@@ -9,6 +9,12 @@ st.title('Water Dew Point')
 st.divider()
 st.text("Set fluid composition:")
 
+if 'uploaded_file' in st.session_state:
+    try:
+        st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
+    except:
+        st.session_state.activefluid_df = pd.DataFrame(default_fluid)
+
 if 'activefluid_df' not in st.session_state or st.session_state.activefluid_name != 'default_fluid':
     st.session_state.activefluid_name = 'default_fluid'
     st.session_state.activefluid_df = pd.DataFrame(default_fluid)
@@ -140,3 +146,5 @@ if uploaded_file is not None:
     check1 = st.sidebar.button("Set fluid")
 else:
     st.session_state.activefluid_df = pd.DataFrame(default_fluid)
+
+st.sidebar.file_uploader("Import Fluid", key='uploaded_file')
