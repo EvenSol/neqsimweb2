@@ -12,25 +12,27 @@ NeqSim TP flash will select the best thermodynamic model based on the fluid comp
 st.divider()
 st.text("Set fluid composition:")
 
-if 'uploaded_file' in st.session_state:
+hidecomponents = st.checkbox('Show active components')
+if hidecomponents:
+   st.edited_df['MolarComposition[-]'] = st.edited_df['MolarComposition[-]']
+   st.session_state.activefluid_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
+
+if 'uploaded_file' in st.session_state and hidecomponents == False:
     try:
         st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
+        numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
+        st.session_state.activefluid_df[numeric_columns] = st.session_state.activefluid_df[numeric_columns].astype(float)
     except:
         st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
-if 'activefluid_df' not in st.session_state or st.session_state.activefluid_name != 'default_fluid':
-   st.session_state.activefluid_name = 'default_fluid'
-   st.session_state.activefluid_df = pd.DataFrame(default_fluid)
+if 'activefluid_df' not in st.session_state:
+    st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
 if 'tp_flash_data' not in st.session_state:
     st.session_state['tp_flash_data'] = pd.DataFrame({
         'Temperature (C)': [20.0, 25.0],  # Default example temperature
         'Pressure (bara)': [1.0, 10.0]  # Default example pressure
     })
-    
-hidecomponents = st.checkbox('Show active components')
-if hidecomponents:
-    st.session_state.activefluid_df =  st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
 
 st.edited_df = st.data_editor(
     st.session_state.activefluid_df,
