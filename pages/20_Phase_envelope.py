@@ -15,6 +15,12 @@ NeqSim uses the UMR-PRU-EoS model for calculations of the phase envelope. The UM
 st.text("Set fluid composition:")
 # Sample data for the DataFrame
 
+if 'uploaded_file' in st.session_state:
+    try:
+        st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
+    except:
+        st.session_state.activefluid_df = pd.DataFrame(detailedHC_data)
+
 if 'activefluid_df' not in st.session_state or st.session_state.activefluid_name != 'detailedHC_data':
    st.session_state.activefluid_name = 'detailedHC_data'
    st.session_state.activefluid_df = pd.DataFrame(detailedHC_data)
@@ -85,3 +91,5 @@ if st.button('Run'):
         st.data_editor(bubdatapoints)
     else:
         st.error('The sum of Molar Composition must be greater than 0. Please adjust your inputs.')
+
+st.sidebar.file_uploader("Import Fluid", key='uploaded_file')

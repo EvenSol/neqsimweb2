@@ -12,6 +12,12 @@ NeqSim TP flash will select the best thermodynamic model based on the fluid comp
 st.divider()
 st.text("Set fluid composition:")
 
+if 'uploaded_file' in st.session_state:
+    try:
+        st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
+    except:
+        st.session_state.activefluid_df = pd.DataFrame(default_fluid)
+
 if 'activefluid_df' not in st.session_state or st.session_state.activefluid_name != 'default_fluid':
    st.session_state.activefluid_name = 'default_fluid'
    st.session_state.activefluid_df = pd.DataFrame(default_fluid)
@@ -25,8 +31,6 @@ if 'tp_flash_data' not in st.session_state:
 hidecomponents = st.checkbox('Show active components')
 if hidecomponents:
     st.session_state.activefluid_df =  st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
-else:
-    st.session_state.activefluid_df = st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
 st.edited_df = st.data_editor(
     st.session_state.activefluid_df,
@@ -112,9 +116,5 @@ if st.button('Run TP Flash Calculations'):
     else:
         st.error('The sum of Molar Composition must be greater than 0. Please adjust your inputs.')
         
-uploaded_file = st.sidebar.file_uploader("Import Fluid")
-if uploaded_file is not None:
-    st.session_state.activefluid_df = pd.read_csv(uploaded_file)
-    check1 = st.sidebar.button("Set fluid")
-else:
-    st.session_state.activefluid_df = pd.DataFrame(default_fluid)
+st.sidebar.file_uploader("Import Fluid", key='uploaded_file')
+
