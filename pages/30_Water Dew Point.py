@@ -20,7 +20,7 @@ if 'uploaded_file' in st.session_state and hidecomponents == False:
         numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
         st.session_state.activefluid_df[numeric_columns] = st.session_state.activefluid_df[numeric_columns].astype(float)
     except:
-        st.session_state.activefluid_df = pd.DataFrame(detailedHC_data)
+        st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
 if 'activefluid_df' not in st.session_state or st.session_state.activefluid_name != 'default_fluid':
     st.session_state.activefluid_name = 'default_fluid'
