@@ -28,7 +28,7 @@ if 'uploaded_file' in st.session_state and hidecomponents == False:
     except:
         st.session_state.activefluid_df = pd.DataFrame(detailedHC_data)
 
-if 'activefluid_df' not in st.session_state or st.session_state.activefluid_name != 'detailedHC_data':
+if 'activefluid_df' not in st.session_state or st.session_state.get('activefluid_name') != 'detailedHC_data':
    st.session_state.activefluid_name = 'detailedHC_data'
    st.session_state.activefluid_df = pd.DataFrame(detailedHC_data)
 
