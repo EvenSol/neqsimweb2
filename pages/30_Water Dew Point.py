@@ -29,8 +29,6 @@ if 'tp_data' not in st.session_state:
 hidecomponents = st.checkbox('Show active components')
 if hidecomponents:
     st.session_state.activefluid_df =  st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
-else:
-    st.session_state.activefluid_df = st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
 st.edited_df = st.data_editor(
     st.session_state.activefluid_df,
@@ -139,12 +137,5 @@ if st.button('Run'):
         st.session_state['rerender'] = not st.session_state.get('rerender', False)
     else:
         st.error('Water Molar Composition must be greater than 0. Please adjust your inputs.')
-
-uploaded_file = st.sidebar.file_uploader("Import Fluid")
-if uploaded_file is not None:
-    st.session_state.activefluid_df = pd.read_csv(uploaded_file)
-    check1 = st.sidebar.button("Set fluid")
-else:
-    st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
 st.sidebar.file_uploader("Import Fluid", key='uploaded_file')
