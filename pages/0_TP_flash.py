@@ -119,5 +119,5 @@ if st.button('Run TP Flash Calculations'):
     else:
         st.error('The sum of Molar Composition must be greater than 0. Please adjust your inputs.')
         
-st.sidebar.file_uploader("Import Fluid", key='uploaded_file')
+st.sidebar.file_uploader("Import Fluid", key='uploaded_file', help='import fluid from file', label="import fluid from file")
 
