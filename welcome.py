@@ -38,9 +38,9 @@ For comprehensive documentation on how to use NeqSim for processing and fluid si
 [Introduction to Gas Processing Using NeqSim](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/examples_of_NeqSim_in_Colab.ipynb)
 
 ### GitHub Repository
-NeqSim is developed in Java and is open-source. You can access the complete source code and contribute to the project on GitHub:
+NeqSim is developed in the Java programming language and is available as an open-source project via GitHub. You can access the complete source code and contribute to the project via the home page:
 
-- [NeqSim Java GitHub Repository](https://equinor.github.io/neqsimhome/)
+- [NeqSim Home](https://equinor.github.io/neqsimhome/)
 
 ### Community & Feedback
 We welcome any feedback, questions, or suggestions for further development. Join the conversation or contribute to discussions on our GitHub page:
