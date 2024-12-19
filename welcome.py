@@ -40,7 +40,7 @@ For comprehensive documentation on how to use NeqSim for processing and fluid si
 ### GitHub Repository
 NeqSim is developed in Java and is open-source. You can access the complete source code and contribute to the project on GitHub:
 
-- [NeqSim Java GitHub Repository](https://github.com/equinor/neqsim)
+- [NeqSim Java GitHub Repository](https://equinor.github.io/neqsimhome/)
 
 ### Community & Feedback
 We welcome any feedback, questions, or suggestions for further development. Join the conversation or contribute to discussions on our GitHub page:
