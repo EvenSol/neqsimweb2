@@ -140,4 +140,4 @@ if st.button('Run'):
     else:
         st.error('Water Molar Composition must be greater than 0. Please adjust your inputs.')
 
-st.sidebar.file_uploader("Import Fluid", key='uploaded_file')
+st.sidebar.file_uploader("Import Fluid", key='uploaded_file', help='Fluids can be saved by hovering over the fluid window and clicking the "Download as CSV" button in the upper-right corner.')
