@@ -29,16 +29,28 @@ To estimate LNG aging, NeqSim considers the following factors:
 st.divider()
 st.subheader("Initial LNG composition:")
 
-if 'activefluid_df' not in st.session_state  or 'activefluid_name' not in st.session_state or st.session_state.activefluid_name != 'lng_fluid':
-   st.session_state.activefluid_name = 'lng_fluid'
-   st.session_state.activefluid_df = pd.DataFrame(lng_fluid)
-
 hidecomponents = st.checkbox('Show active components')
 if hidecomponents:
-    st.session_state.activefluid_df =  st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
-else:
+   st.edited_df['MolarComposition[-]'] = st.edited_df['MolarComposition[-]']
+   st.session_state.activefluid_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
+
+if 'uploaded_file' in st.session_state and hidecomponents == False:
+    try:
+        st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
+        numeric_columns = ['MolarComposition[-]']
+        st.session_state.activefluid_df[numeric_columns] = st.session_state.activefluid_df[numeric_columns].astype(float)
+    except:
+        st.session_state.activefluid_df = pd.DataFrame(lng_fluid)
+
+
+# Check if 'activefluid_df' or 'activefluid_name' is not in session state or if the active fluid name is not 'lng_fluid'
+if 'activefluid_df' not in st.session_state or 'activefluid_name' not in st.session_state or st.session_state.activefluid_name != 'lng_fluid':
+    # Set the active fluid name to 'lng_fluid'
+    st.session_state.activefluid_name = 'lng_fluid'
+    # Create a DataFrame for the LNG fluid and store it in the session state
     st.session_state.activefluid_df = pd.DataFrame(lng_fluid)
 
+# Create an editable data table for the fluid composition
 st.edited_df = st.data_editor(
     st.session_state.activefluid_df,
     column_config={
@@ -51,15 +63,22 @@ st.edited_df = st.data_editor(
             "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
         ),
     },
-num_rows='dynamic')
+    num_rows='dynamic'
+)
 
+# Display a text message indicating that the fluid composition will be normalized before simulation
 st.text("Fluid composition will be normalized before simulation")
+# Add a visual divider
 st.divider()
 
 # LNG Ageing Simulation Parameters
 st.subheader('LNG Ageing Simulation Parameters')
+
+# Input for transport pressure in bara
 pressure_transport = st.number_input('Transport Pressure (bara)', min_value=0.0, value=1.01325)
+# Input for initial volume in cubic meters
 volume_initial = st.number_input('Initial Volume (m3)', min_value=0.0, value=120000.0)
+# Input for boil-off rate in percentage
 BOR = st.number_input('Boil-off Rate (%)', min_value=0.0, value=0.15)
 time_transport = st.number_input('Transport Time (hours)', min_value=0.0, value=24.0)
 standard_version = st.selectbox(
@@ -161,3 +180,4 @@ if st.button('Simulate Ageing'):
         st.error('The sum of Molar Composition must be greater than 0. Please adjust your inputs.')
 
     
+st.sidebar.file_uploader("Import Fluid", key='uploaded_file', help='Fluids can be saved by hovering over the fluid window and clicking the "Download as CSV" button in the upper-right corner.')
