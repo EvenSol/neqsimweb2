@@ -58,7 +58,9 @@ if st.button('Run'):
         modelname = "UMR-PRU-EoS"
         if(usePR):
            modelname = "PrEos"
+        jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
         neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=isplusfluid, add_all_components=False).setModel(modelname)
+        jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(False)
         st.success('Successfully created fluid')
         st.subheader("Results:")
         thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(neqsim_fluid)
