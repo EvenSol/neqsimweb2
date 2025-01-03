@@ -134,8 +134,8 @@ if st.button('Run'):
         criticalT = thermoOps.getOperation().get("criticalPoint1")[0]
         criticalP = thermoOps.getOperation().get("criticalPoint1")[1] 
         st.write('critical point ', 
-                 round(criticalP[1], 2), ' bara, ', 
-                 round(criticalT[0] - 273.15, 2), ' °C')
+                 round(criticalP, 2), ' bara, ', 
+                 round(criticalT - 273.15, 2), ' °C')
         st.write('cricondentherm ', 
                  round(cricotherm[1], 2), ' bara, ', 
                  round(cricotherm[0] - 273.15, 2), ' °C')
