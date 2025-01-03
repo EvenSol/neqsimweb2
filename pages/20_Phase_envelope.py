@@ -131,12 +131,18 @@ if st.button('Run'):
         # Display cricondenbar and cricondentherm
         cricobar = thermoOps.getOperation().get("cricondenbar")
         cricotherm = thermoOps.getOperation().get("cricondentherm")
+        criticalT = thermoOps.getOperation().get("criticalPoint1")[0]
+        criticalP = thermoOps.getOperation().get("criticalPoint1")[1] 
+        st.write('critical point ', 
+                 round(criticalP[1], 2), ' bara, ', 
+                 round(criticalT[0] - 273.15, 2), ' °C')
         st.write('cricondentherm ', 
                  round(cricotherm[1], 2), ' bara, ', 
                  round(cricotherm[0] - 273.15, 2), ' °C')
         st.write('cricondenbar ', 
                  round(cricobar[1], 2), ' bara, ', 
                  round(cricobar[0] - 273.15, 2), ' °C')
+        
         
         # Show dew/bubble data points
         dewdatapoints = pd.DataFrame(
