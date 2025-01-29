@@ -222,12 +222,6 @@ def main():
         st.session_state.activefluid_df = pd.DataFrame(default_fluid)
         st.session_state.activefluid_name = 'default_fluid'
 
-    if 'tp_flash_data' not in st.session_state:
-        st.session_state['tp_flash_data'] = pd.DataFrame({
-            'Temperature (C)': [20.0, 25.0],  # Default example temperature
-            'Pressure (bara)': [1.0, 10.0]  # Default example pressure
-        })
-
     st.edited_df = st.data_editor(
         st.session_state.activefluid_df,
         column_config={
@@ -242,7 +236,7 @@ def main():
         },
     num_rows='dynamic')
     isplusfluid = st.checkbox('Plus Fluid')
-    st.session_state.activefluid_df = st.edited_df
+
     st.text("Fluid composition will be normalized before simulation")
     st.divider()
     
@@ -266,7 +260,7 @@ def main():
     phase_name = st.sidebar.selectbox("Select Phase", phase_options, index=0)
     
     # Dynamically generate property options based on current fluid composition
-    component_names = st.session_state.activefluid_df["ComponentName"].tolist()
+    component_names = st.edited_df["ComponentName"].tolist()
     
     # Base property names
     base_property_names = [
@@ -345,19 +339,19 @@ def main():
     # ----------------------------------------------------------------------------------
     # RUN CALCULATION BUTTON
     # ----------------------------------------------------------------------------------
-    run_button = st.sidebar.button("Run Grid Calculation")
+    run_button = st.button("Run Grid Calculation")
     
     # ----------------------------------------------------------------------------------
     # DISPLAY RESULTS IN 2D GRID
     # ----------------------------------------------------------------------------------
     if run_button:
         # 1) Check fluid composition
-        total_molar_frac = st.session_state.activefluid_df["MolarComposition[-]"].sum()
+        total_molar_frac = st.edited_df["MolarComposition[-]"].sum()
         if total_molar_frac <= 0:
             st.error("Total Molar Composition must be greater than 0.")
         else:
             # 2) Normalize fluid composition
-            normalized_df = st.session_state.activefluid_df.copy()
+            normalized_df = st.edited_df.copy()
             normalized_df["MolarComposition[-]"] = normalized_df["MolarComposition[-]"] / total_molar_frac
 
             # 3) Build fluid using NeqSim
