@@ -345,10 +345,10 @@ def main():
     # Dropdown for selecting the thermodynamic model, including an automatic option
     thermo_model_options = {
         'Automatic': None,  # This option will allow NeqSim to auto-select the model
-        'SRK': "SRK-EOS",
-        'PR': "PR-EOS",
-        'CPA': "CPA-EOS",
-        'UMR': "UMR-PRU-EOS"
+        'SRK': "srk",
+        'PR': "pr",
+        'CPA': "cpa",
+        'UMR': "umr"
     }
     thermo_model_choice = st.sidebar.selectbox("Select Thermodynamic Model", list(thermo_model_options.keys()))
     
