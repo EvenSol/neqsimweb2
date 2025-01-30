@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 # NeqSim imports
 import neqsim
@@ -405,7 +406,7 @@ def main():
 
             # 7) Convert results to DataFrame
             results_df = pd.DataFrame(results_list)
-
+            
             # 8) Display unit above the table
             if unit:
                 st.markdown(f"**Unit of `{property_name}`**: {unit}")
@@ -425,6 +426,35 @@ def main():
                 file_name="neqsim_property_grid_results.csv",
                 mime="text/csv"
             )
+
+            # 11) Pablo added this to plot figure: #### Pablo start
+
+            # Convert DataFrame to 2D numpy array for plotting
+            data_for_heatmap = results_df.drop("Pressure [bara]", axis=1).to_numpy()
+        
+            # Create a figure and axis for the heatmap
+            fig, ax = plt.subplots()
+            heatmap = ax.imshow(data_for_heatmap, cmap='viridis', interpolation='nearest', aspect='auto')
+        
+            # Setting the aspect ratio to 'auto' will make the heatmap fill the figure while preserving the data proportions.
+        
+            # Set the tick labels for the heatmap
+            ax.set_xticks(np.arange(len(T_range)))
+            ax.set_yticks(np.arange(len(P_range)))
+        
+            # Labeling the tick labels with the actual temperature/pressure values
+            ax.set_xticklabels([f"{T:.2f} °C" for T in T_range])
+            ax.set_yticklabels([f"{P} bara" for P in P_range])
+        
+            # Rotate the tick labels so they don't overlap
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+        
+            # Add a colorbar next to the heatmap to indicate the color scale
+            plt.colorbar(heatmap)
+        
+            # Display the figure using streamlit
+            st.pyplot(fig)            
+            #### Pablo ends
     
     st.divider()
     
