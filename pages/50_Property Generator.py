@@ -336,6 +336,21 @@ def main():
             break
     else:
         unit = unit_dict.get(property_name, "")
+        
+    # ----------------------------------------------------------------------------------
+    # SIDEBAR: Thermodynamic Model Selection
+    # ----------------------------------------------------------------------------------
+    st.sidebar.header("Thermodynamic Model Selection")
+    
+    # Dropdown for selecting the thermodynamic model, including an automatic option
+    thermo_model_options = {
+        'Automatic': None,  # This option will allow NeqSim to auto-select the model
+        'SRK': "SRK-EOS",
+        'PR': "PR-EOS",
+        'CPA': "CPA-EOS",
+        'UMR': "UMR-PRU-EOS"
+    }
+    thermo_model_choice = st.sidebar.selectbox("Select Thermodynamic Model", list(thermo_model_options.keys()))
     
     # ----------------------------------------------------------------------------------
     # RUN CALCULATION BUTTON
@@ -357,11 +372,22 @@ def main():
 
             # 3) Build fluid using NeqSim
             try:
+            # Get the selected model or None for automatic selection
+            modelName = thermo_model_options[thermo_model_choice]
+            if modelName:  # A specific model was selected
+                neqsim_fluid = fluid_df(
+                    normalized_df,
+                    lastIsPlusFraction=isplusfluid,
+                    modelName=modelName,  # Model name must correspond to NeqSim's supported models
+                    add_all_components=False
+                )
+            else:  # Automatic selection
                 neqsim_fluid = fluid_df(
                     normalized_df,
                     lastIsPlusFraction=isplusfluid,
                     add_all_components=False
                 ).autoSelectModel()
+
             except Exception as e:
                 st.error(f"Error creating fluid: {e}")
                 st.stop()
@@ -448,7 +474,10 @@ def main():
         
             # Rotate the tick labels so they don't overlap
             plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-        
+            
+            # Reverse the y-axis (pressure) so it increases upwards
+            ax.invert_yaxis()        
+            
             # Add a colorbar next to the heatmap to indicate the color scale
             plt.colorbar(heatmap)
         
