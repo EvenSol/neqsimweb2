@@ -381,13 +381,14 @@ def main():
                         modelName=modelName,  # Model name must correspond to NeqSim's supported models
                         add_all_components=False
                     )
+                    neqsim_fluid.autoSelectMixingRule()
                 else:  # Automatic selection
                     neqsim_fluid = fluid_df(
                         normalized_df,
                         lastIsPlusFraction=isplusfluid,
                         add_all_components=False
                     ).autoSelectModel()
-
+                neqsim_fluid.setMultiPhaseCheck(True)
             except Exception as e:
                 st.error(f"Error creating fluid: {e}")
                 st.stop()
