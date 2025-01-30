@@ -372,21 +372,21 @@ def main():
 
             # 3) Build fluid using NeqSim
             try:
-            # Get the selected model or None for automatic selection
-            modelName = thermo_model_options[thermo_model_choice]
-            if modelName:  # A specific model was selected
-                neqsim_fluid = fluid_df(
-                    normalized_df,
-                    lastIsPlusFraction=isplusfluid,
-                    modelName=modelName,  # Model name must correspond to NeqSim's supported models
-                    add_all_components=False
-                )
-            else:  # Automatic selection
-                neqsim_fluid = fluid_df(
-                    normalized_df,
-                    lastIsPlusFraction=isplusfluid,
-                    add_all_components=False
-                ).autoSelectModel()
+                # Get the selected model or None for automatic selection
+                modelName = thermo_model_options[thermo_model_choice]
+                if modelName:  # A specific model was selected
+                    neqsim_fluid = fluid_df(
+                        normalized_df,
+                        lastIsPlusFraction=isplusfluid,
+                        modelName=modelName,  # Model name must correspond to NeqSim's supported models
+                        add_all_components=False
+                    )
+                else:  # Automatic selection
+                    neqsim_fluid = fluid_df(
+                        normalized_df,
+                        lastIsPlusFraction=isplusfluid,
+                        add_all_components=False
+                    ).autoSelectModel()
 
             except Exception as e:
                 st.error(f"Error creating fluid: {e}")
