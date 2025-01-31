@@ -457,7 +457,7 @@ def main():
             # 11) Pablo added this to plot figure: #### Pablo start
 
             # Convert DataFrame to 2D numpy array for plotting
-            data_for_heatmap = results_df.drop("Pressure [bara]", axis=1).to_numpy()
+            data_with_errors = results_df.drop("Pressure [bara]", axis=1).to_numpy()
 
             # Replace non-numeric error values with np.nan
             data_for_heatmap = np.array([[np.nan if isinstance(value, str) and "Error" in value else value for value in row] for row in data_with_errors])
