@@ -124,6 +124,15 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
                 )
             else:
                 return "No oil-aqueous interface"
+        elif property_name == "wc":
+            if neqsim_fluid.hasPhaseType("oil") and neqsim_fluid.hasPhaseType("aqueous"):
+                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume()+neqsim_fluid.getPhase("aqueous").getVolume())
+            elif neqsim_fluid.hasPhaseType("oil")
+                return 0
+            elif neqsim_fluid.hasPhaseType("aqueous")
+                return 1
+            else:
+                return np.nan
         else:
             return f"{property_name} not defined for overall system"
     else:
@@ -265,6 +274,7 @@ def main():
     
     # Base property names
     base_property_names = [
+        "wc",
         "density",
         "viscosity",
         "compressibility",
