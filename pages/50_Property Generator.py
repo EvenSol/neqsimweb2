@@ -492,6 +492,12 @@ def main():
             
             # Reverse the y-axis (pressure) so it increases upwards
             ax.invert_yaxis()        
+
+            # Add gridlines to the heatmap
+            ax.grid(which='both', color='w', linestyle='-', linewidth=2)
+
+            # Make sure the grid is behind the heatmap
+            ax.set_axisbelow(True)            
             
             # Add a colorbar next to the heatmap to indicate the color scale
             plt.colorbar(heatmap)
