@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import plotly.express as px
 
 # NeqSim imports
 import neqsim
@@ -443,6 +444,10 @@ def main():
 
             # 7) Convert results to DataFrame
             results_df = pd.DataFrame(results_list)
+
+            # Convert DataFrame to a format suitable for Plotly
+            # We need to transform it to a long format
+            results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
             
             # 8) Display unit above the table
             if unit:
@@ -504,7 +509,32 @@ def main():
         
             # Display the figure using streamlit
             st.pyplot(fig)            
+
+            # Create interactive plot with Plotly
+            fig2 = px.scatter(
+                results_long_df,
+                x="Temperature",
+                y="Pressure [bara]",
+                size=np.abs(results_long_df[property_name]),  # Optional: size points by property value (absolute value for demonstration)
+                color=property_name,  # Color by property value
+                hover_data=[property_name],
+                title=f"{property_name} across Temperature and Pressure"
+            )
+        
+            # Adjust layout for better readability
+            fig2.update_layout(
+                xaxis_title="Temperature",
+                yaxis_title="Pressure [bara]",
+                coloraxis_colorbar=dict(
+                    title=unit
+                )
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
             #### Pablo ends
+
+
+    
     
     st.divider()
     
