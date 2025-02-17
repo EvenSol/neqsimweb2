@@ -97,7 +97,13 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
             total_mass = neqsim_fluid.getTotalNumberOfMoles() * neqsim_fluid.getMolarMass()
             return phase_mass / total_mass
         elif property_name == "number of phases":
-            return neqsim_fluid.getNumberOfPhases()
+            nop = neqsim_fluid.getNumberOfPhases()
+            if nop == 1:
+                return nop, None, None
+            elif nop ==1:
+                return nop, neqsim_fluid.getPhase(1).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(1).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), None
+            elif nop ==2:
+                return nop, neqsim_fluid.getPhase(1).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(1).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), neqsim_fluid.getPhase(2).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(2).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
         elif property_name == "gas-oil interfacial tension":
             if neqsim_fluid.hasPhaseType("gas") and neqsim_fluid.hasPhaseType("oil"):
                 neqsim_fluid.calcInterfaceProperties()
@@ -432,7 +438,15 @@ def main():
                         neqsim_fluid.initPhysicalProperties()
 
                         # Compute the selected property
-                        value = compute_property(neqsim_fluid, phase_name, property_name)
+                        if property_name == "number of phases":
+                            value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
+                            # Assign additional values to the row if they are not None
+                            if phase_mass is not None:
+                                row['phase_mass'] = phase_mass
+                            if phase_mass2 is not None:
+                                row['phase_mass2'] = phase_mass2
+                        else:
+                            value = compute_property(neqsim_fluid, phase_name, property_name)
 
                         # Assign to row with temperature as column
                         col_name = f"T={T:.2f} °C"
@@ -447,7 +461,16 @@ def main():
 
             # Convert DataFrame to a format suitable for Plotly
             # We need to transform it to a long format
-            results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
+
+            # Convert DataFrame to a format suitable for Plotly (long format)
+            melt_id_vars = ["Pressure [bara]"]
+            if 'phase_mass' in results_df.columns:
+                melt_id_vars.append('phase_mass')
+            if 'phase_mass2' in results_df.columns:
+                melt_id_vars.append('phase_mass2')
+            
+            results_long_df = results_df.melt(id_vars=melt_id_vars, var_name="Temperature", value_name=property_name)            
+            #results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
             
             # 8) Display unit above the table
             if unit:
@@ -511,7 +534,14 @@ def main():
             st.pyplot(fig)            
 
             # Create interactive plot with Plotly
-            fig = px.scatter(
+            hover_data = [property_name]
+            if 'phase_mass' in results_long_df:
+                hover_data.append('phase_mass')
+            if 'phase_mass2' in results_long_df:
+                hover_data.append('phase_mass2')
+    
+            # Create interactive plot with Plotly
+            fig2 = px.scatter(
                 results_long_df,
                 x="Temperature",
                 y="Pressure [bara]",
@@ -521,14 +551,14 @@ def main():
             )
         
             # Adjust layout for better readability
-            fig.update_layout(
+            fig2.update_layout(
                 xaxis_title="Temperature",
                 yaxis_title="Pressure [bara]",
                 coloraxis_colorbar=dict(
                     title=unit
                 )
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True)
 
             #### Pablo ends
 
