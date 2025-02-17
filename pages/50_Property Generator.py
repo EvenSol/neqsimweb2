@@ -431,6 +431,9 @@ def main():
             # 6) Loop over Pressure and Temperature
             for P in P_range:
                 row = {"Pressure [bara]": P}
+                rowm = {"Pressure [bara]": P}
+                rowm2 = {"Pressure [bara]": P}
+                
                 for T in T_range:
                     try:
                         neqsim_fluid.setTemperature(T, "C")
