@@ -133,11 +133,13 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
                 return "No oil-aqueous interface"
         elif property_name == "wc":
             if neqsim_fluid.hasPhaseType("oil") and neqsim_fluid.hasPhaseType("aqueous"):
-                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume() + neqsim_fluid.getPhase("aqueous").getVolume())
+                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume() + neqsim_fluid.getPhase("aqueous").getVolume()), 
+                    neqsim_fluid.getPhase("aqueous").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("aqueous").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9),
+                    neqsim_fluid.getPhase("oil").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("oil").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
             elif neqsim_fluid.hasPhaseType("oil"):
-                return 0
+                return 0, 0, neqsim_fluid.getPhase("oil").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("oil").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
             elif neqsim_fluid.hasPhaseType("aqueous"):
-                return 1
+                return 1, neqsim_fluid.getPhase("aqueous").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("aqueous").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), 0
             else:
                 return np.nan
         else:
@@ -445,7 +447,7 @@ def main():
                         neqsim_fluid.initPhysicalProperties()
 
                         # Compute the selected property
-                        if property_name == "number of phases":
+                        if property_name == "number of phases" or property_name == "wc":
                             value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
                             col_name = f"T={T:.2f} °C"
                             if phase_mass is not None:
@@ -468,7 +470,7 @@ def main():
                         row[col_name] = f"Error: {e}"
                 results_list.append(row)
                 
-                if property_name == "number of phases":
+                if property_name == "number of phases" or property_name == "wc":
                     phase_mass_list.append(rowm)
                     phase_mass2_list.append(rowm2)
 
@@ -477,7 +479,7 @@ def main():
             results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
             
             # This should be done only if 'number of phases' is the selected property
-            if property_name == "number of phases":
+            if property_name == "number of phases" or property_name == "wc":
                 phase_mass_df = pd.DataFrame(phase_mass_list)
                 phase_mass2_df = pd.DataFrame(phase_mass2_list)
                                 
