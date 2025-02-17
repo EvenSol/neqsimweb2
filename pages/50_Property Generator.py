@@ -550,7 +550,7 @@ def main():
                 x="Temperature",
                 y="Pressure [bara]",
                 color=property_name,  # Color by property value
-                hover_data=[property_name],
+                hover_data=[hover_data],
                 title=f"{property_name} across Temperature and Pressure"
             )
         
