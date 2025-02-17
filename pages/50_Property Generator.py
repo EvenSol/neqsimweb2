@@ -133,8 +133,8 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
                 return "No oil-aqueous interface"
         elif property_name == "wc":
             if neqsim_fluid.hasPhaseType("oil") and neqsim_fluid.hasPhaseType("aqueous"):
-                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume() + neqsim_fluid.getPhase("aqueous").getVolume()), 
-                    neqsim_fluid.getPhase("aqueous").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("aqueous").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9),
+                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume() + neqsim_fluid.getPhase("aqueous").getVolume()), \
+                    neqsim_fluid.getPhase("aqueous").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("aqueous").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9),\
                     neqsim_fluid.getPhase("oil").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("oil").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
             elif neqsim_fluid.hasPhaseType("oil"):
                 return 0, 0, neqsim_fluid.getPhase("oil").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("oil").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
