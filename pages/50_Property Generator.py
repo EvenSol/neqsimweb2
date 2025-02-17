@@ -473,6 +473,10 @@ def main():
                 phase_mass_df = pd.DataFrame(phase_mass_list)
                 phase_mass2_df = pd.DataFrame(phase_mass2_list)
                 
+                st.write("phase_mass_list contents:", phase_mass_list)
+
+                st.write("phase_mass_df contents:", phase_mass_df)                
+                
                 # Melt the phase mass dataframes to long format
                 phase_mass_long_df = phase_mass_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass1")
                 phase_mass2_long_df = phase_mass2_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass2")
