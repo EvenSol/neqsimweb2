@@ -511,7 +511,7 @@ def main():
             st.pyplot(fig)            
 
             # Create interactive plot with Plotly
-            fig2 = px.scatter(
+            fig = px.scatter(
                 results_long_df,
                 x="Temperature",
                 y="Pressure [bara]",
@@ -522,14 +522,14 @@ def main():
             )
         
             # Adjust layout for better readability
-            fig2.update_layout(
+            fig.update_layout(
                 xaxis_title="Temperature",
                 yaxis_title="Pressure [bara]",
                 coloraxis_colorbar=dict(
                     title=unit
                 )
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 
             #### Pablo ends
 
