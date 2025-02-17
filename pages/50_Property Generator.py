@@ -476,30 +476,19 @@ def main():
             results_df = pd.DataFrame(results_list)
             results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
             
-            st.write("results_list contents:", results_list)
-            st.write("results_long_df contents:", results_long_df)
-
             # This should be done only if 'number of phases' is the selected property
             if property_name == "number of phases":
                 phase_mass_df = pd.DataFrame(phase_mass_list)
                 phase_mass2_df = pd.DataFrame(phase_mass2_list)
-                
-                st.write("phase_mass_list contents:", phase_mass_list)
-                st.write("phase_mass_df contents:", phase_mass_df)                
-                st.write("phase_mass2_list contents:", phase_mass2_list)
-                st.write("phase_mass2_df contents:", phase_mass2_df)                
-                
+                                
                 # Melt the phase mass dataframes to long format
-                phase_mass_long_df = phase_mass_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass1")
-                phase_mass2_long_df = phase_mass2_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass2")
+                phase_mass_long_df = phase_mass_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="kg/MSm3")
+                phase_mass2_long_df = phase_mass2_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="kg/MSm3_b")
                 
-                st.write("phase_mass_long_df contents:", phase_mass_long_df)
-                st.write("phase_mas2s_long_df contents:", phase_mass2_long_df)                
-                
+
                 # Merge the mass dataframes with the results_long_df on the common columns
                 results_long_df = pd.merge(results_long_df, phase_mass_long_df, on=["Pressure [bara]", "Temperature"], how='left')
                 results_long_df = pd.merge(results_long_df, phase_mass2_long_df, on=["Pressure [bara]", "Temperature"], how='left')  
-                st.write("results_long_df contents:", results_long_df)                
             
             # 8) Display unit above the table
             if unit:
@@ -564,10 +553,10 @@ def main():
 
             # Create interactive plot with Plotly
             hover_data = [property_name]
-            if 'mass1' in results_long_df.columns:
-                hover_data.append('mass1')
-            if 'mass2' in results_long_df.columns:
-                hover_data.append('mass2')
+            if 'kg/MSm3' in results_long_df.columns:
+                hover_data.append('kg/MSm3')
+            if 'kg/MSm3_b' in results_long_df.columns:
+                hover_data.append('kg/MSm3_b')
             
             fig2 = px.scatter(
                 results_long_df,
