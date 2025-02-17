@@ -467,6 +467,8 @@ def main():
             # 7) Convert results to DataFrame
             results_df = pd.DataFrame(results_list)
             results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
+            
+            st.write("phase_mass_list contents:", results_long_df)
 
             # This should be done only if 'number of phases' is the selected property
             if property_name == "number of phases":
