@@ -473,7 +473,7 @@ def main():
                 phase_mass2_list_results_df = pd.DataFrame(phase_mass2_list)                
                 results_long_df1 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
                 results_long_df2 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
-                results_long_df = pd.concat([results_long_df1, results_long_df2, results_long_df3], ignore_index=True)               
+                results_long_df = pd.concat([results_long_df, results_long_df1, results_long_df2], ignore_index=True)               
             
             
             # 8) Display unit above the table
