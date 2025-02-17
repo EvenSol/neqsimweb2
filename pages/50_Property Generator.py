@@ -468,13 +468,18 @@ def main():
             results_df = pd.DataFrame(results_list)
             results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
 
+            # This should be done only if 'number of phases' is the selected property
             if property_name == "number of phases":
-                phase_mass_list_results_df = pd.DataFrame(phase_mass_list)
-                phase_mass2_list_results_df = pd.DataFrame(phase_mass2_list)                
-                results_long_df1 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass1")
-                results_long_df2 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass2")
-                results_long_df = pd.concat([results_long_df, results_long_df1, results_long_df2], ignore_index=True)               
-            
+                phase_mass_df = pd.DataFrame(phase_mass_list)
+                phase_mass2_df = pd.DataFrame(phase_mass2_list)
+                
+                # Melt the phase mass dataframes to long format
+                phase_mass_long_df = phase_mass_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass1")
+                phase_mass2_long_df = phase_mass2_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass2")
+                
+                # Merge the mass dataframes with the results_long_df on the common columns
+                results_long_df = pd.merge(results_long_df, phase_mass_long_df, on=["Pressure [bara]", "Temperature"], how='left')
+                results_long_df = pd.merge(results_long_df, phase_mass2_long_df, on=["Pressure [bara]", "Temperature"], how='left')  
             
             # 8) Display unit above the table
             if unit:
@@ -539,21 +544,20 @@ def main():
 
             # Create interactive plot with Plotly
             hover_data = [property_name]
-            if 'phase_mass' in results_long_df:
-                hover_data.append('phase_mass')
-            if 'phase_mass2' in results_long_df:
-                hover_data.append('phase_mass2')
-    
-            # Create interactive plot with Plotly
+            if 'mass1' in results_long_df.columns:
+                hover_data.append('mass1')
+            if 'mass2' in results_long_df.columns:
+                hover_data.append('mass2')
+            
             fig2 = px.scatter(
                 results_long_df,
                 x="Temperature",
                 y="Pressure [bara]",
                 color=property_name,  # Color by property value
-                hover_data=mass1,
+                hover_data=hover_data,
                 title=f"{property_name} across Temperature and Pressure"
             )
-        
+            
             # Adjust layout for better readability
             fig2.update_layout(
                 xaxis_title="Temperature",
@@ -563,7 +567,6 @@ def main():
                 )
             )
             st.plotly_chart(fig2, use_container_width=True)
-
             #### Pablo ends
 
 
