@@ -448,8 +448,8 @@ def main():
                         if property_name == "number of phases":
                             value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
                             col_name = f"T={T:.2f} °C"
-                            rowm[col_name] = phase_mass
-                            rowm2[col_name] = phase_mass2
+                            rowm["mass1"] = phase_mass
+                            rowm2["mass2"] = phase_mass2
                         else:
                             value = compute_property(neqsim_fluid, phase_name, property_name)
 
