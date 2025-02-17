@@ -515,7 +515,8 @@ def main():
                 results_long_df,
                 x="Temperature",
                 y="Pressure [bara]",
-                size=np.abs(results_long_df[property_name]),  # Optional: size points by property value (absolute value for demonstration)
+                # size=np.abs(results_long_df[property_name]),  # Optional: size points by property value (absolute value for demonstration)
+                size=10,  # Optional: size points by property value (absolute value for demonstration)
                 color=property_name,  # Color by property value
                 hover_data=[property_name],
                 title=f"{property_name} across Temperature and Pressure"
