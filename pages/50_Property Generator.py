@@ -424,6 +424,10 @@ def main():
             # 5) Initialize results list
             results_list = []
 
+            # Initialize matrices for phase_mass and phase_mass2
+            phase_mass_list = []
+            phase_mass2_list = []
+
             # 6) Loop over Pressure and Temperature
             for P in P_range:
                 row = {"Pressure [bara]": P}
@@ -441,10 +445,10 @@ def main():
                         if property_name == "number of phases":
                             value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
                             # Assign additional values to the row if they are not None
-                            if phase_mass is not None:
-                                row['phase_mass'] = phase_mass
-                            if phase_mass2 is not None:
-                                row['phase_mass2'] = phase_mass2
+                            col_name = f"T={T:.2f} °C"
+                            rowm[col_name] = phase_mass
+                            col_name = f"T={T:.2f} °C"
+                            rowm2[col_name] = phase_mass2
                         else:
                             value = compute_property(neqsim_fluid, phase_name, property_name)
 
@@ -455,22 +459,21 @@ def main():
                         col_name = f"T={T:.2f} °C"
                         row[col_name] = f"Error: {e}"
                 results_list.append(row)
+                if property_name == "number of phases":
+                    phase_mass_list.append(rowm)
+                    phase_mass2_list.append(rowm2)
 
             # 7) Convert results to DataFrame
             results_df = pd.DataFrame(results_list)
+            results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
 
-            # Convert DataFrame to a format suitable for Plotly
-            # We need to transform it to a long format
-
-            # Convert DataFrame to a format suitable for Plotly (long format)
-            melt_id_vars = ["Pressure [bara]"]
-            if 'phase_mass' in results_df.columns:
-                melt_id_vars.append('phase_mass')
-            if 'phase_mass2' in results_df.columns:
-                melt_id_vars.append('phase_mass2')
+            if property_name == "number of phases":
+                phase_mass_list_results_df = pd.DataFrame(phase_mass_list)
+                phase_mass2_list_results_df = pd.DataFrame(phase_mass2_list)                
+                results_long_df1 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
+                results_long_df2 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
+                results_long_df = pd.concat([results_long_df1, results_long_df2, results_long_df3], ignore_index=True)               
             
-            results_long_df = results_df.melt(id_vars=melt_id_vars, var_name="Temperature", value_name=property_name)            
-            #results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
             
             # 8) Display unit above the table
             if unit:
