@@ -100,9 +100,9 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
             nop = neqsim_fluid.getNumberOfPhases()
             if nop == 1:
                 return nop, None, None
-            elif nop ==1:
+            elif nop == 2:
                 return nop, neqsim_fluid.getPhase(1).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(1).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), None
-            elif nop ==2:
+            elif nop == 3:
                 return nop, neqsim_fluid.getPhase(1).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(1).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), neqsim_fluid.getPhase(2).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(2).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
         elif property_name == "gas-oil interfacial tension":
             if neqsim_fluid.hasPhaseType("gas") and neqsim_fluid.hasPhaseType("oil"):
@@ -471,8 +471,8 @@ def main():
             if property_name == "number of phases":
                 phase_mass_list_results_df = pd.DataFrame(phase_mass_list)
                 phase_mass2_list_results_df = pd.DataFrame(phase_mass2_list)                
-                results_long_df1 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
-                results_long_df2 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
+                results_long_df1 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass1")
+                results_long_df2 = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass2")
                 results_long_df = pd.concat([results_long_df, results_long_df1, results_long_df2], ignore_index=True)               
             
             
@@ -550,7 +550,7 @@ def main():
                 x="Temperature",
                 y="Pressure [bara]",
                 color=property_name,  # Color by property value
-                hover_data=hover_data,
+                hover_data=mass1,
                 title=f"{property_name} across Temperature and Pressure"
             )
         
