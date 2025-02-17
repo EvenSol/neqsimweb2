@@ -444,10 +444,8 @@ def main():
                         # Compute the selected property
                         if property_name == "number of phases":
                             value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
-                            # Assign additional values to the row if they are not None
                             col_name = f"T={T:.2f} °C"
                             rowm[col_name] = phase_mass
-                            col_name = f"T={T:.2f} °C"
                             rowm2[col_name] = phase_mass2
                         else:
                             value = compute_property(neqsim_fluid, phase_name, property_name)
