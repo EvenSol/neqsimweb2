@@ -448,8 +448,10 @@ def main():
                         if property_name == "number of phases":
                             value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
                             col_name = f"T={T:.2f} °C"
-                            rowm[col_name] = f"{phase_mass:.2g}"  # Round to 2 significant figures
-                            rowm2[col_name] = f"{phase_mass2:.2g}"  # Round to 2 significant figures
+                            rowm[col_name] = phase_mass  # Round to 2 significant figures
+                            rowm2[col_name] = phase_mass2  # Round to 2 significant figures
+                            #rowm[col_name] = f"{phase_mass:.2g}"  # Round to 2 significant figures
+                            #rowm2[col_name] = f"{phase_mass2:.2g}"  # Round to 2 significant figures
                         else:
                             value = compute_property(neqsim_fluid, phase_name, property_name)
 
