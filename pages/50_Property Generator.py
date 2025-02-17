@@ -460,6 +460,7 @@ def main():
                         col_name = f"T={T:.2f} °C"
                         row[col_name] = f"Error: {e}"
                 results_list.append(row)
+                
                 if property_name == "number of phases":
                     phase_mass_list.append(rowm)
                     phase_mass2_list.append(rowm2)
@@ -478,8 +479,8 @@ def main():
                 
                 st.write("phase_mass_list contents:", phase_mass_list)
                 st.write("phase_mass_df contents:", phase_mass_df)                
-                st.write("phase_mass_list contents:", phase_mass2_list)
-                st.write("phase_mass_df contents:", phase_mass2_df)                
+                st.write("phase_mass2_list contents:", phase_mass2_list)
+                st.write("phase_mass2_df contents:", phase_mass2_df)                
                 
                 # Melt the phase mass dataframes to long format
                 phase_mass_long_df = phase_mass_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="mass1")
