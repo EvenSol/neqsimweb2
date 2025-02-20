@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import plotly.express as px
 
 # NeqSim imports
 import neqsim
@@ -96,7 +97,13 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
             total_mass = neqsim_fluid.getTotalNumberOfMoles() * neqsim_fluid.getMolarMass()
             return phase_mass / total_mass
         elif property_name == "number of phases":
-            return neqsim_fluid.getNumberOfPhases()
+            nop = neqsim_fluid.getNumberOfPhases()
+            if nop == 1:
+                return nop, None, None
+            elif nop == 2:
+                return nop, neqsim_fluid.getPhase(1).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(1).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), None
+            elif nop == 3:
+                return nop, neqsim_fluid.getPhase(1).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(1).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), neqsim_fluid.getPhase(2).getNumberOfMolesInPhase() * neqsim_fluid.getPhase(2).getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
         elif property_name == "gas-oil interfacial tension":
             if neqsim_fluid.hasPhaseType("gas") and neqsim_fluid.hasPhaseType("oil"):
                 neqsim_fluid.calcInterfaceProperties()
@@ -126,11 +133,13 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
                 return "No oil-aqueous interface"
         elif property_name == "wc":
             if neqsim_fluid.hasPhaseType("oil") and neqsim_fluid.hasPhaseType("aqueous"):
-                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume() + neqsim_fluid.getPhase("aqueous").getVolume())
+                return neqsim_fluid.getPhase("aqueous").getVolume() / (neqsim_fluid.getPhase("oil").getVolume() + neqsim_fluid.getPhase("aqueous").getVolume()), \
+                    neqsim_fluid.getPhase("aqueous").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("aqueous").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9),\
+                    neqsim_fluid.getPhase("oil").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("oil").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
             elif neqsim_fluid.hasPhaseType("oil"):
-                return 0
+                return 0, 0, neqsim_fluid.getPhase("oil").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("oil").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9)
             elif neqsim_fluid.hasPhaseType("aqueous"):
-                return 1
+                return 1, neqsim_fluid.getPhase("aqueous").getNumberOfMolesInPhase() * neqsim_fluid.getPhase("aqueous").getMolarMass() / (neqsim_fluid.getPhase(0).getNumberOfMolesInPhase()*23.64/1e9), 0
             else:
                 return np.nan
         else:
@@ -417,9 +426,16 @@ def main():
             # 5) Initialize results list
             results_list = []
 
+            # Initialize matrices for phase_mass and phase_mass2
+            phase_mass_list = []
+            phase_mass2_list = []
+
             # 6) Loop over Pressure and Temperature
             for P in P_range:
                 row = {"Pressure [bara]": P}
+                rowm = {"Pressure [bara]": P}
+                rowm2 = {"Pressure [bara]": P}
+                
                 for T in T_range:
                     try:
                         neqsim_fluid.setTemperature(T, "C")
@@ -431,7 +447,20 @@ def main():
                         neqsim_fluid.initPhysicalProperties()
 
                         # Compute the selected property
-                        value = compute_property(neqsim_fluid, phase_name, property_name)
+                        if property_name == "number of phases" or property_name == "wc":
+                            value, phase_mass, phase_mass2 = compute_property(neqsim_fluid, phase_name, property_name)
+                            col_name = f"T={T:.2f} °C"
+                            if phase_mass is not None:
+                                rowm[col_name] = f"{phase_mass:.2g}"  # Round to 2 significant figures if not None
+                            else:
+                                rowm[col_name] = None  # Or set a default value or keep as None
+                            
+                            if phase_mass2 is not None:
+                                rowm2[col_name] = f"{phase_mass2:.2g}"  # Round to 2 significant figures if not None
+                            else:
+                                rowm2[col_name] = None  # Or set a default value or keep as None
+                        else:
+                            value = compute_property(neqsim_fluid, phase_name, property_name)
 
                         # Assign to row with temperature as column
                         col_name = f"T={T:.2f} °C"
@@ -440,9 +469,28 @@ def main():
                         col_name = f"T={T:.2f} °C"
                         row[col_name] = f"Error: {e}"
                 results_list.append(row)
+                
+                if property_name == "number of phases" or property_name == "wc":
+                    phase_mass_list.append(rowm)
+                    phase_mass2_list.append(rowm2)
 
             # 7) Convert results to DataFrame
             results_df = pd.DataFrame(results_list)
+            results_long_df = results_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name=property_name)
+            
+            # This should be done only if 'number of phases' is the selected property
+            if property_name == "number of phases" or property_name == "wc":
+                phase_mass_df = pd.DataFrame(phase_mass_list)
+                phase_mass2_df = pd.DataFrame(phase_mass2_list)
+                                
+                # Melt the phase mass dataframes to long format
+                phase_mass_long_df = phase_mass_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="kg/MSm3")
+                phase_mass2_long_df = phase_mass2_df.melt(id_vars=["Pressure [bara]"], var_name="Temperature", value_name="kg/MSm3_b")
+                
+
+                # Merge the mass dataframes with the results_long_df on the common columns
+                results_long_df = pd.merge(results_long_df, phase_mass_long_df, on=["Pressure [bara]", "Temperature"], how='left')
+                results_long_df = pd.merge(results_long_df, phase_mass2_long_df, on=["Pressure [bara]", "Temperature"], how='left')  
             
             # 8) Display unit above the table
             if unit:
@@ -504,7 +552,36 @@ def main():
         
             # Display the figure using streamlit
             st.pyplot(fig)            
+
+            # Create interactive plot with Plotly
+            hover_data = [property_name]
+            if 'kg/MSm3' in results_long_df.columns:
+                hover_data.append('kg/MSm3')
+            if 'kg/MSm3_b' in results_long_df.columns:
+                hover_data.append('kg/MSm3_b')
+            
+            fig2 = px.scatter(
+                results_long_df,
+                x="Temperature",
+                y="Pressure [bara]",
+                color=property_name,  # Color by property value
+                hover_data=hover_data,
+                title=f"{property_name} across Temperature and Pressure"
+            )
+            
+            # Adjust layout for better readability
+            fig2.update_layout(
+                xaxis_title="Temperature",
+                yaxis_title="Pressure [bara]",
+                coloraxis_colorbar=dict(
+                    title=unit
+                )
+            )
+            st.plotly_chart(fig2, use_container_width=True)
             #### Pablo ends
+
+
+    
     
     st.divider()
     
