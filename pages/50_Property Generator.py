@@ -553,6 +553,16 @@ def main():
             # Display the figure using streamlit
             st.pyplot(fig)            
 
+            if pd.to_numeric(results_long_df[property_name], errors='coerce').notnull().all():
+                # All values are numeric, proceed as normal
+                numeric_property_data = results_long_df
+            else:
+                # There are non-numeric values, create a copy of the DataFrame with only numeric values for property_name
+                numeric_property_data = results_long_df.copy()
+                numeric_property_data[property_name] = pd.to_numeric(numeric_property_data[property_name], errors='coerce')
+                # Remove rows with NaNs in property_name column (originally non-numeric values)
+                numeric_property_data = numeric_property_data.dropna(subset=[property_name])
+            
             # Create interactive plot with Plotly
             hover_data = [property_name]
             if 'kg/MSm3' in results_long_df.columns:
