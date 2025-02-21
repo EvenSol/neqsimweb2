@@ -552,24 +552,17 @@ def main():
         
             # Display the figure using streamlit
             st.pyplot(fig)            
-
-            if pd.to_numeric(results_long_df[property_name], errors='coerce').notnull().all():
-                # All values are numeric, proceed as normal
-                numeric_property_data = results_long_df
-            else:
-                # There are non-numeric values, create a copy of the DataFrame with only numeric values for property_name
-                numeric_property_data = results_long_df.copy()
-                numeric_property_data[property_name] = pd.to_numeric(numeric_property_data[property_name], errors='coerce')
-                # Remove rows with NaNs in property_name column (originally non-numeric values)
-                numeric_property_data = numeric_property_data.dropna(subset=[property_name])
-            
+           
             # Create interactive plot with Plotly
             hover_data = [property_name]
             if 'kg/MSm3' in results_long_df.columns:
                 hover_data.append('kg/MSm3')
             if 'kg/MSm3_b' in results_long_df.columns:
                 hover_data.append('kg/MSm3_b')
-            
+                
+            # Filter out the rows where 'property_name' contains errors
+            results_long_df_clean = results_long_df[~results_long_df[property_name].astype(str).str.contains("Error")]
+
             fig2 = px.scatter(
                 results_long_df,
                 x="Temperature",
