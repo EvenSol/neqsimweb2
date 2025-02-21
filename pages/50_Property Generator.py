@@ -564,7 +564,7 @@ def main():
             results_long_df_clean = results_long_df[~results_long_df[property_name].astype(str).str.contains("Error")]
 
             fig2 = px.scatter(
-                results_long_df,
+                results_long_df_clean,
                 x="Temperature",
                 y="Pressure [bara]",
                 color=property_name,  # Color by property value
