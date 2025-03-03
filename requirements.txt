@@ -1,4 +1,4 @@
-neqsim==3.0.13
+neqsim==3.0.19
 altair
 pandas
 streamlit
