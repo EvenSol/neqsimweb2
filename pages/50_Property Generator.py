@@ -552,16 +552,19 @@ def main():
         
             # Display the figure using streamlit
             st.pyplot(fig)            
-
+           
             # Create interactive plot with Plotly
             hover_data = [property_name]
             if 'kg/MSm3' in results_long_df.columns:
                 hover_data.append('kg/MSm3')
             if 'kg/MSm3_b' in results_long_df.columns:
                 hover_data.append('kg/MSm3_b')
-            
+                
+            # Filter out the rows where 'property_name' contains errors
+            results_long_df_clean = results_long_df[~results_long_df[property_name].astype(str).str.contains("Error")]
+
             fig2 = px.scatter(
-                results_long_df,
+                results_long_df_clean,
                 x="Temperature",
                 y="Pressure [bara]",
                 color=property_name,  # Color by property value

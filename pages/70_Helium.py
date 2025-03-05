@@ -12,11 +12,14 @@ st.write(
 
     **Models used:**
     - **VEGA EoS:** Thermodynamic properties (e.g., density, enthalpy, heat capacity, etc.).
+    - **Modified KTA model:** Viscosity (gas only).(Modified by master students at NTNU)
+
     
     **Uncertainties:**
     - Density: Typically within **0.02% up to 40 MPa**, increasing at higher pressures.
     - Sound speed: Within **0.02% up to 60 MPa**, but larger deviations at higher pressures.
     - Heat capacity: Typically within **3%**, except near the λ-transition and critical point.
+    - Viscosity: **Unknown**.
     """
 )
 
@@ -68,7 +71,7 @@ if st.button('Run Helium Property Calculations'):
             neqsim_fluid.setTemperature(temp, 'C')
             TPflash(neqsim_fluid)
             neqsim_fluid.initThermoProperties()
-            neqsim_fluid.getPhase(0).getPhysicalProperties().setViscosityModel("KTA")
+            neqsim_fluid.getPhase(0).getPhysicalProperties().setViscosityModel("KTA_mod")
             neqsim_fluid.initPhysicalProperties()
 
             

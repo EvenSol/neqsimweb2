@@ -90,11 +90,9 @@ if st.button('Run Hydrogen Property Calculations'):
             
             # Check number of phases
             num_phases = neqsim_fluid.getNumberOfPhases()
-            st.write(f"Number of detected phases: {num_phases}")
             
             if num_phases > 0:
                 phase = neqsim_fluid.getPhase(0)
-                st.write(f"Phase type: {phase.getPhaseTypeName()}")
                 try:
                     density = phase.getDensity_Leachman(mapped_hydrogen_type)
                     properties = phase.getProperties_Leachman(mapped_hydrogen_type)
@@ -106,6 +104,7 @@ if st.button('Run Hydrogen Property Calculations'):
                     results_list.append({
                         "Temperature (C)": temp,
                         "Pressure (bara)": pressure,
+                        "Phase type": phase.getPhaseTypeName(),
                         "Density (kg/m³)": density,
                         #"Pressure [kPa]": properties[0],
                         "Compressibility factor": properties[1],
