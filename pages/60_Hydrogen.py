@@ -6,8 +6,8 @@ from neqsim.thermo import fluid, TPflash
 st.title("Hydrogen Properties")
 st.write(
     """
-    This application calculates properties of hydrogen using the **Leachman model** for thermal properties and the **PFCT model** for viscosity.
-
+    This application calculates properties of hydrogen using the **Leachman model** for thermal properties and the **Modified Muzny model** for viscosity(Modified by master students at NTNU).
+    
     Select the hydrogen type and specify the temperature (°C) and pressure (bara).
 
     **Hydrogen types:**
@@ -17,7 +17,7 @@ st.write(
 
     **Models used:**
     - **Leachman model:** Thermodynamic properties (e.g., density, enthalpy, heat capacity, etc.).
-    - **PFCT model:** Viscosity (gas only).
+    - **Modified Muzny model:** Viscosity (gas only).
     
     **Uncertainties:**
     - Density: Typically within **0.04%** for **250–450 K** and **p < 300 MPa**, increasing at lower temperatures and higher pressures.
@@ -26,6 +26,7 @@ st.write(
     - Viscosity: **Unknown**.
     """
 )
+
 
 # Hydrogen type selection
 hydrogen_type = st.selectbox("Select Hydrogen Type", ["Normal Hydrogen", "Para Hydrogen", "Ortho Hydrogen"])
@@ -75,7 +76,7 @@ if st.button('Run Hydrogen Property Calculations'):
         st.error('No data to perform calculations. Please input temperature and pressure values.')
     else:
         results_list = []
-        neqsim_fluid = fluid("srk")  # Use Peng-Robinson EoS
+        neqsim_fluid = fluid("srk")  # Use SRK EoS
         neqsim_fluid.addComponent('hydrogen', 1.0, "mol/sec")  # Add hydrogen component
         
         for idx, row in st.session_state.tp_flash_data.iterrows():
@@ -85,7 +86,8 @@ if st.button('Run Hydrogen Property Calculations'):
             neqsim_fluid.setTemperature(temp, 'C')
             TPflash(neqsim_fluid)
             neqsim_fluid.initThermoProperties()
-            neqsim_fluid.getPhase(0).getPhysicalProperties().setViscosityModel("PFCT")
+            neqsim_fluid.getPhase(0).getPhysicalProperties().setViscosityModel("Muzny_mod")
+            neqsim_fluid.initPhysicalProperties()
             
             
             # Check number of phases
