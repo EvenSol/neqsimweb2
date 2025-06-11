@@ -7,7 +7,10 @@ from fluids import default_fluid
 
 st.title('TP flash')
 """
-NeqSim TP flash will select the best thermodynamic model based on the fluid composition. For fluids containing polar components it will use the CPA-EoS.
+The NeqSim flash model will select the best thermodynamic model based on the fluid composition. For fluids containing polar components it will use the CPA-EoS.
+For non-polar fluids it will use the PR-EoS. The flash will calculate the phase equilibrium for given composition at the specified temperatures and pressures.
+
+You can select components from a predifined component list. Alterative component names ([see available components](https://github.com/equinor/neqsim/blob/master/src/main/resources/data/COMP.csv)) can be used by manually editing the table.
 """
 st.divider()
 st.text("Set fluid composition:")
