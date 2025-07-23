@@ -133,8 +133,8 @@ if st.button('Run'):
         cricotherm = thermoOps.getOperation().get("cricondentherm")
         criticalT = thermoOps.getOperation().get("criticalPoint1")[0]
         criticalP = thermoOps.getOperation().get("criticalPoint1")[1] 
-        mixingrulename = neqsim_fluid.getMixingRuleName
-        modelname = neqsim_fluid.getModelName
+        mixingrulename = neqsim_fluid.getMixingRuleName()
+        modelname = neqsim_fluid.getModelName()
         
         st.write('critical point ', 
                  round(criticalP, 2), ' bara, ', 
