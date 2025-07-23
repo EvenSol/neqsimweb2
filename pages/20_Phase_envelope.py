@@ -133,6 +133,9 @@ if st.button('Run'):
         cricotherm = thermoOps.getOperation().get("cricondentherm")
         criticalT = thermoOps.getOperation().get("criticalPoint1")[0]
         criticalP = thermoOps.getOperation().get("criticalPoint1")[1] 
+        mixingrulename = neqsim_fluid.getMixingRuleName
+        modelname = neqsim_fluid.getModelName
+        
         st.write('critical point ', 
                  round(criticalP, 2), ' bara, ', 
                  round(criticalT - 273.15, 2), ' °C')
@@ -142,6 +145,9 @@ if st.button('Run'):
         st.write('cricondenbar ', 
                  round(cricobar[1], 2), ' bara, ', 
                  round(cricobar[0] - 273.15, 2), ' °C')
+        st.write('Using ', 
+                 modelname, ' with ', 
+                 mixingrulename)        
         
         
         # Show dew/bubble data points
