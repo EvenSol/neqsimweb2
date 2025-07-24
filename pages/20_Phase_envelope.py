@@ -107,6 +107,9 @@ if st.button('Run'):
         
         st.success('Successfully created fluid')
         st.subheader("Results:")
+
+        mixingrulename = neqsim_fluid.getMixingRuleName()
+        modelname = neqsim_fluid.getModelName()
         
         # Calculate phase envelope
         thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(neqsim_fluid)
@@ -214,6 +217,34 @@ if st.button('Run'):
             st.pyplot(fig)
             st.divider()
 
+            # --- Add cricondenbar to the phase envelope table, exclude cricondentherm, no 'Type' column, round to 2 decimals ---
+            all_points = np.vstack([
+                np.column_stack((temp_nn, press_nn)),
+                [cricondenbar[0], cricondenbar[1]]
+            ])
+            n_points = len(all_points)
+            used = np.zeros(n_points, dtype=bool)
+            path = []
+            current = 0
+            path.append(current)
+            used[current] = True
+            for _ in range(1, n_points):
+                dists = np.linalg.norm(all_points - all_points[current], axis=1)
+                dists[used] = np.inf
+                next_idx = np.argmin(dists)
+                path.append(next_idx)
+                used[next_idx] = True
+                current = next_idx
+
+            all_points_nn = all_points[path]
+            phase_env_df = pd.DataFrame({
+                'Temperature [°C]': np.round(all_points_nn[:,0], 2),
+                'Pressure [bara]': np.round(all_points_nn[:,1], 2)
+            })
+
+            st.write('Phase envelope points:')
+            st.data_editor(phase_env_df, key='phase_env_table')
+
             st.write('cricondentherm ', 
                     round(cricondentherm[1], 2), ' bara, ', 
                     round(cricondentherm[0], 2), ' °C')
@@ -247,6 +278,9 @@ if st.button('Run'):
             st.write('cricondenbar ', 
                     round(cricobar[1], 2), ' bara, ', 
                     round(cricobar[0] - 273.15, 2), ' °C')
+            st.write('Using ', 
+                 modelname, ' with ', 
+                 mixingrulename)    
             
             
             # Show dew/bubble data points
@@ -278,7 +312,7 @@ if st.button('Run'):
         temp = 15.0         # °C
         neqsim_fluid.setPressure(pressure, 'bara')
         neqsim_fluid.setTemperature(temp, 'C')
-        TPflash(neqsim_fluid)
+        thermoOps.TPflash()
         
         # Retrieve a DataFrame of results
         flash_results_df = dataFrame(neqsim_fluid)
