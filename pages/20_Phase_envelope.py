@@ -107,6 +107,9 @@ if st.button('Run'):
         
         st.success('Successfully created fluid')
         st.subheader("Results:")
+
+        mixingrulename = neqsim_fluid.getMixingRuleName()
+        modelname = neqsim_fluid.getModelName()
         
         # Calculate phase envelope
         thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(neqsim_fluid)
@@ -247,6 +250,9 @@ if st.button('Run'):
             st.write('cricondenbar ', 
                     round(cricobar[1], 2), ' bara, ', 
                     round(cricobar[0] - 273.15, 2), ' °C')
+            st.write('Using ', 
+                 modelname, ' with ', 
+                 mixingrulename)    
             
             
             # Show dew/bubble data points
