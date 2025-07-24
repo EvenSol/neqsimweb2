@@ -5,6 +5,7 @@ from neqsim.thermo import fluid_df, phaseenvelope, TPflash, dataFrame
 from neqsim import jneqsim
 import matplotlib.pyplot as plt
 from fluids import detailedHC_data
+import numpy as np
 
 st.title('Phase Envelope')
 
@@ -115,54 +116,102 @@ if st.button('Run'):
         dewps = list(thermoOps.getOperation().get("dewP"))
         bubts = [x - 273.15 for x in list(thermoOps.getOperation().get("bubT"))]
         bubps = list(thermoOps.getOperation().get("bubP"))
-        
-        # Plot the PT envelope
-        fig, ax = plt.subplots()
-        plt.plot(dewts, dewps, label="dew point")
-        plt.plot(bubts, bubps, label="bubble point")
-        plt.title('PT envelope')
-        plt.xlabel('Temperature [°C]')
-        plt.ylabel('Pressure [bara]')
-        plt.legend()
-        plt.grid(True)
-        st.pyplot(fig)
-        st.divider()
-        
-        # Display cricondenbar and cricondentherm
-        cricobar = thermoOps.getOperation().get("cricondenbar")
-        cricotherm = thermoOps.getOperation().get("cricondentherm")
-        criticalT = thermoOps.getOperation().get("criticalPoint1")[0]
-        criticalP = thermoOps.getOperation().get("criticalPoint1")[1] 
-        st.write('critical point ', 
-                 round(criticalP, 2), ' bara, ', 
-                 round(criticalT - 273.15, 2), ' °C')
-        st.write('cricondentherm ', 
-                 round(cricotherm[1], 2), ' bara, ', 
-                 round(cricotherm[0] - 273.15, 2), ' °C')
-        st.write('cricondenbar ', 
-                 round(cricobar[1], 2), ' bara, ', 
-                 round(cricobar[0] - 273.15, 2), ' °C')
-        
-        
-        # Show dew/bubble data points
-        dewdatapoints = pd.DataFrame(
-            {
-                'dew temperatures [°C]': dewts,
-                'dew pressures [bara]': dewps,
-            }
-        )
-        bubdatapoints = pd.DataFrame(
-            {
-                'bub temperatures [°C]': bubts,
-                'bub pressures [bara]': bubps,
-            }
-        )
-        
-        st.divider()
-        st.write('dew points')
-        st.data_editor(dewdatapoints)
-        st.write('bubble points')
-        st.data_editor(bubdatapoints)
+
+        if len(dewts) == 0 and len(bubts) == 0:
+            P_min = 1.0
+            P_max = 150.0
+            T_min = -50.0
+            T_max = 150.0
+            T_step = 15.0
+            P_step = 1.0
+
+            # Calculate phase envelope
+            thermoOps.calcPTphaseEnvelopeNew3(P_min, P_max, T_min, T_max, P_step, T_step)
+            op = thermoOps.getOperation()
+
+            # Extract phase envelope points from Java op object
+            pressurePhaseEnvelope = op.getPressurePhaseEnvelope()
+            temperaturePhaseEnvelope = op.getTemperaturePhaseEnvelope()
+
+            # Convert to numpy arrays for plotting
+            pressurePhaseEnvelope_np = np.array(pressurePhaseEnvelope)
+            temperaturePhaseEnvelope_np = np.array(temperaturePhaseEnvelope)
+            circondentherm = [0,0]
+            cricondenbar = [0,0]
+
+            # Find cricondenbar (max pressure and corresponding temperature)
+            cricondenbar_index = np.argmax(pressurePhaseEnvelope_np)
+            cricondenbar[1] = pressurePhaseEnvelope_np[cricondenbar_index]
+            cricondenbar[0] = temperaturePhaseEnvelope_np[cricondenbar_index]
+
+            # Find cricondentherm (max temperature and corresponding pressure)
+            cricondentherm_index = np.argmax(temperaturePhaseEnvelope_np)
+            circondentherm[0] = temperaturePhaseEnvelope_np[cricondentherm_index]
+            circondentherm[1] = pressurePhaseEnvelope_np[cricondentherm_index]
+
+            # Scatter plot of phase envelope points
+            fig, ax = plt.subplots()
+            plt.scatter(temperaturePhaseEnvelope_np, pressurePhaseEnvelope_np, color='blue', label='Phase Envelope Points')
+            plt.xlabel('Temperature (°C)')
+            plt.ylabel('Pressure (bara)')
+            plt.grid(True)
+            st.pyplot(fig)
+            st.divider()
+
+            st.write('cricondentherm ', 
+                    round(circondentherm[1], 2), ' bara, ', 
+                    round(circondentherm[0], 2), ' °C')
+            st.write('cricondenbar ', 
+                    round(cricondenbar[1], 2), ' bara, ', 
+                    round(cricondenbar[0], 2), ' °C')
+        else:
+            # Plot the PT envelope
+            fig, ax = plt.subplots()
+            plt.plot(dewts, dewps, label="dew point")
+            plt.plot(bubts, bubps, label="bubble point")
+            plt.title('PT envelope')
+            plt.xlabel('Temperature [°C]')
+            plt.ylabel('Pressure [bara]')
+            plt.legend()
+            plt.grid(True)
+            st.pyplot(fig)
+            st.divider()
+            
+            # Display cricondenbar and cricondentherm
+            cricobar = thermoOps.getOperation().get("cricondenbar")
+            cricotherm = thermoOps.getOperation().get("cricondentherm")
+            criticalT = thermoOps.getOperation().get("criticalPoint1")[0]
+            criticalP = thermoOps.getOperation().get("criticalPoint1")[1] 
+            st.write('critical point ', 
+                    round(criticalP, 2), ' bara, ', 
+                    round(criticalT - 273.15, 2), ' °C')
+            st.write('cricondentherm ', 
+                    round(cricotherm[1], 2), ' bara, ', 
+                    round(cricotherm[0] - 273.15, 2), ' °C')
+            st.write('cricondenbar ', 
+                    round(cricobar[1], 2), ' bara, ', 
+                    round(cricobar[0] - 273.15, 2), ' °C')
+            
+            
+            # Show dew/bubble data points
+            dewdatapoints = pd.DataFrame(
+                {
+                    'dew temperatures [°C]': dewts,
+                    'dew pressures [bara]': dewps,
+                }
+            )
+            bubdatapoints = pd.DataFrame(
+                {
+                    'bub temperatures [°C]': bubts,
+                    'bub pressures [bara]': bubps,
+                }
+            )
+            
+            st.divider()
+            st.write('dew points')
+            st.data_editor(dewdatapoints)
+            st.write('bubble points')
+            st.data_editor(bubdatapoints)
         
         # ---------------------------------------------------------------------
         # 4. Final TP flash at ~1 atm (1.01325 bara) and 15 °C
