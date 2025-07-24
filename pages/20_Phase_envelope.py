@@ -6,6 +6,7 @@ from neqsim import jneqsim
 import matplotlib.pyplot as plt
 from fluids import detailedHC_data
 import numpy as np
+from scipy.interpolate import UnivariateSpline
 
 st.title('Phase Envelope')
 
@@ -123,7 +124,7 @@ if st.button('Run'):
             T_min = -50.0
             T_max = 150.0
             T_step = 15.0
-            P_step = 1.0
+            P_step = 5.0
 
             # Calculate phase envelope
             thermoOps.calcPTphaseEnvelopeNew3(P_min, P_max, T_min, T_max, P_step, T_step)
@@ -136,31 +137,86 @@ if st.button('Run'):
             # Convert to numpy arrays for plotting
             pressurePhaseEnvelope_np = np.array(pressurePhaseEnvelope)
             temperaturePhaseEnvelope_np = np.array(temperaturePhaseEnvelope)
-            circondentherm = [0,0]
-            cricondenbar = [0,0]
 
-            # Find cricondenbar (max pressure and corresponding temperature)
-            cricondenbar_index = np.argmax(pressurePhaseEnvelope_np)
-            cricondenbar[1] = pressurePhaseEnvelope_np[cricondenbar_index]
-            cricondenbar[0] = temperaturePhaseEnvelope_np[cricondenbar_index]
+           # Use nearest-neighbor path for a more physical envelope
+            points = np.column_stack((temperaturePhaseEnvelope_np, pressurePhaseEnvelope_np))
+            n_points = len(points)
+            used = np.zeros(n_points, dtype=bool)
+            path = []
+            current = 0
+            path.append(current)
+            used[current] = True
+            for _ in range(1, n_points):
+                dists = np.linalg.norm(points - points[current], axis=1)
+                dists[used] = np.inf
+                next_idx = np.argmin(dists)
+                path.append(next_idx)
+                used[next_idx] = True
+                current = next_idx
+            points_nn = points[path]
+            temp_nn = points_nn[:,0]
+            press_nn = points_nn[:,1]
 
-            # Find cricondentherm (max temperature and corresponding pressure)
-            cricondentherm_index = np.argmax(temperaturePhaseEnvelope_np)
-            circondentherm[0] = temperaturePhaseEnvelope_np[cricondentherm_index]
-            circondentherm[1] = pressurePhaseEnvelope_np[cricondentherm_index]
+            # Use the path index as the independent variable for spline interpolation
+            path_idx = np.arange(len(temp_nn))
 
-            # Scatter plot of phase envelope points
+            # Spline interpolation along the nearest-neighbor path (not sorted by temperature)
+            spline_temp = UnivariateSpline(path_idx, temp_nn, s=0, k=1)
+            spline_press = UnivariateSpline(path_idx, press_nn, s=0, k=5)
+            path_fine = np.linspace(0, len(temp_nn)-1, 500)
+            temp_fine = spline_temp(path_fine)
+            press_fine = spline_press(path_fine)
+            cricondenbar = [0, 0]
+            cricondentherm = [0, 0]
+
+            # Cricondenbar: max pressure and corresponding temperature (on the spline)
+            cricondenbar_idx = np.argmax(press_fine)
+            cricondenbar[1] = press_fine[cricondenbar_idx]
+            cricondenbar[0] = temp_fine[cricondenbar_idx]
+
+            # Cricondentherm: max temperature and corresponding pressure (on the spline)
+            cricondentherm_idx = np.argmax(temp_fine)
+            cricondentherm[0] = temp_fine[cricondentherm_idx]
+            cricondentherm[1] = press_fine[cricondentherm_idx]
+
             fig, ax = plt.subplots()
-            plt.scatter(temperaturePhaseEnvelope_np, pressurePhaseEnvelope_np, color='blue', label='Phase Envelope Points')
+            plt.plot(temp_fine, press_fine, color='green')
+            plt.plot(temp_nn, press_nn, '-o', color='purple', alpha=0.5, label='Phase Envelope')
+
+            # Select 4 points near the top of the phase envelope (highest pressures)
+            num_top = 4
+            # Get indices of the 4 highest pressure points
+            idx_top = np.argsort(press_nn)[-num_top:]
+            # Sort these indices by temperature for a smooth plot
+            idx_top_sorted = idx_top[np.argsort(top_temps := temp_nn[idx_top])]
+            top_temps = temp_nn[idx_top_sorted]
+            top_press = press_nn[idx_top_sorted]
+
+            # Interpolate with a cubic spline (k=3) through these 4 points
+            spline_top = UnivariateSpline(top_temps, top_press, s=0, k=3)
+            t_fine_top = np.linspace(top_temps[0], top_temps[-1], 100)
+            p_fine_top = spline_top(t_fine_top)
+
+            # Calculate cricondenbar from the interpolated top region
+            cricondenbar_idx_top = np.argmax(p_fine_top)
+            cricondenbar[1] = p_fine_top[cricondenbar_idx_top]
+            cricondenbar[0] = t_fine_top[cricondenbar_idx_top]
+
+            plt.plot(t_fine_top, p_fine_top, color='blue', label='Cubic Spline (Top 4 Points)')
+
+            plt.scatter([cricondenbar[0]], [cricondenbar[1]], color='red', zorder=5, label='Cricondenbar')
+            plt.scatter([cricondentherm[0]], [cricondentherm[1]], color='orange', zorder=5, label='Cricondentherm')
             plt.xlabel('Temperature (°C)')
             plt.ylabel('Pressure (bara)')
             plt.grid(True)
+
+
             st.pyplot(fig)
             st.divider()
 
             st.write('cricondentherm ', 
-                    round(circondentherm[1], 2), ' bara, ', 
-                    round(circondentherm[0], 2), ' °C')
+                    round(cricondentherm[1], 2), ' bara, ', 
+                    round(cricondentherm[0], 2), ' °C')
             st.write('cricondenbar ', 
                     round(cricondenbar[1], 2), ' bara, ', 
                     round(cricondenbar[0], 2), ' °C')
