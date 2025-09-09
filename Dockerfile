@@ -15,6 +15,9 @@ RUN git clone https://github.com/equinor/neqsimhome.git .
 
 RUN pip3 install -r requirements.txt
 
+# Allow reflective access for Java modules required by XStream under Java 21
+ENV JAVA_TOOL_OPTIONS="--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED"
+
 EXPOSE 8501
 
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
