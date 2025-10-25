@@ -6,7 +6,16 @@ from neqsim.thermo.thermoTools import fluidcreator, fluid_df, hydt, dataFrame
 from fluids import default_fluid
 import matplotlib.pyplot as plt
 
+from components.assistant import render_ai_helper
+
 st.title('Gas Hydrate Calculation')
+render_ai_helper(
+    'gas_hydrate',
+    {
+        'requires_water': True,
+        'default_pressure_points': 4,
+    },
+)
 """
 Gas hydrate calculations are done using the CPA-EoS combined with a model for the solid hydrate phase.
 """
