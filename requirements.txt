@@ -1,5 +1,5 @@
 neqsim
-altair
+altair<5
 pandas
 streamlit
 matplotlib
