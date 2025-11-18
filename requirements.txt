@@ -1,7 +1,7 @@
 neqsim
-altair<5
+altair>=5.0.0
 pandas
-streamlit
+streamlit>=1.30.0
 matplotlib
 openai
 xlsxwriter
