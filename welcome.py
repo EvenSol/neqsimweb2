@@ -26,7 +26,7 @@ st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.p
 
 st.image('images/neqsimlogocircleflat.png', width=150)
 
-st.write("# Welcome to the NeqSim Simulation Platform! 👋")
+st.write("# Welcome to the NeqSim Process Simulation Tool! 👋")
 
 """
 ### About NeqSim
