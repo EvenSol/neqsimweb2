@@ -4,6 +4,8 @@ from neqsim import jneqsim
 import pandas as pd
 from fluids import lng_fluid
 from neqsim.thermo.thermoTools import fluid_df
+
+from components.assistant import render_ai_helper
 from io import BytesIO
 
 col1, col2 = st.columns([30,70])
@@ -11,6 +13,13 @@ col1, col2 = st.columns([30,70])
 with col2:
     # Streamlit page configuration
     st.title('LNG Ageing Simulation')
+    render_ai_helper(
+        'lng_ageing',
+        {
+            'default_samples': 5,
+            'supports_weathering': True,
+        },
+    )
 
 with col1:
     st.image('images/LNGship.jpg')

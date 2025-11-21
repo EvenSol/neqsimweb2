@@ -1,4 +1,6 @@
 import streamlit as st
+
+from components.assistant import render_ai_helper
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -215,6 +217,12 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
 
 def main():
     st.title("Property Generator")
+    render_ai_helper(
+        'property_generator',
+        {
+            'supports_components': True,
+        },
+    )
 
     st.write("""
     This application allows you to define a fluid composition, set up a grid of temperatures and pressures,
