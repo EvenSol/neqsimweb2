@@ -59,11 +59,13 @@ st.session_state.tp_flash_data = st.data_editor(
 if st.button('Run Helium Property Calculations'):
     if st.session_state.tp_flash_data.empty:
         st.error('No data to perform calculations. Please input temperature and pressure values.')
+    elif (st.session_state.tp_flash_data['Pressure (bara)'] <= 0).any():
+        st.error('Pressure must be greater than 0 bara. Please update the pressure inputs before running calculations.')
     else:
         results_list = []
         neqsim_fluid = fluid("srk")  # Use SRK EoS (VEGA EoS needs implementation)
         neqsim_fluid.addComponent('helium', 1.0, "mol/sec")  # Add helium component
-        
+
         for idx, row in st.session_state.tp_flash_data.iterrows():
             temp = row['Temperature (C)']
             pressure = row['Pressure (bara)']
@@ -74,7 +76,7 @@ if st.button('Run Helium Property Calculations'):
             neqsim_fluid.getPhase(0).getPhysicalProperties().setViscosityModel("KTA_mod")
             neqsim_fluid.initPhysicalProperties()
 
-            
+
             # Check number of phases
             num_phases = neqsim_fluid.getNumberOfPhases()
             #st.write(f"Number of detected phases: {num_phases}")
