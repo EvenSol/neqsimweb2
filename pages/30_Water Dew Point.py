@@ -56,7 +56,7 @@ st.edited_dfTP = st.data_editor(
     column_config={
         'Pressure (bara)': st.column_config.NumberColumn(
             label="Pressure (bara)",
-            min_value=0.0,      # Minimum pressure
+            min_value=1e-10,      # Minimum pressure (exclude zero)
             max_value=1000,     # Maximum pressure
             format='%f',        # Decimal format
             help='Enter the pressure in bar absolute.'  # Help text for guidance
@@ -68,7 +68,8 @@ if st.button('Run'):
     # Check if water's MolarComposition[-] is greater than 0
     water_row = st.edited_df[st.edited_df['ComponentName'] == 'water']  # Adjust 'ComponentName' and 'water' as necessary
     if not water_row.empty and water_row['MolarComposition[-]'].iloc[0] > 0:
-        if (st.edited_dfTP['Pressure (bara)'] <= 0).any():
+        pressure_values = st.edited_dfTP.dropna()
+        if (pressure_values <= 0).any():
             st.error('Pressure must be greater than 0 bara. Please update the pressure inputs before running calculations.')
         else:
             neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=False, add_all_components=False).autoSelectModel()
@@ -76,8 +77,7 @@ if st.button('Run'):
             results_list2 = []
             pres_list = []
             fluid_results_list = []
-            for pres in st.edited_dfTP.dropna():
-                pressure = pres
+            for pressure in pressure_values:
                 pres_list.append(pressure)
                 neqsim_fluid.setPressure(pressure, 'bara')
                 results_list.append(hydt(neqsim_fluid)-273.15)
@@ -91,7 +91,7 @@ if st.button('Run'):
             st.session_state['tp_data'] = st.session_state['tp_data'].sort_values('Pressure (bara)')
             st.success('Hydrate calculation finished successfully!')
             combined_results = pd.concat(fluid_results_list, ignore_index=True)
-           
+
         if st.session_state.get('refresh', True):
             st.edited_dfTP2 = st.data_editor(
                 st.session_state.tp_data.dropna().reset_index(drop=True),
@@ -99,7 +99,7 @@ if st.button('Run'):
                 column_config={
                     'Pressure (bara)': st.column_config.NumberColumn(
                         label="Pressure (bara)",
-                        min_value=0.0,      # Minimum pressure
+                        min_value=1e-10,      # Minimum pressure (exclude zero)
                         max_value=1000,     # Maximum pressure
                         format='%f',        # Decimal format
                         help='Enter the pressure in bar absolute.'  # Help text for guidance
@@ -117,7 +117,7 @@ if st.button('Run'):
         plt.figure(figsize=(10, 5))
         plt.plot(st.session_state['tp_data']['Hydrate Temperature (C)'], st.session_state['tp_data']['Pressure (bara)'], marker='o', linestyle='-',label="hydrate temperature")
         plt.plot(st.session_state['tp_data']['Aqueous Temperature (C)'], st.session_state['tp_data']['Pressure (bara)'], marker='x', linestyle='--',label="aqueous dew point")
-        
+
         plt.title('Dew Point Lines')
         plt.ylabel('Pressure (bara)')
         plt.xlabel('Temperature (C)')
