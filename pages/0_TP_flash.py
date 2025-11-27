@@ -83,13 +83,11 @@ if st.button('Run TP Flash Calculations'):
         # Check if the dataframe is empty
         if st.session_state.tp_flash_data.empty:
             st.error('No data to perform calculations. Please input temperature and pressure values.')
-        elif (st.edited_dfTP['Pressure (bara)'] <= 0).any():
-            st.error('Pressure must be greater than 0 bara. Please update the pressure inputs before running calculations.')
         else:
             # Initialize a list to store results
             results_list = []
             neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=isplusfluid, add_all_components=False).autoSelectModel()
-
+            
             # Iterate over each row and perform calculations
             for idx, row in st.edited_dfTP.dropna().iterrows():
                 temp = row['Temperature (C)']
@@ -99,12 +97,12 @@ if st.button('Run TP Flash Calculations'):
                 TPflash(neqsim_fluid)
                 #results_df = st.data_editor(dataFrame(neqsim_fluid))
                 results_list.append(dataFrame(neqsim_fluid))
-
+            
             st.success('Flash calculations finished successfully!')
             st.subheader("Results:")
             # Combine all results into a single dataframe
             combined_results = pd.concat(results_list, ignore_index=True)
-
+            
             # Display the combined results
             #st.subheader('Combined TP Flash Results')
             #st.dataframe(combined_results)
