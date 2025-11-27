@@ -98,64 +98,67 @@ volume_ref_temp = st.selectbox(
 )
 if st.button('Simulate Ageing'):
     if st.edited_df['MolarComposition[-]'].sum() > 0:
-        # Create fluid from user input
-        fluid = fluid_df(st.edited_df).autoSelectModel()
-        fluid.setPressure(pressure_transport, 'bara')
-        fluid.setTemperature(-160.0, "C")  # setting a guessed initial temperature
-        
-        # Creating ship system for LNG ageing
-        ship = jneqsim.fluidmechanics.flowsystem.twophaseflowsystem.shipsystem.LNGship(fluid, volume_initial, BOR / 100.0)
-        ship.useStandardVersion("", standard_version)
-        ship.getStandardISO6976().setEnergyRefT(energy_ref_temp)
-        ship.getStandardISO6976().setVolRefT(volume_ref_temp)
-        ship.setEndTime(time_transport)
-        ship.createSystem()
-        ship.solveSteadyState(0)
-        ship.solveTransient(0)
-        ageingresults = ship.getResults("temp")
+        if pressure_transport <= 0:
+            st.error('Transport pressure must be greater than 0 bara. Please update the pressure before running calculations.')
+        else:
+            # Create fluid from user input
+            fluid = fluid_df(st.edited_df).autoSelectModel()
+            fluid.setPressure(pressure_transport, 'bara')
+            fluid.setTemperature(-160.0, "C")  # setting a guessed initial temperature
 
-        ageingresults = ship.getResults("temp")
-        # Assuming ageingresults is already obtained from the simulation
-        results = ageingresults[1:]  # Data rows
-        columns = ageingresults[0]   # Column headers
+            # Creating ship system for LNG ageing
+            ship = jneqsim.fluidmechanics.flowsystem.twophaseflowsystem.shipsystem.LNGship(fluid, volume_initial, BOR / 100.0)
+            ship.useStandardVersion("", standard_version)
+            ship.getStandardISO6976().setEnergyRefT(energy_ref_temp)
+            ship.getStandardISO6976().setVolRefT(volume_ref_temp)
+            ship.setEndTime(time_transport)
+            ship.createSystem()
+            ship.solveSteadyState(0)
+            ship.solveTransient(0)
+            ageingresults = ship.getResults("temp")
 
-        # Clean the column names to ensure uniqueness and handle empty or None values
-        cleaned_columns = []
-        seen = set()
-        for i, col in enumerate(columns):
-            new_col = col if col not in (None, '') else f"Unnamed_{i}"
-            if new_col in seen:
-                new_col = f"{new_col}_{i}"
-            seen.add(new_col)
-            cleaned_columns.append(new_col)
+            ageingresults = ship.getResults("temp")
+            # Assuming ageingresults is already obtained from the simulation
+            results = ageingresults[1:]  # Data rows
+            columns = ageingresults[0]   # Column headers
 
-        # Creating DataFrame from results with cleaned column names
-        resultsDF = pd.DataFrame([[float(str(j).replace(',', '')) for j in i] for i in results], columns=cleaned_columns)
-        resultsDF.columns = ['time', 'temperature','WI','GCV','density','volume','C1','C2','C3','iC4','nC4','iC5','nC5','C6','N2','energy', 'GCV_mass', 'gC1','gC2','gC3','giC4','gnC4','giC5','gnC5','gC6','gN2']
+            # Clean the column names to ensure uniqueness and handle empty or None values
+            cleaned_columns = []
+            seen = set()
+            for i, col in enumerate(columns):
+                new_col = col if col not in (None, '') else f"Unnamed_{i}"
+                if new_col in seen:
+                    new_col = f"{new_col}_{i}"
+                seen.add(new_col)
+                cleaned_columns.append(new_col)
 
-        # Display the DataFrame
-        #print(resultsDF.head())  # or use st.dataframe(resultsDF) in Streamlit
+            # Creating DataFrame from results with cleaned column names
+            resultsDF = pd.DataFrame([[float(str(j).replace(',', '')) for j in i] for i in results], columns=cleaned_columns)
+            resultsDF.columns = ['time', 'temperature','WI','GCV','density','volume','C1','C2','C3','iC4','nC4','iC5','nC5','C6','N2','energy', 'GCV_mass', 'gC1','gC2','gC3','giC4','gnC4','giC5','gnC5','gC6','gN2']
 
-        # Displaying the results DataFrame in Streamlit
-        st.subheader('Ageing Simulation Results')
-        st.dataframe(resultsDF)
+            # Display the DataFrame
+            #print(resultsDF.head())  # or use st.dataframe(resultsDF) in Streamlit
 
-        # Function to convert DataFrame to Excel and offer download
-        def convert_df_to_excel(df):
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False)
-            processed_data = output.getvalue()
-            return processed_data
+            # Displaying the results DataFrame in Streamlit
+            st.subheader('Ageing Simulation Results')
+            st.dataframe(resultsDF)
 
-        # Download button for the results in Excel format
-        # if st.button('Download Results as Excel'):
-        excel_data = convert_df_to_excel(resultsDF)
-        st.download_button(label='📥 Download Excel',
-                        data=excel_data,
-                        file_name='lng_ageing_results.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        st.divider()
+            # Function to convert DataFrame to Excel and offer download
+            def convert_df_to_excel(df):
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df.to_excel(writer, index=False)
+                processed_data = output.getvalue()
+                return processed_data
+
+            # Download button for the results in Excel format
+            # if st.button('Download Results as Excel'):
+            excel_data = convert_df_to_excel(resultsDF)
+            st.download_button(label='📥 Download Excel',
+                            data=excel_data,
+                            file_name='lng_ageing_results.xlsx',
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            st.divider()
         """
         Units:
 

@@ -74,11 +74,13 @@ st.session_state.tp_flash_data = st.data_editor(
 if st.button('Run Hydrogen Property Calculations'):
     if st.session_state.tp_flash_data.empty:
         st.error('No data to perform calculations. Please input temperature and pressure values.')
+    elif (st.session_state.tp_flash_data['Pressure (bara)'] <= 0).any():
+        st.error('Pressure must be greater than 0 bara. Please update the pressure inputs before running calculations.')
     else:
         results_list = []
         neqsim_fluid = fluid("srk")  # Use SRK EoS
         neqsim_fluid.addComponent('hydrogen', 1.0, "mol/sec")  # Add hydrogen component
-        
+
         for idx, row in st.session_state.tp_flash_data.iterrows():
             temp = row['Temperature (C)']
             pressure = row['Pressure (bara)']
@@ -88,11 +90,11 @@ if st.button('Run Hydrogen Property Calculations'):
             neqsim_fluid.initThermoProperties()
             neqsim_fluid.getPhase(0).getPhysicalProperties().setViscosityModel("Muzny_mod")
             neqsim_fluid.initPhysicalProperties()
-            
-            
+
+
             # Check number of phases
             num_phases = neqsim_fluid.getNumberOfPhases()
-            
+
             if num_phases > 0:
                 phase = neqsim_fluid.getPhase(0)
                 try:
@@ -130,7 +132,7 @@ if st.button('Run Hydrogen Property Calculations'):
                     break
             else:
                 st.error("No valid phases found for Leachman model calculations.")
-        
+
         st.success('Hydrogen property calculations completed!')
         st.subheader("Results:")
         combined_results = pd.DataFrame(results_list)
