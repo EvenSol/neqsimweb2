@@ -76,26 +76,23 @@ if st.button('Run'):
     # Check if water's MolarComposition[-] is greater than 0
     water_row = st.edited_df[st.edited_df['ComponentName'] == 'water']  # Adjust 'ComponentName' and 'water' as necessary
     if not water_row.empty and water_row['MolarComposition[-]'].iloc[0] > 0:
-        if (st.edited_dfTP['Pressure (bara)'] <= 0).any():
-            st.error('Pressure must be greater than 0 bara. Please update the pressure inputs before running calculations.')
-        else:
-            neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=False, add_all_components=False).autoSelectModel()
-            results_list = []
-            pres_list = []
-            fluid_results_list = []
-            for pres in st.edited_dfTP.dropna():
-                pressure = pres
-                pres_list.append(pressure)
-                neqsim_fluid.setPressure(pressure, 'bara')
-                results_list.append(hydt(neqsim_fluid)-273.15)
-                fluid_results_list.append(dataFrame(neqsim_fluid))
-            st.session_state['tp_data'] = pd.DataFrame({
-                'Pressure (bara)': pres_list,   # Default example pressure
-                'Temperature (C)': results_list  # Default temperature
-            })
-            st.session_state['tp_data'] = st.session_state['tp_data'].sort_values('Pressure (bara)')
-            st.success('Hydrate calculation finished successfully!')
-            combined_results = pd.concat(fluid_results_list, ignore_index=True)
+        neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=False, add_all_components=False).autoSelectModel()
+        results_list = []
+        pres_list = []
+        fluid_results_list = []
+        for pres in st.edited_dfTP.dropna():
+            pressure = pres
+            pres_list.append(pressure)
+            neqsim_fluid.setPressure(pressure, 'bara')
+            results_list.append(hydt(neqsim_fluid)-273.15)
+            fluid_results_list.append(dataFrame(neqsim_fluid))
+        st.session_state['tp_data'] = pd.DataFrame({
+            'Pressure (bara)': pres_list,   # Default example pressure
+            'Temperature (C)': results_list  # Default temperature
+        })
+        st.session_state['tp_data'] = st.session_state['tp_data'].sort_values('Pressure (bara)')
+        st.success('Hydrate calculation finished successfully!')
+        combined_results = pd.concat(fluid_results_list, ignore_index=True)
            
         if st.session_state.get('refresh', True):
             st.edited_dfTP2 = st.data_editor(
