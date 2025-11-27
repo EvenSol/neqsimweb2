@@ -384,8 +384,6 @@ def main():
         total_molar_frac = st.edited_df["MolarComposition[-]"].sum()
         if total_molar_frac <= 0:
             st.error("Total Molar Composition must be greater than 0.")
-        elif min_pres <= 0 or max_pres <= 0:
-            st.error("Pressure range values must be greater than 0 bara. Please update the minimum and maximum pressure inputs.")
         else:
             # 2) Normalize fluid composition
             normalized_df = st.edited_df.copy()
