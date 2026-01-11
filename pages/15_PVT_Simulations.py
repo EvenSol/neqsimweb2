@@ -1237,19 +1237,25 @@ with tab_gorbo:
                     
                     # Create GOR simulation
                     gor_sim = jneqsim.pvtsimulation.simulation.GOR(fluid)
-                    gor_sim.setTemperature(gorbo_temp + 273.15, "K")
                     
-                    # Set pressure steps
+                    # Set pressure and temperature arrays (both must be same length)
                     pressures = np.linspace(gorbo_pres_range[1], gorbo_pres_range[0], gorbo_steps).tolist()
-                    gor_sim.setPressures(pressures)
+                    temperatures = [gorbo_temp + 273.15] * len(pressures)  # Same temperature for all pressure points
+                    gor_sim.setTemperaturesAndPressures(temperatures, pressures)
                     
                     # Run simulation
                     gor_sim.runCalc()
                     
-                    # Get results
-                    p_results = list(gor_sim.getPressures())
+                    # Get results - use the pressure array we set
+                    p_results = pressures
                     gor = list(gor_sim.getGOR())
                     bo = list(gor_sim.getBofactor())
+                    
+                    # Ensure all arrays have the same length (use the minimum length)
+                    min_len = min(len(p_results), len(gor), len(bo))
+                    p_results = p_results[:min_len]
+                    gor = gor[:min_len]
+                    bo = bo[:min_len]
                     
                     st.success("✅ GOR/Bo calculation completed!")
                     
