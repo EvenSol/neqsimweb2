@@ -215,6 +215,10 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
 
 
 def main():
+    st.set_page_config(page_title="Property Generator", page_icon='images/neqsimlogocircleflat.png')
+    apply_theme()
+    theme_toggle()
+    
     st.title("Property Generator")
 
     st.write("""
