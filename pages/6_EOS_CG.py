@@ -3,9 +3,9 @@ import pandas as pd
 from neqsim.thermo import fluid, TPflash, dataFrame
 from neqsim import jneqsim
 
-st.set_page_config(page_title="EOS-CG TP Flash", page_icon='images/neqsimlogocircleflat.png')
+st.set_page_config(page_title="EOS-CG", page_icon='images/neqsimlogocircleflat.png')
 
-st.title('EOS-CG TP Flash')
+st.title('EOS-CG')
 
 """
 The **EOS-CG** (Equation of State for Combustion Gases) is an extension of the GERG-2008 framework 

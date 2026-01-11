@@ -6,12 +6,11 @@ import openai
 from openai import OpenAI
 
 def make_request(question_input: str):
+    # Only attempt request if API key is provided
+    if not openai_api_key or openai_api_key.strip() == "":
+        return ""
     try:
-        OpenAI.api_key = openai_api_key
         client = OpenAI(api_key=openai_api_key)
-    except:
-        st.write('OpenAI key not provided...')
-    try:
         completion = client.completions.create(
             model="gpt-3.5-turbo-instruct",
             prompt=question_input,
@@ -19,7 +18,7 @@ def make_request(question_input: str):
             temperature=0
         )
         return completion.choices[0].text
-    except:
+    except Exception:
         return ""
 
 st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.png')

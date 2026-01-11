@@ -5,6 +5,8 @@ import neqsim
 from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame
 from fluids import default_fluid
 
+st.set_page_config(page_title="TP Flash", page_icon='images/neqsimlogocircleflat.png')
+
 st.title('TP flash')
 """
 The NeqSim flash model will select the best thermodynamic model based on the fluid composition. For fluids containing polar components it will use the CPA-EoS.
@@ -15,31 +17,37 @@ You can select components from a predifined component list. Alterative component
 st.divider()
 st.text("Set fluid composition:")
 
+# Reset button to restore default composition
+if st.button('Reset to Default Composition'):
+    st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
+    st.rerun()
+
 hidecomponents = st.checkbox('Show active components')
-if hidecomponents:
-   st.edited_df['MolarComposition[-]'] = st.edited_df['MolarComposition[-]']
-   st.session_state.activefluid_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
+if hidecomponents and 'tpflash_edited_df' in st.session_state:
+    st.session_state.tpflash_fluid_df = st.session_state.tpflash_edited_df[
+        st.session_state.tpflash_edited_df['MolarComposition[-]'] > 0
+    ]
 
-if 'uploaded_file' in st.session_state and hidecomponents == False:
+if 'tpflash_uploaded_file' in st.session_state and st.session_state.tpflash_uploaded_file is not None and not hidecomponents:
     try:
-        st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
+        st.session_state.tpflash_fluid_df = pd.read_csv(st.session_state.tpflash_uploaded_file)
         numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
-        st.session_state.activefluid_df[numeric_columns] = st.session_state.activefluid_df[numeric_columns].astype(float)
-    except:
-        st.session_state.activefluid_df = pd.DataFrame(default_fluid)
+        st.session_state.tpflash_fluid_df[numeric_columns] = st.session_state.tpflash_fluid_df[numeric_columns].astype(float)
+    except Exception as e:
+        st.warning(f'Could not load file: {e}')
+        st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
 
-if 'activefluid_df' not in st.session_state or st.session_state.get('activefluid_name') != 'default_fluid':
-    st.session_state.activefluid_df = pd.DataFrame(default_fluid)
-    st.session_state.activefluid_name = 'default_fluid'
+if 'tpflash_fluid_df' not in st.session_state:
+    st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
 
-if 'tp_flash_data' not in st.session_state:
-    st.session_state['tp_flash_data'] = pd.DataFrame({
+if 'tpflash_tp_data' not in st.session_state:
+    st.session_state['tpflash_tp_data'] = pd.DataFrame({
         'Temperature (C)': [20.0, 25.0],  # Default example temperature
         'Pressure (bara)': [1.0, 10.0]  # Default example pressure
     })
 
 st.edited_df = st.data_editor(
-    st.session_state.activefluid_df,
+    st.session_state.tpflash_fluid_df,
     column_config={
         "ComponentName": "Component Name",
         "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
@@ -51,6 +59,10 @@ st.edited_df = st.data_editor(
         ),
     },
 num_rows='dynamic')
+
+# Store edited df for later use
+st.session_state.tpflash_edited_df = st.edited_df
+
 isplusfluid = st.checkbox('Plus Fluid')
 
 st.text("Fluid composition will be normalized before simulation")
@@ -58,7 +70,7 @@ st.divider()
 # Use st.data_editor for inputting temperature and pressure
 st.text("Input Pressures and Temperatures")
 st.edited_dfTP = st.data_editor(
-    st.session_state.tp_flash_data.dropna().reset_index(drop=True),
+    st.session_state.tpflash_tp_data.dropna().reset_index(drop=True),
     num_rows='dynamic',  # Allows dynamic number of rows
     column_config={
         'Temperature (C)': st.column_config.NumberColumn(
@@ -81,45 +93,46 @@ st.edited_dfTP = st.data_editor(
 if st.button('Run TP Flash Calculations'):
     if st.edited_df['MolarComposition[-]'].sum() > 0:
         # Check if the dataframe is empty
-        if st.session_state.tp_flash_data.empty:
+        if st.session_state.tpflash_tp_data.empty:
             st.error('No data to perform calculations. Please input temperature and pressure values.')
         else:
-            # Initialize a list to store results
-            results_list = []
-            neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=isplusfluid, add_all_components=False).autoSelectModel()
-            
-            # Iterate over each row and perform calculations
-            for idx, row in st.edited_dfTP.dropna().iterrows():
-                temp = row['Temperature (C)']
-                pressure = row['Pressure (bara)']
-                neqsim_fluid.setPressure(pressure, 'bara')
-                neqsim_fluid.setTemperature(temp, 'C')
-                TPflash(neqsim_fluid)
-                #results_df = st.data_editor(dataFrame(neqsim_fluid))
-                results_list.append(dataFrame(neqsim_fluid))
-            
-            st.success('Flash calculations finished successfully!')
-            st.subheader("Results:")
-            # Combine all results into a single dataframe
-            combined_results = pd.concat(results_list, ignore_index=True)
-            
-            # Display the combined results
-            #st.subheader('Combined TP Flash Results')
-            #st.dataframe(combined_results)
-            results_df = st.data_editor(combined_results)
-            st.divider()
-            list1 = neqsim_fluid.getComponentNames()
-            l1 = list(list1)
-            string_list = [str(element) for element in l1]
-            delimiter = ", "
-            result_string = delimiter.join(string_list)
-            try:
-                input = "What scientific experimental equilibrium data are available for mixtures of " + result_string + " at temperature around " + str(temp) + " Celsius and pressure around " + str(pressure) + " bar."
-                openapitext = st.make_request(input)
-                st.write(openapitext)
-            except:
-                st.write('OpenAI key needed for data analysis')
+            with st.spinner('Running flash calculations...'):
+                try:
+                    # Initialize a list to store results
+                    results_list = []
+                    neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=isplusfluid, add_all_components=False).autoSelectModel()
+                    
+                    # Iterate over each row and perform calculations
+                    for idx, row in st.edited_dfTP.dropna().iterrows():
+                        temp = row['Temperature (C)']
+                        pressure = row['Pressure (bara)']
+                        neqsim_fluid.setPressure(pressure, 'bara')
+                        neqsim_fluid.setTemperature(temp, 'C')
+                        TPflash(neqsim_fluid)
+                        results_list.append(dataFrame(neqsim_fluid))
+                    
+                    st.success('Flash calculations finished successfully!')
+                    st.subheader("Results:")
+                    # Combine all results into a single dataframe
+                    combined_results = pd.concat(results_list, ignore_index=True)
+                    
+                    # Display the combined results
+                    results_df = st.data_editor(combined_results)
+                    st.divider()
+                    list1 = neqsim_fluid.getComponentNames()
+                    l1 = list(list1)
+                    string_list = [str(element) for element in l1]
+                    delimiter = ", "
+                    result_string = delimiter.join(string_list)
+                    try:
+                        input = "What scientific experimental equilibrium data are available for mixtures of " + result_string + " at temperature around " + str(temp) + " Celsius and pressure around " + str(pressure) + " bar."
+                        openapitext = st.make_request(input)
+                        st.write(openapitext)
+                    except Exception:
+                        st.info('💡 Enter OpenAI API key in the sidebar for AI-powered data analysis')
+                except Exception as e:
+                    st.error(f'Calculation failed: {str(e)}')
     else:
         st.error('The sum of Molar Composition must be greater than 0. Please adjust your inputs.')
         
-st.sidebar.file_uploader("Import Fluid", key='uploaded_file', help='Fluids can be saved by hovering over the fluid window and clicking the "Download as CSV" button in the upper-right corner.')
+st.sidebar.file_uploader("Import Fluid", key='tpflash_uploaded_file', help='Fluids can be saved by hovering over the fluid window and clicking the "Download as CSV" button in the upper-right corner.')

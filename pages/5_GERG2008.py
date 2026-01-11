@@ -3,9 +3,9 @@ import pandas as pd
 from neqsim.thermo import fluid, TPflash, dataFrame
 from neqsim import jneqsim
 
-st.set_page_config(page_title="GERG-2008 TP Flash", page_icon='images/neqsimlogocircleflat.png')
+st.set_page_config(page_title="GERG-2008", page_icon='images/neqsimlogocircleflat.png')
 
-st.title('GERG-2008 TP Flash')
+st.title('GERG-2008')
 
 """
 The GERG-2008 equation of state is a reference equation for natural gas calculations, 
