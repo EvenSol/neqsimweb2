@@ -2,6 +2,11 @@ import streamlit as st
 import pandas as pd
 import neqsim
 from neqsim.thermo import fluid, TPflash
+from theme import apply_theme, theme_toggle
+
+st.set_page_config(page_title="Helium Properties", page_icon='images/neqsimlogocircleflat.png')
+apply_theme()
+theme_toggle()
 
 st.title("Helium Properties")
 st.write(

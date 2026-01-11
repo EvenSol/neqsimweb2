@@ -2,8 +2,11 @@ import streamlit as st
 import pandas as pd
 from neqsim.thermo import fluid, TPflash, dataFrame
 from neqsim import jneqsim
+from theme import apply_theme, theme_toggle
 
 st.set_page_config(page_title="EOS-CG", page_icon='images/neqsimlogocircleflat.png')
+apply_theme()
+theme_toggle()
 
 st.title('EOS-CG')
 

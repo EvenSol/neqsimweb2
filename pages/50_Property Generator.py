@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
+from theme import apply_theme, theme_toggle
 
 # NeqSim imports
 import neqsim
