@@ -7,6 +7,19 @@ from fluids import default_fluid
 
 st.set_page_config(page_title="TP Flash", page_icon='images/neqsimlogocircleflat.png')
 
+# Mobile-friendly CSS
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    .stDataEditor > div { font-size: 14px; }
+    .stButton > button { width: 100%; padding: 0.75rem; font-size: 16px; }
+    h1 { font-size: 1.75rem !important; }
+    .block-container { padding: 1rem !important; }
+}
+.stButton > button { min-height: 44px; }
+</style>
+""", unsafe_allow_html=True)
+
 st.title('TP flash')
 """
 The NeqSim flash model will select the best thermodynamic model based on the fluid composition. For fluids containing polar components it will use the CPA-EoS.
@@ -15,80 +28,78 @@ For non-polar fluids it will use the SRK/PR-EoS. The flash will calculate the ph
 You can select components from a predifined component list. Alterative component names ([see available components](https://github.com/equinor/neqsim/blob/master/src/main/resources/data/COMP.csv)) can be used by manually editing the table.
 """
 st.divider()
-st.text("Set fluid composition:")
 
-# Reset button to restore default composition
-if st.button('Reset to Default Composition'):
-    st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
-    st.rerun()
+with st.expander("📋 Set Fluid Composition", expanded=True):
+    # Reset button to restore default composition
+    if st.button('Reset to Default Composition'):
+        st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
+        st.rerun()
 
-hidecomponents = st.checkbox('Show active components')
-if hidecomponents and 'tpflash_edited_df' in st.session_state:
-    st.session_state.tpflash_fluid_df = st.session_state.tpflash_edited_df[
-        st.session_state.tpflash_edited_df['MolarComposition[-]'] > 0
-    ]
+    hidecomponents = st.checkbox('Show active components')
+    if hidecomponents and 'tpflash_edited_df' in st.session_state:
+        st.session_state.tpflash_fluid_df = st.session_state.tpflash_edited_df[
+            st.session_state.tpflash_edited_df['MolarComposition[-]'] > 0
+        ]
 
-if 'tpflash_uploaded_file' in st.session_state and st.session_state.tpflash_uploaded_file is not None and not hidecomponents:
-    try:
-        st.session_state.tpflash_fluid_df = pd.read_csv(st.session_state.tpflash_uploaded_file)
-        numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
-        st.session_state.tpflash_fluid_df[numeric_columns] = st.session_state.tpflash_fluid_df[numeric_columns].astype(float)
-    except Exception as e:
-        st.warning(f'Could not load file: {e}')
+    if 'tpflash_uploaded_file' in st.session_state and st.session_state.tpflash_uploaded_file is not None and not hidecomponents:
+        try:
+            st.session_state.tpflash_fluid_df = pd.read_csv(st.session_state.tpflash_uploaded_file)
+            numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
+            st.session_state.tpflash_fluid_df[numeric_columns] = st.session_state.tpflash_fluid_df[numeric_columns].astype(float)
+        except Exception as e:
+            st.warning(f'Could not load file: {e}')
+            st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
+
+    if 'tpflash_fluid_df' not in st.session_state:
         st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
 
-if 'tpflash_fluid_df' not in st.session_state:
-    st.session_state.tpflash_fluid_df = pd.DataFrame(default_fluid)
+    if 'tpflash_tp_data' not in st.session_state:
+        st.session_state['tpflash_tp_data'] = pd.DataFrame({
+            'Temperature (C)': [20.0, 25.0],  # Default example temperature
+            'Pressure (bara)': [1.0, 10.0]  # Default example pressure
+        })
 
-if 'tpflash_tp_data' not in st.session_state:
-    st.session_state['tpflash_tp_data'] = pd.DataFrame({
-        'Temperature (C)': [20.0, 25.0],  # Default example temperature
-        'Pressure (bara)': [1.0, 10.0]  # Default example pressure
-    })
+    st.edited_df = st.data_editor(
+        st.session_state.tpflash_fluid_df,
+        column_config={
+            "ComponentName": "Component Name",
+            "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
+            "MolarMass[kg/mol]": st.column_config.NumberColumn(
+                "Molar Mass [kg/mol]", min_value=0, max_value=10000, format="%f kg/mol"
+            ),
+            "RelativeDensity[-]": st.column_config.NumberColumn(
+                "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
+            ),
+        },
+    num_rows='dynamic')
 
-st.edited_df = st.data_editor(
-    st.session_state.tpflash_fluid_df,
-    column_config={
-        "ComponentName": "Component Name",
-        "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
-        "MolarMass[kg/mol]": st.column_config.NumberColumn(
-            "Molar Mass [kg/mol]", min_value=0, max_value=10000, format="%f kg/mol"
-        ),
-        "RelativeDensity[-]": st.column_config.NumberColumn(
-            "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
-        ),
-    },
-num_rows='dynamic')
+    # Store edited df for later use
+    st.session_state.tpflash_edited_df = st.edited_df
 
-# Store edited df for later use
-st.session_state.tpflash_edited_df = st.edited_df
-
-isplusfluid = st.checkbox('Plus Fluid')
-
-st.text("Fluid composition will be normalized before simulation")
-st.divider()
-# Use st.data_editor for inputting temperature and pressure
-st.text("Input Pressures and Temperatures")
-st.edited_dfTP = st.data_editor(
-    st.session_state.tpflash_tp_data.dropna().reset_index(drop=True),
-    num_rows='dynamic',  # Allows dynamic number of rows
-    column_config={
-        'Temperature (C)': st.column_config.NumberColumn(
-            label="Temperature (C)",
-            min_value=-273.15,  # Minimum temperature in Celsius
-            max_value=1000,     # Maximum temperature in Celsius
-            format='%f',        # Decimal format
-            help='Enter the temperature in degrees Celsius.'  # Help text for guidance
-        ),
-        'Pressure (bara)': st.column_config.NumberColumn(
-            label="Pressure (bara)",
-            min_value=0.0,      # Minimum pressure
-            max_value=1000,     # Maximum pressure
-            format='%f',        # Decimal format
-            help='Enter the pressure in bar absolute.'  # Help text for guidance
-        ),
-    }
-)
+    isplusfluid = st.checkbox('Plus Fluid')
+    
+    st.caption("💡 Fluid composition will be normalized before simulation")
+with st.expander("🌡️ Input Pressures and Temperatures", expanded=True):
+    st.edited_dfTP = st.data_editor(
+        st.session_state.tpflash_tp_data.dropna().reset_index(drop=True),
+        num_rows='dynamic',  # Allows dynamic number of rows
+        column_config={
+            'Temperature (C)': st.column_config.NumberColumn(
+                label="Temperature (C)",
+                min_value=-273.15,  # Minimum temperature in Celsius
+                max_value=1000,     # Maximum temperature in Celsius
+                format='%f',        # Decimal format
+                help='Enter the temperature in degrees Celsius.'  # Help text for guidance
+            ),
+            'Pressure (bara)': st.column_config.NumberColumn(
+                label="Pressure (bara)",
+                min_value=0.0,      # Minimum pressure
+                max_value=1000,     # Maximum pressure
+                format='%f',        # Decimal format
+                help='Enter the pressure in bar absolute.'  # Help text for guidance
+            ),
+        }
+    )
 
 if st.button('Run TP Flash Calculations'):
     if st.edited_df['MolarComposition[-]'].sum() > 0:

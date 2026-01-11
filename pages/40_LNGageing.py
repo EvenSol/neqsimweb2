@@ -8,6 +8,20 @@ from io import BytesIO
 
 st.set_page_config(page_title="LNG Ageing", page_icon='images/neqsimlogocircleflat.png')
 
+# Mobile-friendly CSS
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    .stDataEditor > div { font-size: 14px; }
+    .stButton > button { width: 100%; padding: 0.75rem; font-size: 16px; }
+    h1 { font-size: 1.75rem !important; }
+    .block-container { padding: 1rem !important; }
+    [data-testid="column"] { width: 100% !important; flex: 100% !important; }
+}
+.stButton > button { min-height: 44px; }
+</style>
+""", unsafe_allow_html=True)
+
 col1, col2 = st.columns([30,70])
 
 with col2:
@@ -29,53 +43,52 @@ To estimate LNG aging, NeqSim considers the following factors:
 
 """
 st.divider()
-st.subheader("Initial LNG composition:")
 
-# Reset button to restore default composition
-if st.button('Reset to Default Composition'):
-    st.session_state.lng_fluid_df = pd.DataFrame(lng_fluid)
-    st.rerun()
+with st.expander("📋 Initial LNG Composition", expanded=True):
+    # Reset button to restore default composition
+    if st.button('Reset to Default Composition'):
+        st.session_state.lng_fluid_df = pd.DataFrame(lng_fluid)
+        st.rerun()
 
-hidecomponents = st.checkbox('Show active components')
-if hidecomponents and 'lng_edited_df' in st.session_state:
-    st.session_state.lng_fluid_df = st.session_state.lng_edited_df[
-        st.session_state.lng_edited_df['MolarComposition[-]'] > 0
-    ]
+    hidecomponents = st.checkbox('Show active components')
+    if hidecomponents and 'lng_edited_df' in st.session_state:
+        st.session_state.lng_fluid_df = st.session_state.lng_edited_df[
+            st.session_state.lng_edited_df['MolarComposition[-]'] > 0
+        ]
 
-if 'lng_uploaded_file' in st.session_state and st.session_state.lng_uploaded_file is not None and not hidecomponents:
-    try:
-        st.session_state.lng_fluid_df = pd.read_csv(st.session_state.lng_uploaded_file)
-        numeric_columns = ['MolarComposition[-]']
-        st.session_state.lng_fluid_df[numeric_columns] = st.session_state.lng_fluid_df[numeric_columns].astype(float)
-    except Exception as e:
-        st.warning(f'Could not load file: {e}')
+    if 'lng_uploaded_file' in st.session_state and st.session_state.lng_uploaded_file is not None and not hidecomponents:
+        try:
+            st.session_state.lng_fluid_df = pd.read_csv(st.session_state.lng_uploaded_file)
+            numeric_columns = ['MolarComposition[-]']
+            st.session_state.lng_fluid_df[numeric_columns] = st.session_state.lng_fluid_df[numeric_columns].astype(float)
+        except Exception as e:
+            st.warning(f'Could not load file: {e}')
+            st.session_state.lng_fluid_df = pd.DataFrame(lng_fluid)
+
+    # Initialize fluid DataFrame if not present
+    if 'lng_fluid_df' not in st.session_state:
         st.session_state.lng_fluid_df = pd.DataFrame(lng_fluid)
 
-# Initialize fluid DataFrame if not present
-if 'lng_fluid_df' not in st.session_state:
-    st.session_state.lng_fluid_df = pd.DataFrame(lng_fluid)
+    # Create an editable data table for the fluid composition
+    st.edited_df = st.data_editor(
+        st.session_state.lng_fluid_df,
+        column_config={
+            "ComponentName": "Component Name",
+            "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
+            "MolarMass[kg/mol]": st.column_config.NumberColumn(
+                "Molar Mass [kg/mol]", min_value=0, max_value=10000, format="%f kg/mol"
+            ),
+            "RelativeDensity[-]": st.column_config.NumberColumn(
+                "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
+            ),
+        },
+        num_rows='dynamic'
+    )
 
-# Create an editable data table for the fluid composition
-st.edited_df = st.data_editor(
-    st.session_state.lng_fluid_df,
-    column_config={
-        "ComponentName": "Component Name",
-        "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
-        "MolarMass[kg/mol]": st.column_config.NumberColumn(
-            "Molar Mass [kg/mol]", min_value=0, max_value=10000, format="%f kg/mol"
-        ),
-        "RelativeDensity[-]": st.column_config.NumberColumn(
-            "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
-        ),
-    },
-    num_rows='dynamic'
-)
+    # Store edited df for later use
+    st.session_state.lng_edited_df = st.edited_df
 
-# Store edited df for later use
-st.session_state.lng_edited_df = st.edited_df
-
-# Display a text message indicating that the fluid composition will be normalized before simulation
-st.text("Fluid composition will be normalized before simulation")
+    st.caption("💡 Fluid composition will be normalized before simulation")
 # Add a visual divider
 st.divider()
 

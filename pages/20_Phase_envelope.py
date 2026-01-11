@@ -11,6 +11,19 @@ from scipy.interpolate import UnivariateSpline
 
 st.set_page_config(page_title="Phase Envelope", page_icon='images/neqsimlogocircleflat.png')
 
+# Mobile-friendly CSS
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    .stDataEditor > div { font-size: 14px; }
+    .stButton > button { width: 100%; padding: 0.75rem; font-size: 16px; }
+    h1 { font-size: 1.75rem !important; }
+    .block-container { padding: 1rem !important; }
+}
+.stButton > button { min-height: 44px; }
+</style>
+""", unsafe_allow_html=True)
+
 st.title('Phase Envelope')
 
 """
@@ -28,71 +41,72 @@ st.text("Set fluid composition:")
 # 1. Manage session state and reading fluid data
 # -----------------------------------------------------------------------------
 
-# Reset button to restore default composition
-if st.button('Reset to Default Composition'):
-    st.session_state.phaseenv_fluid_df = pd.DataFrame(detailedHC_data)
-    st.rerun()
+with st.expander("📋 Fluid Composition", expanded=True):
+    # Reset button to restore default composition
+    if st.button('Reset to Default Composition'):
+        st.session_state.phaseenv_fluid_df = pd.DataFrame(detailedHC_data)
+        st.rerun()
 
-hidecomponents = st.checkbox('Show active components')
+    hidecomponents = st.checkbox('Show active components')
 
-# Only try to filter if phaseenv_edited_df has already been defined
-if hidecomponents and 'phaseenv_edited_df' in st.session_state:
-    st.session_state.phaseenv_fluid_df = st.session_state.phaseenv_edited_df[
-        st.session_state.phaseenv_edited_df['MolarComposition[-]'] > 0
-    ]
+    # Only try to filter if phaseenv_edited_df has already been defined
+    if hidecomponents and 'phaseenv_edited_df' in st.session_state:
+        st.session_state.phaseenv_fluid_df = st.session_state.phaseenv_edited_df[
+            st.session_state.phaseenv_edited_df['MolarComposition[-]'] > 0
+        ]
 
-# Check for uploaded file in sidebar
-if 'phaseenv_uploaded_file' in st.session_state and st.session_state.phaseenv_uploaded_file is not None and not hidecomponents:
-    try:
-        st.session_state.phaseenv_fluid_df = pd.read_csv(st.session_state.phaseenv_uploaded_file)
-        numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
-        st.session_state.phaseenv_fluid_df[numeric_columns] = (
-            st.session_state.phaseenv_fluid_df[numeric_columns].astype(float)
-        )
-    except Exception as e:
-        st.warning(f'Could not load file: {e}')
+    # Check for uploaded file in sidebar
+    if 'phaseenv_uploaded_file' in st.session_state and st.session_state.phaseenv_uploaded_file is not None and not hidecomponents:
+        try:
+            st.session_state.phaseenv_fluid_df = pd.read_csv(st.session_state.phaseenv_uploaded_file)
+            numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
+            st.session_state.phaseenv_fluid_df[numeric_columns] = (
+                st.session_state.phaseenv_fluid_df[numeric_columns].astype(float)
+            )
+        except Exception as e:
+            st.warning(f'Could not load file: {e}')
+            st.session_state.phaseenv_fluid_df = pd.DataFrame(detailedHC_data)
+
+    # If we don't yet have a fluid DataFrame, initialize it
+    if 'phaseenv_fluid_df' not in st.session_state:
         st.session_state.phaseenv_fluid_df = pd.DataFrame(detailedHC_data)
 
-# If we don't yet have a fluid DataFrame, initialize it
-if 'phaseenv_fluid_df' not in st.session_state:
-    st.session_state.phaseenv_fluid_df = pd.DataFrame(detailedHC_data)
+    # -------------------------------------------------------------------------
+    # 2. Let user edit the fluid data
+    # -------------------------------------------------------------------------
+    st.edited_df = st.data_editor(
+        st.session_state.phaseenv_fluid_df,
+        column_config={
+            "ComponentName": "Component Name",
+            "MolarComposition[-]": st.column_config.NumberColumn(
+                "Molar Composition [-]",
+                min_value=0.0,
+                max_value=1e6,
+                format="%f"
+            ),
+            "MolarMass[kg/mol]": st.column_config.NumberColumn(
+                "Molar Mass [kg/mol]",
+                min_value=0,
+                max_value=10000,
+                format="%f kg/mol"
+            ),
+            "RelativeDensity[-]": st.column_config.NumberColumn(
+                "Density [gr/cm3]",
+                min_value=1e-10,
+                max_value=10.0,
+                format="%f gr/cm3"
+            ),
+        },
+        num_rows='dynamic'
+    )
 
-# -----------------------------------------------------------------------------
-# 2. Let user edit the fluid data
-# -----------------------------------------------------------------------------
-st.edited_df = st.data_editor(
-    st.session_state.phaseenv_fluid_df,
-    column_config={
-        "ComponentName": "Component Name",
-        "MolarComposition[-]": st.column_config.NumberColumn(
-            "Molar Composition [-]",
-            min_value=0.0,
-            max_value=1e6,
-            format="%f"
-        ),
-        "MolarMass[kg/mol]": st.column_config.NumberColumn(
-            "Molar Mass [kg/mol]",
-            min_value=0,
-            max_value=10000,
-            format="%f kg/mol"
-        ),
-        "RelativeDensity[-]": st.column_config.NumberColumn(
-            "Density [gr/cm3]",
-            min_value=1e-10,
-            max_value=10.0,
-            format="%f gr/cm3"
-        ),
-    },
-    num_rows='dynamic'
-)
+    # Store edited df for later use
+    st.session_state.phaseenv_edited_df = st.edited_df
 
-# Store edited df for later use
-st.session_state.phaseenv_edited_df = st.edited_df
+    isplusfluid = st.checkbox('Plus Fluid')
+    usePR = st.checkbox('Peng Robinson EoS', help='use standard Peng Robinson EoS')
 
-isplusfluid = st.checkbox('Plus Fluid')
-usePR = st.checkbox('Peng Robinson EoS', help='use standard Peng Robinson EoS')
-
-st.text("Fluid composition will be normalized before simulation")
+    st.caption("💡 Fluid composition will be normalized before simulation")
 st.divider()
 
 # -----------------------------------------------------------------------------

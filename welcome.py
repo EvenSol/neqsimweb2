@@ -23,6 +23,22 @@ def make_request(question_input: str):
 
 st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.png')
 
+# Mobile-friendly CSS
+st.markdown("""
+<style>
+/* Responsive adjustments for mobile */
+@media (max-width: 768px) {
+    .stDataEditor > div { font-size: 14px; }
+    .stButton > button { width: 100%; padding: 0.75rem; font-size: 16px; }
+    h1 { font-size: 1.75rem !important; }
+    h2, h3 { font-size: 1.25rem !important; }
+    .block-container { padding: 1rem !important; }
+}
+/* Touch-friendly buttons */
+.stButton > button { min-height: 44px; }
+</style>
+""", unsafe_allow_html=True)
+
 st.image('images/neqsimlogocircleflat.png', width=150)
 
 st.write("# Welcome to the NeqSim Process Simulation Tool! 👋")

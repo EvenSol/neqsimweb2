@@ -7,74 +7,86 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Water Dew Point", page_icon='images/neqsimlogocircleflat.png')
 
+# Mobile-friendly CSS
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    .stDataEditor > div { font-size: 14px; }
+    .stButton > button { width: 100%; padding: 0.75rem; font-size: 16px; }
+    h1 { font-size: 1.75rem !important; }
+    .block-container { padding: 1rem !important; }
+}
+.stButton > button { min-height: 44px; }
+</style>
+""", unsafe_allow_html=True)
+
 st.title('Water Dew Point')
 st.divider()
-st.text("Set fluid composition:")
 
-# Reset button to restore default composition
-if st.button('Reset to Default Composition'):
-    st.session_state.waterdew_fluid_df = pd.DataFrame(default_fluid)
-    st.rerun()
+with st.expander("📋 Set Fluid Composition", expanded=True):
+    # Reset button to restore default composition
+    if st.button('Reset to Default Composition'):
+        st.session_state.waterdew_fluid_df = pd.DataFrame(default_fluid)
+        st.rerun()
 
-hidecomponents = st.checkbox('Show active components')
-if hidecomponents and 'waterdew_edited_df' in st.session_state:
-    st.session_state.waterdew_fluid_df = st.session_state.waterdew_edited_df[
-        st.session_state.waterdew_edited_df['MolarComposition[-]'] > 0
-    ]
-   
-if 'waterdew_uploaded_file' in st.session_state and st.session_state.waterdew_uploaded_file is not None and not hidecomponents:
-    try:
-        st.session_state.waterdew_fluid_df = pd.read_csv(st.session_state.waterdew_uploaded_file)
-        numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
-        st.session_state.waterdew_fluid_df[numeric_columns] = st.session_state.waterdew_fluid_df[numeric_columns].astype(float)
-    except Exception as e:
-        st.warning(f'Could not load file: {e}')
+    hidecomponents = st.checkbox('Show active components')
+    if hidecomponents and 'waterdew_edited_df' in st.session_state:
+        st.session_state.waterdew_fluid_df = st.session_state.waterdew_edited_df[
+            st.session_state.waterdew_edited_df['MolarComposition[-]'] > 0
+        ]
+       
+    if 'waterdew_uploaded_file' in st.session_state and st.session_state.waterdew_uploaded_file is not None and not hidecomponents:
+        try:
+            st.session_state.waterdew_fluid_df = pd.read_csv(st.session_state.waterdew_uploaded_file)
+            numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
+            st.session_state.waterdew_fluid_df[numeric_columns] = st.session_state.waterdew_fluid_df[numeric_columns].astype(float)
+        except Exception as e:
+            st.warning(f'Could not load file: {e}')
+            st.session_state.waterdew_fluid_df = pd.DataFrame(default_fluid)
+
+    if 'waterdew_fluid_df' not in st.session_state:
         st.session_state.waterdew_fluid_df = pd.DataFrame(default_fluid)
 
-if 'waterdew_fluid_df' not in st.session_state:
-    st.session_state.waterdew_fluid_df = pd.DataFrame(default_fluid)
+    if 'waterdew_tp_data' not in st.session_state:
+        st.session_state['waterdew_tp_data'] = pd.DataFrame({
+            'Pressure (bara)': [50.0, 100.0, 150.0, 200.0],   # Default example pressure
+            'Temperature (C)': [None, None, None, None]  # Default temperature
+        })
 
-if 'waterdew_tp_data' not in st.session_state:
-    st.session_state['waterdew_tp_data'] = pd.DataFrame({
-        'Pressure (bara)': [50.0, 100.0, 150.0, 200.0],   # Default example pressure
-        'Temperature (C)': [None, None, None, None]  # Default temperature
-    })
+    st.edited_df = st.data_editor(
+        st.session_state.waterdew_fluid_df,
+        column_config={
+            "ComponentName": "Component Name",
+            "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
+            "MolarMass[kg/mol]": st.column_config.NumberColumn(
+                "Molar Mass [kg/mol]", min_value=0, max_value=10000, format="%f kg/mol"
+            ),
+            "RelativeDensity[-]": st.column_config.NumberColumn(
+                "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
+            ),
+        },
+    num_rows='dynamic')
 
-st.edited_df = st.data_editor(
-    st.session_state.waterdew_fluid_df,
-    column_config={
-        "ComponentName": "Component Name",
-        "MolarComposition[-]": st.column_config.NumberColumn("Molar Composition [-]", min_value=0, max_value=10000, format="%f"),
-        "MolarMass[kg/mol]": st.column_config.NumberColumn(
-            "Molar Mass [kg/mol]", min_value=0, max_value=10000, format="%f kg/mol"
-        ),
-        "RelativeDensity[-]": st.column_config.NumberColumn(
-            "Density [gr/cm3]", min_value=1e-10, max_value=10.0, format="%f gr/cm3"
-        ),
-    },
-num_rows='dynamic')
+    # Store edited df for later use
+    st.session_state.waterdew_edited_df = st.edited_df
 
-# Store edited df for later use
-st.session_state.waterdew_edited_df = st.edited_df
+    isplusfluid = st.checkbox('Plus Fluid')
 
-isplusfluid = st.checkbox('Plus Fluid')
-
-st.text("Fluid composition will be normalized before simulation")
-st.divider()
-
-st.edited_dfTP = st.data_editor(
-    st.session_state.waterdew_tp_data['Pressure (bara)'].dropna().reset_index(drop=True),
-    num_rows='dynamic',  # Allows dynamic number of rows
-    column_config={
-        'Pressure (bara)': st.column_config.NumberColumn(
-            label="Pressure (bara)",
-            min_value=1e-10,      # Minimum pressure (exclude zero)
-            max_value=1000,     # Maximum pressure
-            format='%f',        # Decimal format
-            help='Enter the pressure in bar absolute.'  # Help text for guidance
-        )
-    }
-)
+    st.caption("💡 Fluid composition will be normalized before simulation")
+with st.expander("📊 Input Pressures", expanded=True):
+    st.edited_dfTP = st.data_editor(
+        st.session_state.waterdew_tp_data['Pressure (bara)'].dropna().reset_index(drop=True),
+        num_rows='dynamic',  # Allows dynamic number of rows
+        column_config={
+            'Pressure (bara)': st.column_config.NumberColumn(
+                label="Pressure (bara)",
+                min_value=1e-10,      # Minimum pressure (exclude zero)
+                max_value=1000,     # Maximum pressure
+                format='%f',        # Decimal format
+                help='Enter the pressure in bar absolute.'  # Help text for guidance
+            )
+        }
+    )
 
 if st.button('Run'):
     # Check if water's MolarComposition[-] is greater than 0
