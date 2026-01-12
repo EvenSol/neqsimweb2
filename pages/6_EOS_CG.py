@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from neqsim.thermo import fluid, TPflash, dataFrame
+from neqsim.thermo import TPflash, dataFrame
 from neqsim import jneqsim
 from theme import apply_theme, theme_toggle
 
@@ -187,8 +187,9 @@ if st.button('Run EOS-CG TP Flash'):
                         # Set up temporary database tables
                         jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
                         
-                        # Create EOS-CG fluid
-                        eoscg_fluid = fluid("eos-cg")
+                        # Create EOS-CG fluid using Java API directly
+                        # SystemEOSCGEos is the EOS-CG equation of state for CCS applications
+                        eoscg_fluid = jneqsim.thermo.system.SystemEOSCGEos(298.15, 1.0)
                         
                         # Add components with their compositions
                         for idx, row in st.edited_df.iterrows():
@@ -196,6 +197,8 @@ if st.button('Run EOS-CG TP Flash'):
                             comp_moles = row['MolarComposition[-]']
                             if pd.notna(comp_name) and comp_moles > 0:
                                 eoscg_fluid.addComponent(comp_name, float(comp_moles))
+                        
+                        eoscg_fluid.createDatabase(True)
                         
                         # Initialize results list
                         results_list = []
