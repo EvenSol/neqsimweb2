@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from neqsim.thermo import fluid, TPflash, dataFrame
+from neqsim.thermo import TPflash, dataFrame
 from neqsim import jneqsim
 from theme import apply_theme, theme_toggle
 
@@ -169,9 +169,12 @@ if st.button('Run GERG-2008 TP Flash'):
                         # Set up temporary database tables
                         jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
                         
-                        # Create GERG-2008 fluid
-                        # Note: GERG-2008-H2 requires specific setup via jneqsim
-                        gerg_fluid = fluid("gerg-2008")
+                        # Create GERG-2008 fluid using SystemGERG2008Eos for proper H2 support
+                        gerg_fluid = jneqsim.thermo.system.SystemGERG2008Eos(273.15, 1.0)
+                        
+                        # Enable GERG-2008-H2 model if selected
+                        if use_gerg_h2:
+                            gerg_fluid.useHydrogenEnhancedModel()
                         
                         # Add components with their compositions
                         for idx, row in st.edited_df.iterrows():
@@ -197,7 +200,8 @@ if st.button('Run GERG-2008 TP Flash'):
                             
                             results_list.append(dataFrame(gerg_fluid))
                         
-                        st.success('GERG-2008 flash calculations finished successfully!')
+                        model_name = gerg_fluid.getModelName()
+                        st.success(f'Flash calculations finished successfully using {model_name}!')
                         
                         st.subheader("Results:")
                         # Combine all results into a single dataframe
