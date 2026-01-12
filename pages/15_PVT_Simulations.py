@@ -323,11 +323,11 @@ with tab_char:
         
         lumping_model = st.selectbox(
             "Lumping Model",
-            ["PVTlumpingModel", "no lumping", "Standard"],
+            ["Standard", "PVTlumpingModel", "no lumping"],
             help="""
-            **PVTlumpingModel**: Lump into equal weight fractions (recommended)
-            **No Lumping**: Keep all pseudo-components separate
             **Standard**: Default lumping based on carbon number ranges
+            **PVTlumpingModel**: Lump into equal weight fractions
+            **No Lumping**: Keep all pseudo-components separate
             """
         )
         
