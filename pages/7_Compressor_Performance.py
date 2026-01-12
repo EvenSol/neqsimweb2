@@ -674,12 +674,11 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
     
     st.divider()
     
-    # Generate Updated Curves Section
-    st.subheader("🔄 Generate Updated Curves for New Gas")
-    
-    st.markdown("""
-    Generate updated compressor curves when gas composition or molecular weight changes.
-    This uses **Mach number similarity** methods (Khader, 2015; Lüdtke, 2004; Schultz, 1962).
+    # Generate Updated Curves Section - nested expander
+    with st.expander("🔄 Generate Updated Curves for New Gas", expanded=False):
+        st.markdown("""
+        Generate updated compressor curves when gas composition or molecular weight changes.
+        This uses **Mach number similarity** methods (Khader, 2015; Lüdtke, 2004; Schultz, 1962).
     
     ---
     
@@ -716,504 +715,647 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
     - Khader, M.A. (2015). *Effect of Gas Composition on Centrifugal Compressor Performance*, ASME Turbo Expo.
     - Lüdtke, K.H. (2004). *Process Centrifugal Compressors*, Springer.
     - Schultz, J.M. (1962). "The Polytropic Analysis of Centrifugal Compressors", *J. Eng. Power*, 84(1), 69-82.
-    """)
+        """)
     
-    if st.session_state['compressor_curves']:
-        # Reference conditions (original curves)
-        st.write("**Reference Conditions (Original Curves):**")
-        col_ref1, col_ref2 = st.columns(2)
-        with col_ref1:
-            ref_mw = st.number_input("Reference MW (g/mol)", min_value=2.0, max_value=100.0, value=18.0, step=0.1, key='ref_mw',
-                                     help="Molecular weight of the gas used for the original manufacturer curves")
-        with col_ref2:
-            impeller_diameter = st.number_input("1st Stage Impeller Exit Dia (mm)", min_value=50.0, max_value=2000.0, value=500.0, step=10.0, key='impeller_dia',
-                                                help="First stage impeller exit diameter - used for Machine Mach number calculation")
-        
-        col_ref3, col_ref4 = st.columns(2)
-        with col_ref3:
-            ref_temp = st.number_input("Reference Temp (°C)", min_value=-50.0, max_value=150.0, value=30.0, step=1.0, key='ref_temp',
-                                       help="Temperature at which original curves were measured")
-        with col_ref4:
-            ref_pressure = st.number_input("Reference Pressure (bara)", min_value=1.0, max_value=500.0, value=50.0, step=1.0, key='ref_pressure',
-                                           help="Pressure at which original curves were measured")
-        
-        st.write("**New Conditions (Current Fluid):**")
-        st.info(f"Using selected fluid: **{selected_fluid_name}**")
-        
-        # Calculate new conditions from selected fluid
-        new_fluid_composition = get_fluid_composition()
-        
-        if new_fluid_composition and len(new_fluid_composition) > 0:
-            try:
-                # Create reference fluid (approximate using ideal gas properties)
-                R = 8.314  # J/(mol·K)
-                gamma_ref = 1.3  # Typical for natural gas
-                T_ref_K = ref_temp + 273.15
-                # Speed of sound approximation: c = sqrt(gamma * R * T / MW)
-                c_s_ref = np.sqrt(gamma_ref * R * T_ref_K / (ref_mw / 1000))  # m/s
-                
-                # Create new fluid and calculate properties
-                jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
-                new_fluid = fluid("gerg-2008")
-                for comp_name, comp_moles in new_fluid_composition.items():
-                    new_fluid.addComponent(comp_name, float(comp_moles))
-                new_fluid.setPressure(ref_pressure, 'bara')
-                new_fluid.setTemperature(ref_temp, 'C')
-                TPflash(new_fluid)
-                new_fluid.initThermoProperties()
-                
-                new_mw = new_fluid.getMolarMass() * 1000  # g/mol
-                gamma_new = new_fluid.getGamma()
-                z_new = new_fluid.getZ()
-                T_new_K = ref_temp + 273.15
-                # More accurate speed of sound using GERG-2008
-                c_s_new = np.sqrt(gamma_new * z_new * R * T_new_K / (new_mw / 1000))  # m/s
-                
-                # Calculate Machine Mach Number for a reference speed (use first curve speed)
-                ref_speed_rpm = st.session_state['compressor_curves'][0]['speed']
-                D_m = impeller_diameter / 1000  # Convert mm to m
-                U_tip = np.pi * D_m * ref_speed_rpm / 60  # Tip speed in m/s
-                Ma_ref = U_tip / c_s_ref  # Machine Mach number at reference conditions
-                Ma_new = U_tip / c_s_new  # Machine Mach number at new conditions
-                
-                col_new1, col_new2, col_new3, col_new4 = st.columns(4)
-                with col_new1:
-                    st.metric("New MW", f"{new_mw:.2f} g/mol", f"{new_mw - ref_mw:+.2f}")
-                with col_new2:
-                    st.metric("Sound Speed Ratio", f"{c_s_new/c_s_ref:.3f}")
-                with col_new3:
-                    st.metric("κ (Cp/Cv)", f"{gamma_new:.3f}")
-                with col_new4:
-                    st.metric(f"Ma @ {ref_speed_rpm:.0f} RPM", f"{Ma_new:.3f}", f"{Ma_new - Ma_ref:+.3f} vs ref")
-                
-                # Calculate correction factors
-                sound_speed_ratio = c_s_new / c_s_ref
-                head_correction = sound_speed_ratio ** 2  # Head scales with c_s^2
-                flow_correction = sound_speed_ratio  # Flow scales with c_s
-                
-                st.write(f"**Correction Factors:** Head × {head_correction:.3f}, Flow × {flow_correction:.3f}")
-                st.caption(f"Tip speed: {U_tip:.1f} m/s | c_s (ref): {c_s_ref:.1f} m/s | c_s (new): {c_s_new:.1f} m/s")
-                
-                if st.button("🔄 Generate Corrected Curves", type='primary'):
-                    corrected_curves = []
+        if st.session_state['compressor_curves']:
+            # Reference conditions (original curves)
+            st.write("**Reference Conditions (Original Curves):**")
+            col_ref1, col_ref2 = st.columns(2)
+            with col_ref1:
+                ref_mw = st.number_input("Reference MW (g/mol)", min_value=2.0, max_value=100.0, value=18.0, step=0.1, key='ref_mw',
+                                         help="Molecular weight of the gas used for the original manufacturer curves")
+            with col_ref2:
+                impeller_diameter = st.number_input("1st Stage Impeller Exit Dia (mm)", min_value=50.0, max_value=2000.0, value=500.0, step=10.0, key='impeller_dia',
+                                                    help="First stage impeller exit diameter - used for Machine Mach number calculation")
+            
+            col_ref3, col_ref4 = st.columns(2)
+            with col_ref3:
+                ref_temp = st.number_input("Reference Temp (°C)", min_value=-50.0, max_value=150.0, value=30.0, step=1.0, key='ref_temp',
+                                           help="Temperature at which original curves were measured")
+            with col_ref4:
+                ref_pressure = st.number_input("Reference Pressure (bara)", min_value=1.0, max_value=500.0, value=50.0, step=1.0, key='ref_pressure',
+                                               help="Pressure at which original curves were measured")
+            
+            st.write("**New Conditions (Current Fluid):**")
+            st.info(f"Using selected fluid: **{selected_fluid_name}**")
+            
+            # Calculate new conditions from selected fluid
+            new_fluid_composition = get_fluid_composition()
+            
+            if new_fluid_composition and len(new_fluid_composition) > 0:
+                try:
+                    # Create reference fluid (approximate using ideal gas properties)
+                    R = 8.314  # J/(mol·K)
+                    gamma_ref = 1.3  # Typical for natural gas
+                    T_ref_K = ref_temp + 273.15
+                    # Speed of sound approximation: c = sqrt(gamma * R * T / MW)
+                    c_s_ref = np.sqrt(gamma_ref * R * T_ref_K / (ref_mw / 1000))  # m/s
                     
-                    for curve in st.session_state['compressor_curves']:
-                        corrected_flow = [f * flow_correction for f in curve['flow']]
-                        corrected_head = [h * head_correction for h in curve['head']]
-                        # Efficiency is approximately independent of gas properties
-                        corrected_eff = curve['efficiency'].copy()
+                    # Create new fluid and calculate properties
+                    jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
+                    new_fluid = fluid("gerg-2008")
+                    for comp_name, comp_moles in new_fluid_composition.items():
+                        new_fluid.addComponent(comp_name, float(comp_moles))
+                    new_fluid.setPressure(ref_pressure, 'bara')
+                    new_fluid.setTemperature(ref_temp, 'C')
+                    TPflash(new_fluid)
+                    new_fluid.initThermoProperties()
+                    
+                    new_mw = new_fluid.getMolarMass() * 1000  # g/mol
+                    gamma_new = new_fluid.getGamma()
+                    z_new = new_fluid.getZ()
+                    T_new_K = ref_temp + 273.15
+                    # More accurate speed of sound using GERG-2008
+                    c_s_new = np.sqrt(gamma_new * z_new * R * T_new_K / (new_mw / 1000))  # m/s
+                    
+                    # Calculate Machine Mach Number for a reference speed (use first curve speed)
+                    ref_speed_rpm = st.session_state['compressor_curves'][0]['speed']
+                    D_m = impeller_diameter / 1000  # Convert mm to m
+                    U_tip = np.pi * D_m * ref_speed_rpm / 60  # Tip speed in m/s
+                    Ma_ref = U_tip / c_s_ref  # Machine Mach number at reference conditions
+                    Ma_new = U_tip / c_s_new  # Machine Mach number at new conditions
+                    
+                    col_new1, col_new2, col_new3, col_new4 = st.columns(4)
+                    with col_new1:
+                        st.metric("New MW", f"{new_mw:.2f} g/mol", f"{new_mw - ref_mw:+.2f}")
+                    with col_new2:
+                        st.metric("Sound Speed Ratio", f"{c_s_new/c_s_ref:.3f}")
+                    with col_new3:
+                        st.metric("κ (Cp/Cv)", f"{gamma_new:.3f}")
+                    with col_new4:
+                        st.metric(f"Ma @ {ref_speed_rpm:.0f} RPM", f"{Ma_new:.3f}", f"{Ma_new - Ma_ref:+.3f} vs ref")
+                    
+                    # Calculate correction factors
+                    sound_speed_ratio = c_s_new / c_s_ref
+                    head_correction = sound_speed_ratio ** 2  # Head scales with c_s^2
+                    flow_correction = sound_speed_ratio  # Flow scales with c_s
+                    
+                    st.write(f"**Correction Factors:** Head × {head_correction:.3f}, Flow × {flow_correction:.3f}")
+                    st.caption(f"Tip speed: {U_tip:.1f} m/s | c_s (ref): {c_s_ref:.1f} m/s | c_s (new): {c_s_new:.1f} m/s")
+                    
+                    if st.button("🔄 Generate Corrected Curves", type='primary'):
+                        corrected_curves = []
                         
-                        corrected_curves.append({
-                            'speed': curve['speed'],
-                            'flow': corrected_flow,
-                            'head': corrected_head,
-                            'efficiency': corrected_eff
-                        })
-                    
-                    # Store corrected curves with metadata
-                    st.session_state['corrected_curves'] = {
-                        'curves': corrected_curves,
-                        'reference_mw': ref_mw,
-                        'new_mw': new_mw,
-                        'fluid_name': selected_fluid_name,
-                        'flow_unit': st.session_state.get('curve_flow_unit', 'm3/hr')
-                    }
-                    st.success(f"Generated {len(corrected_curves)} corrected curve(s) for MW = {new_mw:.2f} g/mol")
-                
-                # Display corrected curves if available
-                if 'corrected_curves' in st.session_state and st.session_state['corrected_curves']:
-                    corrected_data = st.session_state['corrected_curves']
-                    st.divider()
-                    st.write(f"**Corrected Curves** (MW: {corrected_data.get('reference_mw', 0):.1f} → {corrected_data.get('new_mw', 0):.1f} g/mol)")
-                    
-                    for curve in corrected_data['curves']:
-                        corr_df = pd.DataFrame({
-                            f"Flow ({corrected_data.get('flow_unit', 'm3/hr')})": curve['flow'],
-                            'Head (kJ/kg)': curve['head'],
-                            'Eff (%)': curve['efficiency']
-                        })
-                        st.write(f"**{curve['speed']:.0f} RPM:**")
-                        st.dataframe(corr_df, use_container_width=True, height=100)
-                    
-                    col_action1, col_action2 = st.columns(2)
-                    with col_action1:
-                        if st.button("✅ Use Corrected Curves"):
-                            st.session_state['compressor_curves'] = corrected_data['curves']
-                            st.session_state['corrected_curves'] = None
-                            st.success("Replaced original curves with corrected curves")
-                            st.rerun()
-                    with col_action2:
-                        # Download corrected curves
-                        corr_json = json.dumps({
-                            'flow_unit': corrected_data.get('flow_unit', 'm3/hr'),
-                            'reference_mw': corrected_data.get('reference_mw'),
-                            'corrected_mw': corrected_data.get('new_mw'),
-                            'curves': corrected_data['curves']
-                        }, indent=2)
-                        st.download_button(
-                            label="📥 Download Corrected Curves",
-                            data=corr_json,
-                            file_name=f"corrected_curves_MW{corrected_data.get('new_mw', 0):.0f}.json",
-                            mime="application/json"
-                        )
+                        for curve in st.session_state['compressor_curves']:
+                            corrected_flow = [f * flow_correction for f in curve['flow']]
+                            corrected_head = [h * head_correction for h in curve['head']]
+                            # Efficiency is approximately independent of gas properties
+                            corrected_eff = curve['efficiency'].copy()
+                            
+                            corrected_curves.append({
+                                'speed': curve['speed'],
+                                'flow': corrected_flow,
+                                'head': corrected_head,
+                                'efficiency': corrected_eff
+                            })
                         
-            except Exception as e:
-                st.error(f"Failed to calculate new fluid properties: {e}")
+                        # Store corrected curves with metadata
+                        st.session_state['corrected_curves'] = {
+                            'curves': corrected_curves,
+                            'reference_mw': ref_mw,
+                            'new_mw': new_mw,
+                            'fluid_name': selected_fluid_name,
+                            'flow_unit': st.session_state.get('curve_flow_unit', 'm3/hr')
+                        }
+                        st.success(f"Generated {len(corrected_curves)} corrected curve(s) for MW = {new_mw:.2f} g/mol")
+                    
+                    # Display corrected curves if available
+                    if 'corrected_curves' in st.session_state and st.session_state['corrected_curves']:
+                        corrected_data = st.session_state['corrected_curves']
+                        st.divider()
+                        st.write(f"**Corrected Curves** (MW: {corrected_data.get('reference_mw', 0):.1f} → {corrected_data.get('new_mw', 0):.1f} g/mol)")
+                        
+                        for curve in corrected_data['curves']:
+                            corr_df = pd.DataFrame({
+                                f"Flow ({corrected_data.get('flow_unit', 'm3/hr')})": curve['flow'],
+                                'Head (kJ/kg)': curve['head'],
+                                'Eff (%)': curve['efficiency']
+                            })
+                            st.write(f"**{curve['speed']:.0f} RPM:**")
+                            st.dataframe(corr_df, use_container_width=True, height=100)
+                        
+                        col_action1, col_action2 = st.columns(2)
+                        with col_action1:
+                            if st.button("✅ Use Corrected Curves"):
+                                st.session_state['compressor_curves'] = corrected_data['curves']
+                                st.session_state['corrected_curves'] = None
+                                st.success("Replaced original curves with corrected curves")
+                                st.rerun()
+                        with col_action2:
+                            # Download corrected curves
+                            corr_json = json.dumps({
+                                'flow_unit': corrected_data.get('flow_unit', 'm3/hr'),
+                                'reference_mw': corrected_data.get('reference_mw'),
+                                'corrected_mw': corrected_data.get('new_mw'),
+                                'curves': corrected_data['curves']
+                            }, indent=2)
+                            st.download_button(
+                                label="📥 Download Corrected Curves",
+                                data=corr_json,
+                                file_name=f"corrected_curves_MW{corrected_data.get('new_mw', 0):.0f}.json",
+                                mime="application/json"
+                            )
+                            
+                except Exception as e:
+                    st.error(f"Failed to calculate new fluid properties: {e}")
+            else:
+                st.warning("Please select a valid fluid composition first")
         else:
-            st.warning("Please select a valid fluid composition first")
-    else:
-        st.info("Add original manufacturer curves above first, then generate corrected curves for the new gas.")
+            st.info("Add original manufacturer curves above first, then generate corrected curves for the new gas.")
 
     st.divider()
     
-    # Generate Curves from Measured Data Section
-    st.subheader("📈 Generate Curves from Measured Data")
-    
-    st.markdown("""
-    Develop compressor performance curves from measured operating data using polynomial regression 
-    and **affinity law normalization** (Saravanamuttoo et al., 2017; Brown, 2005).
-    
-    ---
-    
-    **Affinity Laws (Fan Laws):**
-    
-    For a centrifugal compressor operating on geometrically similar conditions:
-    
-    | Parameter | Relationship | Equation |
-    |-----------|--------------|----------|
-    | Volumetric Flow | $Q \\propto N$ | $\\frac{Q_1}{Q_2} = \\frac{N_1}{N_2}$ |
-    | Polytropic Head | $H_p \\propto N^2$ | $\\frac{H_{p1}}{H_{p2}} = \\left(\\frac{N_1}{N_2}\\right)^2$ |
-    | Power | $P \\propto N^3$ | $\\frac{P_1}{P_2} = \\left(\\frac{N_1}{N_2}\\right)^3$ |
-    | Polytropic Efficiency | $\\eta_p \\approx const$ | Independent of speed |
-    
-    ---
-    
-    **Curve Fitting Method:**
-    
-    1. **Normalize to reference speed:** All measured points are transformed to equivalent conditions at $N_{ref}$:
-       - $Q_{norm} = Q_{meas} \\times \\frac{N_{ref}}{N_{meas}}$
-       - $H_{norm} = H_{meas} \\times \\left(\\frac{N_{ref}}{N_{meas}}\\right)^2$
-    
-    2. **Polynomial regression:** Fit characteristic curves using least-squares:
-       - Head: $H_p(Q) = a_n Q^n + a_{n-1} Q^{n-1} + ... + a_1 Q + a_0$ (typically $n=2$)
-       - Efficiency: $\\eta_p(Q) = b_n Q^n + b_{n-1} Q^{n-1} + ... + b_1 Q + b_0$ (bell-shaped)
-    
-    3. **Scale to target speeds:** Apply affinity laws in reverse to generate curves at any speed.
-    
-    ---
-    
-    **References:**
-    - Saravanamuttoo, H.I.H., et al. (2017). *Gas Turbine Theory*, 7th Ed., Pearson.
-    - Brown, R.N. (2005). *Compressors: Selection and Sizing*, 3rd Ed., Gulf Publishing.
-    - ASME PTC 10 (1997). *Performance Test Code on Compressors and Exhausters*.
-    """)
+    # Generate Curves from Measured Data Section - nested expander
+    with st.expander("📈 Generate Curves from Measured Data", expanded=False):
+        st.markdown("""
+        Develop compressor performance curves from measured operating data using polynomial regression 
+        and **affinity law normalization** (Saravanamuttoo et al., 2017; Brown, 2005).
+        
+        ---
+        
+        **Affinity Laws (Fan Laws):**
+        
+        For a centrifugal compressor operating on geometrically similar conditions:
+        
+        | Parameter | Relationship | Equation |
+        |-----------|--------------|----------|
+        | Volumetric Flow | $Q \\propto N$ | $\\frac{Q_1}{Q_2} = \\frac{N_1}{N_2}$ |
+        | Polytropic Head | $H_p \\propto N^2$ | $\\frac{H_{p1}}{H_{p2}} = \\left(\\frac{N_1}{N_2}\\right)^2$ |
+        | Power | $P \\propto N^3$ | $\\frac{P_1}{P_2} = \\left(\\frac{N_1}{N_2}\\right)^3$ |
+        | Polytropic Efficiency | $\\eta_p \\approx const$ | Independent of speed |
+        
+        ---
+        
+        **Curve Fitting Method:**
+        
+        1. **Normalize to reference speed:** All measured points are transformed to equivalent conditions at $N_{ref}$:
+           - $Q_{norm} = Q_{meas} \\times \\frac{N_{ref}}{N_{meas}}$
+           - $H_{norm} = H_{meas} \\times \\left(\\frac{N_{ref}}{N_{meas}}\\right)^2$
+        
+        2. **Polynomial regression:** Fit characteristic curves using least-squares:
+           - Head: $H_p(Q) = a_n Q^n + a_{n-1} Q^{n-1} + ... + a_1 Q + a_0$ (typically $n=2$)
+           - Efficiency: $\\eta_p(Q) = b_n Q^n + b_{n-1} Q^{n-1} + ... + b_1 Q + b_0$ (bell-shaped)
+        
+        3. **Scale to target speeds:** Apply affinity laws in reverse to generate curves at any speed.
+        
+        ---
+        
+        **References:**
+        - Saravanamuttoo, H.I.H., et al. (2017). *Gas Turbine Theory*, 7th Ed., Pearson.
+        - Brown, R.N. (2005). *Compressors: Selection and Sizing*, 3rd Ed., Gulf Publishing.
+        - ASME PTC 10 (1997). *Performance Test Code on Compressors and Exhausters*.
+        """)
 
-# Check if we have calculated results with speed data
-if 'calculated_results' in st.session_state and st.session_state.calculated_results is not None:
-    results_df = st.session_state.calculated_results
-    
-    # Check if we have the required columns (use actual column names from results)
-    required_cols = ['Polytropic Head (kJ/kg)', 'Polytropic Eff (%)']
-    flow_col = 'Vol Flow Inlet (m³/hr)'  # This is the actual column name in results
-    
-    has_required = all(col in results_df.columns for col in required_cols) and flow_col in results_df.columns
-    has_speed = 'Speed (RPM)' in results_df.columns
-    
-    if has_required and len(results_df) >= 3:
-        with st.expander("⚙️ Curve Generation Settings", expanded=True):
-            col_gen1, col_gen2 = st.columns(2)
-            with col_gen1:
-                poly_order_head = st.selectbox("Polynomial Order (Head)", [2, 3, 4], index=0,
-                                                help="Order of polynomial for head vs flow curve. 2nd order (parabola) is typical.")
-            with col_gen2:
-                poly_order_eff = st.selectbox("Polynomial Order (Efficiency)", [2, 3, 4], index=0,
-                                               help="Order of polynomial for efficiency vs flow curve. 2nd order gives bell curve.")
+        # Check if we have calculated results with speed data
+        if 'calculated_results' in st.session_state and st.session_state.calculated_results is not None:
+            results_df = st.session_state.calculated_results
             
-            # Get unique speeds from data or use default
-            if has_speed and results_df['Speed (RPM)'].notna().any():
-                unique_speeds = sorted(results_df['Speed (RPM)'].dropna().unique())
-                if len(unique_speeds) > 0:
-                    ref_speed_default = float(np.median(unique_speeds))
+            # Check if we have the required columns (use actual column names from results)
+            required_cols = ['Polytropic Head (kJ/kg)', 'Polytropic Eff (%)']
+            flow_col = 'Vol Flow Inlet (m³/hr)'  # This is the actual column name in results
+            
+            has_required = all(col in results_df.columns for col in required_cols) and flow_col in results_df.columns
+            has_speed = 'Speed (RPM)' in results_df.columns
+            
+            # Check if manufacturer curves are available for single-point adjustment
+            mfr_curves = st.session_state.get('compressor_curves', [])
+            num_points = len(results_df)
+            
+            # Mode 1: Single or few points with manufacturer curves - adjust existing curves
+            if has_required and num_points >= 1 and num_points < 3 and mfr_curves:
+                st.subheader("📐 Adjust Manufacturer Curves from Measured Data")
+                st.info(f"""
+                **Single-Point Curve Adjustment Mode** ({num_points} data point{'s' if num_points > 1 else ''})
+                
+                With fewer than 3 data points, we can adjust the manufacturer curves based on measured deviations.
+                This applies a correction factor to shift the entire curve set to match your measured performance.
+                
+                **Method:** 
+                - Calculate deviation between measured and expected values at the operating point
+                - Apply proportional or offset correction to all curves
+                """)
+                
+                # Calculate deviations from manufacturer curves
+                deviations = []
+                for idx, row in results_df.iterrows():
+                    speed = row.get('Speed (RPM)', 0)
+                    flow = row[flow_col]
+                    measured_eff = row['Polytropic Eff (%)']
+                    measured_head = row['Polytropic Head (kJ/kg)']
+                    
+                    # Find matching curve (within 5% speed tolerance for single point mode)
+                    for curve in mfr_curves:
+                        if speed > 0 and abs(speed - curve['speed']) / curve['speed'] < 0.05:
+                            curve_flows = np.array(curve['flow'])
+                            curve_effs = np.array(curve['efficiency'])
+                            curve_heads = np.array(curve['head'])
+                            
+                            if flow >= min(curve_flows) * 0.9 and flow <= max(curve_flows) * 1.1:
+                                expected_eff = np.interp(flow, curve_flows, curve_effs)
+                                expected_head = np.interp(flow, curve_flows, curve_heads)
+                                
+                                eff_ratio = measured_eff / expected_eff if expected_eff > 0 else 1.0
+                                head_ratio = measured_head / expected_head if expected_head > 0 else 1.0
+                                eff_offset = measured_eff - expected_eff
+                                head_offset = measured_head - expected_head
+                                
+                                deviations.append({
+                                    'speed': speed,
+                                    'flow': flow,
+                                    'measured_eff': measured_eff,
+                                    'expected_eff': expected_eff,
+                                    'measured_head': measured_head,
+                                    'expected_head': expected_head,
+                                    'eff_ratio': eff_ratio,
+                                    'head_ratio': head_ratio,
+                                    'eff_offset': eff_offset,
+                                    'head_offset': head_offset
+                                })
+                            break
+                
+                if deviations:
+                    # Display measured deviations
+                    st.write("**Measured Deviations from Manufacturer Curves:**")
+                    dev_df = pd.DataFrame(deviations)
+                    
+                    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                    avg_eff_ratio = np.mean([d['eff_ratio'] for d in deviations])
+                    avg_head_ratio = np.mean([d['head_ratio'] for d in deviations])
+                    avg_eff_offset = np.mean([d['eff_offset'] for d in deviations])
+                    avg_head_offset = np.mean([d['head_offset'] for d in deviations])
+                    
+                    with col_d1:
+                        st.metric("Eff Ratio", f"{avg_eff_ratio:.3f}", f"{(avg_eff_ratio-1)*100:+.1f}%")
+                    with col_d2:
+                        st.metric("Head Ratio", f"{avg_head_ratio:.3f}", f"{(avg_head_ratio-1)*100:+.1f}%")
+                    with col_d3:
+                        st.metric("Eff Offset", f"{avg_eff_offset:+.2f}%")
+                    with col_d4:
+                        st.metric("Head Offset", f"{avg_head_offset:+.2f} kJ/kg")
+                    
+                    # Correction method selection
+                    correction_method = st.radio(
+                        "Correction Method",
+                        ["Proportional (Ratio)", "Additive (Offset)"],
+                        horizontal=True,
+                        help="**Proportional:** Multiply curves by measured/expected ratio. Best for systematic degradation.\n\n**Additive:** Add offset to curves. Best for calibration differences."
+                    )
+                    
+                    if st.button("📈 Generate Adjusted Curves", type='primary', key='gen_adjusted_curves'):
+                        adjusted_curves = []
+                        
+                        for curve in mfr_curves:
+                            if correction_method == "Proportional (Ratio)":
+                                adjusted_eff = [e * avg_eff_ratio for e in curve['efficiency']]
+                                adjusted_head = [h * avg_head_ratio for h in curve['head']]
+                            else:
+                                adjusted_eff = [e + avg_eff_offset for e in curve['efficiency']]
+                                adjusted_head = [h + avg_head_offset for h in curve['head']]
+                            
+                            # Clamp efficiency to reasonable range
+                            adjusted_eff = [max(0, min(100, e)) for e in adjusted_eff]
+                            
+                            adjusted_curves.append({
+                                'speed': curve['speed'],
+                                'flow': curve['flow'].copy() if isinstance(curve['flow'], list) else curve['flow'],
+                                'head': adjusted_head,
+                                'efficiency': adjusted_eff
+                            })
+                        
+                        # Store as generated curves
+                        gen_flow_unit = st.session_state.get('curve_flow_unit', 'm³/hr')
+                        st.session_state['generated_curves'] = {
+                            'curves': adjusted_curves,
+                            'flow_unit': gen_flow_unit,
+                            'adjustment_method': correction_method,
+                            'eff_correction': avg_eff_ratio if correction_method == "Proportional (Ratio)" else avg_eff_offset,
+                            'head_correction': avg_head_ratio if correction_method == "Proportional (Ratio)" else avg_head_offset,
+                            'source': 'adjusted_from_manufacturer',
+                            'num_reference_points': len(deviations)
+                        }
+                        st.success(f"Generated {len(adjusted_curves)} adjusted curves based on {len(deviations)} measured point(s)")
+                        st.rerun()
+                else:
+                    st.warning("Could not match measured points to manufacturer curves. Check that speeds match within 5% tolerance and flows are within curve range.")
+                    
+            # Mode 2: 3+ data points - polynomial curve fitting (existing logic)
+            elif has_required and len(results_df) >= 3:
+                st.subheader("⚙️ Curve Generation Settings")
+                col_gen1, col_gen2 = st.columns(2)
+                with col_gen1:
+                    poly_order_head = st.selectbox("Polynomial Order (Head)", [2, 3, 4], index=0,
+                                                    help="Order of polynomial for head vs flow curve. 2nd order (parabola) is typical.")
+                with col_gen2:
+                    poly_order_eff = st.selectbox("Polynomial Order (Efficiency)", [2, 3, 4], index=0,
+                                                   help="Order of polynomial for efficiency vs flow curve. 2nd order gives bell curve.")
+                
+                # Get unique speeds from data or use default
+                if has_speed and results_df['Speed (RPM)'].notna().any():
+                    unique_speeds = sorted(results_df['Speed (RPM)'].dropna().unique())
+                    if len(unique_speeds) > 0:
+                        ref_speed_default = float(np.median(unique_speeds))
+                    else:
+                        ref_speed_default = 10000.0
                 else:
                     ref_speed_default = 10000.0
-            else:
-                ref_speed_default = 10000.0
-                unique_speeds = [ref_speed_default]
-            
-            col_gen3, col_gen4 = st.columns(2)
-            with col_gen3:
-                ref_speed_fit = st.number_input("Reference Speed for Normalization (RPM)", 
-                                                 min_value=1000.0, max_value=50000.0, 
-                                                 value=ref_speed_default, step=100.0,
-                                                 help="All data points will be normalized to this speed for curve fitting")
-            with col_gen4:
-                num_curve_points = st.number_input("Points per Curve", min_value=5, max_value=50, value=20,
-                                                    help="Number of points to generate on each curve")
-            
-            col_gen5, col_gen6 = st.columns(2)
-            with col_gen5:
-                flow_extend_low = st.slider("Extend Flow Range (Low %)", min_value=0, max_value=50, value=20,
-                                            help="Extend curves below minimum measured flow by this percentage")
-            with col_gen6:
-                flow_extend_high = st.slider("Extend Flow Range (High %)", min_value=0, max_value=50, value=20,
-                                             help="Extend curves above maximum measured flow by this percentage")
-            
-            # Speeds to generate curves for - prefer manufacturer curve speeds if available
-            st.write("**Speeds to Generate Curves (RPM):**")
-            
-            # Get speeds from manufacturer curves if available
-            mfr_curves = st.session_state.get('compressor_curves', [])
-            if mfr_curves:
-                mfr_speeds = sorted([c['speed'] for c in mfr_curves])
-                default_speeds = ", ".join([f"{s:.0f}" for s in mfr_speeds])
-                st.caption("ℹ️ Using speeds from manufacturer curves")
-            elif has_speed and len(unique_speeds) > 1:
-                default_speeds = ", ".join([f"{s:.0f}" for s in unique_speeds])
-                st.caption("ℹ️ Using speeds from measured data")
-            else:
-                default_speeds = "8000, 9000, 10000, 11000, 12000"
-                st.caption("ℹ️ Using default speeds - add manufacturer curves or speed data to auto-populate")
-            
-            target_speeds_str = st.text_input("Enter speeds separated by commas (add or modify as needed)", value=default_speeds,
-                                               help="Curves will be generated for these speeds. Add more speeds or modify as needed.")
-            
-            try:
-                target_speeds = [float(s.strip()) for s in target_speeds_str.split(",") if s.strip()]
-            except:
-                target_speeds = [10000.0]
-                st.warning("Invalid speed format. Using default 10000 RPM.")
-        
-        if st.button("🔧 Generate Curves from Data", type='primary'):
-            try:
-                # Extract data
-                flows = results_df[flow_col].values
-                heads = results_df['Polytropic Head (kJ/kg)'].values
-                effs = results_df['Polytropic Eff (%)'].values
+                    unique_speeds = [ref_speed_default]
                 
-                if has_speed and results_df['Speed (RPM)'].notna().any():
-                    speeds = results_df['Speed (RPM)'].fillna(ref_speed_fit).values
+                col_gen3, col_gen4 = st.columns(2)
+                with col_gen3:
+                    ref_speed_fit = st.number_input("Reference Speed for Normalization (RPM)", 
+                                                     min_value=1000.0, max_value=50000.0, 
+                                                     value=ref_speed_default, step=100.0,
+                                                     help="All data points will be normalized to this speed for curve fitting")
+                with col_gen4:
+                    num_curve_points = st.number_input("Points per Curve", min_value=5, max_value=50, value=20,
+                                                        help="Number of points to generate on each curve")
+                
+                # Speeds to generate curves for - prefer manufacturer curve speeds if available
+                st.write("**Speeds to Generate Curves (RPM):**")
+                
+                # Get speeds from manufacturer curves if available
+                mfr_curves = st.session_state.get('compressor_curves', [])
+                if mfr_curves:
+                    mfr_speeds = sorted([c['speed'] for c in mfr_curves])
+                    default_speeds = ", ".join([f"{s:.0f}" for s in mfr_speeds])
+                    st.caption("ℹ️ Using speeds from manufacturer curves")
+                elif has_speed and len(unique_speeds) > 1:
+                    default_speeds = ", ".join([f"{s:.0f}" for s in unique_speeds])
+                    st.caption("ℹ️ Using speeds from measured data")
                 else:
-                    speeds = np.full(len(flows), ref_speed_fit)
+                    default_speeds = "8000, 9000, 10000, 11000, 12000"
+                    st.caption("ℹ️ Using default speeds - add manufacturer curves or speed data to auto-populate")
                 
-                # Filter out invalid data
-                valid_mask = (flows > 0) & (heads > 0) & (effs > 0) & (effs <= 100) & (speeds > 0)
-                flows = flows[valid_mask]
-                heads = heads[valid_mask]
-                effs = effs[valid_mask]
-                speeds = speeds[valid_mask]
+                target_speeds_str = st.text_input("Enter speeds separated by commas (add or modify as needed)", value=default_speeds,
+                                                   help="Curves will be generated for these speeds. Add more speeds or modify as needed.")
                 
-                if len(flows) < 3:
-                    st.error("Need at least 3 valid data points to generate curves")
+                try:
+                    target_speeds = [float(s.strip()) for s in target_speeds_str.split(",") if s.strip()]
+                except:
+                    target_speeds = [10000.0]
+                    st.warning("Invalid speed format. Using default 10000 RPM.")
+            
+                if st.button("🔧 Generate Curves from Data", type='primary'):
+                    try:
+                        # Extract data
+                        flows = results_df[flow_col].values
+                        heads = results_df['Polytropic Head (kJ/kg)'].values
+                        effs = results_df['Polytropic Eff (%)'].values
+                        
+                        if has_speed and results_df['Speed (RPM)'].notna().any():
+                            speeds = results_df['Speed (RPM)'].fillna(ref_speed_fit).values
+                        else:
+                            speeds = np.full(len(flows), ref_speed_fit)
+                        
+                        # Filter out invalid data
+                        valid_mask = (flows > 0) & (heads > 0) & (effs > 0) & (effs <= 100) & (speeds > 0)
+                        flows = flows[valid_mask]
+                        heads = heads[valid_mask]
+                        effs = effs[valid_mask]
+                        speeds = speeds[valid_mask]
+                        
+                        if len(flows) < 3:
+                            st.error("Need at least 3 valid data points to generate curves")
+                        else:
+                            # Normalize to reference speed using fan laws
+                            speed_ratio = ref_speed_fit / speeds
+                            flows_norm = flows * speed_ratio  # Q ∝ N
+                            heads_norm = heads * (speed_ratio ** 2)  # H ∝ N²
+                            effs_norm = effs  # Efficiency is approximately speed-independent
+                            
+                            # Determine flow range - use manufacturer curves scaled by affinity laws
+                            if mfr_curves:
+                                # Use exact flow range from manufacturer curves (normalized to reference speed)
+                                all_mfr_flows = []
+                                for curve in mfr_curves:
+                                    # Normalize manufacturer curve flows to reference speed using affinity laws: Q ∝ N
+                                    curve_speed_ratio = ref_speed_fit / curve['speed']
+                                    normalized_flows = [f * curve_speed_ratio for f in curve['flow']]
+                                    all_mfr_flows.extend(normalized_flows)
+                                
+                                flow_min = min(all_mfr_flows)
+                                flow_max = max(all_mfr_flows)
+                                st.caption(f"ℹ️ Flow range from manufacturer curves (scaled by affinity laws): {flow_min:.0f} - {flow_max:.0f} (at {ref_speed_fit:.0f} RPM)")
+                            else:
+                                # Fall back to measured data range
+                                flow_min = flows_norm.min()
+                                flow_max = flows_norm.max()
+                                st.caption(f"ℹ️ Flow range from measured data: {flow_min:.0f} - {flow_max:.0f} (at {ref_speed_fit:.0f} RPM)")
+                            
+                            flow_range = np.linspace(flow_min, flow_max, num_curve_points)
+                            
+                            # Fit Head vs Flow (typically parabolic: H = a*Q² + b*Q + c)
+                            head_coeffs = np.polyfit(flows_norm, heads_norm, poly_order_head)
+                            head_poly = np.poly1d(head_coeffs)
+                            
+                            # Fit Efficiency vs Flow (typically bell-shaped)
+                            eff_coeffs = np.polyfit(flows_norm, effs_norm, poly_order_eff)
+                            eff_poly = np.poly1d(eff_coeffs)
+                            
+                            # Calculate R² values for fit quality
+                            head_pred = head_poly(flows_norm)
+                            eff_pred = eff_poly(flows_norm)
+                            
+                            ss_res_head = np.sum((heads_norm - head_pred) ** 2)
+                            ss_tot_head = np.sum((heads_norm - np.mean(heads_norm)) ** 2)
+                            r2_head = 1 - (ss_res_head / ss_tot_head) if ss_tot_head > 0 else 0
+                            
+                            ss_res_eff = np.sum((effs_norm - eff_pred) ** 2)
+                            ss_tot_eff = np.sum((effs_norm - np.mean(effs_norm)) ** 2)
+                            r2_eff = 1 - (ss_res_eff / ss_tot_eff) if ss_tot_eff > 0 else 0
+                            
+                            st.write(f"**Curve Fit Quality:** Head R² = {r2_head:.3f}, Efficiency R² = {r2_eff:.3f}")
+                            
+                            if r2_head < 0.7 or r2_eff < 0.7:
+                                st.warning("⚠️ Low R² values indicate poor curve fit. Consider adding more data points or adjusting polynomial order.")
+                            
+                            # Generate curves for each target speed
+                            generated_curves = []
+                            
+                            for target_speed in target_speeds:
+                                speed_scale = target_speed / ref_speed_fit
+                                
+                                # Scale from reference speed to target speed
+                                curve_flows = (flow_range * speed_scale).tolist()  # Q ∝ N
+                                curve_heads = (head_poly(flow_range) * (speed_scale ** 2)).tolist()  # H ∝ N²
+                                curve_effs = np.clip(eff_poly(flow_range), 0, 100).tolist()  # Efficiency stays same
+                                
+                                generated_curves.append({
+                                    'speed': target_speed,
+                                    'flow': curve_flows,
+                                    'head': curve_heads,
+                                    'efficiency': curve_effs
+                                })
+                            
+                            # Store generated curves
+                            # Use the curve flow unit from session or default to m3/hr
+                            gen_flow_unit = st.session_state.get('curve_flow_unit', 'm³/hr')
+                            st.session_state['generated_curves'] = {
+                                'curves': generated_curves,
+                                'flow_unit': gen_flow_unit,
+                                'ref_speed': ref_speed_fit,
+                                'r2_head': r2_head,
+                                'r2_eff': r2_eff,
+                                'head_coeffs': head_coeffs.tolist(),
+                                'eff_coeffs': eff_coeffs.tolist()
+                            }
+                            
+                            st.success(f"Generated {len(generated_curves)} performance curves from {len(flows)} data points")
+                            
+                    except Exception as e:
+                        st.error(f"Failed to generate curves: {e}")
+                
+                # Display generated curves
+                if 'generated_curves' in st.session_state and st.session_state.get('generated_curves'):
+                    gen_data = st.session_state['generated_curves']
+                    
+                    st.divider()
+                    st.write(f"**Generated Curves** (R²: Head={gen_data.get('r2_head', 0):.3f}, Eff={gen_data.get('r2_eff', 0):.3f})")
+                    
+                    # Plot the fitted curves with original data
+                    fig_fit = go.Figure()
+                    
+                    # Add original data points
+                    if 'calculated_results' in st.session_state and st.session_state.calculated_results is not None:
+                        orig_df = st.session_state.calculated_results
+                        if flow_col in orig_df.columns and 'Polytropic Head (kJ/kg)' in orig_df.columns:
+                            fig_fit.add_trace(go.Scatter(
+                                x=orig_df[flow_col],
+                                y=orig_df['Polytropic Head (kJ/kg)'],
+                                mode='markers',
+                                name='Measured Data',
+                                marker=dict(size=10, color='red', symbol='circle')
+                            ))
+                    
+                    # Add fitted curves
+                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+                    for i, curve in enumerate(gen_data['curves']):
+                        color = colors[i % len(colors)]
+                        fig_fit.add_trace(go.Scatter(
+                            x=curve['flow'],
+                            y=curve['head'],
+                            mode='lines',
+                            name=f"{curve['speed']:.0f} RPM",
+                            line=dict(color=color, width=2)
+                        ))
+                    
+                    fig_fit.update_layout(
+                        title="Generated Head Curves vs Measured Data",
+                        xaxis_title=f"Flow ({gen_data.get('flow_unit', 'm³/hr')})",
+                        yaxis_title="Polytropic Head (kJ/kg)",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        height=450
+                    )
+                    st.plotly_chart(fig_fit, use_container_width=True)
+                    
+                    # Add efficiency plot
+                    fig_eff = go.Figure()
+                    
+                    # Add original efficiency data points
+                    if 'calculated_results' in st.session_state and st.session_state.calculated_results is not None:
+                        orig_df = st.session_state.calculated_results
+                        if flow_col in orig_df.columns and 'Polytropic Eff (%)' in orig_df.columns:
+                            fig_eff.add_trace(go.Scatter(
+                                x=orig_df[flow_col],
+                                y=orig_df['Polytropic Eff (%)'],
+                                mode='markers',
+                                name='Measured Data',
+                                marker=dict(size=10, color='red', symbol='circle')
+                            ))
+                    
+                    # Add fitted efficiency curves
+                    for i, curve in enumerate(gen_data['curves']):
+                        color = colors[i % len(colors)]
+                        fig_eff.add_trace(go.Scatter(
+                            x=curve['flow'],
+                            y=curve['efficiency'],
+                            mode='lines',
+                            name=f"{curve['speed']:.0f} RPM",
+                            line=dict(color=color, width=2)
+                        ))
+                    
+                    fig_eff.update_layout(
+                        title="Generated Efficiency Curves vs Measured Data",
+                        xaxis_title=f"Flow ({gen_data.get('flow_unit', 'm³/hr')})",
+                        yaxis_title="Polytropic Efficiency (%)",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        height=400
+                    )
+                    st.plotly_chart(fig_eff, use_container_width=True)
+                    
+                    # Show curve data tables
+                    with st.expander("📋 View Curve Data Tables"):
+                        for curve in gen_data['curves']:
+                            gen_df = pd.DataFrame({
+                                f"Flow ({gen_data.get('flow_unit', 'm3/hr')})": [f"{v:.2f}" for v in curve['flow']],
+                                'Head (kJ/kg)': [f"{v:.2f}" for v in curve['head']],
+                                'Eff (%)': [f"{v:.1f}" for v in curve['efficiency']]
+                            })
+                            st.write(f"**{curve['speed']:.0f} RPM:**")
+                            st.dataframe(gen_df, use_container_width=True, height=100)
+                    
+                    st.divider()
+                    st.subheader("💾 Save Generated Curves")
+                    
+                    # Prepare JSON data for download
+                    gen_json = json.dumps({
+                        'flow_unit': gen_data.get('flow_unit', 'm3/hr'),
+                        'generated_from_data': True,
+                        'generation_date': str(pd.Timestamp.now()),
+                        'reference_speed_rpm': gen_data.get('ref_speed'),
+                        'fit_quality': {
+                            'r2_head': round(gen_data.get('r2_head', 0), 4),
+                            'r2_eff': round(gen_data.get('r2_eff', 0), 4)
+                        },
+                        'polynomial_coefficients': {
+                            'head': gen_data.get('head_coeffs'),
+                            'efficiency': gen_data.get('eff_coeffs')
+                        },
+                        'curves': gen_data['curves']
+                    }, indent=2)
+                    
+                    # Action buttons in clear layout
+                    col_save1, col_save2, col_save3 = st.columns(3)
+                    with col_save1:
+                        st.download_button(
+                            label="📥 Save Curves to JSON File",
+                            data=gen_json,
+                            file_name="generated_compressor_curves.json",
+                            mime="application/json",
+                            key='download_generated',
+                            type='primary'
+                        )
+                    with col_save2:
+                        if st.button("✅ Use as Reference Curves", key='use_generated', 
+                                     help="Set these curves as the manufacturer/reference curves for deviation analysis"):
+                            st.session_state['compressor_curves'] = gen_data['curves']
+                            st.session_state['curve_flow_unit'] = gen_data.get('flow_unit', 'm3/hr')
+                            st.success("Generated curves are now set as reference curves!")
+                            st.rerun()
+                    with col_save3:
+                        if st.button("🗑️ Clear Generated Curves", key='clear_generated'):
+                            st.session_state['generated_curves'] = None
+                            st.rerun()
+                    
+                    st.caption("💡 **Tip:** Save to JSON to preserve curves for future sessions, or 'Use as Reference' to compare future measurements against these curves.")
+            else:
+                # Check if we have 1-2 points but no manufacturer curves
+                if num_points >= 1 and num_points < 3 and not mfr_curves:
+                    st.warning(f"""
+                    **{num_points} data point{'s' if num_points > 1 else ''} available** - Not enough for polynomial curve fitting (need 3+).
+                    
+                    **Option:** Load manufacturer curves first, then we can adjust them based on your measured data.
+                    """)
                 else:
-                    # Normalize to reference speed using fan laws
-                    speed_ratio = ref_speed_fit / speeds
-                    flows_norm = flows * speed_ratio  # Q ∝ N
-                    heads_norm = heads * (speed_ratio ** 2)  # H ∝ N²
-                    effs_norm = effs  # Efficiency is approximately speed-independent
-                    
-                    # Fit polynomials to normalized data with extended range
-                    flow_min_ext = flows_norm.min() * (1 - flow_extend_low / 100)
-                    flow_max_ext = flows_norm.max() * (1 + flow_extend_high / 100)
-                    flow_range = np.linspace(flow_min_ext, flow_max_ext, num_curve_points)
-                    
-                    # Fit Head vs Flow (typically parabolic: H = a*Q² + b*Q + c)
-                    head_coeffs = np.polyfit(flows_norm, heads_norm, poly_order_head)
-                    head_poly = np.poly1d(head_coeffs)
-                    
-                    # Fit Efficiency vs Flow (typically bell-shaped)
-                    eff_coeffs = np.polyfit(flows_norm, effs_norm, poly_order_eff)
-                    eff_poly = np.poly1d(eff_coeffs)
-                    
-                    # Calculate R² values for fit quality
-                    head_pred = head_poly(flows_norm)
-                    eff_pred = eff_poly(flows_norm)
-                    
-                    ss_res_head = np.sum((heads_norm - head_pred) ** 2)
-                    ss_tot_head = np.sum((heads_norm - np.mean(heads_norm)) ** 2)
-                    r2_head = 1 - (ss_res_head / ss_tot_head) if ss_tot_head > 0 else 0
-                    
-                    ss_res_eff = np.sum((effs_norm - eff_pred) ** 2)
-                    ss_tot_eff = np.sum((effs_norm - np.mean(effs_norm)) ** 2)
-                    r2_eff = 1 - (ss_res_eff / ss_tot_eff) if ss_tot_eff > 0 else 0
-                    
-                    st.write(f"**Curve Fit Quality:** Head R² = {r2_head:.3f}, Efficiency R² = {r2_eff:.3f}")
-                    
-                    if r2_head < 0.7 or r2_eff < 0.7:
-                        st.warning("⚠️ Low R² values indicate poor curve fit. Consider adding more data points or adjusting polynomial order.")
-                    
-                    # Generate curves for each target speed
-                    generated_curves = []
-                    
-                    for target_speed in target_speeds:
-                        speed_scale = target_speed / ref_speed_fit
-                        
-                        # Scale from reference speed to target speed
-                        curve_flows = (flow_range * speed_scale).tolist()  # Q ∝ N
-                        curve_heads = (head_poly(flow_range) * (speed_scale ** 2)).tolist()  # H ∝ N²
-                        curve_effs = np.clip(eff_poly(flow_range), 0, 100).tolist()  # Efficiency stays same
-                        
-                        generated_curves.append({
-                            'speed': target_speed,
-                            'flow': curve_flows,
-                            'head': curve_heads,
-                            'efficiency': curve_effs
-                        })
-                    
-                    # Store generated curves
-                    # Use the curve flow unit from session or default to m3/hr
-                    gen_flow_unit = st.session_state.get('curve_flow_unit', 'm³/hr')
-                    st.session_state['generated_curves'] = {
-                        'curves': generated_curves,
-                        'flow_unit': gen_flow_unit,
-                        'ref_speed': ref_speed_fit,
-                        'r2_head': r2_head,
-                        'r2_eff': r2_eff,
-                        'head_coeffs': head_coeffs.tolist(),
-                        'eff_coeffs': eff_coeffs.tolist()
-                    }
-                    
-                    st.success(f"Generated {len(generated_curves)} performance curves from {len(flows)} data points")
-                    
-            except Exception as e:
-                st.error(f"Failed to generate curves: {e}")
-        
-        # Display generated curves
-        if 'generated_curves' in st.session_state and st.session_state.get('generated_curves'):
-            gen_data = st.session_state['generated_curves']
-            
-            st.divider()
-            st.write(f"**Generated Curves** (R²: Head={gen_data.get('r2_head', 0):.3f}, Eff={gen_data.get('r2_eff', 0):.3f})")
-            
-            # Plot the fitted curves with original data
-            fig_fit = go.Figure()
-            
-            # Add original data points
-            if 'calculated_results' in st.session_state and st.session_state.calculated_results is not None:
-                orig_df = st.session_state.calculated_results
-                if flow_col in orig_df.columns and 'Polytropic Head (kJ/kg)' in orig_df.columns:
-                    fig_fit.add_trace(go.Scatter(
-                        x=orig_df[flow_col],
-                        y=orig_df['Polytropic Head (kJ/kg)'],
-                        mode='markers',
-                        name='Measured Data',
-                        marker=dict(size=10, color='red', symbol='circle')
-                    ))
-            
-            # Add fitted curves
-            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
-            for i, curve in enumerate(gen_data['curves']):
-                color = colors[i % len(colors)]
-                fig_fit.add_trace(go.Scatter(
-                    x=curve['flow'],
-                    y=curve['head'],
-                    mode='lines',
-                    name=f"{curve['speed']:.0f} RPM",
-                    line=dict(color=color, width=2)
-                ))
-            
-            fig_fit.update_layout(
-                title="Generated Head Curves vs Measured Data",
-                xaxis_title=f"Flow ({gen_data.get('flow_unit', 'm³/hr')})",
-                yaxis_title="Polytropic Head (kJ/kg)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                height=450
-            )
-            st.plotly_chart(fig_fit, use_container_width=True)
-            
-            # Add efficiency plot
-            fig_eff = go.Figure()
-            
-            # Add original efficiency data points
-            if 'calculated_results' in st.session_state and st.session_state.calculated_results is not None:
-                orig_df = st.session_state.calculated_results
-                if flow_col in orig_df.columns and 'Polytropic Eff (%)' in orig_df.columns:
-                    fig_eff.add_trace(go.Scatter(
-                        x=orig_df[flow_col],
-                        y=orig_df['Polytropic Eff (%)'],
-                        mode='markers',
-                        name='Measured Data',
-                        marker=dict(size=10, color='red', symbol='circle')
-                    ))
-            
-            # Add fitted efficiency curves
-            for i, curve in enumerate(gen_data['curves']):
-                color = colors[i % len(colors)]
-                fig_eff.add_trace(go.Scatter(
-                    x=curve['flow'],
-                    y=curve['efficiency'],
-                    mode='lines',
-                    name=f"{curve['speed']:.0f} RPM",
-                    line=dict(color=color, width=2)
-                ))
-            
-            fig_eff.update_layout(
-                title="Generated Efficiency Curves vs Measured Data",
-                xaxis_title=f"Flow ({gen_data.get('flow_unit', 'm³/hr')})",
-                yaxis_title="Polytropic Efficiency (%)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                height=400
-            )
-            st.plotly_chart(fig_eff, use_container_width=True)
-            
-            # Show curve data tables
-            with st.expander("📋 View Curve Data Tables"):
-                for curve in gen_data['curves']:
-                    gen_df = pd.DataFrame({
-                        f"Flow ({gen_data.get('flow_unit', 'm3/hr')})": [f"{v:.2f}" for v in curve['flow']],
-                        'Head (kJ/kg)': [f"{v:.2f}" for v in curve['head']],
-                        'Eff (%)': [f"{v:.1f}" for v in curve['efficiency']]
-                    })
-                    st.write(f"**{curve['speed']:.0f} RPM:**")
-                    st.dataframe(gen_df, use_container_width=True, height=100)
-            
-            st.divider()
-            st.subheader("💾 Save Generated Curves")
-            
-            # Prepare JSON data for download
-            gen_json = json.dumps({
-                'flow_unit': gen_data.get('flow_unit', 'm3/hr'),
-                'generated_from_data': True,
-                'generation_date': str(pd.Timestamp.now()),
-                'reference_speed_rpm': gen_data.get('ref_speed'),
-                'fit_quality': {
-                    'r2_head': round(gen_data.get('r2_head', 0), 4),
-                    'r2_eff': round(gen_data.get('r2_eff', 0), 4)
-                },
-                'polynomial_coefficients': {
-                    'head': gen_data.get('head_coeffs'),
-                    'efficiency': gen_data.get('eff_coeffs')
-                },
-                'curves': gen_data['curves']
-            }, indent=2)
-            
-            # Action buttons in clear layout
-            col_save1, col_save2, col_save3 = st.columns(3)
-            with col_save1:
-                st.download_button(
-                    label="📥 Save Curves to JSON File",
-                    data=gen_json,
-                    file_name="generated_compressor_curves.json",
-                    mime="application/json",
-                    key='download_generated',
-                    type='primary'
-                )
-            with col_save2:
-                if st.button("✅ Use as Reference Curves", key='use_generated', 
-                             help="Set these curves as the manufacturer/reference curves for deviation analysis"):
-                    st.session_state['compressor_curves'] = gen_data['curves']
-                    st.session_state['curve_flow_unit'] = gen_data.get('flow_unit', 'm3/hr')
-                    st.success("Generated curves are now set as reference curves!")
+                    st.info("Need at least 3 data points with valid Polytropic Head and Efficiency values for polynomial curve fitting.")
+                if st.button("🔄 Run Calculations Now", key='run_calc_from_measured', type='primary'):
+                    st.session_state['trigger_calculation'] = True
                     st.rerun()
-            with col_save3:
-                if st.button("🗑️ Clear Generated Curves", key='clear_generated'):
-                    st.session_state['generated_curves'] = None
-                    st.rerun()
-            
-            st.caption("💡 **Tip:** Save to JSON to preserve curves for future sessions, or 'Use as Reference' to compare future measurements against these curves.")
-    else:
-        st.info("Run calculations first to generate operating data points. Need at least 3 data points.")
-else:
-    st.info("Run compressor calculations first to generate operating data that can be used to create performance curves.")
+        else:
+            st.warning("No calculated results available yet. Click the button below to run compressor calculations first.")
+            if st.button("🔄 Run Compressor Calculations", key='run_calc_from_measured_main', type='primary'):
+                st.session_state['trigger_calculation'] = True
+                st.rerun()
 
 st.divider()
 
@@ -1238,8 +1380,11 @@ def convert_temperature_to_C(value, unit):
         return (value - 32) * 5/9
     return value
 
+# Check if calculation was triggered from "Generate Curves from Measured Data" section
+trigger_calculation = st.session_state.pop('trigger_calculation', False)
+
 # Calculate button
-if st.button('Calculate Compressor Performance', type='primary'):
+if st.button('Calculate Compressor Performance', type='primary') or trigger_calculation:
     fluid_composition = get_fluid_composition()
     
     if not fluid_composition or len(fluid_composition) == 0:
@@ -1658,6 +1803,10 @@ if st.button('Calculate Compressor Performance', type='primary'):
                 mfr_curves = st.session_state.get('compressor_curves', [])
                 curve_flow_unit = st.session_state.get('curve_flow_unit', flow_unit)
                 
+                # Get generated/adjusted curves if available
+                gen_curves_data = st.session_state.get('generated_curves', None)
+                gen_curves = gen_curves_data.get('curves', []) if gen_curves_data else []
+                
                 # Color palette for curves and measured points
                 curve_colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', 
                                '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
@@ -1705,7 +1854,7 @@ if st.button('Calculate Compressor Performance', type='primary'):
                 with tab1:
                     fig_eff = go.Figure()
                     
-                    # Add manufacturer curves first (as background)
+                    # Add manufacturer curves first (as background - dotted lines)
                     if show_mfr_curves and mfr_curves:
                         for i, curve in enumerate(mfr_curves):
                             color = curve_colors[i % len(curve_colors)]
@@ -1713,9 +1862,23 @@ if st.button('Calculate Compressor Performance', type='primary'):
                                 x=curve['flow'],
                                 y=curve['efficiency'],
                                 mode='lines',
-                                name=f"Curve {curve['speed']:.0f} RPM",
+                                name=f"Original {curve['speed']:.0f} RPM",
                                 line=dict(width=2, color=color, dash='dot'),
-                                opacity=0.7
+                                opacity=0.6,
+                                legendgroup=f"speed_{curve['speed']}"
+                            ))
+                    
+                    # Add generated/adjusted curves (solid lines)
+                    if gen_curves:
+                        for i, curve in enumerate(gen_curves):
+                            color = curve_colors[i % len(curve_colors)]
+                            fig_eff.add_trace(go.Scatter(
+                                x=curve['flow'],
+                                y=curve['efficiency'],
+                                mode='lines',
+                                name=f"Adjusted {curve['speed']:.0f} RPM",
+                                line=dict(width=3, color=color),
+                                legendgroup=f"speed_{curve['speed']}"
                             ))
                     
                     # Add calculated data points grouped by speed
@@ -1731,7 +1894,8 @@ if st.button('Calculate Compressor Performance', type='primary'):
                             name=f'Measured @ {speed:.0f} RPM',
                             marker=dict(size=12, color=color, symbol='circle', 
                                        line=dict(width=2, color='white')),
-                            hovertemplate=f'Speed: {speed:.0f} RPM<br>Flow: %{{x:.1f}}<br>Efficiency: %{{y:.2f}}%<extra></extra>'
+                            hovertemplate=f'Speed: {speed:.0f} RPM<br>Flow: %{{x:.1f}}<br>Efficiency: %{{y:.2f}}%<extra></extra>',
+                            legendgroup=f"speed_{speed}"
                         ))
                     
                     fig_eff.update_layout(
@@ -1746,7 +1910,7 @@ if st.button('Calculate Compressor Performance', type='primary'):
                 with tab2:
                     fig_head = go.Figure()
                     
-                    # Add manufacturer curves first (as background)
+                    # Add manufacturer curves first (as background - dotted lines)
                     if show_mfr_curves and mfr_curves:
                         for i, curve in enumerate(mfr_curves):
                             color = curve_colors[i % len(curve_colors)]
@@ -1754,9 +1918,23 @@ if st.button('Calculate Compressor Performance', type='primary'):
                                 x=curve['flow'],
                                 y=curve['head'],
                                 mode='lines',
-                                name=f"Curve {curve['speed']:.0f} RPM",
+                                name=f"Original {curve['speed']:.0f} RPM",
                                 line=dict(width=2, color=color, dash='dot'),
-                                opacity=0.7
+                                opacity=0.6,
+                                legendgroup=f"speed_{curve['speed']}"
+                            ))
+                    
+                    # Add generated/adjusted curves (solid lines)
+                    if gen_curves:
+                        for i, curve in enumerate(gen_curves):
+                            color = curve_colors[i % len(curve_colors)]
+                            fig_head.add_trace(go.Scatter(
+                                x=curve['flow'],
+                                y=curve['head'],
+                                mode='lines',
+                                name=f"Adjusted {curve['speed']:.0f} RPM",
+                                line=dict(width=3, color=color),
+                                legendgroup=f"speed_{curve['speed']}"
                             ))
                     
                     # Add calculated data points grouped by speed
@@ -1770,7 +1948,8 @@ if st.button('Calculate Compressor Performance', type='primary'):
                             name=f'Measured @ {speed:.0f} RPM',
                             marker=dict(size=12, color=color, symbol='circle',
                                        line=dict(width=2, color='white')),
-                            hovertemplate=f'Speed: {speed:.0f} RPM<br>Flow: %{{x:.1f}}<br>Head: %{{y:.2f}} kJ/kg<extra></extra>'
+                            hovertemplate=f'Speed: {speed:.0f} RPM<br>Flow: %{{x:.1f}}<br>Head: %{{y:.2f}} kJ/kg<extra></extra>',
+                            legendgroup=f"speed_{speed}"
                         ))
                     
                     fig_head.update_layout(
