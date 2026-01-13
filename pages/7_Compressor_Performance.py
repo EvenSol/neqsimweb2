@@ -1632,12 +1632,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         
                         # Validate the solved efficiency - must be between 0 and 1 (0-100%)
                         # If invalid, the measured outlet temperature may be thermodynamically inconsistent
-                        if eta_poly is None or np.isnan(float(eta_poly)) or float(eta_poly) <= 0 or float(eta_poly) > 1.0:
-                            # Invalid efficiency - outlet temperature may be too low (unrealistic)
+                        eta_poly_float = float(eta_poly) if eta_poly is not None else None
+                        is_valid = eta_poly_float is not None and not np.isnan(eta_poly_float) and eta_poly_float > 0 and eta_poly_float <= 1.0
+                        
+                        if not is_valid:
+                            # Invalid efficiency - outlet temperature may be unrealistic
                             # Fall back to Schultz method for this point
-                            eta_poly_val = float(eta_poly) if eta_poly is not None else None
-                            eta_poly_str = f"{eta_poly_val:.3f}" if eta_poly_val is not None else "None"
-                            st.warning(f"⚠️ Row {idx}: Could not solve efficiency for T_out={t_out}°C (got η={eta_poly_str}). Check if outlet temperature is realistic for P_ratio={p_out/p_in:.2f}. Using Schultz method as fallback.")
+                            eta_poly_str = f"{eta_poly_float:.3f}" if eta_poly_float is not None else "None"
+                            st.warning(f"⚠️ Row {idx}: NeqSim returned η={eta_poly_str} for T_out={t_out}°C, P_ratio={p_out/p_in:.2f}. Using Schultz method as fallback.")
                             
                             # Use Schultz analytical method as fallback
                             T_out_K = t_out + 273.15
@@ -1661,10 +1663,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 eta_poly_calc = ((n - 1) / n) * (kappa_in / (kappa_in - 1))
                                 # Check if calculated efficiency is unrealistic (>100%)
                                 if eta_poly_calc > 1.0:
-                                    st.error(f"❌ Row {idx}: Calculated efficiency is {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
+                                    st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
                                             f"The outlet temperature {t_out}°C is too LOW for compression from {p_in} to {p_out} bara. "
-                                            f"Please check your measured outlet temperature.")
-                                    eta_poly = np.nan  # Mark as invalid
+                                            f"Please increase the outlet temperature. Setting to 100% for display.")
+                                    eta_poly = 1.0  # Cap at 100% for display but flag the issue
                                 elif eta_poly_calc < 0.3:
                                     st.warning(f"⚠️ Row {idx}: Calculated efficiency is very low ({eta_poly_calc*100:.1f}%). Check measured data.")
                                     eta_poly = eta_poly_calc
@@ -1676,14 +1678,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Calculate polytropic head using Schultz
                             R = 8.314  # J/(mol·K)
                             z_avg = (z_in + z_out) / 2
-                            if n > 1 and not np.isnan(eta_poly):
+                            if n > 1:
                                 polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000
                             else:
-                                polytropic_head = np.nan
+                                polytropic_head = abs(h_out - h_in) * eta_poly  # Use abs to avoid negative
                             
-                            eta_isen = eta_poly * 0.98 if not np.isnan(eta_poly) else np.nan
+                            eta_isen = eta_poly * 0.98
                             actual_work = h_out - h_in
-                            power_kW = mass_flow * actual_work
+                            power_kW = mass_flow * abs(actual_work)  # Use abs to avoid negative power display
                             power_MW = power_kW / 1000
                             kappa_avg = (kappa_in + kappa_out) / 2
                         else:
@@ -2065,9 +2067,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 
                 # Get unique speeds from measured data
                 unique_speeds = sorted(results_df['Speed (RPM)'].unique())
-                
-                # Debug: show number of points to be plotted
-                st.caption(f"📊 Debug: {len(results_df)} total points, Plot Flow values: {list(results_df['Plot Flow'].values)}")
                 
                 # Build a mapping from curve speeds to colors for matching measured points
                 speed_to_color = {}
