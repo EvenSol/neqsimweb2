@@ -19,9 +19,11 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     st.markdown("""
     ## Overview
     
-    This tool calculates centrifugal compressor performance using the **GERG-2008** equation of state 
+    This tool calculates centrifugal compressor performance using advanced equations of state 
     for accurate thermodynamic property calculations. It supports performance testing, curve generation, 
     and gas composition correction.
+    
+    **Supported EoS Models:** GERG-2008 (default), Peng-Robinson, Soave-Redlich-Kwong
     
     ---
     
@@ -29,7 +31,7 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     
     | Step | Action | Description |
     |------|--------|-------------|
-    | 1️⃣ | **Select Fluid** | Choose from preset gases or create custom GERG-2008 mixture |
+    | 1️⃣ | **Select Fluid & Model** | Choose from preset gases or custom mixture, and select EoS model |
     | 2️⃣ | **Enter Operating Data** | Input measured pressures, temperatures, and flow rates |
     | 3️⃣ | **Run Calculations** | Click "Calculate Performance" to compute head/efficiency |
     | 4️⃣ | **Analyze Results** | View plots and compare against manufacturer curves |
@@ -42,8 +44,8 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     - **Polytropic head & efficiency** from measured P, T, and flow data
     - **Isentropic efficiency** and compression power
     - **Two calculation methods available:**
-      - **Schultz (Analytical)**: Traditional polytropic analysis with GERG-2008
-      - **NeqSim Process Model (Detailed)**: Multi-step polytropic compression using NeqSim's process compressor model with GERG-2008
+      - **Schultz (Analytical)**: Traditional polytropic analysis
+      - **NeqSim Process Model (Detailed)**: Multi-step polytropic compression using NeqSim's process compressor model
     
     #### NeqSim Detailed Method
     The detailed polytropic method is based on thermodynamic integration principles developed for 
@@ -54,7 +56,7 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     **Key features:**
     - Multi-step integration through the compression path
     - Accurate for high pressure ratios and non-ideal gases
-    - Proper handling of real-gas effects via GERG-2008
+    - Proper handling of real-gas effects via selected equation of state
     - Calculates polytropic efficiency from measured inlet/outlet conditions
     
     This methodology is based on research from NTNU's thermal turbomachinery group, including 
@@ -116,6 +118,8 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     - ASME PTC 10 (1997) - *Performance Test Code on Compressors and Exhausters*
     - Schultz, J.M. (1962) - Polytropic analysis method
     - GERG-2008 - European gas research group equation of state
+    - Peng-Robinson (1976) - Cubic equation of state
+    - Soave-Redlich-Kwong (1972) - Cubic equation of state
     - Khader (2015) - Gas composition correction method
     - Bakken, L.E. & Hundseid, Ø. - NTNU research on compressor thermodynamic integration and wet gas compression
     """)
@@ -123,14 +127,15 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
 st.divider()
 
 """
-Calculate compressor performance parameters using the **GERG-2008** equation of state.
+Calculate compressor performance parameters using advanced equations of state.
 This tool calculates polytropic head, polytropic efficiency, and power consumption
 based on measured operating data (flow rates, pressures, and temperatures).
 
-**Supported fluids:** Standard test fluids (CO2, Methane, Nitrogen) or custom GERG-2008 mixtures.
+**Supported EoS models:** GERG-2008 (default), Peng-Robinson, Soave-Redlich-Kwong.
 
-The GERG-2008 equation of state provides high accuracy for compressibility factor calculations,
-which is essential for accurate polytropic head and efficiency calculations.
+**Supported fluids:** Standard test fluids (CO2, Methane, Nitrogen) or custom mixtures.
+
+Select the equation of state model in the sidebar under Fluid Selection.
 """
 
 st.divider()
@@ -253,6 +258,17 @@ if 'num_calc_steps' not in st.session_state:
 if 'polytropic_efficiency_input' not in st.session_state:
     st.session_state['polytropic_efficiency_input'] = 75.0
 
+# Initialize session state for equation of state model
+if 'eos_model' not in st.session_state:
+    st.session_state['eos_model'] = "GERG-2008"
+
+# EoS model options mapping
+eos_model_options = {
+    "GERG-2008": "gerg-2008",
+    "Peng-Robinson": "pr",
+    "Soave-Redlich-Kwong": "srk"
+}
+
 # Sidebar for fluid selection
 with st.sidebar:
     st.header("Fluid Selection")
@@ -267,6 +283,15 @@ with st.sidebar:
     else:
         st.info("Define custom composition in the main panel")
     
+    # Equation of State model selection
+    selected_eos = st.selectbox(
+        "Equation of State Model",
+        options=list(eos_model_options.keys()),
+        index=list(eos_model_options.keys()).index(st.session_state['eos_model']),
+        help="GERG-2008: High accuracy for natural gas. PR: Peng-Robinson cubic EoS. SRK: Soave-Redlich-Kwong cubic EoS."
+    )
+    st.session_state['eos_model'] = selected_eos
+    
     st.divider()
     st.header("Calculation Method")
     
@@ -274,7 +299,7 @@ with st.sidebar:
         "Select Method",
         options=["NeqSim Process Model (Detailed)", "Schultz (Analytical)"],
         index=0 if st.session_state['calc_method'] == "NeqSim Process Model (Detailed)" else 1,
-        help="Schultz: Analytical polytropic analysis using GERG-2008. NeqSim: Uses process compressor with detailed multi-step polytropic calculation."
+        help="Schultz: Analytical polytropic analysis. NeqSim: Uses process compressor with detailed multi-step polytropic calculation."
     )
     st.session_state['calc_method'] = calc_method
     
@@ -290,6 +315,10 @@ with st.sidebar:
             help="More steps = higher accuracy but slower calculation"
         )
         st.session_state['num_calc_steps'] = num_steps
+
+# Helper function to get the selected EoS model code
+def get_selected_eos_model():
+    return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
 
 # Helper function to get fluid composition dict
 def get_fluid_composition():
@@ -363,7 +392,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
     if fluid_composition and len(fluid_composition) > 0:
         try:
             jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
-            display_fluid = fluid("gerg-2008")
+            display_fluid = fluid(get_selected_eos_model())
             for comp_name, comp_moles in fluid_composition.items():
                 display_fluid.addComponent(comp_name, float(comp_moles))
             display_fluid.setPressure(50.0, 'bara')
@@ -835,7 +864,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     
                     # Create new fluid and calculate properties
                     jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
-                    new_fluid = fluid("gerg-2008")
+                    new_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in new_fluid_composition.items():
                         new_fluid.addComponent(comp_name, float(comp_moles))
                     new_fluid.setPressure(ref_pressure, 'bara')
@@ -847,7 +876,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     gamma_new = new_fluid.getGamma()
                     z_new = new_fluid.getZ()
                     T_new_K = ref_temp + 273.15
-                    # More accurate speed of sound using GERG-2008
+                    # More accurate speed of sound using selected EoS
                     c_s_new = np.sqrt(gamma_new * z_new * R * T_new_K / (new_mw / 1000))  # m/s
                     
                     # Calculate Machine Mach Number for a reference speed (use first curve speed)
@@ -1475,9 +1504,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
         st.error('Please enter operating data before calculating.')
     else:
         calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
-        spinner_msg = 'Calculating compressor performance using GERG-2008...'
+        eos_name = st.session_state.get('eos_model', 'GERG-2008')
+        spinner_msg = f'Calculating compressor performance using {eos_name}...'
         if calc_method == "NeqSim Process Model (Detailed)":
-            spinner_msg = f'Calculating using NeqSim process model (detailed mode, {st.session_state["num_calc_steps"]} steps)...'
+            spinner_msg = f'Calculating using NeqSim process model ({eos_name}, {st.session_state["num_calc_steps"]} steps)...'
         
         with st.spinner(spinner_msg):
             try:
@@ -1505,7 +1535,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     t_out = convert_temperature_to_C(t_out_raw, temp_unit)
                     
                     # Create inlet fluid
-                    inlet_fluid = fluid("gerg-2008")
+                    inlet_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in fluid_composition.items():
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
                     
@@ -1536,7 +1566,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         mass_flow = flow_value * rho_in / 3600.0  # m3/hr * kg/m3 / 3600 = kg/s
                     elif flow_unit == "MSm3/day":
                         # Standard conditions: 15C, 1.01325 bara
-                        std_fluid = fluid("gerg-2008")
+                        std_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             std_fluid.addComponent(comp_name, float(comp_moles))
                         std_fluid.setPressure(1.01325, 'bara')
@@ -1550,7 +1580,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         mass_flow = flow_value  # Default, assume kg/s
                     
                     # Create outlet fluid at actual conditions
-                    outlet_fluid = fluid("gerg-2008")
+                    outlet_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in fluid_composition.items():
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
                     
@@ -1575,7 +1605,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     if calc_method == "NeqSim Process Model (Detailed)":
                         # Use NeqSim process compressor with detailed polytropic method
                         # Create a stream for the compressor inlet
-                        process_fluid = fluid("gerg-2008")
+                        process_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             process_fluid.addComponent(comp_name, float(comp_moles))
                         process_fluid.setPressure(float(p_in), 'bara')
@@ -1644,7 +1674,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     else:
                         # Use Schultz analytical method (original implementation)
                         # Create isentropic outlet fluid (same entropy as inlet)
-                        isentropic_fluid = fluid("gerg-2008")
+                        isentropic_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             isentropic_fluid.addComponent(comp_name, float(comp_moles))
                         isentropic_fluid.setPressure(float(p_out), 'bara')
@@ -1705,7 +1735,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         else:
                             eta_poly = eta_isen * 1.02  # Approximation
                         
-                        # Polytropic head calculation using GERG-2008
+                        # Polytropic head calculation using selected equation of state
                         # Hp = z_avg * R * T1 / MW * n/(n-1) * [(P2/P1)^((n-1)/n) - 1]
                         R = 8.314  # J/(mol·K)
                         if n > 1:
@@ -2169,7 +2199,7 @@ with st.expander("📚 Theory & Equations", expanded=False):
     st.markdown("""
     ### Polytropic Head Calculation
     
-    The polytropic head is calculated using the GERG-2008 equation of state for accurate 
+    The polytropic head is calculated using the selected equation of state for accurate 
     compressibility factor determination:
     
     $$H_p = \\frac{Z_{avg} \\cdot R \\cdot T_1}{M_w} \\cdot \\frac{n}{n-1} \\cdot \\left[\\left(\\frac{P_2}{P_1}\\right)^{\\frac{n-1}{n}} - 1\\right]$$
