@@ -41,7 +41,25 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     ### 1. Performance Calculations
     - **Polytropic head & efficiency** from measured P, T, and flow data
     - **Isentropic efficiency** and compression power
-    - Uses Schultz method with GERG-2008 compressibility factors
+    - **Two calculation methods available:**
+      - **Schultz (Analytical)**: Traditional polytropic analysis with GERG-2008
+      - **NeqSim Process Model (Detailed)**: Multi-step polytropic compression using NeqSim's process compressor model with GERG-2008
+    
+    #### NeqSim Detailed Method
+    The detailed polytropic method is based on thermodynamic integration principles developed for 
+    accurate compressor performance analysis. This approach divides the compression process into 
+    many small pressure steps, calculating thermodynamic properties at each step using rigorous 
+    equations of state.
+    
+    **Key features:**
+    - Multi-step integration through the compression path
+    - Accurate for high pressure ratios and non-ideal gases
+    - Proper handling of real-gas effects via GERG-2008
+    - Calculates polytropic efficiency from measured inlet/outlet conditions
+    
+    This methodology is based on research from NTNU's thermal turbomachinery group, including 
+    work by **Lars Erik Bakken** and **Øyvind Hundseid** on compressor thermodynamic analysis 
+    and integration techniques for accurate polytropic calculations.
     
     ### 2. Operating Data Input
     - **Manual entry** in editable table (supports multiple operating points)
@@ -100,6 +118,7 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     - Schultz, J.M. (1962) - Polytropic analysis method
     - GERG-2008 - European gas research group equation of state
     - Khader (2015) - Gas composition correction method
+    - Bakken, L.E. & Hundseid, Ø. - NTNU research on compressor thermodynamic integration and wet gas compression
     """)
 
 st.divider()
@@ -217,7 +236,7 @@ if 'compressor_data' not in st.session_state:
         'Inlet Pressure': [50.0, 50.0, 50.0, 50.0, 50.0],
         'Outlet Pressure': [120.0, 120.0, 120.0, 120.0, 120.0],
         'Inlet Temperature': [30.0, 30.0, 30.0, 30.0, 30.0],
-        'Outlet Temperature': [95.0, 93.0, 90.0, 88.0, 87.0],
+        'Outlet Temperature': [110.0, 108.0, 105.0, 103.0, 102.0],
     })
 
 # Initialize session state for compressor curves
@@ -226,6 +245,14 @@ if 'compressor_curves' not in st.session_state:
 
 if 'show_compressor_curves' not in st.session_state:
     st.session_state['show_compressor_curves'] = False
+
+# Initialize session state for calculation method
+if 'calc_method' not in st.session_state:
+    st.session_state['calc_method'] = "NeqSim Process Model (Detailed)"
+if 'num_calc_steps' not in st.session_state:
+    st.session_state['num_calc_steps'] = 40
+if 'polytropic_efficiency_input' not in st.session_state:
+    st.session_state['polytropic_efficiency_input'] = 75.0
 
 # Sidebar for fluid selection
 with st.sidebar:
@@ -240,6 +267,30 @@ with st.sidebar:
         st.info(f"Selected fluid composition: {test_fluids[selected_fluid_name]}")
     else:
         st.info("Define custom composition in the main panel")
+    
+    st.divider()
+    st.header("Calculation Method")
+    
+    calc_method = st.selectbox(
+        "Select Method",
+        options=["NeqSim Process Model (Detailed)", "Schultz (Analytical)"],
+        index=0 if st.session_state['calc_method'] == "NeqSim Process Model (Detailed)" else 1,
+        help="Schultz: Analytical polytropic analysis using GERG-2008. NeqSim: Uses process compressor with detailed multi-step polytropic calculation."
+    )
+    st.session_state['calc_method'] = calc_method
+    
+    if calc_method == "NeqSim Process Model (Detailed)":
+        st.info("🔧 Uses NeqSim's detailed polytropic method. Efficiency is calculated from measured inlet/outlet conditions.")
+        
+        num_steps = st.slider(
+            "Number of Calculation Steps",
+            min_value=10,
+            max_value=100,
+            value=st.session_state['num_calc_steps'],
+            step=10,
+            help="More steps = higher accuracy but slower calculation"
+        )
+        st.session_state['num_calc_steps'] = num_steps
 
 # Helper function to get fluid composition dict
 def get_fluid_composition():
@@ -273,29 +324,37 @@ with st.expander("📋 Fluid Composition", expanded=True):
         if hidecomponents:
             display_df = display_df[display_df['MolarComposition[-]'] > 0]
         
-        edited_fluid_df = st.data_editor(
-            display_df,
-            column_config={
-                "ComponentName": st.column_config.SelectboxColumn(
-                    "Component Name",
-                    options=gerg2008_components,
-                    help="Select from GERG-2008 compatible components"
-                ),
-                "MolarComposition[-]": st.column_config.NumberColumn(
-                    "Molar Composition [-]", 
-                    min_value=0, 
-                    max_value=100, 
-                    format="%.2f",
-                    help="Enter molar composition (will be normalized)"
-                ),
-            },
-            num_rows='dynamic',
-            key='custom_fluid_editor'
-        )
-        
-        # Update session state
-        if not hidecomponents:
-            st.session_state.compressor_custom_fluid_df = edited_fluid_df
+        # Use a form to prevent table reload while typing
+        with st.form("fluid_composition_form"):
+            st.caption("💡 Edit composition and click **Apply** when done.")
+            
+            edited_fluid_df = st.data_editor(
+                display_df,
+                column_config={
+                    "ComponentName": st.column_config.SelectboxColumn(
+                        "Component Name",
+                        options=gerg2008_components,
+                        help="Select from GERG-2008 compatible components"
+                    ),
+                    "MolarComposition[-]": st.column_config.NumberColumn(
+                        "Molar Composition [-]", 
+                        min_value=0, 
+                        max_value=100, 
+                        format="%.2f",
+                        help="Enter molar composition (will be normalized)"
+                    ),
+                },
+                num_rows='dynamic',
+                key='custom_fluid_editor'
+            )
+            
+            submitted_fluid = st.form_submit_button("Apply", type='primary')
+            
+            if submitted_fluid:
+                # Update session state
+                if not hidecomponents:
+                    st.session_state.compressor_custom_fluid_df = edited_fluid_df
+                st.success("✅ Composition updated!")
         
         st.caption("💡 Composition will be normalized before simulation")
     
@@ -428,7 +487,7 @@ with st.expander("📊 Operating Data Input", expanded=True):
             'Inlet Pressure': [50.0, 50.0, 50.0],
             'Outlet Pressure': [120.0, 120.0, 120.0],
             'Inlet Temperature': [30.0, 30.0, 30.0],
-            'Outlet Temperature': [95.0, 90.0, 87.0],
+            'Outlet Temperature': [110.0, 105.0, 102.0],
         })
         csv_template = template_df.to_csv(index=False)
         st.download_button(
@@ -451,7 +510,7 @@ with st.expander("📊 Operating Data Input", expanded=True):
                 'Inlet Pressure': [50.0, 50.0, 50.0, 50.0, 50.0],
                 'Outlet Pressure': [120.0, 120.0, 120.0, 120.0, 120.0],
                 'Inlet Temperature': [30.0, 30.0, 30.0, 30.0, 30.0],
-                'Outlet Temperature': [95.0, 93.0, 90.0, 88.0, 87.0],
+                'Outlet Temperature': [110.0, 108.0, 105.0, 103.0, 102.0],
             })
             st.session_state['flow_unit'] = "m3/hr"
             st.session_state['pressure_unit'] = "bara"
@@ -465,58 +524,69 @@ with st.expander("📊 Operating Data Input", expanded=True):
     t_in_label = f"Inlet Temperature ({selected_temp_unit})"
     t_out_label = f"Outlet Temperature ({selected_temp_unit})"
     
-    edited_data = st.data_editor(
-        st.session_state['compressor_data'].dropna().reset_index(drop=True),
-        num_rows='dynamic',
-        column_config={
-            'Speed (RPM)': st.column_config.NumberColumn(
-                "Speed (RPM)",
-                min_value=100.0,
-                max_value=50000.0,
-                format='%.0f',
-                help='Compressor rotational speed in RPM'
-            ),
-            'Flow Rate': st.column_config.NumberColumn(
-                flow_label,
-                min_value=0.01,
-                max_value=1000000,
-                format='%.2f',
-                help=f'Flow rate in {selected_flow_unit}'
-            ),
-            'Inlet Pressure': st.column_config.NumberColumn(
-                p_in_label,
-                min_value=0.0,
-                max_value=1000,
-                format='%.2f',
-                help=f'Suction pressure in {selected_pressure_unit}'
-            ),
-            'Outlet Pressure': st.column_config.NumberColumn(
-                p_out_label,
-                min_value=0.0,
-                max_value=2000,
-                format='%.2f',
-                help=f'Discharge pressure in {selected_pressure_unit}'
-            ),
-            'Inlet Temperature': st.column_config.NumberColumn(
-                t_in_label,
-                min_value=-273.15,
-                max_value=500,
-                format='%.1f',
-                help=f'Suction temperature in {selected_temp_unit}'
-            ),
-            'Outlet Temperature': st.column_config.NumberColumn(
-                t_out_label,
-                min_value=-273.15,
-                max_value=800,
-                format='%.1f',
-                help=f'Discharge temperature in {selected_temp_unit}'
-            ),
-        }
-    )
-    
-    st.session_state['compressor_data'] = edited_data
-    
-    st.caption(f"📐 Units: Flow = {selected_flow_unit}, Pressure = {selected_pressure_unit}, Temperature = {selected_temp_unit}")
+    # Use a form to prevent table reload while typing
+    with st.form("operating_data_form"):
+        st.caption("💡 Edit the table below and click **Apply Changes** when done.")
+        
+        edited_data = st.data_editor(
+            st.session_state['compressor_data'].dropna().reset_index(drop=True),
+            num_rows='dynamic',
+            column_config={
+                'Speed (RPM)': st.column_config.NumberColumn(
+                    "Speed (RPM)",
+                    min_value=100.0,
+                    max_value=50000.0,
+                    format='%.0f',
+                    help='Compressor rotational speed in RPM'
+                ),
+                'Flow Rate': st.column_config.NumberColumn(
+                    flow_label,
+                    min_value=0.01,
+                    max_value=1000000,
+                    format='%.2f',
+                    help=f'Flow rate in {selected_flow_unit}'
+                ),
+                'Inlet Pressure': st.column_config.NumberColumn(
+                    p_in_label,
+                    min_value=0.0,
+                    max_value=1000,
+                    format='%.2f',
+                    help=f'Suction pressure in {selected_pressure_unit}'
+                ),
+                'Outlet Pressure': st.column_config.NumberColumn(
+                    p_out_label,
+                    min_value=0.0,
+                    max_value=2000,
+                    format='%.2f',
+                    help=f'Discharge pressure in {selected_pressure_unit}'
+                ),
+                'Inlet Temperature': st.column_config.NumberColumn(
+                    t_in_label,
+                    min_value=-273.15,
+                    max_value=500,
+                    format='%.1f',
+                    help=f'Suction temperature in {selected_temp_unit}'
+                ),
+                'Outlet Temperature': st.column_config.NumberColumn(
+                    t_out_label,
+                    min_value=-273.15,
+                    max_value=800,
+                    format='%.1f',
+                    help=f'Discharge temperature in {selected_temp_unit}'
+                ),
+            },
+            key='operating_data_editor'
+        )
+        
+        col_submit1, col_submit2 = st.columns([1, 4])
+        with col_submit1:
+            submitted = st.form_submit_button("Apply Changes", type='primary')
+        with col_submit2:
+            st.caption(f"📐 Units: Flow = {selected_flow_unit}, Pressure = {selected_pressure_unit}, Temperature = {selected_temp_unit}")
+        
+        if submitted:
+            st.session_state['compressor_data'] = edited_data
+            st.success("✅ Data updated!")
 
 st.divider()
 
@@ -592,35 +662,43 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
     if 'new_curve_data' not in st.session_state:
         st.session_state['new_curve_data'] = pd.DataFrame(default_curve_data)
     
-    st.write(f"Enter curve data points (Flow in {curve_flow_unit}):")
-    edited_curve = st.data_editor(
-        st.session_state['new_curve_data'],
-        num_rows='dynamic',
-        column_config={
-            'Flow': st.column_config.NumberColumn(
-                f"Flow ({curve_flow_unit})",
-                min_value=0.0,
-                format='%.2f'
-            ),
-            'Polytropic Head (kJ/kg)': st.column_config.NumberColumn(
-                "Polytropic Head (kJ/kg)",
-                min_value=0.0,
-                format='%.2f'
-            ),
-            'Efficiency (%)': st.column_config.NumberColumn(
-                "Efficiency (%)",
-                min_value=0.0,
-                max_value=100.0,
-                format='%.1f'
-            )
-        },
-        key='curve_data_editor'
-    )
-    st.session_state['new_curve_data'] = edited_curve
-    
-    col_add1, col_add2 = st.columns([1, 3])
-    with col_add1:
-        if st.button("Add Curve", type='primary'):
+    # Use a form to prevent table reload while typing
+    with st.form("curve_data_form"):
+        st.write(f"Enter curve data points (Flow in {curve_flow_unit}):")
+        st.caption("💡 Edit the table and click **Apply & Add Curve** when done.")
+        
+        edited_curve = st.data_editor(
+            st.session_state['new_curve_data'],
+            num_rows='dynamic',
+            column_config={
+                'Flow': st.column_config.NumberColumn(
+                    f"Flow ({curve_flow_unit})",
+                    min_value=0.0,
+                    format='%.2f'
+                ),
+                'Polytropic Head (kJ/kg)': st.column_config.NumberColumn(
+                    "Polytropic Head (kJ/kg)",
+                    min_value=0.0,
+                    format='%.2f'
+                ),
+                'Efficiency (%)': st.column_config.NumberColumn(
+                    "Efficiency (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    format='%.1f'
+                )
+            },
+            key='curve_data_editor'
+        )
+        
+        col_form1, col_form2 = st.columns([1, 1])
+        with col_form1:
+            add_curve_submitted = st.form_submit_button("Apply & Add Curve", type='primary')
+        with col_form2:
+            update_only = st.form_submit_button("Apply Changes Only")
+        
+        if add_curve_submitted:
+            st.session_state['new_curve_data'] = edited_curve
             if not edited_curve.empty and len(edited_curve.dropna()) > 1:
                 new_curve = {
                     'speed': new_speed,
@@ -635,7 +713,12 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                 st.rerun()
             else:
                 st.warning("Please enter at least 2 data points")
-    with col_add2:
+        elif update_only:
+            st.session_state['new_curve_data'] = edited_curve
+            st.success("✅ Table data saved!")
+    
+    col_reset1, col_reset2 = st.columns([1, 3])
+    with col_reset1:
         if st.button("Reset Input"):
             st.session_state['new_curve_data'] = pd.DataFrame(default_curve_data)
             st.rerun()
@@ -1392,7 +1475,12 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
     elif edited_data.empty or edited_data.dropna().empty:
         st.error('Please enter operating data before calculating.')
     else:
-        with st.spinner('Calculating compressor performance using GERG-2008...'):
+        calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
+        spinner_msg = 'Calculating compressor performance using GERG-2008...'
+        if calc_method == "NeqSim Process Model (Detailed)":
+            spinner_msg = f'Calculating using NeqSim process model (detailed mode, {st.session_state["num_calc_steps"]} steps)...'
+        
+        with st.spinner(spinner_msg):
             try:
                 jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
                 
@@ -1482,107 +1570,182 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     kappa_out = cp_out / cv_out if cv_out > 0 else outlet_fluid.getGamma()
                     rho_out = outlet_fluid.getDensity()
                     
-                    # Create isentropic outlet fluid (same entropy as inlet)
-                    isentropic_fluid = fluid("gerg-2008")
-                    for comp_name, comp_moles in fluid_composition.items():
-                        isentropic_fluid.addComponent(comp_name, float(comp_moles))
-                    isentropic_fluid.setPressure(float(p_out), 'bara')
-                    isentropic_fluid.setTemperature(float(t_out), 'C')  # Initial guess
+                    # Check which calculation method to use
+                    calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
                     
-                    # Find isentropic temperature using PS flash
-                    thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(isentropic_fluid)
-                    s_in_total = inlet_fluid.getEntropy()  # Total entropy at inlet
-                    try:
-                        thermoOps.PSflash(s_in_total)
-                        isentropic_fluid.initThermoProperties()
-                        h_out_isen = isentropic_fluid.getEnthalpy() / isentropic_fluid.getNumberOfMoles() / isentropic_fluid.getMolarMass() / 1000  # kJ/kg
-                        t_out_isen = isentropic_fluid.getTemperature() - 273.15  # Convert to Celsius
-                    except:
-                        # Fallback: estimate isentropic temperature
+                    if calc_method == "NeqSim Process Model (Detailed)":
+                        # Use NeqSim process compressor with detailed polytropic method
+                        # Create a stream for the compressor inlet
+                        process_fluid = fluid("gerg-2008")
+                        for comp_name, comp_moles in fluid_composition.items():
+                            process_fluid.addComponent(comp_name, float(comp_moles))
+                        process_fluid.setPressure(float(p_in), 'bara')
+                        process_fluid.setTemperature(float(t_in), 'C')
+                        process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
+                        TPflash(process_fluid)
+                        
+                        # Create stream and compressor
+                        inlet_stream = jneqsim.process.equipment.stream.Stream("inlet", process_fluid)
+                        inlet_stream.run()
+                        
+                        compressor = jneqsim.process.equipment.compressor.Compressor("compressor", inlet_stream)
+                        compressor.setOutletPressure(float(p_out), "bara")
+                        compressor.setUsePolytropicCalc(True)
+                        compressor.setPolytropicMethod("detailed")
+                        compressor.setNumberOfCompressorCalcSteps(st.session_state['num_calc_steps'])
+                        compressor.setUseGERG2008(True)
+                        
+                        # Solve for polytropic efficiency based on measured outlet temperature
+                        # Convert outlet temperature to Kelvin for solveEfficiency method
+                        t_out_K = t_out + 273.15
+                        eta_poly = compressor.solveEfficiency(t_out_K)
+                        
+                        # Get results from compressor after solving efficiency
+                        eta_isen = compressor.getIsentropicEfficiency()
+                        polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
+                        power_kW = compressor.getPower("kW")
+                        power_MW = compressor.getPower("MW")
+                        n = compressor.getPolytropicExponent()
+                        
+                        # Get outlet properties
+                        outlet_stream = compressor.getOutletStream()
+                        z_out = outlet_stream.getFluid().getZ()
+                        t_out_calc = outlet_stream.getTemperature("C")
+                        rho_out = outlet_stream.getFluid().getDensity("kg/m3")
+                        kappa_out = outlet_stream.getFluid().getGamma()
+                        
+                        # Calculate actual work from power and mass flow
+                        actual_work = power_kW / mass_flow if mass_flow > 0 else 0  # kJ/kg
+                        
+                        pr = p_out / p_in
+                        z_avg = (z_in + z_out) / 2
                         kappa_avg = (kappa_in + kappa_out) / 2
-                        t_out_isen = T_in_K * (p_out/p_in)**((kappa_avg-1)/kappa_avg) - 273.15
-                        h_out_isen = h_in + cp_in * (t_out_isen - t_in)
-                    
-                    # Calculate actual work (enthalpy change)
-                    actual_work = h_out - h_in  # kJ/kg
-                    
-                    # Calculate isentropic work
-                    isentropic_work = h_out_isen - h_in  # kJ/kg
-                    
-                    # Isentropic efficiency
-                    eta_isen = isentropic_work / actual_work if actual_work > 0 else 0
-                    
-                    # Calculate polytropic efficiency using the Schultz method
-                    # Average compressibility factor
-                    z_avg = (z_in + z_out) / 2
-                    
-                    # Average kappa
-                    kappa_avg = (kappa_in + kappa_out) / 2
-                    
-                    # Pressure ratio
-                    pr = p_out / p_in
-                    
-                    # Calculate polytropic exponent from measured data
-                    # Using: T2/T1 = (P2/P1)^((n-1)/n)
-                    T_out_K = t_out + 273.15
-                    if pr > 1 and T_out_K > T_in_K:
-                        log_T_ratio = np.log(T_out_K / T_in_K)
-                        log_P_ratio = np.log(pr)
-                        if log_P_ratio > 0 and log_T_ratio > 0:
-                            n_minus_1_over_n = log_T_ratio / log_P_ratio
-                            n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
+                        vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
+                        
+                        results.append({
+                            'Speed (RPM)': speed_rpm,
+                            'Flow Rate (kg/s)': mass_flow,
+                            'Inlet P (bara)': p_in,
+                            'Outlet P (bara)': p_out,
+                            'Inlet T (°C)': t_in,
+                            'Outlet T (°C)': t_out,  # Use measured outlet temperature
+                            'Pressure Ratio': pr,
+                            'Z inlet': z_in,
+                            'Z outlet': z_out,
+                            'κ inlet': kappa_in,
+                            'κ outlet': kappa_out,
+                            'Polytropic Exp (n)': n,
+                            'Isentropic Eff (%)': eta_isen * 100,
+                            'Polytropic Eff (%)': eta_poly * 100,
+                            'Polytropic Head (kJ/kg)': polytropic_head,
+                            'Actual Work (kJ/kg)': actual_work,
+                            'Power (kW)': power_kW,
+                            'Power (MW)': power_MW,
+                            'Vol Flow Inlet (m³/hr)': vol_flow_in,
+                        })
+                    else:
+                        # Use Schultz analytical method (original implementation)
+                        # Create isentropic outlet fluid (same entropy as inlet)
+                        isentropic_fluid = fluid("gerg-2008")
+                        for comp_name, comp_moles in fluid_composition.items():
+                            isentropic_fluid.addComponent(comp_name, float(comp_moles))
+                        isentropic_fluid.setPressure(float(p_out), 'bara')
+                        isentropic_fluid.setTemperature(float(t_out), 'C')  # Initial guess
+                        
+                        # Find isentropic temperature using PS flash
+                        thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(isentropic_fluid)
+                        s_in_total = inlet_fluid.getEntropy()  # Total entropy at inlet
+                        try:
+                            thermoOps.PSflash(s_in_total)
+                            isentropic_fluid.initProperties()
+                            h_out_isen = isentropic_fluid.getEnthalpy() / isentropic_fluid.getNumberOfMoles() / isentropic_fluid.getMolarMass() / 1000  # kJ/kg
+                            t_out_isen = isentropic_fluid.getTemperature() - 273.15  # Convert to Celsius
+                        except:
+                            # Fallback: estimate isentropic temperature
+                            kappa_avg = (kappa_in + kappa_out) / 2
+                            t_out_isen = T_in_K * (p_out/p_in)**((kappa_avg-1)/kappa_avg) - 273.15
+                            h_out_isen = h_in + cp_in * (t_out_isen - t_in)
+                        
+                        # Calculate actual work (enthalpy change)
+                        actual_work = h_out - h_in  # kJ/kg
+                        
+                        # Calculate isentropic work
+                        isentropic_work = h_out_isen - h_in  # kJ/kg
+                        
+                        # Isentropic efficiency
+                        eta_isen = isentropic_work / actual_work if actual_work > 0 else 0
+                        
+                        # Calculate polytropic efficiency using the Schultz method
+                        # Average compressibility factor
+                        z_avg = (z_in + z_out) / 2
+                        
+                        # Average kappa
+                        kappa_avg = (kappa_in + kappa_out) / 2
+                        
+                        # Pressure ratio
+                        pr = p_out / p_in
+                        
+                        # Calculate polytropic exponent from measured data
+                        # Using: T2/T1 = (P2/P1)^((n-1)/n)
+                        T_out_K = t_out + 273.15
+                        if pr > 1 and T_out_K > T_in_K:
+                            log_T_ratio = np.log(T_out_K / T_in_K)
+                            log_P_ratio = np.log(pr)
+                            if log_P_ratio > 0 and log_T_ratio > 0:
+                                n_minus_1_over_n = log_T_ratio / log_P_ratio
+                                n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
+                            else:
+                                n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
                         else:
                             n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
-                    else:
-                        n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
-                    
-                    # Polytropic efficiency
-                    # eta_p = (n-1)/n * k/(k-1)
-                    if n > 1 and kappa_avg > 1:
-                        eta_poly = ((n - 1) / n) * (kappa_avg / (kappa_avg - 1))
-                        eta_poly = min(max(eta_poly, 0.5), 1.0)  # Clamp to reasonable range
-                    else:
-                        eta_poly = eta_isen * 1.02  # Approximation
-                    
-                    # Polytropic head calculation using GERG-2008
-                    # Hp = z_avg * R * T1 / MW * n/(n-1) * [(P2/P1)^((n-1)/n) - 1]
-                    R = 8.314  # J/(mol·K)
-                    if n > 1:
-                        polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000  # kJ/kg
-                    else:
-                        polytropic_head = actual_work * eta_poly  # Fallback
-                    
-                    # Power calculation
-                    power_kW = mass_flow * actual_work  # kW
-                    power_MW = power_kW / 1000  # MW
-                    
-                    # Polytropic power (shaft power required)
-                    polytropic_power_kW = mass_flow * polytropic_head / eta_poly if eta_poly > 0 else power_kW
-                    
-                    # Volume flow at inlet conditions
-                    vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
-                    
-                    results.append({
-                        'Speed (RPM)': speed_rpm,
-                        'Flow Rate (kg/s)': mass_flow,
-                        'Inlet P (bara)': p_in,
-                        'Outlet P (bara)': p_out,
-                        'Inlet T (°C)': t_in,
-                        'Outlet T (°C)': t_out,
-                        'Pressure Ratio': pr,
-                        'Z inlet': z_in,
-                        'Z outlet': z_out,
-                        'κ inlet': kappa_in,
-                        'κ outlet': kappa_out,
-                        'Polytropic Exp (n)': n,
-                        'Isentropic Eff (%)': eta_isen * 100,
-                        'Polytropic Eff (%)': eta_poly * 100,
-                        'Polytropic Head (kJ/kg)': polytropic_head,
-                        'Actual Work (kJ/kg)': actual_work,
-                        'Power (kW)': power_kW,
-                        'Power (MW)': power_MW,
-                        'Vol Flow Inlet (m³/hr)': vol_flow_in,
-                    })
+                        
+                        # Polytropic efficiency
+                        # eta_p = (n-1)/n * k/(k-1)
+                        if n > 1 and kappa_avg > 1:
+                            eta_poly = ((n - 1) / n) * (kappa_avg / (kappa_avg - 1))
+                            eta_poly = min(max(eta_poly, 0.5), 1.0)  # Clamp to reasonable range
+                        else:
+                            eta_poly = eta_isen * 1.02  # Approximation
+                        
+                        # Polytropic head calculation using GERG-2008
+                        # Hp = z_avg * R * T1 / MW * n/(n-1) * [(P2/P1)^((n-1)/n) - 1]
+                        R = 8.314  # J/(mol·K)
+                        if n > 1:
+                            polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000  # kJ/kg
+                        else:
+                            polytropic_head = actual_work * eta_poly  # Fallback
+                        
+                        # Power calculation
+                        power_kW = mass_flow * actual_work  # kW
+                        power_MW = power_kW / 1000  # MW
+                        
+                        # Polytropic power (shaft power required)
+                        polytropic_power_kW = mass_flow * polytropic_head / eta_poly if eta_poly > 0 else power_kW
+                        
+                        # Volume flow at inlet conditions
+                        vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
+                        
+                        results.append({
+                            'Speed (RPM)': speed_rpm,
+                            'Flow Rate (kg/s)': mass_flow,
+                            'Inlet P (bara)': p_in,
+                            'Outlet P (bara)': p_out,
+                            'Inlet T (°C)': t_in,
+                            'Outlet T (°C)': t_out,
+                            'Pressure Ratio': pr,
+                            'Z inlet': z_in,
+                            'Z outlet': z_out,
+                            'κ inlet': kappa_in,
+                            'κ outlet': kappa_out,
+                            'Polytropic Exp (n)': n,
+                            'Isentropic Eff (%)': eta_isen * 100,
+                            'Polytropic Eff (%)': eta_poly * 100,
+                            'Polytropic Head (kJ/kg)': polytropic_head,
+                            'Actual Work (kJ/kg)': actual_work,
+                            'Power (kW)': power_kW,
+                            'Power (MW)': power_MW,
+                            'Vol Flow Inlet (m³/hr)': vol_flow_in,
+                        })
                 
                 results_df = pd.DataFrame(results)
                 
