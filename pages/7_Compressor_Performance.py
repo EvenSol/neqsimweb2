@@ -92,7 +92,6 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     | Polytropic Head | Head vs Flow with manufacturer curves overlay |
     | Polytropic Efficiency | Efficiency vs Flow curve comparison |
     | Compression Power | Power consumption vs Flow |
-    | Isentropic Efficiency | Isentropic efficiency vs Flow |
     
     ---
     
@@ -1593,7 +1592,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         compressor.setUsePolytropicCalc(True)
                         compressor.setPolytropicMethod("detailed")
                         compressor.setNumberOfCompressorCalcSteps(st.session_state['num_calc_steps'])
-                        compressor.setUseGERG2008(True)
                         
                         # Solve for polytropic efficiency based on measured outlet temperature
                         # Convert outlet temperature to Kelvin for solveEfficiency method
@@ -2012,7 +2010,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             return color
                     return default_color
                 
-                tab1, tab2, tab3, tab4 = st.tabs(["Polytropic Efficiency vs Flow", "Head vs Flow", "Power vs Flow", "Isentropic Efficiency vs Flow"])
+                tab1, tab2, tab3 = st.tabs(["Polytropic Efficiency vs Flow", "Head vs Flow", "Power vs Flow"])
                 
                 with tab1:
                     fig_eff = go.Figure()
@@ -2148,31 +2146,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         hovermode='closest'
                     )
                     st.plotly_chart(fig_power, use_container_width=True)
-                
-                with tab4:
-                    fig_isen = go.Figure()
-                    
-                    # Add calculated data points grouped by speed
-                    for speed in sorted(unique_speeds):
-                        speed_data = results_df[results_df['Speed (RPM)'] == speed]
-                        color = get_speed_color(speed, default_color='#ff7f0e')
-                        fig_isen.add_trace(go.Scatter(
-                            x=speed_data['Plot Flow'],
-                            y=speed_data['Isentropic Eff (%)'],
-                            mode='markers',
-                            name=f'Measured @ {speed:.0f} RPM',
-                            marker=dict(size=12, color=color, symbol='circle',
-                                       line=dict(width=2, color='white')),
-                            hovertemplate=f'Speed: {speed:.0f} RPM<br>Flow: %{{x:.1f}}<br>Efficiency: %{{y:.2f}}%<extra></extra>'
-                        ))
-                    
-                    fig_isen.update_layout(
-                        title='Isentropic Efficiency vs Flow Rate',
-                        xaxis_title=x_label,
-                        yaxis_title='Isentropic Efficiency (%)',
-                        hovermode='closest'
-                    )
-                    st.plotly_chart(fig_isen, use_container_width=True)
                 
                 # Download results
                 st.divider()
