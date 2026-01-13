@@ -140,7 +140,7 @@ Select the equation of state model in the sidebar under Fluid Selection.
 
 st.divider()
 
-# GERG-2008 compatible components (18 components)
+# Supported components (compatible with GERG-2008, PR, and SRK)
 gerg2008_components = [
     "methane", "nitrogen", "CO2", "ethane", "propane", 
     "i-butane", "n-butane", "i-pentane", "n-pentane", "n-hexane",
@@ -170,7 +170,7 @@ test_fluids = {
     "Export Gas (Processed)": {
         "methane": 92.0, "ethane": 4.0, "propane": 1.5, "CO2": 1.5, "nitrogen": 1.0
     },
-    "Custom GERG-2008 Mixture": None,  # Special case for custom composition
+    "Custom Mixture": None,  # Special case for custom composition
 }
 
 # Default custom fluid composition
@@ -278,7 +278,7 @@ with st.sidebar:
         index=0
     )
     
-    if selected_fluid_name != "Custom GERG-2008 Mixture":
+    if selected_fluid_name != "Custom Mixture":
         st.info(f"Selected fluid composition: {test_fluids[selected_fluid_name]}")
     else:
         st.info("Define custom composition in the main panel")
@@ -322,7 +322,7 @@ def get_selected_eos_model():
 
 # Helper function to get fluid composition dict
 def get_fluid_composition():
-    if selected_fluid_name == "Custom GERG-2008 Mixture":
+    if selected_fluid_name == "Custom Mixture":
         # Build dict from custom dataframe
         comp_dict = {}
         for idx, row in st.session_state.compressor_custom_fluid_df.iterrows():
@@ -334,11 +334,11 @@ def get_fluid_composition():
 
 # Main content
 with st.expander("📋 Fluid Composition", expanded=True):
-    st.write(f"**Selected Fluid:** {selected_fluid_name}")
+    st.write(f"**Selected Fluid:** {selected_fluid_name} | **EoS Model:** {st.session_state['eos_model']}")
     
     # Show custom fluid editor if custom mixture selected
-    if selected_fluid_name == "Custom GERG-2008 Mixture":
-        st.write("Define your custom GERG-2008 fluid composition:")
+    if selected_fluid_name == "Custom Mixture":
+        st.write("Define your custom fluid composition:")
         
         col1, col2 = st.columns([1, 3])
         with col1:
@@ -386,7 +386,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
         
         st.caption("💡 Composition will be normalized before simulation")
     
-    # Create GERG-2008 fluid for display
+    # Create fluid for display using selected EoS model
     fluid_composition = get_fluid_composition()
     
     if fluid_composition and len(fluid_composition) > 0:
@@ -400,13 +400,15 @@ with st.expander("📋 Fluid Composition", expanded=True):
             display_fluid.initThermoProperties()
             
             st.divider()
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Molar Mass", f"{display_fluid.getMolarMass()*1000:.2f} g/mol")
             with col2:
                 st.metric("Z-factor @ 50 bara, 30°C", f"{display_fluid.getZ():.4f}")
             with col3:
                 st.metric("Cp/Cv (κ)", f"{display_fluid.getGamma():.4f}")
+            with col4:
+                st.metric("EoS Model", st.session_state['eos_model'])
         except Exception as e:
             st.warning(f"Could not calculate fluid properties: {e}")
     else:
