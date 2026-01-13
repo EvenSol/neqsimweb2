@@ -238,9 +238,9 @@ if 'compressor_data' not in st.session_state:
         'Speed (RPM)': [10000.0, 10000.0, 10000.0, 10000.0, 10000.0],
         'Flow Rate': [1000.0, 1200.0, 1500.0, 1800.0, 2000.0],
         'Inlet Pressure': [50.0, 50.0, 50.0, 50.0, 50.0],
-        'Outlet Pressure': [120.0, 120.0, 120.0, 120.0, 120.0],
+        'Outlet Pressure': [100.0, 95.0, 90.0, 85.0, 80.0],
         'Inlet Temperature': [30.0, 30.0, 30.0, 30.0, 30.0],
-        'Outlet Temperature': [110.0, 108.0, 105.0, 103.0, 102.0],
+        'Outlet Temperature': [115.0, 105.0, 95.0, 87.0, 82.0],
     })
 
 # Initialize session state for compressor curves
@@ -538,9 +538,9 @@ with st.expander("📊 Operating Data Input", expanded=True):
                 'Speed (RPM)': [10000.0, 10000.0, 10000.0, 10000.0, 10000.0],
                 'Flow Rate': [1000.0, 1200.0, 1500.0, 1800.0, 2000.0],
                 'Inlet Pressure': [50.0, 50.0, 50.0, 50.0, 50.0],
-                'Outlet Pressure': [120.0, 120.0, 120.0, 120.0, 120.0],
+                'Outlet Pressure': [100.0, 95.0, 90.0, 85.0, 80.0],
                 'Inlet Temperature': [30.0, 30.0, 30.0, 30.0, 30.0],
-                'Outlet Temperature': [110.0, 108.0, 105.0, 103.0, 102.0],
+                'Outlet Temperature': [115.0, 105.0, 95.0, 87.0, 82.0],
             })
             st.session_state['flow_unit'] = "m3/hr"
             st.session_state['pressure_unit'] = "bara"
@@ -1630,22 +1630,80 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         t_out_K = t_out + 273.15
                         eta_poly = compressor.solveEfficiency(t_out_K)
                         
-                        # Get results from compressor after solving efficiency
-                        eta_isen = compressor.getIsentropicEfficiency()
-                        polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
-                        power_kW = compressor.getPower("kW")
-                        power_MW = compressor.getPower("MW")
-                        n = compressor.getPolytropicExponent()
-                        
-                        # Get outlet properties
-                        outlet_stream = compressor.getOutletStream()
-                        z_out = outlet_stream.getFluid().getZ()
-                        t_out_calc = outlet_stream.getTemperature("C")
-                        rho_out = outlet_stream.getFluid().getDensity("kg/m3")
-                        kappa_out = outlet_stream.getFluid().getGamma()
-                        
-                        # Calculate actual work from power and mass flow
-                        actual_work = power_kW / mass_flow if mass_flow > 0 else 0  # kJ/kg
+                        # Validate the solved efficiency - must be between 0 and 1 (0-100%)
+                        # If invalid, the measured outlet temperature may be thermodynamically inconsistent
+                        if eta_poly is None or np.isnan(float(eta_poly)) or float(eta_poly) <= 0 or float(eta_poly) > 1.0:
+                            # Invalid efficiency - outlet temperature may be too low (unrealistic)
+                            # Fall back to Schultz method for this point
+                            eta_poly_val = float(eta_poly) if eta_poly is not None else None
+                            eta_poly_str = f"{eta_poly_val:.3f}" if eta_poly_val is not None else "None"
+                            st.warning(f"⚠️ Row {idx}: Could not solve efficiency for T_out={t_out}°C (got η={eta_poly_str}). Check if outlet temperature is realistic for P_ratio={p_out/p_in:.2f}. Using Schultz method as fallback.")
+                            
+                            # Use Schultz analytical method as fallback
+                            T_out_K = t_out + 273.15
+                            T_in_K = t_in + 273.15
+                            pr = p_out / p_in
+                            
+                            # Calculate polytropic exponent from measured data
+                            if pr > 1 and T_out_K > T_in_K:
+                                log_T_ratio = np.log(T_out_K / T_in_K)
+                                log_P_ratio = np.log(pr)
+                                if log_P_ratio > 0 and log_T_ratio > 0:
+                                    n_minus_1_over_n = log_T_ratio / log_P_ratio
+                                    n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
+                                else:
+                                    n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
+                            else:
+                                n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
+                            
+                            # Polytropic efficiency using Schultz
+                            if n > 1 and kappa_in > 1:
+                                eta_poly_calc = ((n - 1) / n) * (kappa_in / (kappa_in - 1))
+                                # Check if calculated efficiency is unrealistic (>100%)
+                                if eta_poly_calc > 1.0:
+                                    st.error(f"❌ Row {idx}: Calculated efficiency is {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
+                                            f"The outlet temperature {t_out}°C is too LOW for compression from {p_in} to {p_out} bara. "
+                                            f"Please check your measured outlet temperature.")
+                                    eta_poly = np.nan  # Mark as invalid
+                                elif eta_poly_calc < 0.3:
+                                    st.warning(f"⚠️ Row {idx}: Calculated efficiency is very low ({eta_poly_calc*100:.1f}%). Check measured data.")
+                                    eta_poly = eta_poly_calc
+                                else:
+                                    eta_poly = eta_poly_calc
+                            else:
+                                eta_poly = 0.75  # Default fallback
+                            
+                            # Calculate polytropic head using Schultz
+                            R = 8.314  # J/(mol·K)
+                            z_avg = (z_in + z_out) / 2
+                            if n > 1 and not np.isnan(eta_poly):
+                                polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000
+                            else:
+                                polytropic_head = np.nan
+                            
+                            eta_isen = eta_poly * 0.98 if not np.isnan(eta_poly) else np.nan
+                            actual_work = h_out - h_in
+                            power_kW = mass_flow * actual_work
+                            power_MW = power_kW / 1000
+                            kappa_avg = (kappa_in + kappa_out) / 2
+                        else:
+                            # Valid efficiency from NeqSim
+                            # Get results from compressor after solving efficiency
+                            eta_isen = compressor.getIsentropicEfficiency()
+                            polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
+                            power_kW = compressor.getPower("kW")
+                            power_MW = compressor.getPower("MW")
+                            n = compressor.getPolytropicExponent()
+                            
+                            # Get outlet properties
+                            outlet_stream = compressor.getOutletStream()
+                            z_out = outlet_stream.getFluid().getZ()
+                            t_out_calc = outlet_stream.getTemperature("C")
+                            rho_out = outlet_stream.getFluid().getDensity("kg/m3")
+                            kappa_out = outlet_stream.getFluid().getGamma()
+                            
+                            # Calculate actual work from power and mass flow
+                            actual_work = power_kW / mass_flow if mass_flow > 0 else 0  # kJ/kg
                         
                         pr = p_out / p_in
                         z_avg = (z_in + z_out) / 2
@@ -1982,7 +2040,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     x_label = f'Flow Rate ({flow_unit})'
                 elif flow_unit == "MSm3/day":
                     # Convert back from kg/s to MSm3/day
-                    x_flow = edited_data['Flow Rate'].values[:len(results_df)]
+                    # Use dropna() to match the same rows used in calculations
+                    x_flow = edited_data.dropna()['Flow Rate'].values[:len(results_df)]
                     x_label = f'Flow Rate ({flow_unit})'
                 else:
                     x_flow = results_df['Flow Rate (kg/s)']
@@ -2006,6 +2065,9 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 
                 # Get unique speeds from measured data
                 unique_speeds = sorted(results_df['Speed (RPM)'].unique())
+                
+                # Debug: show number of points to be plotted
+                st.caption(f"📊 Debug: {len(results_df)} total points, Plot Flow values: {list(results_df['Plot Flow'].values)}")
                 
                 # Build a mapping from curve speeds to colors for matching measured points
                 speed_to_color = {}
