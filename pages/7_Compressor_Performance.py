@@ -2610,7 +2610,7 @@ if is_ai_enabled():
     gemini_api_key = get_gemini_api_key()
     if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
         st.divider()
-        st.header("🤖 AI Performance Analysis")
+        st.header("🤖 Performance Analysis")
         
         with st.expander("**AI-Powered Compressor Analysis**", expanded=True):
             st.markdown("""
@@ -2639,47 +2639,65 @@ if is_ai_enabled():
                     
                     # Get manufacturer curves if available
                     mfr_curves = st.session_state.get('compressor_curves', [])
-                    has_mfr_curves = len(mfr_curves) > 0
+                    has_mfr_curves = isinstance(mfr_curves, list) and len(mfr_curves) > 0
                     
                     # Get fitted curves if available
                     fitted_curves = st.session_state.get('generated_curves', [])
-                    has_fitted_curves = len(fitted_curves) > 0
+                    has_fitted_curves = isinstance(fitted_curves, list) and len(fitted_curves) > 0
                     
                     # Get MW-corrected curves if available
                     corrected_curves = st.session_state.get('corrected_curves', [])
-                    has_corrected_curves = len(corrected_curves) > 0
+                    has_corrected_curves = isinstance(corrected_curves, list) and len(corrected_curves) > 0
                     
                     # Build curve data strings for AI
                     mfr_curve_text = ""
                     if has_mfr_curves:
                         mfr_curve_text = "\n## Manufacturer Curves (Design Performance):\n"
                         for i, curve in enumerate(mfr_curves):
-                            mfr_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
-                            mfr_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
-                            mfr_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
-                            mfr_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                            if isinstance(curve, dict):
+                                mfr_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
+                                mfr_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
+                                mfr_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
+                                mfr_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                            else:
+                                mfr_curve_text += f"\n### Curve {i+1}: {str(curve)[:200]}\n"
                     
                     fitted_curve_text = ""
                     if has_fitted_curves:
                         fitted_curve_text = "\n## Fitted Curves (from Measured Data):\n"
                         for i, curve in enumerate(fitted_curves):
-                            fitted_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
-                            fitted_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
-                            fitted_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
-                            fitted_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                            if isinstance(curve, dict):
+                                fitted_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
+                                fitted_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
+                                fitted_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
+                                fitted_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                            else:
+                                fitted_curve_text += f"\n### Curve {i+1}: {str(curve)[:200]}\n"
                     
                     corrected_curve_text = ""
                     if has_corrected_curves:
                         corrected_curve_text = "\n## MW-Corrected Curves (Adjusted for Gas Composition):\n"
                         for i, curve in enumerate(corrected_curves):
-                            corrected_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
-                            corrected_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
-                            corrected_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
-                            corrected_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                            if isinstance(curve, dict):
+                                corrected_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
+                                corrected_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
+                                corrected_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
+                                corrected_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                            else:
+                                corrected_curve_text += f"\n### Curve {i+1}: {str(curve)[:200]}\n"
                     
                     # Build the AI prompt with curve analysis
                     prompt = f"""
                     You are an expert centrifugal compressor performance engineer. Analyze the following compressor test data, performance curves, and provide detailed insights including curve shape analysis and deviations.
+                    
+                    Base your analysis on established industry standards and technical references:
+                    - ASME PTC 10 (1997): Performance Test Code on Compressors and Exhausters - for test procedures and acceptance criteria
+                    - Schultz, J.M. (1962): "The Polytropic Analysis of Centrifugal Compressors" (ASME) - for polytropic efficiency calculations
+                    - GERG-2008: European Gas Research Group equation of state (ISO 20765-2) - for thermodynamic properties
+                    - Peng-Robinson (1976): Cubic equation of state for hydrocarbon systems
+                    - Soave-Redlich-Kwong (1972): Modified RK equation of state
+                    - Bakken & Hundseid (NTNU): Multi-step polytropic integration methods for improved accuracy
+                    - Khader (2015): Gas composition correction using Mach number similarity for MW corrections
                     
                     ## Test Results Summary:
                     - Number of operating points: {len(results_df)}
@@ -2744,10 +2762,22 @@ if is_ai_enabled():
                         genai.configure(api_key=gemini_api_key)
                         selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
                         
+                        system_instruction = """You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting.
+
+Your analysis is grounded in established industry standards and technical literature:
+- ASME PTC 10 (1997): Performance Test Code on Compressors and Exhausters
+- Schultz, J.M. (1962): "The Polytropic Analysis of Centrifugal Compressors" (ASME Journal of Engineering for Power)
+- GERG-2008: European Gas Research Group equation of state (ISO 20765-2)
+- Peng-Robinson (1976) and Soave-Redlich-Kwong (1972) equations of state
+- Bakken & Hundseid (NTNU): Multi-step polytropic integration methods
+- Khader (2015): Gas composition correction using Mach number similarity
+
+Reference these standards when making recommendations. Use ASME PTC 10 acceptance criteria when evaluating performance deviations."""
+                        
                         try:
                             model = genai.GenerativeModel(
                                 selected_model,
-                                system_instruction="You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."
+                                system_instruction=system_instruction
                             )
                             response = model.generate_content(
                                 prompt,
@@ -2762,7 +2792,7 @@ if is_ai_enabled():
                             st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.0-flash...")
                             model = genai.GenerativeModel(
                                 'gemini-2.0-flash',
-                                system_instruction="You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."
+                                system_instruction=system_instruction
                             )
                             response = model.generate_content(
                                 prompt,
