@@ -468,7 +468,7 @@ if 'show_compressor_curves' not in st.session_state:
 if 'calc_method' not in st.session_state:
     st.session_state['calc_method'] = "NeqSim Process Model (Detailed)"
 if 'num_calc_steps' not in st.session_state:
-    st.session_state['num_calc_steps'] = 40
+    st.session_state['num_calc_steps'] = 10
 if 'polytropic_efficiency_input' not in st.session_state:
     st.session_state['polytropic_efficiency_input'] = 75.0
 
@@ -522,10 +522,10 @@ with st.sidebar:
         
         num_steps = st.slider(
             "Number of Calculation Steps",
-            min_value=10,
-            max_value=100,
+            min_value=5,
+            max_value=20,
             value=st.session_state['num_calc_steps'],
-            step=10,
+            step=5,
             help="More steps = higher accuracy but slower calculation"
         )
         st.session_state['num_calc_steps'] = num_steps
