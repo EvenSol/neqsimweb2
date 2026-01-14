@@ -1512,7 +1512,9 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
         eos_name = st.session_state.get('eos_model', 'GERG-2008')
         spinner_msg = f'Calculating compressor performance using {eos_name}...'
         if calc_method == "NeqSim Process Model (Detailed)":
-            spinner_msg = f'Calculating using NeqSim process model ({eos_name}, {st.session_state["num_calc_steps"]} steps)...'
+            spinner_msg = f'Calculating using NeqSim detailed model ({eos_name}, {st.session_state["num_calc_steps"]} steps)...'
+        elif calc_method == "NeqSim Process Model (Simple)":
+            spinner_msg = f'Calculating using NeqSim simple model ({eos_name})...'
         
         with st.spinner(spinner_msg):
             try:
