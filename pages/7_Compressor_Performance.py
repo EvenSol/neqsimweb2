@@ -57,7 +57,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     Three calculation methods are available, each with different trade-offs between speed and accuracy:
     
-    ### 3.1 Schultz Analytical Method (Default)
+    ### 3.1 Schultz Analytical Method — Default
     
     The traditional analytical approach based on Schultz (1962). This method calculates the 
     polytropic exponent directly from measured temperature and pressure ratios.
@@ -122,7 +122,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     ---
     
-    ### 3.3 NeqSim Process Model (Detailed)
+    ### 3.3 NeqSim Process Model (Detailed) (Default)
     
     The most accurate method, using multi-step thermodynamic integration through the 
     compression path. Based on research from NTNU's thermal turbomachinery group.
@@ -1747,7 +1747,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
     elif edited_data.empty or edited_data.dropna().empty:
         st.error('Please enter operating data before calculating.')
     else:
-        calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
+        calc_method = st.session_state.get('calc_method', 'NeqSim Process Model (Detailed)')
         eos_name = st.session_state.get('eos_model', 'GERG-2008')
         spinner_msg = f'Calculating compressor performance using {eos_name}...'
         if calc_method == "NeqSim Process Model (Detailed)":
@@ -1850,7 +1850,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     z_avg = (z_in + z_out) / 2
                     
                     # Check which calculation method to use
-                    calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
+                    calc_method = st.session_state.get('calc_method', 'NeqSim Process Model (Detailed)')
                     
                     if calc_method in ["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)"]:
                         # Use NeqSim process compressor with detailed polytropic method
