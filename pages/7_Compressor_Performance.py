@@ -1554,10 +1554,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     
                     # Get inlet properties
                     z_in = inlet_fluid.getZ()
-                    h_in = inlet_fluid.getEnthalpy() / inlet_fluid.getNumberOfMoles() / inlet_fluid.getMolarMass() / 1000  # kJ/kg
-                    s_in = inlet_fluid.getEntropy() / inlet_fluid.getNumberOfMoles() / inlet_fluid.getMolarMass() / 1000  # kJ/kg/K
-                    cp_in = inlet_fluid.getCp() / inlet_fluid.getNumberOfMoles() / inlet_fluid.getMolarMass() / 1000  # kJ/kg/K
-                    cv_in = inlet_fluid.getCv() / inlet_fluid.getNumberOfMoles() / inlet_fluid.getMolarMass() / 1000  # kJ/kg/K
+                    h_in = inlet_fluid.getEnthalpy("kJ/kg")  # Specific enthalpy in kJ/kg
+                    s_in = inlet_fluid.getEntropy("kJ/kgK")  # Specific entropy in kJ/kg/K
+                    cp_in = inlet_fluid.getCp("kJ/kgK")  # Specific Cp in kJ/kg/K
+                    cv_in = inlet_fluid.getCv("kJ/kgK")  # Specific Cv in kJ/kg/K
                     kappa_in = cp_in / cv_in if cv_in > 0 else inlet_fluid.getGamma()
                     MW = inlet_fluid.getMolarMass() * 1000  # g/mol -> kg/kmol
                     rho_in = inlet_fluid.getDensity()  # kg/m3
@@ -1599,10 +1599,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     
                     # Get outlet properties
                     z_out = outlet_fluid.getZ()
-                    h_out = outlet_fluid.getEnthalpy() / outlet_fluid.getNumberOfMoles() / outlet_fluid.getMolarMass() / 1000  # kJ/kg
-                    s_out = outlet_fluid.getEntropy() / outlet_fluid.getNumberOfMoles() / outlet_fluid.getMolarMass() / 1000  # kJ/kg/K
-                    cp_out = outlet_fluid.getCp() / outlet_fluid.getNumberOfMoles() / outlet_fluid.getMolarMass() / 1000  # kJ/kg/K
-                    cv_out = outlet_fluid.getCv() / outlet_fluid.getNumberOfMoles() / outlet_fluid.getMolarMass() / 1000  # kJ/kg/K
+                    h_out = outlet_fluid.getEnthalpy("kJ/kg")  # Specific enthalpy in kJ/kg
+                    s_out = outlet_fluid.getEntropy("kJ/kgK")  # Specific entropy in kJ/kg/K
+                    cp_out = outlet_fluid.getCp("kJ/kgK")  # Specific Cp in kJ/kg/K
+                    cv_out = outlet_fluid.getCv("kJ/kgK")  # Specific Cv in kJ/kg/K
                     kappa_out = cp_out / cv_out if cv_out > 0 else outlet_fluid.getGamma()
                     rho_out = outlet_fluid.getDensity()
                     
