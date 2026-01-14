@@ -483,6 +483,8 @@ if 'num_calc_steps' not in st.session_state:
     st.session_state['num_calc_steps'] = 10
 if 'polytropic_efficiency_input' not in st.session_state:
     st.session_state['polytropic_efficiency_input'] = 75.0
+if 'single_phase_mode' not in st.session_state:
+    st.session_state['single_phase_mode'] = True  # Default to single-phase gas (faster)
 
 # Initialize session state for equation of state model
 if 'eos_model' not in st.session_state:
@@ -544,6 +546,19 @@ with st.sidebar:
     elif calc_method == "NeqSim Process Model (Simple)":
         st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
     
+    st.divider()
+    st.header("Advanced Options")
+    single_phase = st.toggle(
+        "Single-Phase Gas Mode (Faster)",
+        value=st.session_state['single_phase_mode'],
+        help="When enabled, calculations assume gas phase only (faster). Disable for multiphase flash calculations."
+    )
+    st.session_state['single_phase_mode'] = single_phase
+    if single_phase:
+        st.caption("⚡ Using single-phase gas calculations")
+    else:
+        st.caption("🔄 Using multiphase flash calculations")
+    
     # AI Analysis section - only show if AI is enabled
     if is_ai_enabled():
         st.divider()
@@ -553,6 +568,18 @@ with st.sidebar:
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
+
+# Helper function to configure fluid for single-phase gas mode (faster calculations)
+def configure_single_phase_if_enabled(neqsim_fluid):
+    """Configure fluid for single-phase gas calculations if enabled.
+    
+    This forces the thermodynamic system to only consider gas phase,
+    skipping the multiphase flash calculation which is much faster.
+    Should only be used when you know the fluid is in gas phase.
+    """
+    if st.session_state.get('single_phase_mode', True):
+        neqsim_fluid.setForceSinglePhase("GAS")
+    return neqsim_fluid
 
 # Helper function to calculate polytropic exponent from measured data
 def calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg):
@@ -656,6 +683,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
             display_fluid = fluid(get_selected_eos_model())
             for comp_name, comp_moles in fluid_composition.items():
                 display_fluid.addComponent(comp_name, float(comp_moles))
+            configure_single_phase_if_enabled(display_fluid)
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
             TPflash(display_fluid)
@@ -1131,6 +1159,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     new_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in new_fluid_composition.items():
                         new_fluid.addComponent(comp_name, float(comp_moles))
+                    configure_single_phase_if_enabled(new_fluid)
                     new_fluid.setPressure(ref_pressure, 'bara')
                     new_fluid.setTemperature(ref_temp, 'C')
                     TPflash(new_fluid)
@@ -1804,6 +1833,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     inlet_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in fluid_composition.items():
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
+                    configure_single_phase_if_enabled(inlet_fluid)
                     
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
@@ -1836,6 +1866,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         std_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             std_fluid.addComponent(comp_name, float(comp_moles))
+                        configure_single_phase_if_enabled(std_fluid)
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
                         TPflash(std_fluid)
@@ -1851,6 +1882,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     outlet_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in fluid_composition.items():
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
+                    configure_single_phase_if_enabled(outlet_fluid)
                     
                     outlet_fluid.setPressure(float(p_out), 'bara')
                     outlet_fluid.setTemperature(float(t_out), 'C')
@@ -1878,6 +1910,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         process_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             process_fluid.addComponent(comp_name, float(comp_moles))
+                        configure_single_phase_if_enabled(process_fluid)
                         process_fluid.setPressure(float(p_in), 'bara')
                         process_fluid.setTemperature(float(t_in), 'C')
                         process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
@@ -2001,6 +2034,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         isentropic_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             isentropic_fluid.addComponent(comp_name, float(comp_moles))
+                        configure_single_phase_if_enabled(isentropic_fluid)
                         isentropic_fluid.setPressure(float(p_out), 'bara')
                         isentropic_fluid.setTemperature(float(t_out), 'C')  # Initial guess
                         
