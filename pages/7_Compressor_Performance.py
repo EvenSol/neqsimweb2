@@ -1834,13 +1834,22 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         else:
                             eta_poly = eta_isen * 0.98 if eta_isen > 0 else 0.75  # Approximation
                         
-                        # Polytropic head calculation using selected equation of state
-                        # Hp = z_avg * R * T1 / MW * n/(n-1) * [(P2/P1)^((n-1)/n) - 1]
-                        R = 8.314  # J/(mol·K)
-                        if n > 1:
-                            polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000  # kJ/kg
+                        # Polytropic head calculation
+                        # NeqSim calculates: Hp = actual_work * eta_poly (enthalpy-based)
+                        # This is more accurate for real gases than the ideal gas formula
+                        # The ideal gas formula Hp = z*R*T/MW * n/(n-1) * [PR^((n-1)/n) - 1] 
+                        # overestimates head for real gases
+                        
+                        # Use enthalpy-based head (consistent with NeqSim)
+                        if actual_work > 0 and eta_poly > 0:
+                            polytropic_head = actual_work * eta_poly  # kJ/kg - real gas head
                         else:
-                            polytropic_head = actual_work * eta_poly if actual_work > 0 else 0  # Fallback
+                            # Fallback to ideal gas formula if enthalpy not available
+                            R = 8.314  # J/(mol·K)
+                            if n > 1:
+                                polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000
+                            else:
+                                polytropic_head = 0
                         
                         # Power calculation - use shaft power (polytropic head / efficiency) to match NeqSim
                         # Shaft power = mass_flow * polytropic_head / eta_poly
