@@ -1694,11 +1694,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             if n > 1:
                                 polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000
                             else:
-                                polytropic_head = abs(h_out - h_in) * eta_poly  # Use abs to avoid negative
+                                polytropic_head = (h_out - h_in) * eta_poly if (h_out - h_in) > 0 else 0
                             
                             eta_isen = eta_poly * 0.98
                             actual_work = h_out - h_in
-                            power_kW = mass_flow * abs(actual_work)  # Use abs to avoid negative power display
+                            # Validate: for compression, actual_work should be positive
+                            if actual_work <= 0:
+                                st.warning(f"⚠️ Row {idx}: Negative actual work ({actual_work:.2f} kJ/kg). h_in={h_in:.2f}, h_out={h_out:.2f} kJ/kg. Check outlet temperature.")
+                            power_kW = mass_flow * actual_work
                             power_MW = power_kW / 1000
                             kappa_avg = (kappa_in + kappa_out) / 2
                         else:
@@ -1710,8 +1713,13 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Get results from compressor after running
                             eta_isen = compressor.getIsentropicEfficiency()
                             polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
-                            power_kW = abs(compressor.getPower("kW"))  # Use abs - NeqSim may return negative for work done on system
-                            power_MW = abs(compressor.getPower("MW"))
+                            power_kW = compressor.getPower("kW")  # Positive for work input to compressor
+                            power_MW = compressor.getPower("MW")
+                            # Validate: power should be positive for compression
+                            if power_kW < 0:
+                                st.warning(f"⚠️ Row {idx}: NeqSim returned negative power ({power_kW:.2f} kW). Using absolute value.")
+                                power_kW = abs(power_kW)
+                                power_MW = abs(power_MW)
                             n = compressor.getPolytropicExponent()
                             
                             # If polytropic exponent is still 0, calculate from measured data
@@ -1793,7 +1801,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             h_out_isen = h_in + cp_in * (t_out_isen - t_in)
                         
                         # Calculate actual work (enthalpy change)
-                        actual_work = h_out - h_in  # kJ/kg
+                        actual_work = h_out - h_in  # kJ/kg - should be positive for compression
+                        
+                        # Validate: for compression, actual_work should be positive
+                        if actual_work <= 0:
+                            st.warning(f"⚠️ Row {idx}: Negative actual work ({actual_work:.2f} kJ/kg). h_in={h_in:.2f}, h_out={h_out:.2f} kJ/kg. Outlet T may be too low.")
                         
                         # Calculate isentropic work
                         isentropic_work = h_out_isen - h_in  # kJ/kg
@@ -1839,10 +1851,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         if n > 1:
                             polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000  # kJ/kg
                         else:
-                            polytropic_head = abs(actual_work) * eta_poly  # Fallback
+                            polytropic_head = actual_work * eta_poly if actual_work > 0 else 0  # Fallback
                         
-                        # Power calculation - use abs to ensure positive values
-                        power_kW = mass_flow * abs(actual_work)  # kW
+                        # Power calculation
+                        power_kW = mass_flow * actual_work  # kW - should be positive
                         power_MW = power_kW / 1000  # MW
                         
                         # Polytropic power (shaft power required)
