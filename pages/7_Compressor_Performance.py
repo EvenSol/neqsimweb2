@@ -1851,13 +1851,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             else:
                                 polytropic_head = 0
                         
-                        # Power calculation - use shaft power (polytropic head / efficiency) to match NeqSim
-                        # Shaft power = mass_flow * polytropic_head / eta_poly
-                        # This is consistent with NeqSim's getPower() which returns shaft power
-                        if eta_poly > 0 and polytropic_head > 0:
-                            power_kW = mass_flow * polytropic_head / eta_poly  # Shaft power in kW
-                        else:
-                            power_kW = mass_flow * actual_work  # Fallback to gas power
+                        # Power calculation - NeqSim returns gas power = mass_flow × Δh
+                        # For adiabatic compressor: Gas power = Shaft power (no heat loss)
+                        # This matches NeqSim's getPower() which returns total enthalpy change
+                        power_kW = mass_flow * actual_work  # Gas power in kW
                         power_MW = power_kW / 1000  # MW
                         
                         # Volume flow at inlet conditions
