@@ -61,10 +61,9 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | 1️⃣ | **Select Fluid** | Choose a preset gas or define custom mixture composition |
     | 2️⃣ | **Select EoS Model** | GERG-2008 recommended for natural gas |
     | 3️⃣ | **Choose Calculation Method** | Schultz (fast) or NeqSim Detailed (accurate) |
-    | 4️⃣ | **Configure Advanced Options** | Single-phase mode enabled by default for speed |
-    | 5️⃣ | **Enter Operating Data** | Input measured P, T, and flow at inlet/outlet |
-    | 6️⃣ | **Calculate** | Click "Calculate Performance" button |
-    | 7️⃣ | **Analyze Results** | View plots, compare with manufacturer curves |
+    | 4️⃣ | **Enter Operating Data** | Input measured P, T, and flow at inlet/outlet |
+    | 5️⃣ | **Calculate** | Click "Calculate Performance" button |
+    | 6️⃣ | **Analyze Results** | View plots, compare with manufacturer curves |
     
     ---
     
@@ -338,11 +337,9 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons
     2. **Use Detailed method** for high pressure ratios (>3:1) or near-critical conditions
-    3. **Keep Single-Phase Mode ON** for faster calculations when operating in gas phase
-    4. **Disable Single-Phase Mode** if operating near dew point or with wet gas
-    5. **Verify input data:** Ensure pressures are absolute (not gauge)
-    6. **Check temperature units:** Confirm whether input is °C or K
-    7. **Validate with known points:** Test with manufacturer guarantee point first
+    3. **Verify input data:** Ensure pressures are absolute (not gauge)
+    4. **Check temperature units:** Confirm whether input is °C or K
+    5. **Validate with known points:** Test with manufacturer guarantee point first
     8. **Monitor efficiency trends:** Declining efficiency may indicate fouling or damage
     
     ---
@@ -357,39 +354,6 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | Head deviation | Gas composition difference | Use composition correction |
     | Calculation fails | Invalid thermodynamic state | Check if conditions are in valid range |
     
-    ---
-    
-    ## 13. Advanced Options
-    
-    ### 13.1 Single-Phase Gas Mode (Default: Enabled)
-    
-    Located in the sidebar under **Advanced Options**, this toggle controls the thermodynamic 
-    calculation mode:
-    
-    | Mode | Description | When to Use |
-    |------|-------------|-------------|
-    | ⚡ **Single-Phase (ON)** | Forces gas-phase only calculations | Normal compressor operation in gas phase |
-    | 🔄 **Multiphase (OFF)** | Full vapor-liquid equilibrium flash | Near dew point or with liquid dropout |
-    
-    **Why Single-Phase Mode is Faster:**
-    
-    - Skips the iterative phase equilibrium (VLE) calculation
-    - Directly calculates gas-phase properties without checking for liquid formation
-    - **With GERG-2008:** Enables optimized `PHflashGERG2008` and `PSflashGERG2008` 
-      methods which are significantly faster than standard flash calculations
-    - Typically **5-20x faster** calculation speed with GERG-2008
-    
-    **When to Disable Single-Phase Mode:**
-    
-    - Operating near the phase envelope (dew point conditions)
-    - Wet gas compression with potential liquid dropout
-    - Retrograde condensation conditions
-    - When accuracy is more important than speed
-    
-    **Technical Note:** Uses NeqSim's `setNumberOfPhases(1)`, `setMaxNumberOfPhases(1)`, 
-    `setForcePhaseTypes(True)`, and `setPhaseType(0, "GAS")` methods to lock the 
-    thermodynamic system to gas-phase calculations. Additionally enables 
-    `compressor.setUseGERG2008(True)` for optimized compressor flash calculations.
     
     """)
 
@@ -520,8 +484,6 @@ if 'num_calc_steps' not in st.session_state:
     st.session_state['num_calc_steps'] = 10
 if 'polytropic_efficiency_input' not in st.session_state:
     st.session_state['polytropic_efficiency_input'] = 75.0
-if 'single_phase_mode' not in st.session_state:
-    st.session_state['single_phase_mode'] = True  # Default to single-phase gas (faster)
 
 # Initialize session state for equation of state model
 if 'eos_model' not in st.session_state:
@@ -583,22 +545,6 @@ with st.sidebar:
     elif calc_method == "NeqSim Process Model (Simple)":
         st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
     
-    st.divider()
-    st.header("Advanced Options")
-    single_phase = st.toggle(
-        "Single-Phase Gas Mode (Faster)",
-        value=st.session_state['single_phase_mode'],
-        help="When enabled, calculations assume gas phase only (faster). Disable for multiphase flash calculations."
-    )
-    st.session_state['single_phase_mode'] = single_phase
-    if single_phase:
-        if st.session_state.get('eos_model') == "GERG-2008":
-            st.caption("⚡ GERG2008 optimized single-phase mode (fastest)")
-        else:
-            st.caption("⚡ Single-phase gas calculations")
-    else:
-        st.caption("🔄 Using multiphase flash calculations")
-    
     # AI Analysis section - only show if AI is enabled
     if is_ai_enabled():
         st.divider()
@@ -609,22 +555,6 @@ with st.sidebar:
 def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
 
-# Helper function to configure fluid for single-phase gas mode (faster calculations)
-def configure_single_phase_if_enabled(neqsim_fluid):
-    """Configure fluid for single-phase gas calculations if enabled.
-    
-    This forces the thermodynamic system to only consider gas phase,
-    skipping the multiphase flash calculation which is much faster.
-    Should only be used when you know the fluid is in gas phase.
-    
-    Must be called AFTER adding all components but BEFORE setting T/P and flash.
-    """
-    if st.session_state.get('single_phase_mode', True):
-        neqsim_fluid.setNumberOfPhases(1)
-        neqsim_fluid.setMaxNumberOfPhases(1)
-        neqsim_fluid.setForcePhaseTypes(True)
-        neqsim_fluid.setPhaseType(0, "GAS")
-    return neqsim_fluid
 
 # Helper function to calculate polytropic exponent from measured data
 def calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg):
@@ -728,7 +658,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
             display_fluid = fluid(get_selected_eos_model())
             for comp_name, comp_moles in fluid_composition.items():
                 display_fluid.addComponent(comp_name, float(comp_moles))
-            configure_single_phase_if_enabled(display_fluid)
+            display_fluid.setMixingRule('classic')
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
             TPflash(display_fluid)
@@ -1204,7 +1134,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     new_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in new_fluid_composition.items():
                         new_fluid.addComponent(comp_name, float(comp_moles))
-                    configure_single_phase_if_enabled(new_fluid)
+                    new_fluid.setMixingRule('classic')
                     new_fluid.setPressure(ref_pressure, 'bara')
                     new_fluid.setTemperature(ref_temp, 'C')
                     TPflash(new_fluid)
@@ -1878,7 +1808,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     inlet_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in fluid_composition.items():
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
-                    configure_single_phase_if_enabled(inlet_fluid)
+                    inlet_fluid.setMixingRule('classic')
                     
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
@@ -1911,7 +1841,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         std_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             std_fluid.addComponent(comp_name, float(comp_moles))
-                        configure_single_phase_if_enabled(std_fluid)
+                        std_fluid.setMixingRule('classic')
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
                         TPflash(std_fluid)
@@ -1927,8 +1857,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     outlet_fluid = fluid(get_selected_eos_model())
                     for comp_name, comp_moles in fluid_composition.items():
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
-                    configure_single_phase_if_enabled(outlet_fluid)
-                    
+                    outlet_fluid.setMixingRule('classic')
                     outlet_fluid.setPressure(float(p_out), 'bara')
                     outlet_fluid.setTemperature(float(t_out), 'C')
                     TPflash(outlet_fluid)
@@ -1955,7 +1884,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         process_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             process_fluid.addComponent(comp_name, float(comp_moles))
-                        configure_single_phase_if_enabled(process_fluid)
+                        process_fluid.setMixingRule('classic')
                         process_fluid.setPressure(float(p_in), 'bara')
                         process_fluid.setTemperature(float(t_in), 'C')
                         process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
@@ -1977,20 +1906,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Simple mode - faster calculation
                             compressor.setPolytropicMethod("schultz")
                         
-                        # Enable optimized GERG2008 flash methods (PHflashGERG2008, PSflashGERG2008)
-                        # when using GERG-2008 EoS with single-phase mode
-                        # The compressor checks inStream.getThermoSystem().getNumberOfPhases() == 1
-                        # along with useGERG2008 flag to use fast GERG flash methods
-                        if st.session_state.get('single_phase_mode', True) and get_selected_eos_model() == "gerg-2008":
-                            compressor.setUseGERG2008(True)
-                        
                         # Debug: verify method settings (only on first row)
                         if idx == 0:
                             method_used = compressor.getPolytropicMethod() if hasattr(compressor, 'getPolytropicMethod') else "N/A"
                             steps_used = compressor.getNumberOfCompressorCalcSteps() if hasattr(compressor, 'getNumberOfCompressorCalcSteps') else "N/A"
-                            single_phase_status = "ON" if st.session_state.get('single_phase_mode', True) else "OFF"
-                            gerg_optimized = "Yes" if (st.session_state.get('single_phase_mode', True) and get_selected_eos_model() == "gerg-2008") else "No"
-                            st.caption(f"🔧 Method: {method_used}, Steps: {steps_used}, GERG2008-Fast: {gerg_optimized}")
+                            st.caption(f"🔧 Method: {method_used}, Steps: {steps_used}")
                         
                         # Solve for polytropic efficiency based on measured outlet temperature
                         # Convert outlet temperature to Kelvin for solveEfficiency method
@@ -2088,7 +2008,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         isentropic_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             isentropic_fluid.addComponent(comp_name, float(comp_moles))
-                        configure_single_phase_if_enabled(isentropic_fluid)
                         isentropic_fluid.setPressure(float(p_out), 'bara')
                         isentropic_fluid.setTemperature(float(t_out), 'C')  # Initial guess
                         
