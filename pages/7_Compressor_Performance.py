@@ -340,7 +340,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     3. **Verify input data:** Ensure pressures are absolute (not gauge)
     4. **Check temperature units:** Confirm whether input is °C or K
     5. **Validate with known points:** Test with manufacturer guarantee point first
-    8. **Monitor efficiency trends:** Declining efficiency may indicate fouling or damage
+    6. **Monitor efficiency trends:** Declining efficiency may indicate fouling or damage
     
     ---
     
@@ -1272,8 +1272,8 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
            - $H_{norm} = H_{meas} \\times \\left(\\frac{N_{ref}}{N_{meas}}\\right)^2$
         
         2. **Polynomial regression:** Fit characteristic curves using least-squares:
-           - Head: $H_p(Q) = a_n Q^n + a_{n-1} Q^{n-1} + \cdots + a_1 Q + a_0$ (typically $n=2$)
-           - Efficiency: $\\eta_p(Q) = b_n Q^n + b_{n-1} Q^{n-1} + \cdots + b_1 Q + b_0$ (bell-shaped)
+           - Head: $H_p(Q) = a_n Q^n + a_{n-1} Q^{n-1} + \\cdots + a_1 Q + a_0$ (typically $n=2$)
+           - Efficiency: $\\eta_p(Q) = b_n Q^n + b_{n-1} Q^{n-1} + \\cdots + b_1 Q + b_0$ (bell-shaped)
         
         3. **Scale to target speeds:** Apply affinity laws in reverse to generate curves at any speed.
         
