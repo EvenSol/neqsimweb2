@@ -257,7 +257,7 @@ def create_characterized_fluid(df, is_plus_fraction=True, plus_fraction_model="P
         if plus_fraction_model == "Whitson Gamma Model":
             try:
                 char.getPlusFractionModel().setGammaParameters(gamma_alpha, gamma_eta)
-            except:
+            except Exception:
                 pass
         
         # Run characterization - this expands ONLY the plus fraction
@@ -483,7 +483,7 @@ with tab_char:
                     try:
                         lumping = char_fluid.getCharacterization().getLumpingModel()
                         n_lumped = int(lumping.getNumberOfLumpedComponents())
-                    except:
+                    except Exception:
                         n_lumped = 0
                     
                     # Count defined (non-TBP) components
@@ -553,7 +553,7 @@ with tab_char:
                                 try:
                                     name = str(lumping.getLumpedComponentName(i))
                                     st.text(f"  {i+1}. {name}")
-                                except:
+                                except Exception:
                                     pass
                     
                     # Visualization of mole fraction distribution

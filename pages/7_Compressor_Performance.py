@@ -6,7 +6,6 @@ from neqsim.thermo import fluid, TPflash
 from neqsim import jneqsim
 from theme import apply_theme, theme_toggle
 import json
-import io
 
 st.set_page_config(page_title="Compressor Performance", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
@@ -57,7 +56,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     Three calculation methods are available, each with different trade-offs between speed and accuracy:
     
-    ### 3.1 Schultz Analytical Method — Default
+    ### 3.1 Schultz Analytical Method
     
     The traditional analytical approach based on Schultz (1962). This method calculates the 
     polytropic exponent directly from measured temperature and pressure ratios.
@@ -1446,7 +1445,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                 
                 try:
                     target_speeds = [float(s.strip()) for s in target_speeds_str.split(",") if s.strip()]
-                except:
+                except (ValueError, AttributeError):
                     target_speeds = [10000.0]
                     st.warning("Invalid speed format. Using default 10000 RPM.")
             
@@ -1985,7 +1984,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             thermoOps.PSflash(s_in_total)
                             isentropic_fluid.initProperties()
                             h_out_isen = isentropic_fluid.getEnthalpy("kJ/kg")
-                        except:
+                        except Exception:
                             # Fallback: estimate isentropic enthalpy using ideal gas relation
                             t_out_isen = T_in_K * pr**((kappa_avg-1)/kappa_avg) - 273.15
                             h_out_isen = h_in + cp_in * (t_out_isen - t_in)
@@ -2004,7 +2003,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
                         if n > 1 and kappa_avg > 1:
                             eta_poly = (n * (kappa_avg - 1)) / (kappa_avg * (n - 1))
-                            eta_poly = min(max(eta_poly, 0.5), 0.95)  # Clamp to reasonable range
+                            # Check for unrealistic efficiency values
+                            if eta_poly > 1.0:
+                                st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly*100:.1f}% (>100%). "
+                                        f"The outlet temperature {t_out}°C is too LOW for compression from {p_in:.1f} to {p_out:.1f} bara. "
+                                        f"Please check measured outlet temperature.")
+                                eta_poly = 1.0  # Cap at 100% for calculation
+                            elif eta_poly < 0.4:
+                                st.warning(f"⚠️ Row {idx}: Calculated efficiency is very low ({eta_poly*100:.1f}%). Check measured data.")
                         else:
                             eta_poly = eta_isen * 0.98 if eta_isen > 0 else 0.75  # Approximation
                         
@@ -2065,7 +2071,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         # Find matching curve (within 1% speed tolerance)
                         matching_curve = None
                         for curve in mfr_curves:
-                            if abs(speed - curve['speed']) / curve['speed'] < 0.01:
+                            if curve['speed'] > 0 and abs(speed - curve['speed']) / curve['speed'] < 0.01:
                                 matching_curve = curve
                                 break
                         
@@ -2192,7 +2198,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         'Polytropic Head (kJ/kg)': '{:.2f}',
                         'Expected Head (kJ/kg)': '{:.2f}',
                         'Head Deviation (%)': '{:+.2f}',
-                    }, na_rep='-').applymap(color_status, subset=['Status']).applymap(
+                    }, na_rep='-').map(color_status, subset=['Status']).map(
                         color_deviation, subset=['Eff Deviation (%)', 'Head Deviation (%)']
                     )
                     

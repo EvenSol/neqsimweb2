@@ -23,7 +23,7 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
     def get_phase_number(fluid, p_name):
         try:
             return fluid.getPhaseNumberOfPhase(p_name)
-        except:
+        except Exception:
             return None
 
     # Handle component-specific properties
@@ -234,12 +234,12 @@ def main():
         st.edited_df['MolarComposition[-]'] = st.edited_df['MolarComposition[-]']
         st.session_state.activefluid_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
 
-    if 'uploaded_file' in st.session_state and hidecomponents == False:
+    if 'uploaded_file' in st.session_state and not hidecomponents:
         try:
             st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
             numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
             st.session_state.activefluid_df[numeric_columns] = st.session_state.activefluid_df[numeric_columns].astype(float)
-        except:
+        except Exception:
             st.session_state.activefluid_df = pd.DataFrame(default_fluid)
 
     if 'activefluid_df' not in st.session_state or st.session_state.get('activefluid_name') != 'default_fluid':
