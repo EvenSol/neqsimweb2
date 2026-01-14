@@ -1878,6 +1878,12 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Simple mode - faster calculation
                             compressor.setPolytropicMethod("schultz")
                         
+                        # Debug: verify method settings (only on first row)
+                        if idx == 0:
+                            method_used = compressor.getPolytropicMethod() if hasattr(compressor, 'getPolytropicMethod') else "N/A"
+                            steps_used = compressor.getNumberOfCompressorCalcSteps() if hasattr(compressor, 'getNumberOfCompressorCalcSteps') else "N/A"
+                            st.caption(f"🔧 NeqSim Method: {method_used}, Steps: {steps_used}")
+                        
                         # Solve for polytropic efficiency based on measured outlet temperature
                         # Convert outlet temperature to Kelvin for solveEfficiency method
                         t_out_K = t_out + 273.15
