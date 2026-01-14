@@ -1698,9 +1698,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             
                             eta_isen = eta_poly * 0.98
                             actual_work = h_out - h_in
-                            # Validate: for compression, actual_work should be positive
-                            if actual_work <= 0:
-                                st.warning(f"⚠️ Row {idx}: Negative actual work ({actual_work:.2f} kJ/kg). h_in={h_in:.2f}, h_out={h_out:.2f} kJ/kg. Check outlet temperature.")
                             power_kW = mass_flow * actual_work
                             power_MW = power_kW / 1000
                             kappa_avg = (kappa_in + kappa_out) / 2
@@ -1713,13 +1710,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Get results from compressor after running
                             eta_isen = compressor.getIsentropicEfficiency()
                             polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
-                            power_kW = compressor.getPower("kW")  # Positive for work input to compressor
-                            power_MW = compressor.getPower("MW")
-                            # Validate: power should be positive for compression
-                            if power_kW < 0:
-                                st.warning(f"⚠️ Row {idx}: NeqSim returned negative power ({power_kW:.2f} kW). Using absolute value.")
-                                power_kW = abs(power_kW)
-                                power_MW = abs(power_MW)
+                            power_kW = abs(compressor.getPower("kW"))
+                            power_MW = abs(compressor.getPower("MW"))
                             n = compressor.getPolytropicExponent()
                             
                             # If polytropic exponent is still 0, calculate from measured data
@@ -1801,11 +1793,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             h_out_isen = h_in + cp_in * (t_out_isen - t_in)
                         
                         # Calculate actual work (enthalpy change)
-                        actual_work = h_out - h_in  # kJ/kg - should be positive for compression
-                        
-                        # Validate: for compression, actual_work should be positive
-                        if actual_work <= 0:
-                            st.warning(f"⚠️ Row {idx}: Negative actual work ({actual_work:.2f} kJ/kg). h_in={h_in:.2f}, h_out={h_out:.2f} kJ/kg. Outlet T may be too low.")
+                        actual_work = h_out - h_in  # kJ/kg
                         
                         # Calculate isentropic work
                         isentropic_work = h_out_isen - h_in  # kJ/kg
