@@ -57,4 +57,10 @@ NeqSim is integrated with OpenAI for enhanced simulation support. Enter your Ope
 """
 
 openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+
+# Store API key in session state for use across pages
+if openai_api_key:
+    st.session_state['openai_api_key'] = openai_api_key
+    st.sidebar.success("✓ API key saved for all pages")
+
 st.make_request = make_request

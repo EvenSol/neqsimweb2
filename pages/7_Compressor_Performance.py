@@ -6,6 +6,9 @@ from neqsim.thermo import fluid, TPflash
 from neqsim import jneqsim
 from theme import apply_theme, theme_toggle
 import json
+import concurrent.futures
+import time
+from openai import OpenAI
 
 st.set_page_config(page_title="Compressor Performance", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
@@ -528,6 +531,25 @@ with st.sidebar:
         st.session_state['num_calc_steps'] = num_steps
     elif calc_method == "NeqSim Process Model (Simple)":
         st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
+    
+    # AI Analysis section - only show if API key was provided on welcome page
+    openai_api_key = st.session_state.get('openai_api_key', '')
+    
+    if openai_api_key:
+        st.divider()
+        st.header("🤖 AI Analysis")
+        st.success("✓ API key active (from Welcome page)")
+        
+        # Model selection
+        ai_model = st.selectbox(
+            "AI Model",
+            options=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+            index=0,
+            help="Select the AI model. GPT-4o is most capable, GPT-3.5-turbo is fastest/cheapest."
+        )
+        if 'ai_model' not in st.session_state:
+            st.session_state['ai_model'] = ai_model
+        st.session_state['ai_model'] = ai_model
 
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
@@ -2571,3 +2593,283 @@ with st.expander("📚 Theory & Equations", expanded=False):
     - Speed of sound: ±0.1%
     - Heat capacity: ±1%
     """)
+
+# AI Analysis Section - Only shown if API key was provided on welcome page
+openai_api_key = st.session_state.get('openai_api_key', '')
+
+if openai_api_key and openai_api_key.strip() != "":
+    if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
+        st.divider()
+        st.header("🤖 AI Performance Analysis")
+        
+        with st.expander("**AI-Powered Compressor Analysis**", expanded=True):
+            st.markdown("""
+            Click the button below to get AI-powered insights on your compressor performance results.
+            The analysis includes:
+            - Performance evaluation and efficiency assessment
+            - Comparison with typical industry benchmarks
+            - Potential issues and troubleshooting recommendations
+            - Operational optimization suggestions
+            - **Curve shape analysis and deviations from manufacturer data**
+            """)
+            
+            if st.button("🔍 Analyze Performance", type="primary", key="ai_analyze_btn"):
+                try:
+                    results_df = st.session_state['calculated_results']
+                    
+                    # Prepare summary statistics for AI
+                    avg_efficiency = results_df['Polytropic Eff (%)'].mean() if 'Polytropic Eff (%)' in results_df.columns else 0
+                    avg_head = results_df['Polytropic Head (kJ/kg)'].mean() if 'Polytropic Head (kJ/kg)' in results_df.columns else 0
+                    avg_power = results_df['Power (MW)'].mean() if 'Power (MW)' in results_df.columns else 0
+                    avg_pr = results_df['Pressure Ratio'].mean() if 'Pressure Ratio' in results_df.columns else 0
+                    avg_flow = results_df['Mass Flow (kg/hr)'].mean() if 'Mass Flow (kg/hr)' in results_df.columns else 0
+                    
+                    min_eff = results_df['Polytropic Eff (%)'].min() if 'Polytropic Eff (%)' in results_df.columns else 0
+                    max_eff = results_df['Polytropic Eff (%)'].max() if 'Polytropic Eff (%)' in results_df.columns else 0
+                    
+                    # Get manufacturer curves if available
+                    mfr_curves = st.session_state.get('compressor_curves', [])
+                    has_mfr_curves = len(mfr_curves) > 0
+                    
+                    # Get fitted curves if available
+                    fitted_curves = st.session_state.get('generated_curves', [])
+                    has_fitted_curves = len(fitted_curves) > 0
+                    
+                    # Get MW-corrected curves if available
+                    corrected_curves = st.session_state.get('corrected_curves', [])
+                    has_corrected_curves = len(corrected_curves) > 0
+                    
+                    # Build curve data strings for AI
+                    mfr_curve_text = ""
+                    if has_mfr_curves:
+                        mfr_curve_text = "\n## Manufacturer Curves (Design Performance):\n"
+                        for i, curve in enumerate(mfr_curves):
+                            mfr_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
+                            mfr_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
+                            mfr_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
+                            mfr_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                    
+                    fitted_curve_text = ""
+                    if has_fitted_curves:
+                        fitted_curve_text = "\n## Fitted Curves (from Measured Data):\n"
+                        for i, curve in enumerate(fitted_curves):
+                            fitted_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
+                            fitted_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
+                            fitted_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
+                            fitted_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                    
+                    corrected_curve_text = ""
+                    if has_corrected_curves:
+                        corrected_curve_text = "\n## MW-Corrected Curves (Adjusted for Gas Composition):\n"
+                        for i, curve in enumerate(corrected_curves):
+                            corrected_curve_text += f"\n### Speed {curve.get('speed', 'N/A')} RPM:\n"
+                            corrected_curve_text += f"- Flow points: {curve.get('flow', [])}\n"
+                            corrected_curve_text += f"- Head (kJ/kg): {curve.get('head', [])}\n"
+                            corrected_curve_text += f"- Efficiency (%): {curve.get('efficiency', [])}\n"
+                    
+                    # Build the AI prompt with curve analysis
+                    prompt = f"""
+                    You are an expert centrifugal compressor performance engineer. Analyze the following compressor test data, performance curves, and provide detailed insights including curve shape analysis and deviations.
+                    
+                    ## Test Results Summary:
+                    - Number of operating points: {len(results_df)}
+                    - Average polytropic efficiency: {avg_efficiency:.1f}%
+                    - Efficiency range: {min_eff:.1f}% to {max_eff:.1f}%
+                    - Average polytropic head: {avg_head:.1f} kJ/kg
+                    - Average power consumption: {avg_power:.2f} MW
+                    - Average pressure ratio: {avg_pr:.2f}
+                    - Average mass flow: {avg_flow:.0f} kg/hr
+                    
+                    ## Curve Data Available:
+                    - Manufacturer curves: {'Yes' if has_mfr_curves else 'No'}
+                    - Fitted curves from measurements: {'Yes' if has_fitted_curves else 'No'}
+                    - MW-corrected curves: {'Yes' if has_corrected_curves else 'No'}
+                    
+                    ## Full Results Data:
+                    {results_df.to_string()}
+                    {mfr_curve_text}
+                    {fitted_curve_text}
+                    {corrected_curve_text}
+                    
+                    Please provide a comprehensive analysis:
+                    
+                    1. **Performance Assessment**: Evaluate the overall compressor performance. Is the efficiency typical for a centrifugal compressor? (70-85% is typical range)
+                    
+                    2. **Operating Point Analysis**: Analyze the operating points. Are there any concerning patterns (e.g., operation near surge, low efficiency points, choke proximity)?
+                    
+                    3. **Curve Shape Analysis** (if curves available):
+                       - Analyze the shape of efficiency and head curves
+                       - Is the efficiency curve parabolic as expected? Is the peak at the right flow?
+                       - Is the head curve showing normal falling characteristic with flow?
+                       - Any abnormal inflections, flat spots, or irregular shapes?
+                    
+                    4. **Deviation Analysis** (if manufacturer and fitted/measured curves available):
+                       - Compare measured performance to manufacturer curves
+                       - Quantify deviations in head and efficiency at similar operating points
+                       - Is the deviation parallel (uniform across flow range) or divergent (varies with flow)?
+                       - Parallel shift suggests: overall degradation (fouling, wear)
+                       - Divergent pattern suggests: specific issues (tip clearance at high speed, surge at low flow)
+                    
+                    5. **MW Correction Assessment** (if MW-corrected curves available):
+                       - Are the MW corrections reasonable for the gas composition change?
+                       - Does the corrected curve better match the measured data?
+                    
+                    6. **Potential Issues**: Based on the data and curve analysis:
+                       - Low efficiency: fouling, wear, seal leakage, measurement errors
+                       - Head deviation: gas composition changes, impeller damage, internal leakage
+                       - Abnormal curve shape: partial fouling, erosion, mechanical damage
+                    
+                    7. **Recommendations**: Provide 3-4 actionable recommendations for:
+                       - Performance optimization
+                       - Maintenance considerations
+                       - Operating improvements
+                       - Further testing or investigation needed
+                    
+                    8. **Summary**: One-paragraph executive summary of the compressor condition and priority actions.
+                    
+                    Keep the response practical for an operations/maintenance engineer. Use specific numbers and percentages where possible.
+                    """
+                    
+                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gpt-4o')}..."):
+                        client = OpenAI(api_key=openai_api_key)
+                        selected_model = st.session_state.get('ai_model', 'gpt-4o')
+                        
+                        try:
+                            response = client.chat.completions.create(
+                                model=selected_model,
+                                messages=[
+                                    {"role": "system", "content": "You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."},
+                                    {"role": "user", "content": prompt}
+                                ],
+                                max_tokens=1500,
+                                temperature=0.3
+                            )
+                        except Exception as model_error:
+                            # Try fallback to gpt-3.5-turbo if primary model fails
+                            st.warning(f"⚠️ {selected_model} unavailable, trying gpt-3.5-turbo...")
+                            response = client.chat.completions.create(
+                                model="gpt-3.5-turbo",
+                                messages=[
+                                    {"role": "system", "content": "You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."},
+                                    {"role": "user", "content": prompt}
+                                ],
+                                max_tokens=1500,
+                                temperature=0.3
+                            )
+                        
+                        ai_analysis = response.choices[0].message.content
+                        
+                        st.markdown("---")
+                        st.markdown("### 📊 AI Analysis Results")
+                        st.markdown(ai_analysis)
+                        
+                        # Store in session state for later reference
+                        st.session_state['ai_analysis'] = ai_analysis
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    st.error(f"AI analysis failed: {error_msg}")
+                    if "connection" in error_msg.lower():
+                        st.warning("🔌 **Connection Issue**: Check your internet connection or firewall settings.")
+                    elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+                        st.warning("🔑 **API Key Issue**: Your API key may be invalid or expired.")
+                    elif "rate_limit" in error_msg.lower():
+                        st.warning("⏱️ **Rate Limit**: Too many requests. Wait a moment and try again.")
+                    else:
+                        st.info("💡 **Tip**: Try selecting a different model (e.g., gpt-3.5-turbo) in the sidebar.")
+            
+            # Show previous analysis if available
+            if 'ai_analysis' in st.session_state and st.session_state['ai_analysis']:
+                with st.expander("📜 Previous AI Analysis", expanded=False):
+                    st.markdown(st.session_state['ai_analysis'])
+            
+            # Follow-up Q&A section
+            st.divider()
+            st.subheader("💬 Ask Follow-up Questions")
+            st.markdown("Ask questions about the analysis, request clarifications, or explore specific aspects of the compressor performance.")
+            
+            # Initialize chat history in session state
+            if 'ai_chat_history' not in st.session_state:
+                st.session_state['ai_chat_history'] = []
+            
+            # Display chat history
+            for message in st.session_state['ai_chat_history']:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+            
+            # Chat input for follow-up questions
+            if follow_up_question := st.chat_input("Ask a question about the compressor analysis..."):
+                # Add user message to chat history
+                st.session_state['ai_chat_history'].append({"role": "user", "content": follow_up_question})
+                
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(follow_up_question)
+                
+                # Prepare context for follow-up
+                try:
+                    results_df = st.session_state['calculated_results']
+                    previous_analysis = st.session_state.get('ai_analysis', '')
+                    
+                    # Build conversation context
+                    messages = [
+                        {"role": "system", "content": """You are an expert centrifugal compressor performance engineer with 20+ years of experience. 
+                        You have access to the compressor test data and your previous analysis. 
+                        Answer follow-up questions concisely and practically.
+                        Reference specific data points and numbers when relevant.
+                        If asked about something not in the data, explain what additional information would be needed."""}
+                    ]
+                    
+                    # Add context about the data
+                    context_message = f"""
+                    Context - Previous Analysis:
+                    {previous_analysis}
+                    
+                    Context - Test Data Summary:
+                    {results_df.to_string() if results_df is not None else 'No data available'}
+                    """
+                    messages.append({"role": "user", "content": context_message})
+                    messages.append({"role": "assistant", "content": "I have reviewed the compressor performance data and my previous analysis. What would you like to know?"})
+                    
+                    # Add chat history
+                    for msg in st.session_state['ai_chat_history']:
+                        messages.append({"role": msg["role"], "content": msg["content"]})
+                    
+                    # Get AI response
+                    with st.chat_message("assistant"):
+                        with st.spinner("Thinking..."):
+                            client = OpenAI(api_key=openai_api_key)
+                            selected_model = st.session_state.get('ai_model', 'gpt-4o')
+                            try:
+                                response = client.chat.completions.create(
+                                    model=selected_model,
+                                    messages=messages,
+                                    max_tokens=1000,
+                                    temperature=0.3
+                                )
+                            except Exception:
+                                # Fallback to gpt-3.5-turbo
+                                response = client.chat.completions.create(
+                                    model="gpt-3.5-turbo",
+                                    messages=messages,
+                                    max_tokens=1000,
+                                    temperature=0.3
+                                )
+                            
+                            assistant_response = response.choices[0].message.content
+                            st.markdown(assistant_response)
+                            
+                            # Add assistant response to chat history
+                            st.session_state['ai_chat_history'].append({"role": "assistant", "content": assistant_response})
+                
+                except Exception as e:
+                    st.error(f"Failed to get response: {str(e)}")
+            
+            # Clear chat button
+            if st.session_state['ai_chat_history']:
+                if st.button("🗑️ Clear Chat History", key="clear_chat_btn"):
+                    st.session_state['ai_chat_history'] = []
+                    st.rerun()
+    else:
+        st.divider()
+        st.info("🤖 **AI Analysis Available**: Run calculations first to enable AI-powered performance analysis.")
