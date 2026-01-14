@@ -43,9 +43,10 @@ with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
     ### 1. Performance Calculations
     - **Polytropic head & efficiency** from measured P, T, and flow data
     - **Isentropic efficiency** and compression power
-    - **Two calculation methods available:**
-      - **Schultz (Analytical)**: Traditional polytropic analysis
-      - **NeqSim Process Model (Detailed)**: Multi-step polytropic compression using NeqSim's process compressor model
+    - **Three calculation methods available:**
+      - **Schultz (Analytical)**: Traditional polytropic analysis - fastest
+      - **NeqSim Process Model (Simple)**: NeqSim polytropic using Schultz method - good balance of speed and accuracy
+      - **NeqSim Process Model (Detailed)**: Multi-step polytropic compression - most accurate but slower
     
     #### NeqSim Detailed Method
     The detailed polytropic method is based on thermodynamic integration principles developed for 
@@ -297,14 +298,14 @@ with st.sidebar:
     
     calc_method = st.selectbox(
         "Select Method",
-        options=["NeqSim Process Model (Detailed)", "Schultz (Analytical)"],
-        index=0 if st.session_state['calc_method'] == "NeqSim Process Model (Detailed)" else 1,
-        help="Schultz: Analytical polytropic analysis. NeqSim: Uses process compressor with detailed multi-step polytropic calculation."
+        options=["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)", "Schultz (Analytical)"],
+        index=["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)", "Schultz (Analytical)"].index(st.session_state['calc_method']) if st.session_state['calc_method'] in ["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)", "Schultz (Analytical)"] else 0,
+        help="Schultz: Analytical polytropic analysis. NeqSim Simple: Faster calculation. NeqSim Detailed: Multi-step polytropic (more accurate but slower)."
     )
     st.session_state['calc_method'] = calc_method
     
     if calc_method == "NeqSim Process Model (Detailed)":
-        st.info("🔧 Uses NeqSim's detailed polytropic method. Efficiency is calculated from measured inlet/outlet conditions.")
+        st.info("🔧 Uses NeqSim's detailed polytropic method with multi-step integration. More accurate but slower.")
         
         num_steps = st.slider(
             "Number of Calculation Steps",
@@ -315,6 +316,8 @@ with st.sidebar:
             help="More steps = higher accuracy but slower calculation"
         )
         st.session_state['num_calc_steps'] = num_steps
+    elif calc_method == "NeqSim Process Model (Simple)":
+        st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
 
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
@@ -368,7 +371,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
                         "Molar Composition [-]", 
                         min_value=0, 
                         max_value=100, 
-                        format="%.2f",
+                        format="%.4f",
                         help="Enter molar composition (will be normalized)"
                     ),
                 },
@@ -1604,7 +1607,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Check which calculation method to use
                     calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
                     
-                    if calc_method == "NeqSim Process Model (Detailed)":
+                    if calc_method in ["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)"]:
                         # Use NeqSim process compressor with detailed polytropic method
                         # Create a stream for the compressor inlet
                         process_fluid = fluid(get_selected_eos_model())
@@ -1622,8 +1625,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         compressor = jneqsim.process.equipment.compressor.Compressor("compressor", inlet_stream)
                         compressor.setOutletPressure(float(p_out), "bara")
                         compressor.setUsePolytropicCalc(True)
-                        compressor.setPolytropicMethod("detailed")
-                        compressor.setNumberOfCompressorCalcSteps(st.session_state['num_calc_steps'])
+                        
+                        # Set polytropic method based on user selection
+                        if calc_method == "NeqSim Process Model (Detailed)":
+                            compressor.setPolytropicMethod("detailed")
+                            compressor.setNumberOfCompressorCalcSteps(st.session_state['num_calc_steps'])
+                        else:
+                            # Simple mode - faster calculation
+                            compressor.setPolytropicMethod("schultz")
                         
                         # Solve for polytropic efficiency based on measured outlet temperature
                         # Convert outlet temperature to Kelvin for solveEfficiency method
@@ -1711,21 +1720,24 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         z_avg = (z_in + z_out) / 2
                         kappa_avg = (kappa_in + kappa_out) / 2
                         vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
+                        mass_flow_kg_hr = mass_flow * 3600  # kg/hr
                         
                         results.append({
                             'Speed (RPM)': speed_rpm,
-                            'Flow Rate (kg/s)': mass_flow,
+                            'Mass Flow (kg/hr)': mass_flow_kg_hr,
                             'Inlet P (bara)': p_in,
                             'Outlet P (bara)': p_out,
                             'Inlet T (°C)': t_in,
                             'Outlet T (°C)': t_out,  # Use measured outlet temperature
                             'Pressure Ratio': pr,
+                            'Density Inlet (kg/m³)': rho_in,
+                            'Density Outlet (kg/m³)': rho_out,
                             'Z inlet': z_in,
                             'Z outlet': z_out,
                             'κ inlet': kappa_in,
                             'κ outlet': kappa_out,
                             'Polytropic Exp (n)': n,
-                            'Isentropic Eff (%)': eta_isen * 100,
+                            'Isentropic Eff (%)': eta_isen * 100 if eta_isen is not None else None,
                             'Polytropic Eff (%)': eta_poly * 100,
                             'Polytropic Head (kJ/kg)': polytropic_head,
                             'Actual Work (kJ/kg)': actual_work,
@@ -1814,15 +1826,18 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         
                         # Volume flow at inlet conditions
                         vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
+                        mass_flow_kg_hr = mass_flow * 3600  # kg/hr
                         
                         results.append({
                             'Speed (RPM)': speed_rpm,
-                            'Flow Rate (kg/s)': mass_flow,
+                            'Mass Flow (kg/hr)': mass_flow_kg_hr,
                             'Inlet P (bara)': p_in,
                             'Outlet P (bara)': p_out,
                             'Inlet T (°C)': t_in,
                             'Outlet T (°C)': t_out,
                             'Pressure Ratio': pr,
+                            'Density Inlet (kg/m³)': rho_in,
+                            'Density Outlet (kg/m³)': rho_out,
                             'Z inlet': z_in,
                             'Z outlet': z_out,
                             'κ inlet': kappa_in,
@@ -2000,25 +2015,31 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 st.subheader("📋 Full Calculation Details")
                 
                 display_columns = [
-                    'Speed (RPM)', 'Flow Rate (kg/s)', 'Pressure Ratio', 'Polytropic Eff (%)', 
+                    'Speed (RPM)', 'Mass Flow (kg/hr)', 'Vol Flow Inlet (m³/hr)', 'Pressure Ratio', 
+                    'Density Inlet (kg/m³)', 'Density Outlet (kg/m³)',
+                    'Polytropic Eff (%)', 'Isentropic Eff (%)',
                     'Polytropic Head (kJ/kg)', 'Power (MW)', 'Z inlet', 'Z outlet',
-                    'κ inlet', 'Polytropic Exp (n)', 'Vol Flow Inlet (m³/hr)'
+                    'κ inlet', 'κ outlet', 'Polytropic Exp (n)'
                 ]
                 
                 st.dataframe(
                     display_df[display_columns].style.format({
                         'Speed (RPM)': '{:.0f}',
-                        'Flow Rate (kg/s)': '{:.2f}',
+                        'Mass Flow (kg/hr)': '{:.1f}',
+                        'Vol Flow Inlet (m³/hr)': '{:.1f}',
                         'Pressure Ratio': '{:.3f}',
+                        'Density Inlet (kg/m³)': '{:.3f}',
+                        'Density Outlet (kg/m³)': '{:.3f}',
                         'Polytropic Eff (%)': '{:.2f}',
+                        'Isentropic Eff (%)': '{:.2f}',
                         'Polytropic Head (kJ/kg)': '{:.2f}',
                         'Power (MW)': '{:.3f}',
                         'Z inlet': '{:.4f}',
                         'Z outlet': '{:.4f}',
                         'κ inlet': '{:.4f}',
+                        'κ outlet': '{:.4f}',
                         'Polytropic Exp (n)': '{:.4f}',
-                        'Vol Flow Inlet (m³/hr)': '{:.1f}',
-                    }),
+                    }, na_rep='-'),
                     use_container_width=True
                 )
                 
@@ -2032,10 +2053,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 
                 # Calculate flow in the input unit for x-axis
                 if flow_unit in ["kg/s"]:
-                    x_flow = results_df['Flow Rate (kg/s)']
+                    x_flow = results_df['Mass Flow (kg/hr)'] / 3600
                     x_label = f'Flow Rate ({flow_unit})'
                 elif flow_unit == "kg/hr":
-                    x_flow = results_df['Flow Rate (kg/s)'] * 3600
+                    x_flow = results_df['Mass Flow (kg/hr)']
                     x_label = f'Flow Rate ({flow_unit})'
                 elif flow_unit in ["m3/hr", "Am3/hr"]:
                     x_flow = results_df['Vol Flow Inlet (m³/hr)']
@@ -2046,8 +2067,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     x_flow = edited_data.dropna()['Flow Rate'].values[:len(results_df)]
                     x_label = f'Flow Rate ({flow_unit})'
                 else:
-                    x_flow = results_df['Flow Rate (kg/s)']
-                    x_label = 'Flow Rate (kg/s)'
+                    x_flow = results_df['Mass Flow (kg/hr)']
+                    x_label = 'Flow Rate (kg/hr)'
                 
                 # Store x_flow in results for use in plots
                 results_df['Plot Flow'] = x_flow.values if hasattr(x_flow, 'values') else x_flow
