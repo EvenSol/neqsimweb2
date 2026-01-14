@@ -1699,12 +1699,32 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             kappa_avg = (kappa_in + kappa_out) / 2
                         else:
                             # Valid efficiency from NeqSim
-                            # Get results from compressor after solving efficiency
+                            # Set the solved efficiency and run the compressor to get all results
+                            compressor.setPolytropicEfficiency(eta_poly)
+                            compressor.run()
+                            
+                            # Get results from compressor after running
                             eta_isen = compressor.getIsentropicEfficiency()
                             polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
                             power_kW = compressor.getPower("kW")
                             power_MW = compressor.getPower("MW")
                             n = compressor.getPolytropicExponent()
+                            
+                            # If polytropic exponent is still 0, calculate from measured data
+                            if n == 0 or n is None:
+                                T_out_K = t_out + 273.15
+                                T_in_K = t_in + 273.15
+                                pr = p_out / p_in
+                                if pr > 1 and T_out_K > T_in_K:
+                                    log_T_ratio = np.log(T_out_K / T_in_K)
+                                    log_P_ratio = np.log(pr)
+                                    if log_P_ratio > 0 and log_T_ratio > 0:
+                                        n_minus_1_over_n = log_T_ratio / log_P_ratio
+                                        n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
+                                    else:
+                                        n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
+                                else:
+                                    n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
                             
                             # Get outlet properties
                             outlet_stream = compressor.getOutletStream()
