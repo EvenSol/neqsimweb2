@@ -1782,7 +1782,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         try:
                             thermoOps.PSflash(s_in_total)
                             isentropic_fluid.initProperties()
-                            h_out_isen = isentropic_fluid.getEnthalpy() / isentropic_fluid.getNumberOfMoles() / isentropic_fluid.getMolarMass() / 1000  # kJ/kg
+                            h_out_isen = isentropic_fluid.getEnthalpy("kJ/kg")  # Use NeqSim API for proper unit conversion
                             t_out_isen = isentropic_fluid.getTemperature() - 273.15  # Convert to Celsius
                         except:
                             # Fallback: estimate isentropic temperature

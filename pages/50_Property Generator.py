@@ -81,13 +81,13 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
         elif property_name == "JouleThomson coef.":
             return neqsim_fluid.getJouleThomsonCoefficient()
         elif property_name == "heat capacity Cp":
-            return neqsim_fluid.getCp() / (neqsim_fluid.getMolarMass() * neqsim_fluid.getTotalNumberOfMoles() * 1000.0)
+            return neqsim_fluid.getCp("kJ/kgK")  # Use NeqSim API for proper unit conversion
         elif property_name == "heat capacity Cv":
-            return neqsim_fluid.getCv() / (neqsim_fluid.getMolarMass() * neqsim_fluid.getTotalNumberOfMoles() * 1000.0)
+            return neqsim_fluid.getCv("kJ/kgK")  # Use NeqSim API for proper unit conversion
         elif property_name == "enthalpy":
-            return neqsim_fluid.getEnthalpy() / (neqsim_fluid.getMolarMass() * neqsim_fluid.getTotalNumberOfMoles() * 1000.0)
+            return neqsim_fluid.getEnthalpy("kJ/kg")  # Use NeqSim API for proper unit conversion
         elif property_name == "entropy":
-            return neqsim_fluid.getEntropy() / (neqsim_fluid.getMolarMass() * neqsim_fluid.getTotalNumberOfMoles() * 1000.0)
+            return neqsim_fluid.getEntropy("kJ/kgK")  # Use NeqSim API for proper unit conversion
         elif property_name == "phase fraction (mole)":
             return neqsim_fluid.getPhase(0).getBeta()
         elif property_name == "phase fraction (volume)":
@@ -162,13 +162,13 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
             elif property_name == "JouleThomson coef.":
                 return phase.getJouleThomsonCoefficient()
             elif property_name == "heat capacity Cp":
-                return phase.getCp() / (phase.getMolarMass() * phase.getNumberOfMolesInPhase() * 1000.0)
+                return phase.getCp("kJ/kgK")  # Use NeqSim API for proper unit conversion
             elif property_name == "heat capacity Cv":
-                return phase.getCv() / (phase.getMolarMass() * phase.getNumberOfMolesInPhase() * 1000.0)
+                return phase.getCv("kJ/kgK")  # Use NeqSim API for proper unit conversion
             elif property_name == "enthalpy":
-                return phase.getEnthalpy() / (phase.getMolarMass() * phase.getNumberOfMolesInPhase() * 1000.0)
+                return phase.getEnthalpy("kJ/kg")  # Use NeqSim API for proper unit conversion
             elif property_name == "entropy":
-                return phase.getEntropy() / (phase.getMolarMass() * phase.getNumberOfMolesInPhase() * 1000.0)
+                return phase.getEntropy("kJ/kgK")  # Use NeqSim API for proper unit conversion
             elif property_name == "phase fraction (mole)":
                 return phase.getBeta()
             elif property_name == "phase fraction (volume)":
