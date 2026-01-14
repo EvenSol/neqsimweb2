@@ -323,6 +323,33 @@ with st.sidebar:
 def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
 
+# Helper function to calculate polytropic exponent from measured data
+def calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg):
+    """
+    Calculate polytropic exponent n from measured temperature and pressure ratios.
+    
+    Using: T2/T1 = (P2/P1)^((n-1)/n)
+    Solving: (n-1)/n = log(T2/T1) / log(P2/P1)
+             n = 1 / (1 - (n-1)/n)
+    
+    Args:
+        T_in_K: Inlet temperature in Kelvin
+        T_out_K: Outlet temperature in Kelvin
+        pr: Pressure ratio (P_out / P_in)
+        kappa_avg: Average isentropic exponent for fallback
+        
+    Returns:
+        Polytropic exponent n
+    """
+    if pr > 1 and T_out_K > T_in_K:
+        log_T_ratio = np.log(T_out_K / T_in_K)
+        log_P_ratio = np.log(pr)
+        if log_P_ratio > 0 and log_T_ratio > 0:
+            n_minus_1_over_n = log_T_ratio / log_P_ratio
+            return 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
+    # Fallback estimate
+    return kappa_avg / (kappa_avg - 1 + 0.001) * 0.8
+
 # Helper function to get fluid composition dict
 def get_fluid_composition():
     if selected_fluid_name == "Custom Mixture":
@@ -1556,13 +1583,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Get inlet properties
                     z_in = inlet_fluid.getZ()
                     h_in = inlet_fluid.getEnthalpy("kJ/kg")  # Specific enthalpy in kJ/kg
-                    s_in = inlet_fluid.getEntropy("kJ/kgK")  # Specific entropy in kJ/kg/K
                     cp_in = inlet_fluid.getCp("kJ/kgK")  # Specific Cp in kJ/kg/K
                     cv_in = inlet_fluid.getCv("kJ/kgK")  # Specific Cv in kJ/kg/K
                     kappa_in = cp_in / cv_in if cv_in > 0 else inlet_fluid.getGamma()
                     MW = inlet_fluid.getMolarMass() * 1000  # g/mol -> kg/kmol
                     rho_in = inlet_fluid.getDensity()  # kg/m3
                     T_in_K = t_in + 273.15
+                    T_out_K = t_out + 273.15
+                    pr = p_out / p_in
                     
                     # Convert flow to mass flow (kg/s) based on unit
                     if flow_unit == "kg/s":
@@ -1602,11 +1630,13 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Get outlet properties
                     z_out = outlet_fluid.getZ()
                     h_out = outlet_fluid.getEnthalpy("kJ/kg")  # Specific enthalpy in kJ/kg
-                    s_out = outlet_fluid.getEntropy("kJ/kgK")  # Specific entropy in kJ/kg/K
-                    cp_out = outlet_fluid.getCp("kJ/kgK")  # Specific Cp in kJ/kg/K
-                    cv_out = outlet_fluid.getCv("kJ/kgK")  # Specific Cv in kJ/kg/K
-                    kappa_out = cp_out / cv_out if cv_out > 0 else outlet_fluid.getGamma()
+                    kappa_out = outlet_fluid.getGamma()  # Use direct gamma for outlet
                     rho_out = outlet_fluid.getDensity()
+                    
+                    # Common calculated values
+                    actual_work = h_out - h_in  # kJ/kg
+                    kappa_avg = (kappa_in + kappa_out) / 2
+                    z_avg = (z_in + z_out) / 2
                     
                     # Check which calculation method to use
                     calc_method = st.session_state.get('calc_method', 'Schultz (Analytical)')
@@ -1655,27 +1685,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             st.warning(f"⚠️ Row {idx}: NeqSim returned η={eta_poly_str} for T_out={t_out}°C, P_ratio={p_out/p_in:.2f}. Using Schultz method as fallback.")
                             
                             # Use Schultz analytical method as fallback
-                            T_out_K = t_out + 273.15
-                            T_in_K = t_in + 273.15
-                            pr = p_out / p_in
-                            
                             # Calculate polytropic exponent from measured data
-                            if pr > 1 and T_out_K > T_in_K:
-                                log_T_ratio = np.log(T_out_K / T_in_K)
-                                log_P_ratio = np.log(pr)
-                                if log_P_ratio > 0 and log_T_ratio > 0:
-                                    n_minus_1_over_n = log_T_ratio / log_P_ratio
-                                    n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
-                                else:
-                                    n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
-                            else:
-                                n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
+                            n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
                             
                             # Polytropic efficiency using Schultz
                             # From: n = 1 / (1 - (κ-1)/κ / η_p)
                             # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
-                            if n > 1 and kappa_in > 1:
-                                eta_poly_calc = (n * (kappa_in - 1)) / (kappa_in * (n - 1))
+                            if n > 1 and kappa_avg > 1:
+                                eta_poly_calc = (n * (kappa_avg - 1)) / (kappa_avg * (n - 1))
                                 # Check if calculated efficiency is unrealistic (>100%)
                                 if eta_poly_calc > 1.0:
                                     st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
@@ -1692,16 +1709,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             
                             # Calculate polytropic head using enthalpy-based method
                             # Hp = η_p × actual_work (consistent with NeqSim)
-                            actual_work = h_out - h_in
-                            if actual_work > 0 and eta_poly > 0:
-                                polytropic_head = actual_work * eta_poly  # kJ/kg
-                            else:
-                                polytropic_head = 0
-                            
+                            polytropic_head = actual_work * eta_poly if actual_work > 0 and eta_poly > 0 else 0
                             eta_isen = eta_poly * 0.98
                             power_kW = mass_flow * actual_work
                             power_MW = power_kW / 1000
-                            kappa_avg = (kappa_in + kappa_out) / 2
                         else:
                             # Valid efficiency from NeqSim
                             # Set the solved efficiency and run the compressor to get all results
@@ -1713,39 +1724,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
                             n = compressor.getPolytropicExponent()
                             
-                            # Calculate power from MEASURED enthalpy difference for consistency
-                            # This ensures power matches the actual measured conditions
-                            # (h_out from measured T_out was calculated earlier)
-                            actual_work = h_out - h_in  # kJ/kg from measured conditions
+                            # Power from MEASURED enthalpy difference for consistency
                             power_kW = mass_flow * actual_work  # kW
                             power_MW = power_kW / 1000  # MW
                             
                             # If polytropic exponent is still 0, calculate from measured data
                             if n == 0 or n is None:
-                                T_out_K = t_out + 273.15
-                                T_in_K = t_in + 273.15
-                                pr = p_out / p_in
-                                if pr > 1 and T_out_K > T_in_K:
-                                    log_T_ratio = np.log(T_out_K / T_in_K)
-                                    log_P_ratio = np.log(pr)
-                                    if log_P_ratio > 0 and log_T_ratio > 0:
-                                        n_minus_1_over_n = log_T_ratio / log_P_ratio
-                                        n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
-                                    else:
-                                        n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
-                                else:
-                                    n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
-                            
-                            # Get outlet properties from NeqSim model for display
-                            # (but we use measured values for power calculation)
-                            outlet_stream = compressor.getOutletStream()
-                            # Note: z_out, kappa_out, rho_out already set from measured outlet_fluid earlier
-                            # t_out_calc can be compared to measured t_out for validation
-                            t_out_calc = outlet_stream.getTemperature("C")
+                                n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
                         
-                        pr = p_out / p_in
-                        z_avg = (z_in + z_out) / 2
-                        kappa_avg = (kappa_in + kappa_out) / 2
                         vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
                         mass_flow_kg_hr = mass_flow * 3600  # kg/hr
                         
@@ -1787,16 +1773,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         try:
                             thermoOps.PSflash(s_in_total)
                             isentropic_fluid.initProperties()
-                            h_out_isen = isentropic_fluid.getEnthalpy("kJ/kg")  # Use NeqSim API for proper unit conversion
-                            t_out_isen = isentropic_fluid.getTemperature() - 273.15  # Convert to Celsius
+                            h_out_isen = isentropic_fluid.getEnthalpy("kJ/kg")
                         except:
-                            # Fallback: estimate isentropic temperature
-                            kappa_avg = (kappa_in + kappa_out) / 2
-                            t_out_isen = T_in_K * (p_out/p_in)**((kappa_avg-1)/kappa_avg) - 273.15
+                            # Fallback: estimate isentropic enthalpy using ideal gas relation
+                            t_out_isen = T_in_K * pr**((kappa_avg-1)/kappa_avg) - 273.15
                             h_out_isen = h_in + cp_in * (t_out_isen - t_in)
-                        
-                        # Calculate actual work (enthalpy change)
-                        actual_work = h_out - h_in  # kJ/kg
                         
                         # Calculate isentropic work
                         isentropic_work = h_out_isen - h_in  # kJ/kg
@@ -1804,60 +1785,22 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         # Isentropic efficiency
                         eta_isen = isentropic_work / actual_work if actual_work > 0 else 0
                         
-                        # Calculate polytropic efficiency using the Schultz method
-                        # Average compressibility factor
-                        z_avg = (z_in + z_out) / 2
-                        
-                        # Average kappa
-                        kappa_avg = (kappa_in + kappa_out) / 2
-                        
-                        # Pressure ratio
-                        pr = p_out / p_in
-                        
                         # Calculate polytropic exponent from measured data
-                        # Using: T2/T1 = (P2/P1)^((n-1)/n)
-                        T_out_K = t_out + 273.15
-                        if pr > 1 and T_out_K > T_in_K:
-                            log_T_ratio = np.log(T_out_K / T_in_K)
-                            log_P_ratio = np.log(pr)
-                            if log_P_ratio > 0 and log_T_ratio > 0:
-                                n_minus_1_over_n = log_T_ratio / log_P_ratio
-                                n = 1 / (1 - n_minus_1_over_n) if n_minus_1_over_n < 1 else 1.5
-                            else:
-                                n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
-                        else:
-                            n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
+                        n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
                         
-                        # Polytropic efficiency
-                        # From the relation: n = 1 / (1 - (κ-1)/κ / η_p)
+                        # Polytropic efficiency from Schultz formula
+                        # From: n = 1 / (1 - (κ-1)/κ / η_p)
                         # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
-                        # This is the Schultz polytropic efficiency formula
                         if n > 1 and kappa_avg > 1:
                             eta_poly = (n * (kappa_avg - 1)) / (kappa_avg * (n - 1))
                             eta_poly = min(max(eta_poly, 0.5), 0.95)  # Clamp to reasonable range
                         else:
                             eta_poly = eta_isen * 0.98 if eta_isen > 0 else 0.75  # Approximation
                         
-                        # Polytropic head calculation
-                        # NeqSim calculates: Hp = actual_work * eta_poly (enthalpy-based)
-                        # This is more accurate for real gases than the ideal gas formula
-                        # The ideal gas formula Hp = z*R*T/MW * n/(n-1) * [PR^((n-1)/n) - 1] 
-                        # overestimates head for real gases
+                        # Polytropic head (enthalpy-based, consistent with NeqSim)
+                        polytropic_head = actual_work * eta_poly if actual_work > 0 and eta_poly > 0 else 0
                         
-                        # Use enthalpy-based head (consistent with NeqSim)
-                        if actual_work > 0 and eta_poly > 0:
-                            polytropic_head = actual_work * eta_poly  # kJ/kg - real gas head
-                        else:
-                            # Fallback to ideal gas formula if enthalpy not available
-                            R = 8.314  # J/(mol·K)
-                            if n > 1:
-                                polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000
-                            else:
-                                polytropic_head = 0
-                        
-                        # Power calculation - NeqSim returns gas power = mass_flow × Δh
-                        # For adiabatic compressor: Gas power = Shaft power (no heat loss)
-                        # This matches NeqSim's getPower() which returns total enthalpy change
+                        # Power calculation
                         power_kW = mass_flow * actual_work  # Gas power in kW
                         power_MW = power_kW / 1000  # MW
                         
