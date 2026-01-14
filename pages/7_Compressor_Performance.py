@@ -1580,6 +1580,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         std_fluid.setTemperature(15.0, 'C')
                         TPflash(std_fluid)
                         std_fluid.initThermoProperties()
+                        std_fluid.initPhysicalProperties()
                         rho_std = std_fluid.getDensity()  # kg/m3 at std conditions
                         # MSm3/day to kg/s: flow * 1e6 m3/day * rho_std / 86400 s/day
                         mass_flow = flow_value * 1e6 * rho_std / 86400.0

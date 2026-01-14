@@ -473,6 +473,8 @@ with tab_char:
                     char_fluid.setTemperature(reservoir_temp + 273.15, "K")
                     char_fluid.setPressure(reservoir_pres, "bara")
                     TPflash(char_fluid)
+                    char_fluid.initThermoProperties()
+                    char_fluid.initPhysicalProperties()
                     
                     # Count components correctly using the lumping model
                     n_total = char_fluid.getNumberOfComponents()
