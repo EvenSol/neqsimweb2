@@ -61,9 +61,10 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | 1️⃣ | **Select Fluid** | Choose a preset gas or define custom mixture composition |
     | 2️⃣ | **Select EoS Model** | GERG-2008 recommended for natural gas |
     | 3️⃣ | **Choose Calculation Method** | Schultz (fast) or NeqSim Detailed (accurate) |
-    | 4️⃣ | **Enter Operating Data** | Input measured P, T, and flow at inlet/outlet |
-    | 5️⃣ | **Calculate** | Click "Calculate Performance" button |
-    | 6️⃣ | **Analyze Results** | View plots, compare with manufacturer curves |
+    | 4️⃣ | **Configure Advanced Options** | Single-phase mode enabled by default for speed |
+    | 5️⃣ | **Enter Operating Data** | Input measured P, T, and flow at inlet/outlet |
+    | 6️⃣ | **Calculate** | Click "Calculate Performance" button |
+    | 7️⃣ | **Analyze Results** | View plots, compare with manufacturer curves |
     
     ---
     
@@ -337,10 +338,12 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons
     2. **Use Detailed method** for high pressure ratios (>3:1) or near-critical conditions
-    3. **Verify input data:** Ensure pressures are absolute (not gauge)
-    4. **Check temperature units:** Confirm whether input is °C or K
-    5. **Validate with known points:** Test with manufacturer guarantee point first
-    6. **Monitor efficiency trends:** Declining efficiency may indicate fouling or damage
+    3. **Keep Single-Phase Mode ON** for faster calculations when operating in gas phase
+    4. **Disable Single-Phase Mode** if operating near dew point or with wet gas
+    5. **Verify input data:** Ensure pressures are absolute (not gauge)
+    6. **Check temperature units:** Confirm whether input is °C or K
+    7. **Validate with known points:** Test with manufacturer guarantee point first
+    8. **Monitor efficiency trends:** Declining efficiency may indicate fouling or damage
     
     ---
     
@@ -353,6 +356,37 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | Power mismatch | Flow measurement error | Verify flow meter calibration |
     | Head deviation | Gas composition difference | Use composition correction |
     | Calculation fails | Invalid thermodynamic state | Check if conditions are in valid range |
+    
+    ---
+    
+    ## 13. Advanced Options
+    
+    ### 13.1 Single-Phase Gas Mode (Default: Enabled)
+    
+    Located in the sidebar under **Advanced Options**, this toggle controls the thermodynamic 
+    calculation mode:
+    
+    | Mode | Description | When to Use |
+    |------|-------------|-------------|
+    | ⚡ **Single-Phase (ON)** | Forces gas-phase only calculations | Normal compressor operation in gas phase |
+    | 🔄 **Multiphase (OFF)** | Full vapor-liquid equilibrium flash | Near dew point or with liquid dropout |
+    
+    **Why Single-Phase Mode is Faster:**
+    
+    - Skips the iterative phase equilibrium (VLE) calculation
+    - Directly calculates gas-phase properties without checking for liquid formation
+    - Typically 2-5x faster calculation speed
+    
+    **When to Disable Single-Phase Mode:**
+    
+    - Operating near the phase envelope (dew point conditions)
+    - Wet gas compression with potential liquid dropout
+    - Retrograde condensation conditions
+    - When accuracy is more important than speed
+    
+    **Technical Note:** Uses NeqSim's `setNumberOfPhases(1)`, `setMaxNumberOfPhases(1)`, 
+    `setForcePhaseTypes(True)`, and `setPhaseType(0, "GAS")` methods to lock the 
+    thermodynamic system to gas-phase calculations only.
     
     """)
 
@@ -576,9 +610,14 @@ def configure_single_phase_if_enabled(neqsim_fluid):
     This forces the thermodynamic system to only consider gas phase,
     skipping the multiphase flash calculation which is much faster.
     Should only be used when you know the fluid is in gas phase.
+    
+    Must be called AFTER adding all components but BEFORE setting T/P and flash.
     """
     if st.session_state.get('single_phase_mode', True):
-        neqsim_fluid.setForceSinglePhase("GAS")
+        neqsim_fluid.setNumberOfPhases(1)
+        neqsim_fluid.setMaxNumberOfPhases(1)
+        neqsim_fluid.setForcePhaseTypes(True)
+        neqsim_fluid.setPhaseType(0, "GAS")
     return neqsim_fluid
 
 # Helper function to calculate polytropic exponent from measured data
