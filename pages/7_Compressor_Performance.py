@@ -2280,9 +2280,13 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 mfr_curves = st.session_state.get('compressor_curves', [])
                 curve_flow_unit = st.session_state.get('curve_flow_unit', flow_unit)
                 
-                # Get generated/adjusted curves if available
+                # Get generated/adjusted curves if available (from measured data fitting)
                 gen_curves_data = st.session_state.get('generated_curves', None)
                 gen_curves = gen_curves_data.get('curves', []) if gen_curves_data else []
+                
+                # Get MW-corrected curves if available (from "Generate Updated Curves for New Gas")
+                corrected_curves_data = st.session_state.get('corrected_curves', None)
+                corrected_curves = corrected_curves_data.get('curves', []) if corrected_curves_data else []
                 
                 # Color palette for curves and measured points
                 curve_colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', 
@@ -2326,6 +2330,17 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             return color
                     return default_color
                 
+                # Show legend for curve types if multiple curve sources are present
+                curve_legend_parts = []
+                if show_mfr_curves and mfr_curves:
+                    curve_legend_parts.append("**···** Original (dotted)")
+                if corrected_curves:
+                    curve_legend_parts.append("**- -** MW-Corrected (dashed)")
+                if gen_curves:
+                    curve_legend_parts.append("**—** Fitted (solid)")
+                if curve_legend_parts:
+                    st.caption("**Curve Legend:** " + " | ".join(curve_legend_parts) + " | **●** Measured Data")
+                
                 tab1, tab2, tab3 = st.tabs(["Polytropic Efficiency vs Flow", "Head vs Flow", "Power vs Flow"])
                 
                 with tab1:
@@ -2345,7 +2360,21 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 legendgroup=f"speed_{curve['speed']}"
                             ))
                     
-                    # Add generated/adjusted curves (solid lines)
+                    # Add MW-corrected curves (dashed lines - from new gas composition)
+                    if show_mfr_curves and corrected_curves:
+                        for i, curve in enumerate(corrected_curves):
+                            color = curve_colors[i % len(curve_colors)]
+                            fig_eff.add_trace(go.Scatter(
+                                x=curve['flow'],
+                                y=curve['efficiency'],
+                                mode='lines',
+                                name=f"MW-Corrected {curve['speed']:.0f} RPM",
+                                line=dict(width=2, color=color, dash='dash'),
+                                opacity=0.8,
+                                legendgroup=f"speed_{curve['speed']}_corr"
+                            ))
+                    
+                    # Add generated/adjusted curves (solid lines - from measured data)
                     if gen_curves:
                         for i, curve in enumerate(gen_curves):
                             color = curve_colors[i % len(curve_colors)]
@@ -2353,7 +2382,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 x=curve['flow'],
                                 y=curve['efficiency'],
                                 mode='lines',
-                                name=f"Adjusted {curve['speed']:.0f} RPM",
+                                name=f"Fitted {curve['speed']:.0f} RPM",
                                 line=dict(width=3, color=color),
                                 legendgroup=f"speed_{curve['speed']}"
                             ))
@@ -2401,7 +2430,21 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 legendgroup=f"speed_{curve['speed']}"
                             ))
                     
-                    # Add generated/adjusted curves (solid lines)
+                    # Add MW-corrected curves (dashed lines - from new gas composition)
+                    if show_mfr_curves and corrected_curves:
+                        for i, curve in enumerate(corrected_curves):
+                            color = curve_colors[i % len(curve_colors)]
+                            fig_head.add_trace(go.Scatter(
+                                x=curve['flow'],
+                                y=curve['head'],
+                                mode='lines',
+                                name=f"MW-Corrected {curve['speed']:.0f} RPM",
+                                line=dict(width=2, color=color, dash='dash'),
+                                opacity=0.8,
+                                legendgroup=f"speed_{curve['speed']}_corr"
+                            ))
+                    
+                    # Add generated/adjusted curves (solid lines - from measured data)
                     if gen_curves:
                         for i, curve in enumerate(gen_curves):
                             color = curve_colors[i % len(curve_colors)]
@@ -2409,7 +2452,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 x=curve['flow'],
                                 y=curve['head'],
                                 mode='lines',
-                                name=f"Adjusted {curve['speed']:.0f} RPM",
+                                name=f"Fitted {curve['speed']:.0f} RPM",
                                 line=dict(width=3, color=color),
                                 legendgroup=f"speed_{curve['speed']}"
                             ))
