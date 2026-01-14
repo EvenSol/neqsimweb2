@@ -14,130 +14,341 @@ theme_toggle()
 
 st.title('Compressor Performance Calculator')
 
-# Documentation expander at the top
-with st.expander("📖 **User Guide - How to Use This Tool**", expanded=False):
-    st.markdown("""
-    ## Overview
+# Comprehensive documentation expander at the top
+with st.expander("📖 **Documentation - User Manual & Method Reference**", expanded=False):
+    st.markdown(r"""
+    # Compressor Performance Calculator
     
-    This tool calculates centrifugal compressor performance using advanced equations of state 
-    for accurate thermodynamic property calculations. It supports performance testing, curve generation, 
-    and gas composition correction.
+    ## 1. Overview
     
-    **Supported EoS Models:** GERG-2008 (default), Peng-Robinson, Soave-Redlich-Kwong
+    This tool calculates centrifugal compressor performance parameters from measured operating data 
+    using rigorous thermodynamic calculations based on advanced equations of state. It is designed 
+    for performance testing, commissioning verification, condition monitoring, and comparing actual 
+    performance against manufacturer curves.
+    
+    **Primary Outputs:**
+    - Polytropic head (kJ/kg)
+    - Polytropic efficiency (%)
+    - Isentropic efficiency (%)
+    - Compression power (kW, MW)
+    - Polytropic exponent (n)
+    
+    **Supported Equations of State:**
+    - GERG-2008 (default) - Most accurate for natural gas applications
+    - Peng-Robinson (PR) - General purpose cubic EoS
+    - Soave-Redlich-Kwong (SRK) - General purpose cubic EoS
     
     ---
     
-    ## 🚀 Quick Start Workflow
+    ## 2. Quick Start Workflow
     
     | Step | Action | Description |
     |------|--------|-------------|
-    | 1️⃣ | **Select Fluid & Model** | Choose from preset gases or custom mixture, and select EoS model |
-    | 2️⃣ | **Enter Operating Data** | Input measured pressures, temperatures, and flow rates |
-    | 3️⃣ | **Run Calculations** | Click "Calculate Performance" to compute head/efficiency |
-    | 4️⃣ | **Analyze Results** | View plots and compare against manufacturer curves |
+    | 1️⃣ | **Select Fluid** | Choose a preset gas or define custom mixture composition |
+    | 2️⃣ | **Select EoS Model** | GERG-2008 recommended for natural gas |
+    | 3️⃣ | **Choose Calculation Method** | Schultz (fast) or NeqSim Detailed (accurate) |
+    | 4️⃣ | **Enter Operating Data** | Input measured P, T, and flow at inlet/outlet |
+    | 5️⃣ | **Calculate** | Click "Calculate Performance" button |
+    | 6️⃣ | **Analyze Results** | View plots, compare with manufacturer curves |
     
     ---
     
-    ## 📋 Features
+    ## 3. Calculation Methods
     
-    ### 1. Performance Calculations
-    - **Polytropic head & efficiency** from measured P, T, and flow data
-    - **Isentropic efficiency** and compression power
-    - **Three calculation methods available:**
-      - **Schultz (Analytical)**: Traditional polytropic analysis - fastest
-      - **NeqSim Process Model (Simple)**: NeqSim polytropic using Schultz method - good balance of speed and accuracy
-      - **NeqSim Process Model (Detailed)**: Multi-step polytropic compression - most accurate but slower
+    Three calculation methods are available, each with different trade-offs between speed and accuracy:
     
-    #### NeqSim Detailed Method
-    The detailed polytropic method is based on thermodynamic integration principles developed for 
-    accurate compressor performance analysis. This approach divides the compression process into 
-    many small pressure steps, calculating thermodynamic properties at each step using rigorous 
-    equations of state.
+    ### 3.1 Schultz Analytical Method (Default)
     
-    **Key features:**
-    - Multi-step integration through the compression path
-    - Accurate for high pressure ratios and non-ideal gases
-    - Proper handling of real-gas effects via selected equation of state
-    - Calculates polytropic efficiency from measured inlet/outlet conditions
+    The traditional analytical approach based on Schultz (1962). This method calculates the 
+    polytropic exponent directly from measured temperature and pressure ratios.
     
-    This methodology is based on research from NTNU's thermal turbomachinery group, including 
-    work by **Lars Erik Bakken** and **Øyvind Hundseid** on compressor thermodynamic analysis 
-    and integration techniques for accurate polytropic calculations.
+    **Polytropic Exponent Calculation:**
     
-    ### 2. Operating Data Input
-    - **Manual entry** in editable table (supports multiple operating points)
-    - **CSV/Excel import** with automatic column mapping
-    - **Speed (RPM)** tracking for variable speed compressors
+    From the polytropic process relation:
+    $$\frac{T_2}{T_1} = \left(\frac{P_2}{P_1}\right)^{\frac{n-1}{n}}$$
     
-    ### 3. Manufacturer Curves
-    - **Add curves** for multiple speeds (head, efficiency vs flow)
-    - **Save/Load** curves as JSON files for reuse
-    - **Deviation analysis** - compare measured vs expected performance
-    - **Status indicators**: ✅ OK | ⚠️ Warning | ❌ Check
+    Taking logarithms and solving for n:
+    $$\frac{n-1}{n} = \frac{\ln(T_2/T_1)}{\ln(P_2/P_1)}$$
     
-    ### 4. Generate Curves from Data
-    - Create performance curves from measured operating data
-    - Uses **fan law normalization** for multi-speed data
-    - Polynomial curve fitting with R² quality metrics
-    - Adjustable flow range extension
+    $$n = \frac{1}{1 - \frac{\ln(T_2/T_1)}{\ln(P_2/P_1)}}$$
     
-    ### 5. Gas Composition Correction (Khader Method)
-    - Correct manufacturer curves for different gas compositions
-    - Based on **Mach number similarity** and speed of sound ratio
-    - Requires 1st stage impeller exit diameter
+    **Polytropic Efficiency:**
     
-    ---
+    From the relation between polytropic exponent, isentropic exponent, and efficiency:
+    $$n = \frac{1}{1 - \frac{\kappa-1}{\kappa \cdot \eta_p}}$$
     
-    ## 📊 Output Plots
+    Solving for polytropic efficiency:
+    $$\eta_p = \frac{n \cdot (\kappa - 1)}{\kappa \cdot (n - 1)}$$
     
-    | Tab | Content |
-    |-----|---------|
-    | Polytropic Head | Head vs Flow with manufacturer curves overlay |
-    | Polytropic Efficiency | Efficiency vs Flow curve comparison |
-    | Compression Power | Power consumption vs Flow |
+    Where:
+    - $n$ = polytropic exponent (calculated from measured data)
+    - $\kappa$ = isentropic exponent (Cp/Cv), averaged between inlet and outlet
+    - $\eta_p$ = polytropic efficiency
+    
+    **Polytropic Head (Enthalpy-Based):**
+    
+    $$H_p = \eta_p \times (h_2 - h_1)$$
+    
+    Where $h_1$ and $h_2$ are specific enthalpies at inlet and outlet conditions, 
+    calculated using the selected equation of state.
+    
+    **Power Calculation:**
+    
+    $$P = \dot{m} \times (h_2 - h_1)$$
+    
+    Where:
+    - $P$ = shaft power (kW)
+    - $\dot{m}$ = mass flow rate (kg/s)
+    - $(h_2 - h_1)$ = specific enthalpy rise (kJ/kg)
+    
+    **Advantages:** Fast calculation, no iteration required
+    **Limitations:** Less accurate for high pressure ratios or highly non-ideal gases
     
     ---
     
-    ## 📁 File Formats
+    ### 3.2 NeqSim Process Model (Simple)
     
-    **Curves JSON format:**
+    Uses NeqSim's compressor model with the Schultz polytropic method internally. 
+    The efficiency is solved iteratively to match the measured outlet temperature.
+    
+    **Algorithm:**
+    1. Create inlet stream at measured P, T, and composition
+    2. Set compressor outlet pressure to measured value
+    3. Use Newton-Raphson iteration to find efficiency that produces measured outlet temperature
+    4. Run compressor model with solved efficiency to get head and power
+    
+    **Advantages:** Good balance of accuracy and speed
+    **Limitations:** Single-step integration may have small errors for high pressure ratios
+    
+    ---
+    
+    ### 3.3 NeqSim Process Model (Detailed)
+    
+    The most accurate method, using multi-step thermodynamic integration through the 
+    compression path. Based on research from NTNU's thermal turbomachinery group.
+    
+    **Multi-Step Integration:**
+    
+    The compression is divided into N small pressure steps (configurable, default 40):
+    
+    $$\Delta P = \frac{P_2 - P_1}{N}$$
+    
+    At each step i, the following are calculated:
+    1. Isentropic outlet state via entropy-flash (PSflash)
+    2. Actual outlet state using polytropic efficiency
+    3. Cumulative enthalpy change
+    
+    This approach properly accounts for:
+    - Variation of thermodynamic properties along the compression path
+    - Real-gas effects captured by the equation of state
+    - Non-constant isentropic exponent
+    
+    **Efficiency Solving:**
+    
+    The method iteratively adjusts polytropic efficiency until the calculated outlet 
+    temperature matches the measured outlet temperature:
+    
+    $$|T_{out,calc} - T_{out,measured}| < 10^{-5} \text{ K}$$
+    
+    **Advantages:** Most accurate, especially for:
+    - High pressure ratios (>3:1)
+    - Near-critical conditions
+    - Gases with significant non-ideal behavior
+    - Multi-component mixtures
+    
+    **Limitations:** Slower calculation (configurable trade-off with step count)
+    
+    ---
+    
+    ## 4. Isentropic Efficiency Calculation
+    
+    Isentropic efficiency is calculated using the PS-flash (pressure-entropy flash) to find 
+    the isentropic outlet state:
+    
+    $$\eta_s = \frac{h_{2s} - h_1}{h_2 - h_1} = \frac{\text{Isentropic Work}}{\text{Actual Work}}$$
+    
+    Where:
+    - $h_1$ = inlet specific enthalpy
+    - $h_2$ = actual outlet specific enthalpy (from measured T, P)
+    - $h_{2s}$ = isentropic outlet specific enthalpy (same entropy as inlet, at outlet pressure)
+    
+    ---
+    
+    ## 5. Input Data Requirements
+    
+    ### 5.1 Required Operating Data
+    
+    | Parameter | Description | Units |
+    |-----------|-------------|-------|
+    | Speed | Compressor rotational speed | RPM |
+    | Flow | Volumetric or mass flow rate | Various (see below) |
+    | Inlet P | Inlet pressure (absolute) | bara |
+    | Outlet P | Outlet pressure (absolute) | bara |
+    | Inlet T | Inlet temperature | °C or K |
+    | Outlet T | Outlet temperature | °C or K |
+    
+    ### 5.2 Supported Flow Units
+    
+    | Unit | Description |
+    |------|-------------|
+    | kg/s | Mass flow rate |
+    | kg/hr | Mass flow rate |
+    | m³/hr (Am³/hr) | Actual volume flow at inlet conditions |
+    | MSm³/day | Standard volume flow (at 15°C, 1.01325 bara) |
+    
+    ### 5.3 Data Input Methods
+    
+    - **Manual Entry:** Edit the data table directly
+    - **CSV Import:** Upload a CSV file with operating data
+    - **Excel Import:** Upload an Excel file (.xlsx)
+    
+    ---
+    
+    ## 6. Manufacturer Curve Comparison
+    
+    ### 6.1 Adding Manufacturer Curves
+    
+    Manufacturer performance curves can be added for comparison:
+    - Head vs Flow curves at various speeds
+    - Efficiency vs Flow curves at various speeds
+    
+    ### 6.2 Deviation Analysis
+    
+    The tool calculates deviations between measured and expected performance:
+    
+    $$\Delta H = H_{measured} - H_{curve}$$
+    $$\Delta \eta = \eta_{measured} - \eta_{curve}$$
+    
+    Status indicators:
+    - ✅ **OK:** Within ±2% of expected
+    - ⚠️ **Warning:** 2-5% deviation
+    - ❌ **Check:** >5% deviation
+    
+    ### 6.3 Gas Composition Correction (Khader Method)
+    
+    When operating with a different gas composition than the design gas, 
+    manufacturer curves can be corrected using Mach number similarity:
+    
+    $$\frac{Q_{new}}{Q_{ref}} = \frac{a_{new}}{a_{ref}}$$
+    
+    Where $a$ is the speed of sound, calculated from the equation of state.
+    
+    ---
+    
+    ## 7. Output Results
+    
+    ### 7.1 Results Table
+    
+    | Column | Description | Unit |
+    |--------|-------------|------|
+    | Speed | Rotational speed | RPM |
+    | Mass Flow | Mass flow rate | kg/hr |
+    | Pressure Ratio | P_out / P_in | - |
+    | Polytropic Exp (n) | Polytropic exponent | - |
+    | Isentropic Eff | Isentropic efficiency | % |
+    | Polytropic Eff | Polytropic efficiency | % |
+    | Polytropic Head | Specific polytropic head | kJ/kg |
+    | Actual Work | Specific enthalpy rise | kJ/kg |
+    | Power | Shaft power | kW, MW |
+    
+    ### 7.2 Plots
+    
+    - **Polytropic Head vs Flow:** With manufacturer curve overlay
+    - **Polytropic Efficiency vs Flow:** With manufacturer curve overlay
+    - **Power vs Flow:** Compression power consumption
+    
+    ---
+    
+    ## 8. Thermodynamic Properties
+    
+    All thermodynamic properties are calculated using the selected equation of state:
+    
+    | Property | Symbol | Description |
+    |----------|--------|-------------|
+    | Compressibility | Z | Deviation from ideal gas |
+    | Enthalpy | h | Specific enthalpy (kJ/kg) |
+    | Entropy | s | Specific entropy (kJ/kg·K) |
+    | Heat Capacity | Cp, Cv | Isobaric/isochoric heat capacity |
+    | Isentropic Exponent | κ = Cp/Cv | Ratio of heat capacities |
+    | Density | ρ | Mass density (kg/m³) |
+    | Speed of Sound | a | For Mach number calculations |
+    
+    ---
+    
+    ## 9. File Formats
+    
+    ### 9.1 Manufacturer Curves JSON
+    
     ```json
     {
       "flow_unit": "m3/hr",
       "curves": [
-        {"speed": 10000, "flow": [...], "head": [...], "efficiency": [...]}
+        {
+          "speed": 10000,
+          "flow": [100, 200, 300, 400],
+          "head": [50, 48, 44, 38],
+          "efficiency": [70, 78, 80, 75]
+        }
       ]
     }
     ```
     
-    **Operating Data CSV:** Should include columns for Speed, Flow, Inlet P/T, Outlet P/T
+    ### 9.2 Operating Data CSV
+    
+    Required columns (names are flexible, mapped via dropdown):
+    - Speed (RPM)
+    - Flow (with unit specification)
+    - Inlet Pressure
+    - Outlet Pressure  
+    - Inlet Temperature
+    - Outlet Temperature
     
     ---
     
-    ## 📚 References
+    ## 10. References & Standards
     
-    - ASME PTC 10 (1997) - *Performance Test Code on Compressors and Exhausters*
-    - Schultz, J.M. (1962) - Polytropic analysis method
-    - GERG-2008 - European gas research group equation of state
-    - Peng-Robinson (1976) - Cubic equation of state
-    - Soave-Redlich-Kwong (1972) - Cubic equation of state
-    - Khader (2015) - Gas composition correction method
-    - Bakken, L.E. & Hundseid, Ø. - NTNU research on compressor thermodynamic integration and wet gas compression
+    | Reference | Description |
+    |-----------|-------------|
+    | ASME PTC 10 (1997) | Performance Test Code on Compressors and Exhausters |
+    | Schultz, J.M. (1962) | "The Polytropic Analysis of Centrifugal Compressors" - ASME |
+    | GERG-2008 | European Gas Research Group equation of state |
+    | Peng-Robinson (1976) | Cubic equation of state for hydrocarbon systems |
+    | Soave-Redlich-Kwong (1972) | Modified RK equation of state |
+    | Bakken & Hundseid (NTNU) | Multi-step polytropic integration methods |
+    | Khader (2015) | Gas composition correction using Mach number similarity |
+    
+    ---
+    
+    ## 11. Tips & Best Practices
+    
+    1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons
+    2. **Use Detailed method** for high pressure ratios (>3:1) or near-critical conditions
+    3. **Verify input data:** Ensure pressures are absolute (not gauge)
+    4. **Check temperature units:** Confirm whether input is °C or K
+    5. **Validate with known points:** Test with manufacturer guarantee point first
+    6. **Monitor efficiency trends:** Declining efficiency may indicate fouling or damage
+    
+    ---
+    
+    ## 12. Troubleshooting
+    
+    | Issue | Possible Cause | Solution |
+    |-------|----------------|----------|
+    | Efficiency > 100% | Outlet T too low for pressure ratio | Verify temperature measurement |
+    | Efficiency < 50% | Outlet T too high or data error | Check for gas leaks, recycle |
+    | Power mismatch | Flow measurement error | Verify flow meter calibration |
+    | Head deviation | Gas composition difference | Use composition correction |
+    | Calculation fails | Invalid thermodynamic state | Check if conditions are in valid range |
+    
     """)
 
 st.divider()
 
-"""
-Calculate compressor performance parameters using advanced equations of state.
-This tool calculates polytropic head, polytropic efficiency, and power consumption
-based on measured operating data (flow rates, pressures, and temperatures).
+st.info("""
+**💡 Quick Start:** Select fluid composition → Enter operating data (P, T, Flow) → Click "Calculate Performance"
 
-**Supported EoS models:** GERG-2008 (default), Peng-Robinson, Soave-Redlich-Kwong.
-
-**Supported fluids:** Standard test fluids (CO2, Methane, Nitrogen) or custom mixtures.
-
-Select the equation of state model in the sidebar under Fluid Selection.
-"""
+Expand the **Documentation** section above for detailed method descriptions, equations, and troubleshooting tips.
+""")
 
 st.divider()
 
