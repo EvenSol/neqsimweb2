@@ -1841,12 +1841,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         else:
                             polytropic_head = actual_work * eta_poly if actual_work > 0 else 0  # Fallback
                         
-                        # Power calculation
-                        power_kW = mass_flow * actual_work  # kW - should be positive
+                        # Power calculation - use shaft power (polytropic head / efficiency) to match NeqSim
+                        # Shaft power = mass_flow * polytropic_head / eta_poly
+                        # This is consistent with NeqSim's getPower() which returns shaft power
+                        if eta_poly > 0 and polytropic_head > 0:
+                            power_kW = mass_flow * polytropic_head / eta_poly  # Shaft power in kW
+                        else:
+                            power_kW = mass_flow * actual_work  # Fallback to gas power
                         power_MW = power_kW / 1000  # MW
-                        
-                        # Polytropic power (shaft power required)
-                        polytropic_power_kW = mass_flow * polytropic_head / eta_poly if eta_poly > 0 else power_kW
                         
                         # Volume flow at inlet conditions
                         vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
