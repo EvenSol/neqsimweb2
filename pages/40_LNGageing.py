@@ -5,11 +5,10 @@ import pandas as pd
 from fluids import lng_fluid
 from neqsim.thermo.thermoTools import fluid_df
 from io import BytesIO
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 st.set_page_config(page_title="LNG Ageing", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
-theme_toggle()
 
 col1, col2 = st.columns([30,70])
 

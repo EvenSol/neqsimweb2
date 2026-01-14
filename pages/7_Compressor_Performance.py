@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from neqsim.thermo import fluid, TPflash
 from neqsim import jneqsim
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 import json
 import concurrent.futures
 import time
@@ -25,7 +25,6 @@ def is_ai_enabled():
 
 st.set_page_config(page_title="Compressor Performance", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
-theme_toggle()
 
 st.title('Compressor Performance Calculator')
 

@@ -19,11 +19,10 @@ from plotly.subplots import make_subplots
 from neqsim.thermo import fluid_df, TPflash
 from neqsim import jneqsim
 from fluids import default_fluid
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 st.set_page_config(page_title="PVT Simulations", page_icon='images/neqsimlogocircleflat.png', layout="wide")
 apply_theme()
-theme_toggle()
 
 st.title('🛢️ PVT Simulations')
 

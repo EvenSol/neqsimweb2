@@ -2,11 +2,10 @@ import streamlit as st
 import pandas as pd
 import neqsim
 from neqsim.thermo import fluid, TPflash
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 st.set_page_config(page_title="Hydrogen Properties", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
-theme_toggle()
 
 st.title("Hydrogen Properties")
 st.write(

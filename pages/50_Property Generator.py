@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 # NeqSim imports
 import neqsim
@@ -217,7 +217,6 @@ def compute_property(neqsim_fluid, phase_name: str, property_name: str):
 def main():
     st.set_page_config(page_title="Property Generator", page_icon='images/neqsimlogocircleflat.png')
     apply_theme()
-    theme_toggle()
     
     st.title("Property Generator")
 

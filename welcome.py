@@ -35,9 +35,34 @@ st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.p
 apply_theme()
 theme_toggle()
 
-st.image('images/neqsimlogocircleflat.png', width=150)
+# Custom CSS for mobile-responsive logo
+st.markdown("""
+<style>
+    /* Ensure images are visible on mobile */
+    [data-testid="stImage"] {
+        display: block !important;
+        visibility: visible !important;
+    }
+    /* Reduce padding on mobile for better space usage */
+    @media (max-width: 640px) {
+        .block-container {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
-st.write("# Welcome to the NeqSim Process Simulation Tool! 👋")
+# Logo and title - responsive layout for mobile
+# Use columns with ratio that works on both desktop and mobile
+col_logo, col_title = st.columns([1, 4])
+with col_logo:
+    st.image('images/neqsimlogocircleflat.png', width=80)
+with col_title:
+    st.write("# NeqSim")
+    st.caption("Process Simulation Tool")
+
+st.write("## Welcome! 👋")
 
 """
 ### About NeqSim

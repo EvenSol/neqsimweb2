@@ -7,11 +7,10 @@ from neqsim.thermo import fluid
 from neqsim import jneqsim
 from fluids import default_fluid
 import plotly.graph_objects as go
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 st.set_page_config(page_title="Gas Hydrate", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
-theme_toggle()
 
 st.title('Gas Hydrate Calculation')
 """

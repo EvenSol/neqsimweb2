@@ -4,11 +4,10 @@ import neqsim
 from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame, hydt, waterdewt
 from fluids import default_fluid
 import plotly.graph_objects as go
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 st.set_page_config(page_title="Water Dew Point", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
-theme_toggle()
 
 st.title('Water Dew Point')
 st.divider()

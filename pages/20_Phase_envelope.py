@@ -8,11 +8,10 @@ import plotly.graph_objects as go
 from fluids import detailedHC_data
 import numpy as np
 from scipy.interpolate import UnivariateSpline
-from theme import apply_theme, theme_toggle
+from theme import apply_theme
 
 st.set_page_config(page_title="Phase Envelope", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
-theme_toggle()
 
 st.title('Phase Envelope')
 
