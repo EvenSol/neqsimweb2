@@ -329,7 +329,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | GERG-2008 | European Gas Research Group equation of state |
     | Peng-Robinson (1976) | Cubic equation of state for hydrocarbon systems |
     | Soave-Redlich-Kwong (1972) | Modified RK equation of state |
-    | Bakken & Hundseid (NTNU) | Multi-step polytropic integration methods |
+    | Hundseid & Bakken (2006) | "Wet Gas Performance Analysis" ASME GT2006-91035 |
     | Khader (2015) | Gas composition correction using Mach number similarity |
     
     ---
@@ -2604,12 +2604,29 @@ if is_ai_enabled():
         with st.expander("**AI-Powered Compressor Analysis**", expanded=True):
             st.markdown("""
             Click the button below to get AI-powered insights on your compressor performance results.
-            The analysis includes:
+            
+            **The analysis includes:**
             - Performance evaluation and efficiency assessment
             - Comparison with typical industry benchmarks
             - Potential issues and troubleshooting recommendations
             - Operational optimization suggestions
-            - **Curve shape analysis and deviations from manufacturer data**
+            - Curve shape analysis and deviations from manufacturer data
+            
+            **Reference Documents:**
+            The analysis is based on established industry standards and technical literature:
+            
+            | Document | Description |
+            |----------|-------------|
+            | ASME PTC 10 (1997) | Performance Test Code on Compressors and Exhausters |
+            | ISO 5389 (2005) | Turbocompressors - Performance test code |
+            | API 617 (2022) | Axial and Centrifugal Compressors and Expander-compressors |
+            | Schultz, J.M. (1962) | "The Polytropic Analysis of Centrifugal Compressors" - ASME |
+            | Huntington (1985) | "Thermodynamic Analysis of Centrifugal Compressors" |
+            | GERG-2008 (ISO 20765-2) | European Gas Research Group equation of state |
+            | Hundseid & Bakken (2006) | "Wet Gas Performance Analysis" ASME GT2006-91035 |
+            | Khader (2015) | Gas composition correction using Mach number similarity |
+            | Lüdtke (2004) | "Process Centrifugal Compressors" - Springer |
+            | Bloch & Godse (2006) | "Compressors and Modern Process Applications" |
             """)
             
             if st.button("🔍 Analyze Performance", type="primary", key="ai_analyze_btn"):
@@ -2680,13 +2697,32 @@ if is_ai_enabled():
                     You are an expert centrifugal compressor performance engineer. Analyze the following compressor test data, performance curves, and provide detailed insights including curve shape analysis and deviations.
                     
                     Base your analysis on established industry standards and technical references:
-                    - ASME PTC 10 (1997): Performance Test Code on Compressors and Exhausters - for test procedures and acceptance criteria
-                    - Schultz, J.M. (1962): "The Polytropic Analysis of Centrifugal Compressors" (ASME) - for polytropic efficiency calculations
-                    - GERG-2008: European Gas Research Group equation of state (ISO 20765-2) - for thermodynamic properties
+                    
+                    **Test Codes & Standards:**
+                    - ASME PTC 10 (1997): Performance Test Code on Compressors and Exhausters - test procedures, uncertainty analysis, acceptance criteria
+                    - ISO 5389 (2005): Turbocompressors - Performance test code - international test standards
+                    - API 617 (2022): Axial and Centrifugal Compressors - design, materials, shop testing requirements
+                    
+                    **Thermodynamic Analysis:**
+                    - Schultz, J.M. (1962): "The Polytropic Analysis of Centrifugal Compressors" (ASME Journal of Engineering for Power) - polytropic efficiency method
+                    - Huntington, R.A. (1985): "Thermodynamic Analysis of Centrifugal Compressors" - real gas effects
+                    - Mallen & Saville (1977): "Polytropic Processes in the Performance Prediction of Centrifugal Compressors"
+                    
+                    **Equations of State:**
+                    - GERG-2008 (ISO 20765-2): European Gas Research Group - high accuracy natural gas properties
                     - Peng-Robinson (1976): Cubic equation of state for hydrocarbon systems
                     - Soave-Redlich-Kwong (1972): Modified RK equation of state
-                    - Bakken & Hundseid (NTNU): Multi-step polytropic integration methods for improved accuracy
-                    - Khader (2015): Gas composition correction using Mach number similarity for MW corrections
+                    - AGA8-DC92: Natural gas compressibility calculations
+                    
+                    **Advanced Methods:**
+                    - Hundseid & Bakken (2006): "Wet Gas Performance Analysis" ASME GT2006-91035 - multi-step polytropic integration
+                    - Khader (2015): Gas composition correction using Mach number similarity
+                    - Evans & Huble (1981): Surge margin and operating envelope analysis
+                    
+                    **Reference Books:**
+                    - Lüdtke, K.H. (2004): "Process Centrifugal Compressors" - Springer
+                    - Bloch & Godse (2006): "Compressors and Modern Process Applications"
+                    - Brown (2005): "Compressors: Selection and Sizing" - Gulf Publishing
                     
                     ## Test Results Summary:
                     - Number of operating points: {len(results_df)}
@@ -2754,14 +2790,33 @@ if is_ai_enabled():
                         system_instruction = """You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting.
 
 Your analysis is grounded in established industry standards and technical literature:
-- ASME PTC 10 (1997): Performance Test Code on Compressors and Exhausters
-- Schultz, J.M. (1962): "The Polytropic Analysis of Centrifugal Compressors" (ASME Journal of Engineering for Power)
-- GERG-2008: European Gas Research Group equation of state (ISO 20765-2)
-- Peng-Robinson (1976) and Soave-Redlich-Kwong (1972) equations of state
-- Bakken & Hundseid (NTNU): Multi-step polytropic integration methods
-- Khader (2015): Gas composition correction using Mach number similarity
 
-Reference these standards when making recommendations. Use ASME PTC 10 acceptance criteria when evaluating performance deviations."""
+TEST CODES & STANDARDS:
+- ASME PTC 10 (1997): Performance Test Code on Compressors and Exhausters
+- ISO 5389 (2005): Turbocompressors - Performance test code
+- API 617 (2022): Axial and Centrifugal Compressors and Expander-compressors
+
+THERMODYNAMIC ANALYSIS:
+- Schultz, J.M. (1962): "The Polytropic Analysis of Centrifugal Compressors" - ASME
+- Huntington, R.A. (1985): "Thermodynamic Analysis of Centrifugal Compressors"
+- Mallen & Saville (1977): "Polytropic Processes in the Performance Prediction"
+
+EQUATIONS OF STATE:
+- GERG-2008 (ISO 20765-2): European Gas Research Group
+- Peng-Robinson (1976) and Soave-Redlich-Kwong (1972) equations of state
+- AGA8-DC92: Natural gas compressibility
+
+ADVANCED METHODS:
+- Hundseid & Bakken (2006): "Wet Gas Performance Analysis" ASME GT2006-91035
+- Khader (2015): Gas composition correction using Mach number similarity
+- Evans & Huble (1981): Surge margin analysis
+
+REFERENCE BOOKS:
+- Lüdtke (2004): "Process Centrifugal Compressors" - Springer
+- Bloch & Godse (2006): "Compressors and Modern Process Applications"
+- Brown (2005): "Compressors: Selection and Sizing"
+
+Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5389 acceptance criteria when evaluating performance deviations. Cite specific standards where applicable."""
                         
                         try:
                             model = genai.GenerativeModel(
