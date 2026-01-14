@@ -19,6 +19,10 @@ def get_gemini_api_key():
         pass
     return st.session_state.get('gemini_api_key', '')
 
+def is_ai_enabled():
+    """Check if AI features are enabled."""
+    return st.session_state.get('ai_enabled', False) and get_gemini_api_key()
+
 st.set_page_config(page_title="Compressor Performance", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
 theme_toggle()
@@ -541,10 +545,8 @@ with st.sidebar:
     elif calc_method == "NeqSim Process Model (Simple)":
         st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
     
-    # AI Analysis section - only show if API key is available
-    gemini_api_key = get_gemini_api_key()
-    
-    if gemini_api_key:
+    # AI Analysis section - only show if AI is enabled
+    if is_ai_enabled():
         st.divider()
         st.header("🤖 AI Analysis")
         st.success("✓ AI features enabled")
@@ -552,9 +554,9 @@ with st.sidebar:
         # Model selection
         ai_model = st.selectbox(
             "AI Model",
-            options=["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
+            options=["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
             index=0,
-            help="Select the AI model. Flash is fastest, Pro is most capable."
+            help="Select the AI model. Flash models are fastest, Pro is most capable."
         )
         if 'ai_model' not in st.session_state:
             st.session_state['ai_model'] = ai_model
@@ -2603,10 +2605,9 @@ with st.expander("📚 Theory & Equations", expanded=False):
     - Heat capacity: ±1%
     """)
 
-# AI Analysis Section - Only shown if API key is available
-gemini_api_key = get_gemini_api_key()
-
-if gemini_api_key and gemini_api_key.strip() != "":
+# AI Analysis Section - Only shown if AI is enabled
+if is_ai_enabled():
+    gemini_api_key = get_gemini_api_key()
     if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
         st.divider()
         st.header("🤖 AI Performance Analysis")
@@ -2739,9 +2740,9 @@ if gemini_api_key and gemini_api_key.strip() != "":
                     Keep the response practical for an operations/maintenance engineer. Use specific numbers and percentages where possible.
                     """
                     
-                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-1.5-flash')}..."):
+                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-2.0-flash')}..."):
                         genai.configure(api_key=gemini_api_key)
-                        selected_model = st.session_state.get('ai_model', 'gemini-1.5-flash')
+                        selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
                         
                         try:
                             model = genai.GenerativeModel(
@@ -2757,10 +2758,10 @@ if gemini_api_key and gemini_api_key.strip() != "":
                             )
                             ai_analysis = response.text
                         except Exception as model_error:
-                            # Try fallback to gemini-1.5-flash if primary model fails
-                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-1.5-flash...")
+                            # Try fallback to gemini-2.0-flash if primary model fails
+                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.0-flash...")
                             model = genai.GenerativeModel(
-                                'gemini-1.5-flash',
+                                'gemini-2.0-flash',
                                 system_instruction="You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."
                             )
                             response = model.generate_content(
@@ -2789,7 +2790,7 @@ if gemini_api_key and gemini_api_key.strip() != "":
                     elif "rate_limit" in error_msg.lower() or "quota" in error_msg.lower():
                         st.warning("⏱️ **Rate Limit**: Too many requests. Wait a moment and try again.")
                     else:
-                        st.info("💡 **Tip**: Try selecting a different model (e.g., gemini-1.5-flash) in the sidebar.")
+                        st.info("💡 **Tip**: Try selecting a different model in the sidebar.")
             
             # Show previous analysis if available
             if 'ai_analysis' in st.session_state and st.session_state['ai_analysis']:
@@ -2851,7 +2852,7 @@ if gemini_api_key and gemini_api_key.strip() != "":
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
                             genai.configure(api_key=gemini_api_key)
-                            selected_model = st.session_state.get('ai_model', 'gemini-1.5-flash')
+                            selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
                             try:
                                 model = genai.GenerativeModel(selected_model)
                                 response = model.generate_content(
@@ -2863,8 +2864,8 @@ if gemini_api_key and gemini_api_key.strip() != "":
                                 )
                                 assistant_response = response.text
                             except Exception:
-                                # Fallback to gemini-1.5-flash
-                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                # Fallback to gemini-2.0-flash
+                                model = genai.GenerativeModel('gemini-2.0-flash')
                                 response = model.generate_content(
                                     context_prompt,
                                     generation_config=genai.types.GenerationConfig(

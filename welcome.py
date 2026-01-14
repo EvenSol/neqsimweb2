@@ -17,13 +17,15 @@ def get_gemini_api_key():
     return st.session_state.get('gemini_api_key', '')
 
 def make_request(question_input: str):
-    # Only attempt request if API key is available
+    # Only attempt request if AI is enabled and API key is available
+    if not st.session_state.get('ai_enabled', False):
+        return ""
     api_key = get_gemini_api_key()
     if not api_key or api_key.strip() == "":
         return ""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         response = model.generate_content(question_input)
         return response.text
     except Exception:
@@ -58,27 +60,43 @@ We welcome any feedback, questions, or suggestions for further development. Join
 
 ### Getting Started
 Use the left-hand menu to select the desired simulation or process. Enter any required inputs, and NeqSim will handle the calculations.
-
-### NeqSim AI Assistant
-NeqSim is integrated with Google Gemini AI for enhanced simulation support and analysis.
 """
 
-# Check if API key is configured in secrets
-api_key_from_secrets = False
-try:
-    if 'GEMINI_API_KEY' in st.secrets:
-        api_key_from_secrets = True
-        st.session_state['gemini_api_key'] = st.secrets['GEMINI_API_KEY']
-        st.sidebar.success("✓ AI features enabled")
-except Exception:
-    pass
+# Initialize AI enabled state (default OFF)
+if 'ai_enabled' not in st.session_state:
+    st.session_state['ai_enabled'] = False
 
-# If no secrets, show manual input option (for local development)
-if not api_key_from_secrets:
-    gemini_api_key = st.sidebar.text_input("Gemini API Key (optional)", type="password", 
-                                            help="Get a free key from https://aistudio.google.com/")
-    if gemini_api_key:
-        st.session_state['gemini_api_key'] = gemini_api_key
-        st.sidebar.success("✓ API key saved for all pages")
+# AI Settings in sidebar
+st.sidebar.divider()
+st.sidebar.subheader("🤖 AI Assistant")
+
+# Toggle to enable/disable AI
+ai_enabled = st.sidebar.toggle(
+    "Enable AI Features",
+    value=st.session_state['ai_enabled'],
+    help="Enable AI-powered analysis and recommendations"
+)
+st.session_state['ai_enabled'] = ai_enabled
+
+if ai_enabled:
+    # Check if API key is configured in secrets
+    api_key_from_secrets = False
+    try:
+        if 'GEMINI_API_KEY' in st.secrets:
+            api_key_from_secrets = True
+            st.session_state['gemini_api_key'] = st.secrets['GEMINI_API_KEY']
+            st.sidebar.success("✓ AI ready")
+    except Exception:
+        pass
+
+    # If no secrets, show manual input option (for local development)
+    if not api_key_from_secrets:
+        gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", 
+                                                help="Get a free key from https://aistudio.google.com/")
+        if gemini_api_key:
+            st.session_state['gemini_api_key'] = gemini_api_key
+            st.sidebar.success("✓ API key saved")
+        else:
+            st.sidebar.info("Enter API key to use AI features")
 
 st.make_request = make_request
