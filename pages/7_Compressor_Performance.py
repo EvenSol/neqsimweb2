@@ -1711,9 +1711,14 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Get results from compressor after running
                             eta_isen = compressor.getIsentropicEfficiency()
                             polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
-                            power_kW = abs(compressor.getPower("kW"))
-                            power_MW = abs(compressor.getPower("MW"))
                             n = compressor.getPolytropicExponent()
+                            
+                            # Calculate power from MEASURED enthalpy difference for consistency
+                            # This ensures power matches the actual measured conditions
+                            # (h_out from measured T_out was calculated earlier)
+                            actual_work = h_out - h_in  # kJ/kg from measured conditions
+                            power_kW = mass_flow * actual_work  # kW
+                            power_MW = power_kW / 1000  # MW
                             
                             # If polytropic exponent is still 0, calculate from measured data
                             if n == 0 or n is None:
@@ -1731,15 +1736,12 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 else:
                                     n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
                             
-                            # Get outlet properties
+                            # Get outlet properties from NeqSim model for display
+                            # (but we use measured values for power calculation)
                             outlet_stream = compressor.getOutletStream()
-                            z_out = outlet_stream.getFluid().getZ()
+                            # Note: z_out, kappa_out, rho_out already set from measured outlet_fluid earlier
+                            # t_out_calc can be compared to measured t_out for validation
                             t_out_calc = outlet_stream.getTemperature("C")
-                            rho_out = outlet_stream.getFluid().getDensity("kg/m3")
-                            kappa_out = outlet_stream.getFluid().getGamma()
-                            
-                            # Calculate actual work from power and mass flow
-                            actual_work = power_kW / mass_flow if mass_flow > 0 else 0  # kJ/kg
                         
                         pr = p_out / p_in
                         z_avg = (z_in + z_out) / 2
