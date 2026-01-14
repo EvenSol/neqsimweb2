@@ -1708,8 +1708,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Get results from compressor after running
                             eta_isen = compressor.getIsentropicEfficiency()
                             polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
-                            power_kW = compressor.getPower("kW")
-                            power_MW = compressor.getPower("MW")
+                            power_kW = abs(compressor.getPower("kW"))  # Use abs - NeqSim may return negative for work done on system
+                            power_MW = abs(compressor.getPower("MW"))
                             n = compressor.getPolytropicExponent()
                             
                             # If polytropic exponent is still 0, calculate from measured data
@@ -1837,10 +1837,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         if n > 1:
                             polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000  # kJ/kg
                         else:
-                            polytropic_head = actual_work * eta_poly  # Fallback
+                            polytropic_head = abs(actual_work) * eta_poly  # Fallback
                         
-                        # Power calculation
-                        power_kW = mass_flow * actual_work  # kW
+                        # Power calculation - use abs to ensure positive values
+                        power_kW = mass_flow * abs(actual_work)  # kW
                         power_MW = power_kW / 1000  # MW
                         
                         # Polytropic power (shaft power required)
