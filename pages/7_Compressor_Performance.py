@@ -349,8 +349,8 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     | Issue | Possible Cause | Solution |
     |-------|----------------|----------|
-    | Efficiency > 100% | Outlet T too low for pressure ratio | Verify temperature measurement |
-    | Efficiency < 50% | Outlet T too high or data error | Check for gas leaks, recycle |
+    | Efficiency > 100% | Outlet temperature too low for pressure ratio | Verify temperature measurement |
+    | Efficiency < 50% | Outlet temperature too high or data error | Check for gas leaks or recycle |
     | Power mismatch | Flow measurement error | Verify flow meter calibration |
     | Head deviation | Gas composition difference | Use composition correction |
     | Calculation fails | Invalid thermodynamic state | Check if conditions are in valid range |
@@ -362,7 +362,7 @@ st.divider()
 st.info("""
 **💡 Quick Start:** Select fluid composition → Enter operating data (P, T, Flow) → Click "Calculate Performance"
 
-Expand the **Documentation** section above for detailed method descriptions, equations, and troubleshooting tips.
+Expand the **Documentation** section above for detailed method descriptions, equations, and troubleshooting guidance.
 """)
 
 st.divider()
@@ -1066,14 +1066,14 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
     
     Where:
     - $U_{tip}$ = Impeller tip speed (m/s)
-    - $D$ = First stage impeller exit diameter (m)  
+    - $D$ = First stage impeller exit diameter (m)
     - $N$ = Rotational speed (rev/s)
     - $c_s$ = Speed of sound in gas (m/s)
     
     The speed of sound is calculated from:
     $$c_s = \\sqrt{\\gamma Z R T / M_w}$$
     
-    Where $\\gamma$ = isentropic exponent, $Z$ = compressibility, $R$ = gas constant, $T$ = temperature, $M_w$ = molar mass.
+    Where $\\gamma$ = isentropic exponent, $Z$ = compressibility factor, $R$ = gas constant, $T$ = temperature, $M_w$ = molar mass.
     
     ---
     
@@ -1081,8 +1081,8 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
     
     | Parameter | Correction | Physical Basis |
     |-----------|------------|----------------|
-    | Polytropic Head | $H_{new} = H_{ref} \\times \\left(\\frac{c_{s,new}}{c_{s,ref}}\\right)^2$ | $H_p \\propto U_{tip}^2 \\propto c_s^2$ at constant Ma |
-    | Volumetric Flow | $Q_{new} = Q_{ref} \\times \\frac{c_{s,new}}{c_{s,ref}}$ | $Q \\propto U_{tip} \\propto c_s$ at constant Ma |
+    | Polytropic Head | $H_{new} = H_{ref} \\times \\left(\\frac{c_{s,new}}{c_{s,ref}}\\right)^2$ | $H_p \\propto U_{tip}^2 \\propto c_s^2$ at constant $Ma$ |
+    | Volumetric Flow | $Q_{new} = Q_{ref} \\times \\frac{c_{s,new}}{c_{s,ref}}$ | $Q \\propto U_{tip} \\propto c_s$ at constant $Ma$ |
     | Polytropic Efficiency | $\\eta_{p,new} \\approx \\eta_{p,ref}$ | Approximately invariant |
     
     ---
@@ -1167,7 +1167,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     flow_correction = sound_speed_ratio  # Flow scales with c_s
                     
                     st.write(f"**Correction Factors:** Head × {head_correction:.3f}, Flow × {flow_correction:.3f}")
-                    st.caption(f"Tip speed: {U_tip:.1f} m/s | c_s (ref): {c_s_ref:.1f} m/s | c_s (new): {c_s_new:.1f} m/s")
+                    st.caption(f"Tip speed: {U_tip:.1f} m/s | Sound speed (ref): {c_s_ref:.1f} m/s | Sound speed (new): {c_s_new:.1f} m/s")
                     
                     if st.button("🔄 Generate Corrected Curves", type='primary'):
                         corrected_curves = []
@@ -1176,7 +1176,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                             corrected_flow = [f * flow_correction for f in curve['flow']]
                             corrected_head = [h * head_correction for h in curve['head']]
                             # Efficiency is approximately independent of gas properties
-                            corrected_eff = curve['efficiency'].copy()
+                            corrected_eff = curve['efficiency'].copy() if isinstance(curve['efficiency'], list) else list(curve['efficiency'])
                             
                             corrected_curves.append({
                                 'speed': curve['speed'],
@@ -1264,13 +1264,13 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
         
         **Curve Fitting Method:**
         
-        1. **Normalize to reference speed:** All measured points are transformed to equivalent conditions at $N_{ref}$:
+        1. **Normalize to reference speed using affinity laws:** All measured points are transformed to equivalent conditions at $N_{ref}$:
            - $Q_{norm} = Q_{meas} \\times \\frac{N_{ref}}{N_{meas}}$
            - $H_{norm} = H_{meas} \\times \\left(\\frac{N_{ref}}{N_{meas}}\\right)^2$
         
         2. **Polynomial regression:** Fit characteristic curves using least-squares:
-           - Head: $H_p(Q) = a_n Q^n + a_{n-1} Q^{n-1} + ... + a_1 Q + a_0$ (typically $n=2$)
-           - Efficiency: $\\eta_p(Q) = b_n Q^n + b_{n-1} Q^{n-1} + ... + b_1 Q + b_0$ (bell-shaped)
+           - Head: $H_p(Q) = a_n Q^n + a_{n-1} Q^{n-1} + \cdots + a_1 Q + a_0$ (typically $n=2$)
+           - Efficiency: $\\eta_p(Q) = b_n Q^n + b_{n-1} Q^{n-1} + \cdots + b_1 Q + b_0$ (bell-shaped)
         
         3. **Scale to target speeds:** Apply affinity laws in reverse to generate curves at any speed.
         
@@ -1303,7 +1303,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                 st.info(f"""
                 **Single-Point Curve Adjustment Mode** ({num_points} data point{'s' if num_points > 1 else ''})
                 
-                With fewer than 3 data points, we can adjust the manufacturer curves based on measured deviations.
+                With fewer than 3 data points, you can adjust the manufacturer curves based on measured deviations.
                 This applies a correction factor to shift the entire curve set to match your measured performance.
                 
                 **Method:** 
@@ -1460,7 +1460,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     st.caption("ℹ️ Using speeds from measured data")
                 else:
                     default_speeds = "8000, 9000, 10000, 11000, 12000"
-                    st.caption("ℹ️ Using default speeds - add manufacturer curves or speed data to auto-populate")
+                    st.caption("ℹ️ Using default speeds - add manufacturer curves or measured speed data to auto-populate")
                 
                 target_speeds_str = st.text_input("Enter speeds separated by commas (add or modify as needed)", value=default_speeds,
                                                    help="Curves will be generated for these speeds. Add more speeds or modify as needed.")
@@ -1511,12 +1511,12 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                                 
                                 flow_min = min(all_mfr_flows)
                                 flow_max = max(all_mfr_flows)
-                                st.caption(f"ℹ️ Flow range from manufacturer curves (scaled by affinity laws): {flow_min:.0f} - {flow_max:.0f} (at {ref_speed_fit:.0f} RPM)")
+                                st.caption(f"ℹ️ Flow range from manufacturer curves (scaled by affinity laws): {flow_min:.0f} to {flow_max:.0f} (at {ref_speed_fit:.0f} RPM)")
                             else:
                                 # Fall back to measured data range
                                 flow_min = flows_norm.min()
                                 flow_max = flows_norm.max()
-                                st.caption(f"ℹ️ Flow range from measured data: {flow_min:.0f} - {flow_max:.0f} (at {ref_speed_fit:.0f} RPM)")
+                                st.caption(f"ℹ️ Flow range from measured data: {flow_min:.0f} to {flow_max:.0f} (at {ref_speed_fit:.0f} RPM)")
                             
                             flow_range = np.linspace(flow_min, flow_max, num_curve_points)
                             
@@ -1934,8 +1934,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 # Check if calculated efficiency is unrealistic (>100%)
                                 if eta_poly_calc > 1.0:
                                     st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
-                                            f"The outlet temperature {t_out}°C is too LOW for compression from {p_in} to {p_out} bara. "
-                                            f"Please increase the outlet temperature. Setting to 100% for display.")
+                                            f"The outlet temperature {t_out}°C is too low for compression from {p_in} to {p_out} bara. "
+                                            f"Please increase the outlet temperature. Setting efficiency to 100% for display.")
                                     eta_poly = 1.0  # Cap at 100% for display but flag the issue
                                 elif eta_poly_calc < 0.3:
                                     st.warning(f"⚠️ Row {idx}: Calculated efficiency is very low ({eta_poly_calc*100:.1f}%). Check measured data.")
@@ -1997,7 +1997,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             'Vol Flow Inlet (m³/hr)': vol_flow_in,
                         })
                     else:
-                        # Use Schultz analytical method (original implementation)
+                        # Use Schultz analytical method
                         # Create isentropic outlet fluid (same entropy as inlet)
                         isentropic_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
@@ -2034,7 +2034,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             # Check for unrealistic efficiency values
                             if eta_poly > 1.0:
                                 st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly*100:.1f}% (>100%). "
-                                        f"The outlet temperature {t_out}°C is too LOW for compression from {p_in:.1f} to {p_out:.1f} bara. "
+                                        f"The outlet temperature {t_out}°C is too low for compression from {p_in:.1f} to {p_out:.1f} bara. "
                                         f"Please check measured outlet temperature.")
                                 eta_poly = 1.0  # Cap at 100% for calculation
                             elif eta_poly < 0.4:
@@ -2588,7 +2588,7 @@ with st.expander("📚 Theory & Equations", expanded=False):
     ### GERG-2008 Equation of State
     
     The GERG-2008 equation of state (ISO 20765-2) provides highly accurate thermodynamic 
-    properties for natural gas mixtures with uncertainties of:
+    properties for natural gas mixtures with typical uncertainties of:
     - Density: ±0.1%
     - Speed of sound: ±0.1%
     - Heat capacity: ±1%
