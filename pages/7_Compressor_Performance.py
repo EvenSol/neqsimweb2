@@ -400,6 +400,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
                 display_fluid.addComponent(comp_name, float(comp_moles))
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
+            TPflash(display_fluid)
             display_fluid.initThermoProperties()
             
             st.divider()
