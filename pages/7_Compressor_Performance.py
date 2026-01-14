@@ -2039,7 +2039,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 display_columns = [
                     'Speed (RPM)', 'Mass Flow (kg/hr)', 'Vol Flow Inlet (m³/hr)', 'Pressure Ratio', 
                     'Density Inlet (kg/m³)', 'Density Outlet (kg/m³)',
-                    'Polytropic Eff (%)', 'Isentropic Eff (%)',
+                    'Polytropic Eff (%)',
                     'Polytropic Head (kJ/kg)', 'Power (MW)', 'Z inlet', 'Z outlet',
                     'κ inlet', 'κ outlet', 'Polytropic Exp (n)'
                 ]
@@ -2053,7 +2053,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         'Density Inlet (kg/m³)': '{:.3f}',
                         'Density Outlet (kg/m³)': '{:.3f}',
                         'Polytropic Eff (%)': '{:.2f}',
-                        'Isentropic Eff (%)': '{:.2f}',
                         'Polytropic Head (kJ/kg)': '{:.2f}',
                         'Power (MW)': '{:.3f}',
                         'Z inlet': '{:.4f}',
