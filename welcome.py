@@ -35,15 +35,21 @@ st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.p
 apply_theme()
 theme_toggle()
 
-# Custom CSS for mobile-responsive logo
+# Custom CSS for responsive header layout with vertical centering
 st.markdown("""
 <style>
-    /* Ensure images are visible on mobile */
-    [data-testid="stImage"] {
-        display: block !important;
-        visibility: visible !important;
+    /* Vertically center content in columns */
+    div[data-testid="column"] {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
-    /* Reduce padding on mobile for better space usage */
+    /* Remove extra spacing around headers */
+    div[data-testid="column"] h1 {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+    }
+    /* Mobile adjustments */
     @media (max-width: 640px) {
         .block-container {
             padding-left: 1rem !important;
@@ -53,13 +59,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Logo and title - responsive layout for mobile
-# Use columns with ratio that works on both desktop and mobile
-col_logo, col_title = st.columns([1, 4])
+# Logo and title with proper vertical alignment
+col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
 with col_logo:
-    st.image('images/neqsimlogocircleflat.png', width=80)
+    st.image('images/neqsimlogocircleflat.png', width=90)
 with col_title:
-    st.write("# NeqSim")
+    st.markdown("# NeqSim")
     st.caption("Process Simulation Tool")
 
 st.write("## Welcome! 👋")
