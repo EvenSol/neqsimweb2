@@ -1826,12 +1826,13 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
                         
                         # Polytropic efficiency
-                        # eta_p = (n-1)/n * k/(k-1)
+                        # Correct formula: eta_p = [(n-1)/n] / [(k-1)/k] = k*(n-1) / (n*(k-1))
+                        # This relates the polytropic and isentropic exponents
                         if n > 1 and kappa_avg > 1:
-                            eta_poly = ((n - 1) / n) * (kappa_avg / (kappa_avg - 1))
-                            eta_poly = min(max(eta_poly, 0.5), 1.0)  # Clamp to reasonable range
+                            eta_poly = (kappa_avg * (n - 1)) / (n * (kappa_avg - 1))
+                            eta_poly = min(max(eta_poly, 0.5), 0.95)  # Clamp to reasonable range
                         else:
-                            eta_poly = eta_isen * 1.02  # Approximation
+                            eta_poly = eta_isen * 0.98 if eta_isen > 0 else 0.75  # Approximation
                         
                         # Polytropic head calculation using selected equation of state
                         # Hp = z_avg * R * T1 / MW * n/(n-1) * [(P2/P1)^((n-1)/n) - 1]
