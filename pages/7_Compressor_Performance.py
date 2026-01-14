@@ -8,7 +8,16 @@ from theme import apply_theme, theme_toggle
 import json
 import concurrent.futures
 import time
-from openai import OpenAI
+import google.generativeai as genai
+
+def get_gemini_api_key():
+    """Get Gemini API key from secrets or session state."""
+    try:
+        if 'GEMINI_API_KEY' in st.secrets:
+            return st.secrets['GEMINI_API_KEY']
+    except Exception:
+        pass
+    return st.session_state.get('gemini_api_key', '')
 
 st.set_page_config(page_title="Compressor Performance", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
@@ -532,20 +541,20 @@ with st.sidebar:
     elif calc_method == "NeqSim Process Model (Simple)":
         st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
     
-    # AI Analysis section - only show if API key was provided on welcome page
-    openai_api_key = st.session_state.get('openai_api_key', '')
+    # AI Analysis section - only show if API key is available
+    gemini_api_key = get_gemini_api_key()
     
-    if openai_api_key:
+    if gemini_api_key:
         st.divider()
         st.header("🤖 AI Analysis")
-        st.success("✓ API key active (from Welcome page)")
+        st.success("✓ AI features enabled")
         
         # Model selection
         ai_model = st.selectbox(
             "AI Model",
-            options=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+            options=["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
             index=0,
-            help="Select the AI model. GPT-4o is most capable, GPT-3.5-turbo is fastest/cheapest."
+            help="Select the AI model. Flash is fastest, Pro is most capable."
         )
         if 'ai_model' not in st.session_state:
             st.session_state['ai_model'] = ai_model
@@ -2594,10 +2603,10 @@ with st.expander("📚 Theory & Equations", expanded=False):
     - Heat capacity: ±1%
     """)
 
-# AI Analysis Section - Only shown if API key was provided on welcome page
-openai_api_key = st.session_state.get('openai_api_key', '')
+# AI Analysis Section - Only shown if API key is available
+gemini_api_key = get_gemini_api_key()
 
-if openai_api_key and openai_api_key.strip() != "":
+if gemini_api_key and gemini_api_key.strip() != "":
     if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
         st.divider()
         st.header("🤖 AI Performance Analysis")
@@ -2730,34 +2739,38 @@ if openai_api_key and openai_api_key.strip() != "":
                     Keep the response practical for an operations/maintenance engineer. Use specific numbers and percentages where possible.
                     """
                     
-                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gpt-4o')}..."):
-                        client = OpenAI(api_key=openai_api_key)
-                        selected_model = st.session_state.get('ai_model', 'gpt-4o')
+                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-1.5-flash')}..."):
+                        genai.configure(api_key=gemini_api_key)
+                        selected_model = st.session_state.get('ai_model', 'gemini-1.5-flash')
                         
                         try:
-                            response = client.chat.completions.create(
-                                model=selected_model,
-                                messages=[
-                                    {"role": "system", "content": "You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."},
-                                    {"role": "user", "content": prompt}
-                                ],
-                                max_tokens=1500,
-                                temperature=0.3
+                            model = genai.GenerativeModel(
+                                selected_model,
+                                system_instruction="You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."
                             )
+                            response = model.generate_content(
+                                prompt,
+                                generation_config=genai.types.GenerationConfig(
+                                    max_output_tokens=1500,
+                                    temperature=0.3
+                                )
+                            )
+                            ai_analysis = response.text
                         except Exception as model_error:
-                            # Try fallback to gpt-3.5-turbo if primary model fails
-                            st.warning(f"⚠️ {selected_model} unavailable, trying gpt-3.5-turbo...")
-                            response = client.chat.completions.create(
-                                model="gpt-3.5-turbo",
-                                messages=[
-                                    {"role": "system", "content": "You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."},
-                                    {"role": "user", "content": prompt}
-                                ],
-                                max_tokens=1500,
-                                temperature=0.3
+                            # Try fallback to gemini-1.5-flash if primary model fails
+                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-1.5-flash...")
+                            model = genai.GenerativeModel(
+                                'gemini-1.5-flash',
+                                system_instruction="You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting."
                             )
-                        
-                        ai_analysis = response.choices[0].message.content
+                            response = model.generate_content(
+                                prompt,
+                                generation_config=genai.types.GenerationConfig(
+                                    max_output_tokens=1500,
+                                    temperature=0.3
+                                )
+                            )
+                            ai_analysis = response.text
                         
                         st.markdown("---")
                         st.markdown("### 📊 AI Analysis Results")
@@ -2773,10 +2786,10 @@ if openai_api_key and openai_api_key.strip() != "":
                         st.warning("🔌 **Connection Issue**: Check your internet connection or firewall settings.")
                     elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
                         st.warning("🔑 **API Key Issue**: Your API key may be invalid or expired.")
-                    elif "rate_limit" in error_msg.lower():
+                    elif "rate_limit" in error_msg.lower() or "quota" in error_msg.lower():
                         st.warning("⏱️ **Rate Limit**: Too many requests. Wait a moment and try again.")
                     else:
-                        st.info("💡 **Tip**: Try selecting a different model (e.g., gpt-3.5-turbo) in the sidebar.")
+                        st.info("💡 **Tip**: Try selecting a different model (e.g., gemini-1.5-flash) in the sidebar.")
             
             # Show previous analysis if available
             if 'ai_analysis' in st.session_state and st.session_state['ai_analysis']:
@@ -2811,52 +2824,56 @@ if openai_api_key and openai_api_key.strip() != "":
                     results_df = st.session_state['calculated_results']
                     previous_analysis = st.session_state.get('ai_analysis', '')
                     
-                    # Build conversation context
-                    messages = [
-                        {"role": "system", "content": """You are an expert centrifugal compressor performance engineer with 20+ years of experience. 
-                        You have access to the compressor test data and your previous analysis. 
-                        Answer follow-up questions concisely and practically.
-                        Reference specific data points and numbers when relevant.
-                        If asked about something not in the data, explain what additional information would be needed."""}
-                    ]
+                    # Build conversation context for Gemini
+                    context_prompt = f"""You are an expert centrifugal compressor performance engineer with 20+ years of experience. 
+                    You have access to the compressor test data and your previous analysis. 
+                    Answer follow-up questions concisely and practically.
+                    Reference specific data points and numbers when relevant.
+                    If asked about something not in the data, explain what additional information would be needed.
                     
-                    # Add context about the data
-                    context_message = f"""
                     Context - Previous Analysis:
                     {previous_analysis}
                     
                     Context - Test Data Summary:
                     {results_df.to_string() if results_df is not None else 'No data available'}
-                    """
-                    messages.append({"role": "user", "content": context_message})
-                    messages.append({"role": "assistant", "content": "I have reviewed the compressor performance data and my previous analysis. What would you like to know?"})
                     
-                    # Add chat history
-                    for msg in st.session_state['ai_chat_history']:
-                        messages.append({"role": msg["role"], "content": msg["content"]})
+                    Conversation History:
+                    """
+                    
+                    # Add chat history to context
+                    for msg in st.session_state['ai_chat_history'][:-1]:  # Exclude the current question
+                        role = "User" if msg["role"] == "user" else "Assistant"
+                        context_prompt += f"\n{role}: {msg['content']}"
+                    
+                    context_prompt += f"\n\nUser's current question: {follow_up_question}\n\nProvide a helpful response:"
                     
                     # Get AI response
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
-                            client = OpenAI(api_key=openai_api_key)
-                            selected_model = st.session_state.get('ai_model', 'gpt-4o')
+                            genai.configure(api_key=gemini_api_key)
+                            selected_model = st.session_state.get('ai_model', 'gemini-1.5-flash')
                             try:
-                                response = client.chat.completions.create(
-                                    model=selected_model,
-                                    messages=messages,
-                                    max_tokens=1000,
-                                    temperature=0.3
+                                model = genai.GenerativeModel(selected_model)
+                                response = model.generate_content(
+                                    context_prompt,
+                                    generation_config=genai.types.GenerationConfig(
+                                        max_output_tokens=1000,
+                                        temperature=0.3
+                                    )
                                 )
+                                assistant_response = response.text
                             except Exception:
-                                # Fallback to gpt-3.5-turbo
-                                response = client.chat.completions.create(
-                                    model="gpt-3.5-turbo",
-                                    messages=messages,
-                                    max_tokens=1000,
-                                    temperature=0.3
+                                # Fallback to gemini-1.5-flash
+                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                response = model.generate_content(
+                                    context_prompt,
+                                    generation_config=genai.types.GenerationConfig(
+                                        max_output_tokens=1000,
+                                        temperature=0.3
+                                    )
                                 )
+                                assistant_response = response.text
                             
-                            assistant_response = response.choices[0].message.content
                             st.markdown(assistant_response)
                             
                             # Add assistant response to chat history

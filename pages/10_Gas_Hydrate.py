@@ -673,7 +673,7 @@ if st.button('Run Hydrate Calculation'):
                 openapitext = st.make_request(input_text)
                 st.write(openapitext)
             except Exception:
-                st.info('💡 Enter OpenAI API key in the sidebar for AI-powered data analysis')
+                pass  # AI features optional
             
         except Exception as e:
             st.error(f'Calculation failed: {str(e)}')

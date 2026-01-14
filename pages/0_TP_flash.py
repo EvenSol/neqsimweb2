@@ -130,7 +130,7 @@ if st.button('Run TP Flash Calculations'):
                         openapitext = st.make_request(input)
                         st.write(openapitext)
                     except Exception:
-                        st.info('💡 Enter OpenAI API key in the sidebar for AI-powered data analysis')
+                        pass  # AI features optional
                 except Exception as e:
                     st.error(f'Calculation failed: {str(e)}')
     else:

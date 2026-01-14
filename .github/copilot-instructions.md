@@ -37,7 +37,7 @@ neqsimweb2/
 - **matplotlib/plotly**: Visualization
 - **numpy/scipy**: Numerical computations
 - **altair**: Declarative visualizations
-- **openai**: AI assistant integration
+- **google-generativeai**: Google Gemini AI integration
 
 ## NeqSim Java Library Reference
 

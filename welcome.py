@@ -2,23 +2,30 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import openai
-from openai import OpenAI
+import google.generativeai as genai
 from theme import apply_theme, theme_toggle
 
+def get_gemini_api_key():
+    """Get Gemini API key from secrets or session state."""
+    # First check Streamlit secrets (for deployed app)
+    try:
+        if 'GEMINI_API_KEY' in st.secrets:
+            return st.secrets['GEMINI_API_KEY']
+    except Exception:
+        pass
+    # Fall back to session state (for user-provided key)
+    return st.session_state.get('gemini_api_key', '')
+
 def make_request(question_input: str):
-    # Only attempt request if API key is provided
-    if not openai_api_key or openai_api_key.strip() == "":
+    # Only attempt request if API key is available
+    api_key = get_gemini_api_key()
+    if not api_key or api_key.strip() == "":
         return ""
     try:
-        client = OpenAI(api_key=openai_api_key)
-        completion = client.completions.create(
-            model="gpt-3.5-turbo-instruct",
-            prompt=question_input,
-            max_tokens=500,
-            temperature=0
-        )
-        return completion.choices[0].text
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(question_input)
+        return response.text
     except Exception:
         return ""
 
@@ -53,14 +60,25 @@ We welcome any feedback, questions, or suggestions for further development. Join
 Use the left-hand menu to select the desired simulation or process. Enter any required inputs, and NeqSim will handle the calculations.
 
 ### NeqSim AI Assistant
-NeqSim is integrated with OpenAI for enhanced simulation support. Enter your OpenAI API key in the sidebar to interact with the AI assistant for insights and guidance related to your simulations.
+NeqSim is integrated with Google Gemini AI for enhanced simulation support and analysis.
 """
 
-openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+# Check if API key is configured in secrets
+api_key_from_secrets = False
+try:
+    if 'GEMINI_API_KEY' in st.secrets:
+        api_key_from_secrets = True
+        st.session_state['gemini_api_key'] = st.secrets['GEMINI_API_KEY']
+        st.sidebar.success("✓ AI features enabled")
+except Exception:
+    pass
 
-# Store API key in session state for use across pages
-if openai_api_key:
-    st.session_state['openai_api_key'] = openai_api_key
-    st.sidebar.success("✓ API key saved for all pages")
+# If no secrets, show manual input option (for local development)
+if not api_key_from_secrets:
+    gemini_api_key = st.sidebar.text_input("Gemini API Key (optional)", type="password", 
+                                            help="Get a free key from https://aistudio.google.com/")
+    if gemini_api_key:
+        st.session_state['gemini_api_key'] = gemini_api_key
+        st.sidebar.success("✓ API key saved for all pages")
 
 st.make_request = make_request

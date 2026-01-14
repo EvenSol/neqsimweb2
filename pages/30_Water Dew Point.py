@@ -180,7 +180,7 @@ if st.button('Run'):
                         openapitext = st.make_request(input)
                         st.write(openapitext)
                     except Exception:
-                        st.info('💡 Enter OpenAI API key in the sidebar for AI-powered data analysis')
+                        pass  # AI features optional
                     st.session_state['rerender'] = not st.session_state.get('rerender', False)
                 except Exception as e:
                     st.error(f'Calculation failed: {str(e)}')
