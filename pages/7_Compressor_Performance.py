@@ -1672,8 +1672,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 n = kappa_in / (kappa_in - 1 + 0.001) * 0.8
                             
                             # Polytropic efficiency using Schultz
+                            # From: n = 1 / (1 - (κ-1)/κ / η_p)
+                            # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
                             if n > 1 and kappa_in > 1:
-                                eta_poly_calc = ((n - 1) / n) * (kappa_in / (kappa_in - 1))
+                                eta_poly_calc = (n * (kappa_in - 1)) / (kappa_in * (n - 1))
                                 # Check if calculated efficiency is unrealistic (>100%)
                                 if eta_poly_calc > 1.0:
                                     st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
@@ -1688,16 +1690,15 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             else:
                                 eta_poly = 0.75  # Default fallback
                             
-                            # Calculate polytropic head using Schultz
-                            R = 8.314  # J/(mol·K)
-                            z_avg = (z_in + z_out) / 2
-                            if n > 1:
-                                polytropic_head = z_avg * R * T_in_K / (MW / 1000) * (n / (n - 1)) * (pr**((n - 1) / n) - 1) / 1000
+                            # Calculate polytropic head using enthalpy-based method
+                            # Hp = η_p × actual_work (consistent with NeqSim)
+                            actual_work = h_out - h_in
+                            if actual_work > 0 and eta_poly > 0:
+                                polytropic_head = actual_work * eta_poly  # kJ/kg
                             else:
-                                polytropic_head = (h_out - h_in) * eta_poly if (h_out - h_in) > 0 else 0
+                                polytropic_head = 0
                             
                             eta_isen = eta_poly * 0.98
-                            actual_work = h_out - h_in
                             power_kW = mass_flow * actual_work
                             power_MW = power_kW / 1000
                             kappa_avg = (kappa_in + kappa_out) / 2
@@ -1826,10 +1827,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             n = kappa_avg / (kappa_avg - 1 + 0.001) * 0.8  # Estimate
                         
                         # Polytropic efficiency
-                        # Correct formula: eta_p = [(n-1)/n] / [(k-1)/k] = k*(n-1) / (n*(k-1))
-                        # This relates the polytropic and isentropic exponents
+                        # From the relation: n = 1 / (1 - (κ-1)/κ / η_p)
+                        # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
+                        # This is the Schultz polytropic efficiency formula
                         if n > 1 and kappa_avg > 1:
-                            eta_poly = (kappa_avg * (n - 1)) / (n * (kappa_avg - 1))
+                            eta_poly = (n * (kappa_avg - 1)) / (kappa_avg * (n - 1))
                             eta_poly = min(max(eta_poly, 0.5), 0.95)  # Clamp to reasonable range
                         else:
                             eta_poly = eta_isen * 0.98 if eta_isen > 0 else 0.75  # Approximation
