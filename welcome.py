@@ -98,5 +98,14 @@ if ai_enabled:
             st.sidebar.success("✓ API key saved")
         else:
             st.sidebar.info("Enter API key to use AI features")
+    
+    # Model selection (only shown when AI is enabled)
+    ai_model = st.sidebar.selectbox(
+        "AI Model",
+        options=["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"],
+        index=0,
+        help="Select the AI model. gemini-2.0-flash is recommended."
+    )
+    st.session_state['ai_model'] = ai_model
 
 st.make_request = make_request

@@ -549,18 +549,7 @@ with st.sidebar:
     if is_ai_enabled():
         st.divider()
         st.header("🤖 AI Analysis")
-        st.success("✓ AI features enabled")
-        
-        # Model selection
-        ai_model = st.selectbox(
-            "AI Model",
-            options=["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
-            index=0,
-            help="Select the AI model. Flash models are fastest, Pro is most capable."
-        )
-        if 'ai_model' not in st.session_state:
-            st.session_state['ai_model'] = ai_model
-        st.session_state['ai_model'] = ai_model
+        st.success(f"✓ AI enabled ({st.session_state.get('ai_model', 'gemini-2.0-flash')})")
 
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
