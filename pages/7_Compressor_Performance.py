@@ -633,15 +633,19 @@ with st.expander("📋 Fluid Composition", expanded=True):
         
         # Handle uploaded CSV file from sidebar
         if 'compressor_uploaded_fluid' in st.session_state and st.session_state.compressor_uploaded_fluid is not None:
-            try:
-                uploaded_df = pd.read_csv(st.session_state.compressor_uploaded_fluid)
-                # Ensure required columns exist
-                if 'ComponentName' in uploaded_df.columns and 'MolarComposition[-]' in uploaded_df.columns:
-                    uploaded_df['MolarComposition[-]'] = uploaded_df['MolarComposition[-]'].astype(float)
-                    st.session_state.compressor_custom_fluid_df = uploaded_df
-                    st.success(f"✅ Loaded fluid composition from {st.session_state.compressor_uploaded_fluid.name}")
-            except Exception as e:
-                st.warning(f'Could not load file: {e}')
+            # Track uploaded file to avoid repeated loading
+            fluid_file_id = f"{st.session_state.compressor_uploaded_fluid.name}_{st.session_state.compressor_uploaded_fluid.size}"
+            if st.session_state.get('last_loaded_fluid_file') != fluid_file_id:
+                try:
+                    uploaded_df = pd.read_csv(st.session_state.compressor_uploaded_fluid)
+                    # Ensure required columns exist
+                    if 'ComponentName' in uploaded_df.columns and 'MolarComposition[-]' in uploaded_df.columns:
+                        uploaded_df['MolarComposition[-]'] = uploaded_df['MolarComposition[-]'].astype(float)
+                        st.session_state.compressor_custom_fluid_df = uploaded_df
+                        st.session_state['last_loaded_fluid_file'] = fluid_file_id
+                        st.success(f"✅ Loaded fluid composition from {st.session_state.compressor_uploaded_fluid.name}")
+                except Exception as e:
+                    st.warning(f'Could not load file: {e}')
         
         col1, col2 = st.columns([1, 3])
         with col1:
@@ -2024,7 +2028,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             if n == 0 or n is None:
                                 n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
                         
-                        vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
+                        vol_flow_in = mass_flow / rho_in * 3600 if rho_in > 0 else 0  # m³/hr
                         mass_flow_kg_hr = mass_flow * 3600  # kg/hr
                         
                         results.append({
@@ -2104,7 +2108,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         power_MW = power_kW / 1000  # MW
                         
                         # Volume flow at inlet conditions
-                        vol_flow_in = mass_flow / rho_in * 3600  # m³/hr
+                        vol_flow_in = mass_flow / rho_in * 3600 if rho_in > 0 else 0  # m³/hr
                         mass_flow_kg_hr = mass_flow * 3600  # kg/hr
                         
                         results.append({
@@ -2167,8 +2171,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 expected_eff = np.interp(flow, curve_flows, curve_effs)
                                 expected_head = np.interp(flow, curve_flows, curve_heads)
                                 
-                                eff_deviation = ((row['Polytropic Eff (%)'] - expected_eff) / expected_eff) * 100
-                                head_deviation = ((row['Polytropic Head (kJ/kg)'] - expected_head) / expected_head) * 100
+                                eff_deviation = ((row['Polytropic Eff (%)'] - expected_eff) / expected_eff) * 100 if expected_eff > 0 else 0
+                                head_deviation = ((row['Polytropic Head (kJ/kg)'] - expected_head) / expected_head) * 100 if expected_head > 0 else 0
                                 
                                 results_df.at[idx, 'Expected Eff (%)'] = expected_eff
                                 results_df.at[idx, 'Expected Head (kJ/kg)'] = expected_head
