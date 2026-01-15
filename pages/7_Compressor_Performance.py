@@ -1876,7 +1876,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     rho_in = inlet_fluid.getDensity()  # kg/m3
                     T_in_K = t_in + 273.15
                     T_out_K = t_out + 273.15
-                    pr = p_out / p_in
+                    pr = p_out / p_in if p_in > 0 else 1.0  # Pressure ratio, default to 1 if p_in is zero
+                    
+                    # Validate pressure ratio
+                    if pr <= 1.0:
+                        st.warning(f"⚠️ Row {idx}: Pressure ratio {pr:.2f} ≤ 1. Check inlet/outlet pressures.")
                     
                     # Convert flow to mass flow (kg/s) based on unit
                     if flow_unit == "kg/s":
@@ -2060,6 +2064,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         isentropic_fluid = fluid(get_selected_eos_model())
                         for comp_name, comp_moles in fluid_composition.items():
                             isentropic_fluid.addComponent(comp_name, float(comp_moles))
+                        isentropic_fluid.setMixingRule('classic')
                         isentropic_fluid.setPressure(float(p_out), 'bara')
                         isentropic_fluid.setTemperature(float(t_out), 'C')  # Initial guess
                         
