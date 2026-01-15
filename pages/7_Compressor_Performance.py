@@ -770,53 +770,59 @@ with st.expander("📊 Operating Data Input", expanded=True):
             help="Upload a CSV or Excel file with columns: Speed (RPM), Flow Rate, Inlet Pressure, Outlet Pressure, Inlet Temperature, Outlet Temperature"
         )
         if uploaded_csv is not None:
-            try:
-                if uploaded_csv.name.endswith('.csv'):
-                    imported_df = pd.read_csv(uploaded_csv)
-                else:
-                    imported_df = pd.read_excel(uploaded_csv)
-                
-                # Try to map columns to expected names
-                column_mapping = {}
-                expected_cols = ['Speed (RPM)', 'Flow Rate', 'Inlet Pressure', 'Outlet Pressure', 'Inlet Temperature', 'Outlet Temperature']
-                
-                for expected in expected_cols:
-                    for col in imported_df.columns:
-                        col_lower = col.lower().replace('_', ' ').replace('-', ' ')
-                        expected_lower = expected.lower()
-                        if expected_lower in col_lower or col_lower in expected_lower:
-                            column_mapping[col] = expected
-                            break
-                        # Also check partial matches
-                        if 'speed' in col_lower and 'speed' in expected_lower:
-                            column_mapping[col] = expected
-                        elif 'flow' in col_lower and 'flow' in expected_lower:
-                            column_mapping[col] = expected
-                        elif 'inlet' in col_lower and 'pressure' in col_lower and 'inlet p' in expected_lower:
-                            column_mapping[col] = expected
-                        elif 'outlet' in col_lower and 'pressure' in col_lower and 'outlet p' in expected_lower:
-                            column_mapping[col] = expected
-                        elif 'inlet' in col_lower and 'temp' in col_lower and 'inlet t' in expected_lower:
-                            column_mapping[col] = expected
-                        elif 'outlet' in col_lower and 'temp' in col_lower and 'outlet t' in expected_lower:
-                            column_mapping[col] = expected
-                
-                if column_mapping:
-                    imported_df = imported_df.rename(columns=column_mapping)
-                
-                # Ensure all expected columns exist
-                for col in expected_cols:
-                    if col not in imported_df.columns:
-                        if col == 'Speed (RPM)':
-                            imported_df[col] = 10000.0  # Default speed
-                        else:
-                            st.warning(f"Column '{col}' not found in file. Please add it manually.")
-                
-                st.session_state['compressor_data'] = imported_df[expected_cols].dropna()
-                st.success(f"Imported {len(imported_df)} data points")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to import data: {e}")
+            # Track uploaded file to avoid repeated loading and infinite loop
+            data_file_id = f"{uploaded_csv.name}_{uploaded_csv.size}"
+            if st.session_state.get('last_loaded_data_file') != data_file_id:
+                try:
+                    if uploaded_csv.name.endswith('.csv'):
+                        imported_df = pd.read_csv(uploaded_csv)
+                    else:
+                        imported_df = pd.read_excel(uploaded_csv)
+                    
+                    # Try to map columns to expected names
+                    column_mapping = {}
+                    expected_cols = ['Speed (RPM)', 'Flow Rate', 'Inlet Pressure', 'Outlet Pressure', 'Inlet Temperature', 'Outlet Temperature']
+                    
+                    for expected in expected_cols:
+                        for col in imported_df.columns:
+                            col_lower = col.lower().replace('_', ' ').replace('-', ' ')
+                            expected_lower = expected.lower()
+                            if expected_lower in col_lower or col_lower in expected_lower:
+                                column_mapping[col] = expected
+                                break
+                            # Also check partial matches
+                            if 'speed' in col_lower and 'speed' in expected_lower:
+                                column_mapping[col] = expected
+                            elif 'flow' in col_lower and 'flow' in expected_lower:
+                                column_mapping[col] = expected
+                            elif 'inlet' in col_lower and 'pressure' in col_lower and 'inlet p' in expected_lower:
+                                column_mapping[col] = expected
+                            elif 'outlet' in col_lower and 'pressure' in col_lower and 'outlet p' in expected_lower:
+                                column_mapping[col] = expected
+                            elif 'inlet' in col_lower and 'temp' in col_lower and 'inlet t' in expected_lower:
+                                column_mapping[col] = expected
+                            elif 'outlet' in col_lower and 'temp' in col_lower and 'outlet t' in expected_lower:
+                                column_mapping[col] = expected
+                    
+                    if column_mapping:
+                        imported_df = imported_df.rename(columns=column_mapping)
+                    
+                    # Ensure all expected columns exist
+                    for col in expected_cols:
+                        if col not in imported_df.columns:
+                            if col == 'Speed (RPM)':
+                                imported_df[col] = 10000.0  # Default speed
+                            else:
+                                st.warning(f"Column '{col}' not found in file. Please add it manually.")
+                    
+                    st.session_state['compressor_data'] = imported_df[expected_cols].dropna()
+                    st.session_state['last_loaded_data_file'] = data_file_id
+                    st.success(f"Imported {len(imported_df)} data points")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to import data: {e}")
+            else:
+                st.success(f"Data loaded from {uploaded_csv.name}")
     
     with col_import2:
         # Download template
