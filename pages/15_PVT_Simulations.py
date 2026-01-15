@@ -611,32 +611,15 @@ with tab_char:
                         oil_rho = char_fluid.getPhase("oil").getDensity("kg/m3")
                         col4.metric("Oil Density", f"{oil_rho:.2f} kg/m³")
                     
-                    # Download characterized composition
-                    st.subheader("📥 Export Characterized Fluid")
+                    # Store characterized composition for editing
+                    st.session_state.char_comp_df = char_comp_df.copy()
+                    st.session_state.char_complete = True
                     
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # Full properties export
-                        st.download_button(
-                            label="📥 Download Full Properties (CSV)",
-                            data=char_comp_df.to_csv(index=False),
-                            file_name="characterized_fluid_full.csv",
-                            mime="text/csv",
-                            help="Download all component properties (Tc, Pc, acentric factor, etc.)"
-                        )
-                    
-                    with col2:
-                        # Simplified composition export (for import into other tools)
-                        simple_df = char_comp_df[['Component', 'Mole Fraction [-]', 'Molar Mass [kg/mol]']].copy()
-                        simple_df.columns = ['ComponentName', 'MolarComposition[-]', 'MolarMass[kg/mol]']
-                        st.download_button(
-                            label="📥 Download Composition Only (CSV)",
-                            data=simple_df.to_csv(index=False),
-                            file_name="characterized_fluid_composition.csv",
-                            mime="text/csv",
-                            help="Download simplified composition for import into NeqSim or other simulators"
-                        )
+                    # Reset editing session state to force refresh with new characterization data
+                    st.session_state.pop('original_edit_df', None)
+                    st.session_state.pop('edited_params_df', None)
+                    st.session_state.pop('original_kij_matrix', None)
+                    st.session_state.pop('edited_kij_matrix', None)
                     
                 except Exception as e:
                     st.error(f"Error during characterization: {e}")
@@ -644,6 +627,471 @@ with tab_char:
                     st.code(traceback.format_exc())
         else:
             st.warning("Please enter a valid fluid composition (molar sum > 0)")
+    
+    # =============================================================================
+    # Manual Parameter Editing Section (shown after characterization)
+    # =============================================================================
+    if st.session_state.get('char_complete', False) and 'characterized_fluid' in st.session_state:
+        st.divider()
+        st.subheader("✏️ Manual Parameter Tuning")
+        st.markdown("""
+        Adjust component parameters to tune the characterized fluid. Common tuning targets:
+        - **Critical Temperature (Tc)** and **Critical Pressure (Pc)**: Affect phase behavior
+        - **Acentric Factor (ω)**: Affects vapor pressure and phase equilibrium
+        - **Volume Correction Const**: Affects liquid density predictions (Peneloux shift)
+        - **Racket Z**: Alternative volume correction parameter
+        """)
+        
+        char_fluid = st.session_state.characterized_fluid
+        
+        # Build editable DataFrame with all tunable parameters
+        edit_comp_data = []
+        for i in range(char_fluid.getNumberOfComponents()):
+            comp = char_fluid.getPhase(0).getComponent(i)
+            is_pseudo = bool(comp.isIsPlusFraction() or comp.isIsTBPfraction())
+            
+            # Get volume correction parameters
+            try:
+                vol_corr_const = float(comp.getVolumeCorrectionConst())
+            except Exception:
+                vol_corr_const = 0.0
+            
+            try:
+                racket_z = float(comp.getRacketZ())
+            except Exception:
+                racket_z = 0.0
+                
+            try:
+                vol_corr_t = float(comp.getVolumeCorrectionT())
+            except Exception:
+                vol_corr_t = 0.0
+            
+            edit_comp_data.append({
+                'Component': str(comp.getComponentName()),
+                'Mole Fraction [-]': float(comp.getz()),
+                'Molar Mass [kg/mol]': float(comp.getMolarMass()),
+                'Tc [K]': float(comp.getTC()),
+                'Pc [bara]': float(comp.getPC()),
+                'Acentric Factor': float(comp.getAcentricFactor()),
+                'Vol Corr Const': vol_corr_const,
+                'Racket Z': racket_z,
+                'Vol Corr T': vol_corr_t,
+                'Is Pseudo': is_pseudo
+            })
+        
+        edit_df = pd.DataFrame(edit_comp_data)
+        
+        # Store original for comparison
+        if 'original_edit_df' not in st.session_state:
+            st.session_state.original_edit_df = edit_df.copy()
+        
+        st.markdown("##### 📝 Component Parameters")
+        st.info("💡 Modify values below. Changes to pseudo-components (Is Pseudo = True) are most common for tuning.")
+        
+        # Editable data table
+        edited_params_df = st.data_editor(
+            edit_df,
+            column_config={
+                "Component": st.column_config.TextColumn("Component", disabled=True),
+                "Mole Fraction [-]": st.column_config.NumberColumn(
+                    "Mole Frac [-]", 
+                    min_value=0.0, 
+                    format="%.6f",
+                    help="Mole fraction (normalized)"
+                ),
+                "Molar Mass [kg/mol]": st.column_config.NumberColumn(
+                    "MW [kg/mol]", 
+                    min_value=0.001, 
+                    format="%.4f",
+                    help="Molar mass in kg/mol"
+                ),
+                "Tc [K]": st.column_config.NumberColumn(
+                    "Tc [K]", 
+                    min_value=50.0, 
+                    max_value=2000.0,
+                    format="%.2f",
+                    help="Critical temperature in Kelvin"
+                ),
+                "Pc [bara]": st.column_config.NumberColumn(
+                    "Pc [bara]", 
+                    min_value=1.0, 
+                    max_value=500.0,
+                    format="%.2f",
+                    help="Critical pressure in bara"
+                ),
+                "Acentric Factor": st.column_config.NumberColumn(
+                    "ω [-]", 
+                    min_value=-0.5, 
+                    max_value=2.0,
+                    format="%.4f",
+                    help="Acentric factor (dimensionless)"
+                ),
+                "Vol Corr Const": st.column_config.NumberColumn(
+                    "Vol Corr Const", 
+                    min_value=-1.0, 
+                    max_value=1.0,
+                    format="%.6f",
+                    help="Peneloux volume correction constant. Affects liquid density."
+                ),
+                "Racket Z": st.column_config.NumberColumn(
+                    "Racket Z", 
+                    min_value=0.0, 
+                    max_value=0.5,
+                    format="%.4f",
+                    help="Rackett compressibility factor for volume correction"
+                ),
+                "Vol Corr T": st.column_config.NumberColumn(
+                    "Vol Corr T", 
+                    min_value=-1.0, 
+                    max_value=1.0,
+                    format="%.6f",
+                    help="Temperature-dependent volume correction parameter"
+                ),
+                "Is Pseudo": st.column_config.CheckboxColumn(
+                    "Pseudo?", 
+                    disabled=True,
+                    help="Whether this is a pseudo-component from characterization"
+                ),
+            },
+            use_container_width=True,
+            height=400,
+            key="param_editor"
+        )
+        
+        # Quick multiplier tools for batch adjustments
+        st.markdown("**🔧 Quick Adjustment Tools (for Pseudo-components only)**")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            tc_mult = st.number_input("Tc Multiplier", value=1.0, min_value=0.8, max_value=1.2, step=0.01, key="tc_mult")
+        with col2:
+            pc_mult = st.number_input("Pc Multiplier", value=1.0, min_value=0.8, max_value=1.2, step=0.01, key="pc_mult")
+        with col3:
+            omega_mult = st.number_input("ω Multiplier", value=1.0, min_value=0.8, max_value=1.2, step=0.01, key="omega_mult")
+        with col4:
+            volcorr_mult = st.number_input("Vol Corr Multiplier", value=1.0, min_value=0.5, max_value=2.0, step=0.1, key="volcorr_mult")
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            apply_multipliers = st.button("🎛️ Apply Multipliers", key="apply_mult")
+        with col2:
+            apply_changes = st.button("✅ Apply Changes to Fluid", key="apply_changes", type="primary")
+        with col3:
+            reset_params = st.button("🔄 Reset to Original", key="reset_params")
+        
+        if apply_multipliers:
+            # Apply multipliers only to pseudo-components
+            for idx, row in edited_params_df.iterrows():
+                if row['Is Pseudo']:
+                    edited_params_df.at[idx, 'Tc [K]'] = row['Tc [K]'] * tc_mult
+                    edited_params_df.at[idx, 'Pc [bara]'] = row['Pc [bara]'] * pc_mult
+                    edited_params_df.at[idx, 'Acentric Factor'] = row['Acentric Factor'] * omega_mult
+                    if abs(row['Vol Corr Const']) > 1e-10:
+                        edited_params_df.at[idx, 'Vol Corr Const'] = row['Vol Corr Const'] * volcorr_mult
+            st.session_state.edited_params_df = edited_params_df
+            st.rerun()
+        
+        if reset_params:
+            st.session_state.pop('edited_params_df', None)
+            st.rerun()
+        
+        if apply_changes:
+            with st.spinner("Applying parameter changes to fluid..."):
+                try:
+                    # Apply changes to the characterized fluid
+                    for idx, row in edited_params_df.iterrows():
+                        comp_name = row['Component']
+                        
+                        # Update parameters for all phases
+                        for phase_idx in range(char_fluid.getNumberOfPhases()):
+                            comp = char_fluid.getPhase(phase_idx).getComponent(comp_name)
+                            
+                            # Update critical properties
+                            comp.setTC(float(row['Tc [K]']))
+                            comp.setPC(float(row['Pc [bara]']))
+                            comp.setAcentricFactor(float(row['Acentric Factor']))
+                            comp.setMolarMass(float(row['Molar Mass [kg/mol]']))
+                            
+                            # Update volume correction parameters
+                            comp.setVolumeCorrectionConst(float(row['Vol Corr Const']))
+                            comp.setRacketZ(float(row['Racket Z']))
+                            comp.setVolumeCorrectionT(float(row['Vol Corr T']))
+                    
+                    # Re-initialize fluid with new parameters
+                    char_fluid.setTemperature(reservoir_temp + 273.15, "K")
+                    char_fluid.setPressure(reservoir_pres, "bara")
+                    char_fluid.init(0)
+                    TPflash(char_fluid)
+                    char_fluid.initThermoProperties()
+                    char_fluid.initPhysicalProperties()
+                    
+                    # Update session state
+                    st.session_state.characterized_fluid = char_fluid
+                    st.session_state.original_edit_df = edited_params_df.copy()
+                    
+                    st.success("✅ Parameters applied successfully!")
+                    
+                    # Show updated flash results
+                    st.markdown("##### ⚡ Updated Flash Results")
+                    st.markdown(f"**T = {reservoir_temp}°C, P = {reservoir_pres} bara**")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Number of Phases", char_fluid.getNumberOfPhases())
+                    col2.metric("Vapor Fraction", f"{char_fluid.getBeta():.4f}")
+                    
+                    if char_fluid.hasPhaseType("gas"):
+                        gas_rho = char_fluid.getPhase("gas").getDensity("kg/m3")
+                        col3.metric("Gas Density", f"{gas_rho:.2f} kg/m³")
+                    
+                    if char_fluid.hasPhaseType("oil"):
+                        oil_rho = char_fluid.getPhase("oil").getDensity("kg/m3")
+                        col4.metric("Oil Density", f"{oil_rho:.2f} kg/m³")
+                        
+                except Exception as e:
+                    st.error(f"Error applying changes: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+        
+        # =============================================================================
+        # Binary Interaction Coefficients (kij) Editing Section
+        # =============================================================================
+        st.divider()
+        st.markdown("##### 🔗 Binary Interaction Coefficients (kij)")
+        st.markdown("""
+        Binary interaction parameters (kij) correct the mixing rules for non-ideal mixtures.
+        Common adjustments:
+        - **CO2-Hydrocarbon**: Typically 0.10-0.15
+        - **N2-Hydrocarbon**: Typically 0.02-0.10
+        - **H2S-Hydrocarbon**: Typically 0.05-0.10
+        - **Hydrocarbon-Hydrocarbon**: Usually 0.0 (ideal mixing)
+        
+        💡 Only modify kij values that significantly affect your simulation results.
+        """)
+        
+        # Build kij matrix from current fluid
+        n_comp = char_fluid.getNumberOfComponents()
+        comp_names = [str(char_fluid.getPhase(0).getComponent(i).getComponentName()) for i in range(n_comp)]
+        
+        # Get current kij values
+        kij_matrix = np.zeros((n_comp, n_comp))
+        for i in range(n_comp):
+            for j in range(n_comp):
+                if i != j:
+                    try:
+                        # Get kij from the mixing rule
+                        kij_matrix[i, j] = float(char_fluid.getPhase(0).getMixingRule().getBinaryInteractionParameter(i, j))
+                    except Exception:
+                        kij_matrix[i, j] = 0.0
+        
+        # Store original kij if not already stored
+        if 'original_kij_matrix' not in st.session_state:
+            st.session_state.original_kij_matrix = kij_matrix.copy()
+        
+        # Create DataFrame for display - upper triangular only
+        kij_df = pd.DataFrame(kij_matrix, index=comp_names, columns=comp_names)
+        
+        st.markdown("""
+        💡 **Symmetric Matrix**: Only the upper triangle is editable (above the diagonal). 
+        The lower triangle shows "—" to indicate symmetry. Diagonal values are always 0.
+        """)
+        
+        # Show all components including pseudo-components
+        display_comps = comp_names
+        
+        # Create upper triangular display with lower triangle masked
+        kij_upper = kij_df.copy()
+        for i in range(n_comp):
+            for j in range(n_comp):
+                if i > j:  # Lower triangle
+                    kij_upper.iloc[i, j] = np.nan  # Will display as empty/masked
+                elif i == j:  # Diagonal
+                    kij_upper.iloc[i, j] = 0.0
+        
+        # Build column config - lower triangle columns disabled
+        col_config = {}
+        for idx, col in enumerate(kij_upper.columns):
+            col_label = col[:8] + "..." if len(col) > 8 else col
+            col_config[col] = st.column_config.NumberColumn(
+                col_label,
+                min_value=-0.5,
+                max_value=0.5,
+                step=0.001,
+                format="%.4f"
+            )
+        
+        # Editable kij table (upper triangle only)
+        edited_kij_df = st.data_editor(
+            kij_upper,
+            use_container_width=True,
+            key="kij_editor",
+            column_config=col_config
+        )
+        
+        # Build full symmetric matrix from upper triangle
+        edited_kij_array = np.zeros((n_comp, n_comp))
+        for i in range(n_comp):
+            for j in range(i + 1, n_comp):
+                # Get value from upper triangle (row i, col j where i < j)
+                val = edited_kij_df.iloc[i, j]
+                if pd.notna(val):
+                    edited_kij_array[i, j] = val
+                    edited_kij_array[j, i] = val  # Mirror to lower triangle
+        
+        # Update the edited DataFrame with full symmetric values
+        edited_kij_df = pd.DataFrame(edited_kij_array, index=display_comps, columns=display_comps)
+        
+        # Quick kij presets
+        st.markdown("**🔧 Quick kij Presets**")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            co2_kij = st.number_input("CO2-HC kij", value=0.12, min_value=0.0, max_value=0.3, step=0.01, key="co2_kij_preset")
+        with col2:
+            n2_kij = st.number_input("N2-HC kij", value=0.05, min_value=0.0, max_value=0.2, step=0.01, key="n2_kij_preset")
+        with col3:
+            h2s_kij = st.number_input("H2S-HC kij", value=0.07, min_value=0.0, max_value=0.2, step=0.01, key="h2s_kij_preset")
+        with col4:
+            c7plus_kij = st.number_input("C7+ internal kij", value=0.0, min_value=-0.1, max_value=0.1, step=0.01, key="c7plus_kij_preset")
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            apply_kij_presets = st.button("🎛️ Apply Presets", key="apply_kij_presets")
+        with col2:
+            apply_kij_changes = st.button("✅ Apply kij Changes", key="apply_kij", type="primary")
+        with col3:
+            reset_kij = st.button("🔄 Reset kij to Original", key="reset_kij")
+        
+        if apply_kij_presets:
+            # Apply preset kij values
+            try:
+                for i in range(n_comp):
+                    comp_i = comp_names[i]
+                    for j in range(i + 1, n_comp):
+                        comp_j = comp_names[j]
+                        
+                        # Check if one is CO2 and other is hydrocarbon
+                        if comp_i == 'CO2' or comp_j == 'CO2':
+                            other = comp_j if comp_i == 'CO2' else comp_i
+                            if other not in ['CO2', 'nitrogen', 'H2S', 'water']:
+                                kij_matrix[i, j] = co2_kij
+                                kij_matrix[j, i] = co2_kij
+                        
+                        # Check if one is N2 and other is hydrocarbon
+                        elif comp_i == 'nitrogen' or comp_j == 'nitrogen':
+                            other = comp_j if comp_i == 'nitrogen' else comp_i
+                            if other not in ['CO2', 'nitrogen', 'H2S', 'water']:
+                                kij_matrix[i, j] = n2_kij
+                                kij_matrix[j, i] = n2_kij
+                        
+                        # Check if one is H2S and other is hydrocarbon
+                        elif comp_i == 'H2S' or comp_j == 'H2S':
+                            other = comp_j if comp_i == 'H2S' else comp_i
+                            if other not in ['CO2', 'nitrogen', 'H2S', 'water']:
+                                kij_matrix[i, j] = h2s_kij
+                                kij_matrix[j, i] = h2s_kij
+                
+                st.session_state.edited_kij_matrix = kij_matrix
+                st.success("✅ Presets applied! Click 'Apply kij Changes' to update the fluid.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error applying presets: {e}")
+        
+        if reset_kij:
+            if 'original_kij_matrix' in st.session_state:
+                st.session_state.pop('edited_kij_matrix', None)
+                st.rerun()
+        
+        if apply_kij_changes:
+            with st.spinner("Applying kij changes to fluid..."):
+                try:
+                    # Update kij matrix from edited DataFrame
+                    for i, comp_i in enumerate(display_comps):
+                        idx_i = comp_names.index(comp_i)
+                        for j, comp_j in enumerate(display_comps):
+                            idx_j = comp_names.index(comp_j)
+                            if idx_i != idx_j:
+                                new_kij = float(edited_kij_df.iloc[i, j])
+                                # Apply to fluid (symmetric)
+                                for phase_idx in range(char_fluid.getNumberOfPhases()):
+                                    try:
+                                        char_fluid.getPhase(phase_idx).getMixingRule().setBinaryInteractionParameter(idx_i, idx_j, new_kij)
+                                        char_fluid.getPhase(phase_idx).getMixingRule().setBinaryInteractionParameter(idx_j, idx_i, new_kij)
+                                    except Exception:
+                                        pass
+                    
+                    # Re-initialize fluid with new kij
+                    char_fluid.setTemperature(reservoir_temp + 273.15, "K")
+                    char_fluid.setPressure(reservoir_pres, "bara")
+                    char_fluid.init(0)
+                    TPflash(char_fluid)
+                    char_fluid.initThermoProperties()
+                    char_fluid.initPhysicalProperties()
+                    
+                    # Update session state
+                    st.session_state.characterized_fluid = char_fluid
+                    
+                    st.success("✅ Binary interaction parameters applied successfully!")
+                    
+                    # Show updated results
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Number of Phases", char_fluid.getNumberOfPhases())
+                    col2.metric("Vapor Fraction", f"{char_fluid.getBeta():.4f}")
+                    
+                    if char_fluid.hasPhaseType("gas"):
+                        gas_rho = char_fluid.getPhase("gas").getDensity("kg/m3")
+                        col3.metric("Gas Density", f"{gas_rho:.2f} kg/m³")
+                    
+                    if char_fluid.hasPhaseType("oil"):
+                        oil_rho = char_fluid.getPhase("oil").getDensity("kg/m3")
+                        col4.metric("Oil Density", f"{oil_rho:.2f} kg/m³")
+                        
+                except Exception as e:
+                    st.error(f"Error applying kij changes: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+        
+        # Download section
+        st.divider()
+        st.markdown("##### 📥 Export Characterized Fluid")
+        
+        # Get current state of parameters
+        export_df = edited_params_df.copy() if 'edited_params_df' in st.session_state else edit_df.copy()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Full properties export
+            st.download_button(
+                label="📥 Download Full Properties (CSV)",
+                data=export_df.to_csv(index=False),
+                file_name="characterized_fluid_full.csv",
+                mime="text/csv",
+                help="Download all component properties (Tc, Pc, acentric factor, volume correction, etc.)"
+            )
+        
+        with col2:
+            # Simplified composition export (for import into other tools)
+            simple_df = export_df[['Component', 'Mole Fraction [-]', 'Molar Mass [kg/mol]']].copy()
+            simple_df.columns = ['ComponentName', 'MolarComposition[-]', 'MolarMass[kg/mol]']
+            st.download_button(
+                label="📥 Download Composition Only (CSV)",
+                data=simple_df.to_csv(index=False),
+                file_name="characterized_fluid_composition.csv",
+                mime="text/csv",
+                help="Download simplified composition for import into NeqSim or other simulators"
+            )
+        
+        # Export kij matrix
+        st.markdown("**Binary Interaction Parameters:**")
+        st.download_button(
+            label="📥 Download kij Matrix (CSV)",
+            data=kij_df.to_csv(),
+            file_name="kij_matrix.csv",
+            mime="text/csv",
+            help="Download binary interaction coefficient matrix"
+        )
 
 # =============================================================================
 # TAB 1: CCE (Constant Composition Expansion)
