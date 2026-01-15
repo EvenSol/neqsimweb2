@@ -216,6 +216,12 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     - **CSV Import:** Upload a CSV file with operating data
     - **Excel Import:** Upload an Excel file (.xlsx)
     
+    ### 5.4 Fluid Composition Import/Export
+    
+    For custom gas mixtures:
+    - **Export:** Hover over the composition table and click "Download as CSV"
+    - **Import:** Use "Import Fluid (CSV)" in the sidebar when "Custom Mixture" is selected
+    
     ---
     
     ## 6. Manufacturer Curve Comparison
@@ -316,6 +322,22 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     - Outlet Pressure  
     - Inlet Temperature
     - Outlet Temperature
+    
+    ### 9.3 Fluid Composition CSV
+    
+    Required columns:
+    - ComponentName (e.g., "methane", "ethane", "CO2")
+    - MolarComposition[-] (molar fraction, will be normalized)
+    
+    Example:
+    ```csv
+    ComponentName,MolarComposition[-]
+    methane,0.85
+    ethane,0.08
+    propane,0.04
+    CO2,0.02
+    nitrogen,0.01
+    ```
     
     ---
     
@@ -509,6 +531,12 @@ with st.sidebar:
         st.info(f"Selected fluid composition: {test_fluids[selected_fluid_name]}")
     else:
         st.info("Define custom composition in the main panel")
+        st.file_uploader(
+            "Import Fluid (CSV)", 
+            key='compressor_uploaded_fluid', 
+            type=['csv'],
+            help="Import fluid from CSV. Save by hovering over the composition table and clicking 'Download as CSV'."
+        )
     
     # Equation of State model selection
     selected_eos = st.selectbox(
@@ -603,6 +631,18 @@ with st.expander("📋 Fluid Composition", expanded=True):
     if selected_fluid_name == "Custom Mixture":
         st.write("Define your custom fluid composition:")
         
+        # Handle uploaded CSV file from sidebar
+        if 'compressor_uploaded_fluid' in st.session_state and st.session_state.compressor_uploaded_fluid is not None:
+            try:
+                uploaded_df = pd.read_csv(st.session_state.compressor_uploaded_fluid)
+                # Ensure required columns exist
+                if 'ComponentName' in uploaded_df.columns and 'MolarComposition[-]' in uploaded_df.columns:
+                    uploaded_df['MolarComposition[-]'] = uploaded_df['MolarComposition[-]'].astype(float)
+                    st.session_state.compressor_custom_fluid_df = uploaded_df
+                    st.success(f"✅ Loaded fluid composition from {st.session_state.compressor_uploaded_fluid.name}")
+            except Exception as e:
+                st.warning(f'Could not load file: {e}')
+        
         col1, col2 = st.columns([1, 3])
         with col1:
             if st.button('Reset to Default', key='reset_custom_fluid'):
@@ -647,7 +687,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
                     st.session_state.compressor_custom_fluid_df = edited_fluid_df
                 st.success("✅ Composition updated!")
         
-        st.caption("💡 Composition will be normalized before simulation")
+        st.caption("💡 Composition will be normalized before simulation. Use sidebar to import fluid from CSV file.")
     
     # Create fluid for display using selected EoS model
     fluid_composition = get_fluid_composition()
@@ -929,16 +969,22 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
         # Load curves from file
         uploaded_file = st.file_uploader("📤 Load Curves (JSON)", type=['json'], key='curve_upload')
         if uploaded_file is not None:
-            try:
-                loaded_data = json.load(uploaded_file)
-                if 'curves' in loaded_data:
-                    st.session_state['compressor_curves'] = loaded_data['curves']
-                    if 'flow_unit' in loaded_data:
-                        st.session_state['curve_flow_unit'] = loaded_data['flow_unit']
-                    st.success(f"Loaded {len(loaded_data['curves'])} curve(s)")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Failed to load curves: {e}")
+            # Check if this file was already processed to avoid infinite rerun loop
+            file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            if st.session_state.get('last_loaded_curve_file') != file_id:
+                try:
+                    loaded_data = json.load(uploaded_file)
+                    if 'curves' in loaded_data:
+                        st.session_state['compressor_curves'] = loaded_data['curves']
+                        if 'flow_unit' in loaded_data:
+                            st.session_state['curve_flow_unit'] = loaded_data['flow_unit']
+                        st.session_state['last_loaded_curve_file'] = file_id
+                        st.success(f"Loaded {len(loaded_data['curves'])} curve(s)")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load curves: {e}")
+            else:
+                st.success(f"Curves loaded from {uploaded_file.name}")
     
     st.divider()
     
@@ -1889,6 +1935,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         process_fluid.setTemperature(float(t_in), 'C')
                         process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
                         TPflash(process_fluid)
+                        process_fluid.initThermoProperties()
+                        process_fluid.initPhysicalProperties()
                         
                         # Create stream and compressor
                         inlet_stream = jneqsim.process.equipment.stream.Stream("inlet", process_fluid)
