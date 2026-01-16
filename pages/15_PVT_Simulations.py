@@ -149,7 +149,8 @@ with st.expander("Edit Fluid Composition", expanded=False):
         num_rows='dynamic',
         use_container_width=True
     )
-    st.session_state.pvt_fluid_df = edited_fluid_df
+    # Store edited df for later use (don't update main session state to avoid reruns)
+    st.session_state.pvt_edited_df = edited_fluid_df
 
 isplusfluid = st.checkbox('Last component is Plus Fraction (C10+)', value=True)
 

@@ -108,7 +108,13 @@ if 'eoscg_tp_data' not in st.session_state:
     })
 
 # Show only active components option
-hidecomponents = st.checkbox('Show only active components')
+hidecomponents = st.checkbox('Show active components')
+
+# Filter display if showing only active components
+if hidecomponents and 'eoscg_edited_df' in st.session_state:
+    st.session_state.eoscg_fluid_df = st.session_state.eoscg_edited_df[
+        st.session_state.eoscg_edited_df['MolarComposition[-]'] > 0
+    ]
 
 # Fluid composition editor
 st.edited_df = st.data_editor(
@@ -130,15 +136,8 @@ st.edited_df = st.data_editor(
     num_rows='dynamic'
 )
 
-# Update session state with edited data
-st.session_state.eoscg_fluid_df = st.edited_df
-
-# Filter display if showing only active components
-if hidecomponents:
-    active_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
-    if not active_df.empty:
-        st.write("**Active components:**")
-        st.dataframe(active_df, hide_index=True)
+# Store edited df for later use (don't update main session state to avoid reruns)
+st.session_state.eoscg_edited_df = st.edited_df
 
 st.info("💡 Note: EOS-CG supports 27 components including CCS/combustion species. Composition will be normalized before simulation.")
 

@@ -39,7 +39,7 @@ if 'tp_flash_data' not in st.session_state:
 
 st.divider()
 st.text("Input Pressures and Temperatures")
-st.session_state.tp_flash_data = st.data_editor(
+st.edited_tp_data = st.data_editor(
     st.session_state.tp_flash_data.dropna().reset_index(drop=True),
     num_rows='dynamic',
     column_config={
@@ -61,14 +61,14 @@ st.session_state.tp_flash_data = st.data_editor(
 )
 
 if st.button('Run Helium Property Calculations'):
-    if st.session_state.tp_flash_data.empty:
+    if st.edited_tp_data.dropna().empty:
         st.error('No data to perform calculations. Please input temperature and pressure values.')
     else:
         results_list = []
         neqsim_fluid = fluid("srk")  # Use SRK EoS (VEGA EoS needs implementation)
         neqsim_fluid.addComponent('helium', 1.0, "mol/sec")  # Add helium component
         
-        for idx, row in st.session_state.tp_flash_data.iterrows():
+        for idx, row in st.edited_tp_data.dropna().iterrows():
             temp = row['Temperature (C)']
             pressure = row['Pressure (bara)']
             neqsim_fluid.setPressure(pressure, 'bara')
