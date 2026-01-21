@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from neqsim.thermo import fluid, TPflash
+from neqsim.thermo import fluid, TPflash, dataFrame
 from neqsim import jneqsim
 from theme import apply_theme
 import json
@@ -297,7 +297,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     ## 9. File Formats
     
-    ### 9.1 Manufacturer Curves JSON
+    ### 9.1 Manufacturer Curves JSON (Simple Format)
     
     ```json
     {
@@ -313,7 +313,40 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     }
     ```
     
-    ### 9.2 Operating Data CSV
+    ### 9.2 Manufacturer Curves JSON (Design Data Format)
+    
+    This format is typically exported from compressor vendor software:
+    
+    ```json
+    {
+      "designData": {
+        "curveData": [
+          {
+            "type": "Head vs Flow",
+            "primaryData": [
+              {
+                "legend": "5558",
+                "units": ["RPM", "m3/hr", "kJ/kg"],
+                "data": [[5558.0, 17340.1, 139.2], [5558.0, 18991.5, 137.4], ...]
+              }
+            ]
+          },
+          {
+            "type": "Efficiency vs Flow",
+            "primaryData": [
+              {
+                "legend": "5558",
+                "units": ["RPM", "m3/hr", "%"],
+                "data": [[5558.0, 17340.1, 79.86], [5558.0, 18991.5, 81.57], ...]
+              }
+            ]
+          }
+        ]
+      }
+    }
+    ```
+    
+    ### 9.3 Operating Data CSV
     
     Required columns (names are flexible, mapped via dropdown):
     - Speed (RPM)
@@ -323,7 +356,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     - Inlet Temperature
     - Outlet Temperature
     
-    ### 9.3 Fluid Composition CSV
+    ### 9.4 Fluid Composition CSV
     
     Required columns:
     - ComponentName (e.g., "methane", "ethane", "CO2")
@@ -582,6 +615,123 @@ with st.sidebar:
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
+
+
+def parse_design_data_format(loaded_data):
+    """
+    Parse the designData JSON format (e.g., from compressor vendor software).
+    
+    Expected format:
+    {
+        "designData": {
+            "curveData": [
+                {
+                    "type": "Head vs Flow",
+                    "primaryData": [
+                        {"legend": "5558", "units": ["RPM", "m3/hr", "kJ/kg"], "data": [[RPM, flow, head], ...]}
+                    ]
+                },
+                {
+                    "type": "Efficiency vs Flow",
+                    "primaryData": [
+                        {"legend": "5558", "units": ["RPM", "m3/hr", "%"], "data": [[RPM, flow, eff], ...]}
+                    ]
+                }
+            ]
+        }
+    }
+    
+    Returns:
+        tuple: (list of curve dicts, flow_unit string)
+    """
+    curve_data = loaded_data['designData']['curveData']
+    
+    # Find Head vs Flow and Efficiency vs Flow sections
+    head_data = None
+    eff_data = None
+    flow_unit = "m3/hr"  # Default
+    
+    for section in curve_data:
+        if section.get('type') == 'Head vs Flow':
+            head_data = section.get('primaryData', [])
+            # Try to get flow unit from the first entry
+            if head_data and 'units' in head_data[0]:
+                units = head_data[0]['units']
+                if len(units) >= 2:
+                    flow_unit = units[1]  # Second unit is flow
+        elif section.get('type') == 'Efficiency vs Flow':
+            eff_data = section.get('primaryData', [])
+    
+    if not head_data:
+        return None, None
+    
+    # Build curves dictionary keyed by speed (from legend)
+    curves_by_speed = {}
+    
+    # Process Head vs Flow data
+    for entry in head_data:
+        speed_str = entry.get('legend', '0')
+        try:
+            speed = float(speed_str)
+        except ValueError:
+            continue
+        
+        data_points = entry.get('data', [])
+        flows = []
+        heads = []
+        for point in data_points:
+            if len(point) >= 3:
+                # Format: [RPM, flow, head]
+                flows.append(float(point[1]))
+                heads.append(float(point[2]))
+        
+        if flows and heads:
+            curves_by_speed[speed] = {
+                'speed': speed,
+                'flow': flows,
+                'head': heads,
+                'efficiency': [80.0] * len(flows)  # Default efficiency, will be overwritten
+            }
+    
+    # Process Efficiency vs Flow data (if available)
+    if eff_data:
+        for entry in eff_data:
+            speed_str = entry.get('legend', '0')
+            try:
+                speed = float(speed_str)
+            except ValueError:
+                continue
+            
+            data_points = entry.get('data', [])
+            
+            if speed in curves_by_speed:
+                # Match efficiency values to existing flow points
+                eff_by_flow = {}
+                for point in data_points:
+                    if len(point) >= 3:
+                        # Format: [RPM, flow, efficiency]
+                        flow = float(point[1])
+                        eff = float(point[2])
+                        eff_by_flow[flow] = eff
+                
+                # Update efficiency for matching flows
+                curve = curves_by_speed[speed]
+                new_eff = []
+                for flow in curve['flow']:
+                    # Find closest efficiency value
+                    if flow in eff_by_flow:
+                        new_eff.append(eff_by_flow[flow])
+                    else:
+                        # Interpolate or use closest
+                        closest_flow = min(eff_by_flow.keys(), key=lambda x: abs(x - flow))
+                        new_eff.append(eff_by_flow[closest_flow])
+                curve['efficiency'] = new_eff
+    
+    # Convert to list sorted by speed
+    curves = list(curves_by_speed.values())
+    curves.sort(key=lambda x: x['speed'])
+    
+    return curves, flow_unit
 
 
 # Helper function to calculate polytropic exponent from measured data
@@ -984,13 +1134,29 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
             if st.session_state.get('last_loaded_curve_file') != file_id:
                 try:
                     loaded_data = json.load(uploaded_file)
+                    
+                    # Detect format and parse accordingly
+                    parsed_curves = None
+                    parsed_flow_unit = None
+                    
+                    # Format 1: Simple format with 'curves' array
                     if 'curves' in loaded_data:
-                        st.session_state['compressor_curves'] = loaded_data['curves']
-                        if 'flow_unit' in loaded_data:
-                            st.session_state['curve_flow_unit'] = loaded_data['flow_unit']
+                        parsed_curves = loaded_data['curves']
+                        parsed_flow_unit = loaded_data.get('flow_unit')
+                    
+                    # Format 2: designData format with curveData array
+                    elif 'designData' in loaded_data and 'curveData' in loaded_data['designData']:
+                        parsed_curves, parsed_flow_unit = parse_design_data_format(loaded_data)
+                    
+                    if parsed_curves:
+                        st.session_state['compressor_curves'] = parsed_curves
+                        if parsed_flow_unit:
+                            st.session_state['curve_flow_unit'] = parsed_flow_unit
                         st.session_state['last_loaded_curve_file'] = file_id
-                        st.success(f"Loaded {len(loaded_data['curves'])} curve(s)")
+                        st.success(f"Loaded {len(parsed_curves)} curve(s)")
                         st.rerun()
+                    else:
+                        st.error("Unrecognized JSON format. Expected 'curves' array or 'designData.curveData' structure.")
                 except Exception as e:
                     st.error(f"Failed to load curves: {e}")
             else:
@@ -1840,6 +2006,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
                 
                 results = []
+                fluid_properties_list = []  # Store detailed fluid properties for each point
                 
                 # Get selected units
                 flow_unit = st.session_state['flow_unit']
@@ -1923,6 +2090,20 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     TPflash(outlet_fluid)
                     outlet_fluid.initThermoProperties()
                     outlet_fluid.initPhysicalProperties()
+                    
+                    # Capture detailed fluid properties for both inlet and outlet
+                    inlet_df = dataFrame(inlet_fluid)
+                    outlet_df = dataFrame(outlet_fluid)
+                    fluid_properties_list.append({
+                        'point_index': len(fluid_properties_list),
+                        'inlet_df': inlet_df,
+                        'outlet_df': outlet_df,
+                        'inlet_P': p_in,
+                        'inlet_T': t_in,
+                        'outlet_P': p_out,
+                        'outlet_T': t_out,
+                        'speed': speed_rpm
+                    })
                     
                     # Get outlet properties
                     z_out = outlet_fluid.getZ()
@@ -2151,6 +2332,9 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 # Store results in session state for curve generation
                 st.session_state.calculated_results = results_df
                 
+                # Store detailed fluid properties in session state
+                st.session_state.fluid_properties_list = fluid_properties_list
+                
                 # Calculate deviation from manufacturer curves if available
                 mfr_curves = st.session_state.get('compressor_curves', [])
                 if mfr_curves:
@@ -2335,6 +2519,50 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     }, na_rep='-'),
                     use_container_width=True
                 )
+                
+                # Detailed Fluid Properties Section
+                with st.expander("🔬 **Detailed Fluid Properties (Inlet & Outlet)**", expanded=False):
+                    st.markdown("""
+                    This section shows detailed thermodynamic properties for each operating point, 
+                    similar to TP-flash results. Select a point to view inlet and outlet fluid properties.
+                    """)
+                    
+                    if fluid_properties_list:
+                        # Create point selector with meaningful labels
+                        point_labels = []
+                        for i, fp in enumerate(fluid_properties_list):
+                            label = f"Point {i+1}: P={fp['inlet_P']:.1f}→{fp['outlet_P']:.1f} bara, T={fp['inlet_T']:.1f}→{fp['outlet_T']:.1f} °C"
+                            if fp['speed'] > 0:
+                                label += f", {fp['speed']:.0f} RPM"
+                            point_labels.append(label)
+                        
+                        selected_point_label = st.selectbox(
+                            "Select Operating Point",
+                            options=point_labels,
+                            key='fluid_prop_point_selector'
+                        )
+                        
+                        # Get the selected point index
+                        selected_idx = point_labels.index(selected_point_label)
+                        fp = fluid_properties_list[selected_idx]
+                        
+                        st.markdown(f"**Operating Point {selected_idx + 1}** — Speed: {fp['speed']:.0f} RPM")
+                        
+                        col_in, col_out = st.columns(2)
+                        
+                        with col_in:
+                            st.markdown(f"### 📥 Inlet Conditions")
+                            st.markdown(f"**P = {fp['inlet_P']:.2f} bara, T = {fp['inlet_T']:.2f} °C**")
+                            st.dataframe(fp['inlet_df'], use_container_width=True, height=400)
+                        
+                        with col_out:
+                            st.markdown(f"### 📤 Outlet Conditions")
+                            st.markdown(f"**P = {fp['outlet_P']:.2f} bara, T = {fp['outlet_T']:.2f} °C**")
+                            st.dataframe(fp['outlet_df'], use_container_width=True, height=400)
+                        
+                        st.caption("💡 These properties correspond to the row in the Full Calculation Details table above.")
+                    else:
+                        st.info("No fluid property data available. Run a calculation first.")
                 
                 st.divider()
                 
