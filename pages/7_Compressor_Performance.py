@@ -2008,12 +2008,35 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 results = []
                 fluid_properties_list = []  # Store detailed fluid properties for each point
                 
+                # Timeout settings
+                MAX_TOTAL_TIME = 120  # 2 minutes max for all calculations
+                MAX_POINT_TIME = 30   # 30 seconds max per point
+                calculation_start_time = time.time()
+                
                 # Get selected units
                 flow_unit = st.session_state['flow_unit']
                 pressure_unit = st.session_state['pressure_unit']
                 temp_unit = st.session_state['temperature_unit']
                 
-                for idx, row in edited_data.dropna().iterrows():
+                # Progress tracking
+                total_rows = len(edited_data.dropna())
+                progress_bar = st.progress(0, text="Starting calculations...")
+                
+                for row_num, (idx, row) in enumerate(edited_data.dropna().iterrows()):
+                    # Check total time limit
+                    elapsed_total = time.time() - calculation_start_time
+                    if elapsed_total > MAX_TOTAL_TIME:
+                        st.error(f"⏱️ Calculation timeout: Total time exceeded {MAX_TOTAL_TIME} seconds ({elapsed_total:.1f}s). "
+                                f"Completed {len(results)} of {total_rows} points. "
+                                f"Try using a simpler EoS model (PR or SRK) or reduce the number of data points.")
+                        break
+                    
+                    # Update progress
+                    progress_bar.progress((row_num + 1) / total_rows, 
+                                         text=f"Calculating point {row_num + 1} of {total_rows}... ({elapsed_total:.0f}s elapsed)")
+                    
+                    point_start_time = time.time()
+                    
                     speed_rpm = row.get('Speed (RPM)', 0.0)
                     flow_value = row['Flow Rate']
                     p_in_raw = row['Inlet Pressure']
@@ -2245,6 +2268,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             'Power (MW)': power_MW,
                             'Vol Flow Inlet (m³/hr)': vol_flow_in,
                         })
+                        
+                        # Check point calculation time
+                        point_elapsed = time.time() - point_start_time
+                        if point_elapsed > MAX_POINT_TIME:
+                            st.warning(f"⚠️ Point {row_num + 1} took {point_elapsed:.1f}s (>{MAX_POINT_TIME}s limit)")
                     else:
                         # Use Schultz analytical method
                         # Create isentropic outlet fluid (same entropy as inlet)
@@ -2326,6 +2354,17 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             'Power (MW)': power_MW,
                             'Vol Flow Inlet (m³/hr)': vol_flow_in,
                         })
+                        
+                        # Check point calculation time
+                        point_elapsed = time.time() - point_start_time
+                        if point_elapsed > MAX_POINT_TIME:
+                            st.warning(f"⚠️ Point {row_num + 1} took {point_elapsed:.1f}s (>{MAX_POINT_TIME}s limit)")
+                
+                # Clear progress bar after completion
+                progress_bar.empty()
+                
+                # Show total calculation time
+                total_calc_time = time.time() - calculation_start_time
                 
                 results_df = pd.DataFrame(results)
                 
@@ -2384,7 +2423,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                             else:
                                 results_df.at[idx, 'Status'] = '⚠️ Out of range'
                 
-                st.success('Compressor performance calculations completed successfully!')
+                st.success(f'Compressor performance calculations completed successfully! ({total_calc_time:.1f}s for {len(results)} points)')
                 
                 # Display results
                 st.subheader("📊 Calculation Results")
@@ -2520,57 +2559,105 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     use_container_width=True
                 )
                 
-                # Detailed Fluid Properties Section
-                # Track if user has interacted with this section to keep it expanded
-                fluid_props_expanded = st.session_state.get('fluid_props_expanded', False)
+                # Detailed Fluid Properties Section - Download Option
+                st.subheader("🔬 Detailed Fluid Properties (Inlet & Outlet)")
+                st.markdown("""
+                Download comprehensive results including input data, calculated performance, 
+                and detailed thermodynamic properties for all operating points.
+                """)
                 
-                with st.expander("🔬 **Detailed Fluid Properties (Inlet & Outlet)**", expanded=fluid_props_expanded):
-                    st.markdown("""
-                    This section shows detailed thermodynamic properties for each operating point, 
-                    similar to TP-flash results. Select a point to view inlet and outlet fluid properties.
-                    """)
+                if fluid_properties_list:
+                    # Create Excel file with multiple sheets
+                    import io
                     
-                    if fluid_properties_list:
-                        # Create point selector with meaningful labels
-                        point_labels = []
+                    # Create buffer for Excel file
+                    excel_buffer = io.BytesIO()
+                    
+                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                        # Sheet 1: Summary Results
+                        display_df.to_excel(writer, sheet_name='Summary Results', index=False)
+                        
+                        # Sheet 2: Input Data
+                        input_data_for_export = edited_data.dropna().copy()
+                        input_data_for_export.to_excel(writer, sheet_name='Input Data', index=False)
+                        
+                        # Sheets for each point: Inlet and Outlet properties
                         for i, fp in enumerate(fluid_properties_list):
-                            label = f"Point {i+1}: P={fp['inlet_P']:.1f}→{fp['outlet_P']:.1f} bara, T={fp['inlet_T']:.1f}→{fp['outlet_T']:.1f} °C"
-                            if fp['speed'] > 0:
-                                label += f", {fp['speed']:.0f} RPM"
-                            point_labels.append(label)
-                        
-                        # Use on_change callback to keep expander open when selecting points
-                        def on_point_change():
-                            st.session_state['fluid_props_expanded'] = True
-                        
-                        selected_point_label = st.selectbox(
-                            "Select Operating Point",
-                            options=point_labels,
-                            key='fluid_prop_point_selector',
-                            on_change=on_point_change
+                            # Inlet properties sheet
+                            inlet_sheet_name = f'Point{i+1}_Inlet'
+                            # Add metadata rows
+                            inlet_meta = pd.DataFrame({
+                                'Property': ['Point', 'Pressure (bara)', 'Temperature (°C)', 'Speed (RPM)'],
+                                'Value': [i+1, fp['inlet_P'], fp['inlet_T'], fp['speed']]
+                            })
+                            inlet_meta.to_excel(writer, sheet_name=inlet_sheet_name, index=False, startrow=0)
+                            fp['inlet_df'].to_excel(writer, sheet_name=inlet_sheet_name, index=True, startrow=5)
+                            
+                            # Outlet properties sheet
+                            outlet_sheet_name = f'Point{i+1}_Outlet'
+                            outlet_meta = pd.DataFrame({
+                                'Property': ['Point', 'Pressure (bara)', 'Temperature (°C)', 'Speed (RPM)'],
+                                'Value': [i+1, fp['outlet_P'], fp['outlet_T'], fp['speed']]
+                            })
+                            outlet_meta.to_excel(writer, sheet_name=outlet_sheet_name, index=False, startrow=0)
+                            fp['outlet_df'].to_excel(writer, sheet_name=outlet_sheet_name, index=True, startrow=5)
+                    
+                    excel_buffer.seek(0)
+                    
+                    col_dl1, col_dl2 = st.columns(2)
+                    
+                    with col_dl1:
+                        st.download_button(
+                            label="📥 Download All Results (Excel)",
+                            data=excel_buffer,
+                            file_name="compressor_detailed_results.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
                         )
+                    
+                    with col_dl2:
+                        # Also offer CSV option (combined into one file)
+                        csv_buffer = io.StringIO()
                         
-                        # Get the selected point index
-                        selected_idx = point_labels.index(selected_point_label)
-                        fp = fluid_properties_list[selected_idx]
+                        # Write header info
+                        csv_buffer.write("# Compressor Performance Detailed Results\n")
+                        csv_buffer.write(f"# Generated: {pd.Timestamp.now()}\n")
+                        csv_buffer.write(f"# EoS Model: {st.session_state.get('eos_model', 'N/A')}\n")
+                        csv_buffer.write(f"# Calculation Method: {st.session_state.get('calc_method', 'N/A')}\n")
+                        csv_buffer.write("\n")
                         
-                        st.markdown(f"**Operating Point {selected_idx + 1}** — Speed: {fp['speed']:.0f} RPM")
+                        # Summary results
+                        csv_buffer.write("## SUMMARY RESULTS\n")
+                        display_df.to_csv(csv_buffer, index=False)
+                        csv_buffer.write("\n\n")
                         
-                        col_in, col_out = st.columns(2)
+                        # Input data
+                        csv_buffer.write("## INPUT DATA\n")
+                        edited_data.dropna().to_csv(csv_buffer, index=False)
+                        csv_buffer.write("\n\n")
                         
-                        with col_in:
-                            st.markdown(f"### 📥 Inlet Conditions")
-                            st.markdown(f"**P = {fp['inlet_P']:.2f} bara, T = {fp['inlet_T']:.2f} °C**")
-                            st.dataframe(fp['inlet_df'], use_container_width=True, height=400)
+                        # Detailed properties for each point
+                        for i, fp in enumerate(fluid_properties_list):
+                            csv_buffer.write(f"## POINT {i+1} - INLET (P={fp['inlet_P']:.2f} bara, T={fp['inlet_T']:.2f} °C, Speed={fp['speed']:.0f} RPM)\n")
+                            fp['inlet_df'].to_csv(csv_buffer, index=True)
+                            csv_buffer.write("\n")
+                            
+                            csv_buffer.write(f"## POINT {i+1} - OUTLET (P={fp['outlet_P']:.2f} bara, T={fp['outlet_T']:.2f} °C)\n")
+                            fp['outlet_df'].to_csv(csv_buffer, index=True)
+                            csv_buffer.write("\n\n")
                         
-                        with col_out:
-                            st.markdown(f"### 📤 Outlet Conditions")
-                            st.markdown(f"**P = {fp['outlet_P']:.2f} bara, T = {fp['outlet_T']:.2f} °C**")
-                            st.dataframe(fp['outlet_df'], use_container_width=True, height=400)
+                        csv_data = csv_buffer.getvalue()
                         
-                        st.caption("💡 These properties correspond to the row in the Full Calculation Details table above.")
-                    else:
-                        st.info("No fluid property data available. Run a calculation first.")
+                        st.download_button(
+                            label="📥 Download All Results (Text/CSV)",
+                            data=csv_data,
+                            file_name="compressor_detailed_results.txt",
+                            mime="text/plain"
+                        )
+                    
+                    st.caption(f"💡 Excel file contains {len(fluid_properties_list)} operating points with separate sheets for inlet/outlet properties.")
+                else:
+                    st.info("No fluid property data available. Run a calculation first.")
                 
                 st.divider()
                 
