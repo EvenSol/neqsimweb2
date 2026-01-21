@@ -422,28 +422,28 @@ test_fluids = {
     "Custom Mixture": None,  # Special case for custom composition
 }
 
-# Default custom fluid composition
+# Default custom fluid composition (pure methane)
 default_custom_fluid = {
     'ComponentName': gerg2008_components,
     'MolarComposition[-]': [
-        90.0,  # methane
-        1.5,   # nitrogen
-        2.0,   # CO2
-        4.0,   # ethane
-        1.5,   # propane
-        0.3,   # i-butane
-        0.4,   # n-butane
-        0.1,   # i-pentane
-        0.1,   # n-pentane
-        0.05,  # n-hexane
-        0.02,  # n-heptane
-        0.01,  # n-octane
-        0.0,   # hydrogen
-        0.0,   # oxygen
-        0.0,   # CO
-        0.0,   # water
-        0.0,   # helium
-        0.0    # argon
+        100.0,  # methane
+        0.0,    # nitrogen
+        0.0,    # CO2
+        0.0,    # ethane
+        0.0,    # propane
+        0.0,    # i-butane
+        0.0,    # n-butane
+        0.0,    # i-pentane
+        0.0,    # n-pentane
+        0.0,    # n-hexane
+        0.0,    # n-heptane
+        0.0,    # n-octane
+        0.0,    # hydrogen
+        0.0,    # oxygen
+        0.0,    # CO
+        0.0,    # water
+        0.0,    # helium
+        0.0     # argon
     ]
 }
 
