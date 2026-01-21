@@ -2559,228 +2559,6 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     use_container_width=True
                 )
                 
-                # Detailed Fluid Properties Section - Download Option
-                st.subheader("🔬 Detailed Fluid Properties (Inlet & Outlet)")
-                st.markdown("""
-                Download comprehensive results including input data, calculated performance, 
-                and detailed thermodynamic properties for all operating points.
-                """)
-                
-                if fluid_properties_list:
-                    # Create Excel file with multiple sheets
-                    import io
-                    
-                    # Get curve data for export
-                    input_curves = st.session_state.get('compressor_curves', [])
-                    gen_curves_export = st.session_state.get('generated_curves', None)
-                    curve_flow_unit_export = st.session_state.get('curve_flow_unit', 'm3/hr')
-                    
-                    # Create buffer for Excel file
-                    excel_buffer = io.BytesIO()
-                    
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        # Sheet 1: Summary Results
-                        display_df.to_excel(writer, sheet_name='Summary Results', index=False)
-                        
-                        # Sheet 2: Input Data
-                        input_data_for_export = edited_data.dropna().copy()
-                        input_data_for_export.to_excel(writer, sheet_name='Input Data', index=False)
-                        
-                        # Sheet 3: Fluid Composition
-                        fluid_comp = get_fluid_composition()
-                        if fluid_comp:
-                            fluid_comp_df = pd.DataFrame({
-                                'Component': list(fluid_comp.keys()),
-                                'Mole %': list(fluid_comp.values())
-                            })
-                            fluid_comp_df.to_excel(writer, sheet_name='Fluid Composition', index=False)
-                        
-                        # Sheets for Input Manufacturer Curves
-                        if input_curves:
-                            # Create combined curves sheet
-                            all_input_curves_data = []
-                            for curve in input_curves:
-                                for j in range(len(curve['flow'])):
-                                    all_input_curves_data.append({
-                                        'Speed (RPM)': curve['speed'],
-                                        f'Flow ({curve_flow_unit_export})': curve['flow'][j],
-                                        'Head (kJ/kg)': curve['head'][j],
-                                        'Efficiency (%)': curve['efficiency'][j]
-                                    })
-                            if all_input_curves_data:
-                                input_curves_df = pd.DataFrame(all_input_curves_data)
-                                input_curves_df.to_excel(writer, sheet_name='Input Curves (All)', index=False)
-                            
-                            # Individual sheets per speed
-                            for i, curve in enumerate(input_curves):
-                                sheet_name = f'InputCurve_{curve["speed"]:.0f}RPM'
-                                # Truncate sheet name if too long (Excel max 31 chars)
-                                if len(sheet_name) > 31:
-                                    sheet_name = sheet_name[:31]
-                                curve_df = pd.DataFrame({
-                                    f'Flow ({curve_flow_unit_export})': curve['flow'],
-                                    'Head (kJ/kg)': curve['head'],
-                                    'Efficiency (%)': curve['efficiency']
-                                })
-                                # Add metadata
-                                meta_df = pd.DataFrame({'Property': ['Speed (RPM)'], 'Value': [curve['speed']]})
-                                meta_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=0)
-                                curve_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=3)
-                        
-                        # Sheets for Generated/Adjusted Curves
-                        if gen_curves_export and gen_curves_export.get('curves'):
-                            gen_curves_list = gen_curves_export['curves']
-                            gen_flow_unit = gen_curves_export.get('flow_unit', 'm³/hr')
-                            
-                            # Create combined generated curves sheet
-                            all_gen_curves_data = []
-                            for curve in gen_curves_list:
-                                for j in range(len(curve['flow'])):
-                                    all_gen_curves_data.append({
-                                        'Speed (RPM)': curve['speed'],
-                                        f'Flow ({gen_flow_unit})': curve['flow'][j],
-                                        'Head (kJ/kg)': curve['head'][j],
-                                        'Efficiency (%)': curve['efficiency'][j]
-                                    })
-                            if all_gen_curves_data:
-                                gen_curves_df = pd.DataFrame(all_gen_curves_data)
-                                gen_curves_df.to_excel(writer, sheet_name='Generated Curves (All)', index=False)
-                            
-                            # Individual sheets per speed
-                            for i, curve in enumerate(gen_curves_list):
-                                sheet_name = f'GenCurve_{curve["speed"]:.0f}RPM'
-                                if len(sheet_name) > 31:
-                                    sheet_name = sheet_name[:31]
-                                curve_df = pd.DataFrame({
-                                    f'Flow ({gen_flow_unit})': curve['flow'],
-                                    'Head (kJ/kg)': curve['head'],
-                                    'Efficiency (%)': curve['efficiency']
-                                })
-                                meta_df = pd.DataFrame({'Property': ['Speed (RPM)'], 'Value': [curve['speed']]})
-                                meta_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=0)
-                                curve_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=3)
-                        
-                        # Sheets for each point: Inlet and Outlet properties
-                        for i, fp in enumerate(fluid_properties_list):
-                            # Inlet properties sheet
-                            inlet_sheet_name = f'Point{i+1}_Inlet'
-                            # Add metadata rows
-                            inlet_meta = pd.DataFrame({
-                                'Property': ['Point', 'Pressure (bara)', 'Temperature (°C)', 'Speed (RPM)'],
-                                'Value': [i+1, fp['inlet_P'], fp['inlet_T'], fp['speed']]
-                            })
-                            inlet_meta.to_excel(writer, sheet_name=inlet_sheet_name, index=False, startrow=0)
-                            fp['inlet_df'].to_excel(writer, sheet_name=inlet_sheet_name, index=True, startrow=5)
-                            
-                            # Outlet properties sheet
-                            outlet_sheet_name = f'Point{i+1}_Outlet'
-                            outlet_meta = pd.DataFrame({
-                                'Property': ['Point', 'Pressure (bara)', 'Temperature (°C)', 'Speed (RPM)'],
-                                'Value': [i+1, fp['outlet_P'], fp['outlet_T'], fp['speed']]
-                            })
-                            outlet_meta.to_excel(writer, sheet_name=outlet_sheet_name, index=False, startrow=0)
-                            fp['outlet_df'].to_excel(writer, sheet_name=outlet_sheet_name, index=True, startrow=5)
-                    
-                    excel_buffer.seek(0)
-                    
-                    col_dl1, col_dl2 = st.columns(2)
-                    
-                    with col_dl1:
-                        st.download_button(
-                            label="📥 Download All Results (Excel)",
-                            data=excel_buffer,
-                            file_name="compressor_detailed_results.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            type="primary"
-                        )
-                    
-                    with col_dl2:
-                        # Also offer CSV option (combined into one file)
-                        csv_buffer = io.StringIO()
-                        
-                        # Write header info
-                        csv_buffer.write("# Compressor Performance Detailed Results\n")
-                        csv_buffer.write(f"# Generated: {pd.Timestamp.now()}\n")
-                        csv_buffer.write(f"# EoS Model: {st.session_state.get('eos_model', 'N/A')}\n")
-                        csv_buffer.write(f"# Calculation Method: {st.session_state.get('calc_method', 'N/A')}\n")
-                        csv_buffer.write("\n")
-                        
-                        # Summary results
-                        csv_buffer.write("## SUMMARY RESULTS\n")
-                        display_df.to_csv(csv_buffer, index=False)
-                        csv_buffer.write("\n\n")
-                        
-                        # Input data
-                        csv_buffer.write("## INPUT DATA\n")
-                        edited_data.dropna().to_csv(csv_buffer, index=False)
-                        csv_buffer.write("\n\n")
-                        
-                        # Fluid composition
-                        if fluid_comp:
-                            csv_buffer.write("## FLUID COMPOSITION\n")
-                            fluid_comp_df.to_csv(csv_buffer, index=False)
-                            csv_buffer.write("\n\n")
-                        
-                        # Input manufacturer curves
-                        if input_curves:
-                            csv_buffer.write("## INPUT MANUFACTURER CURVES\n")
-                            for curve in input_curves:
-                                csv_buffer.write(f"# Speed: {curve['speed']:.0f} RPM\n")
-                                curve_df = pd.DataFrame({
-                                    f'Flow ({curve_flow_unit_export})': curve['flow'],
-                                    'Head (kJ/kg)': curve['head'],
-                                    'Efficiency (%)': curve['efficiency']
-                                })
-                                curve_df.to_csv(csv_buffer, index=False)
-                                csv_buffer.write("\n")
-                            csv_buffer.write("\n")
-                        
-                        # Generated curves
-                        if gen_curves_export and gen_curves_export.get('curves'):
-                            csv_buffer.write("## GENERATED/ADJUSTED CURVES\n")
-                            gen_flow_unit = gen_curves_export.get('flow_unit', 'm³/hr')
-                            for curve in gen_curves_export['curves']:
-                                csv_buffer.write(f"# Speed: {curve['speed']:.0f} RPM\n")
-                                curve_df = pd.DataFrame({
-                                    f'Flow ({gen_flow_unit})': curve['flow'],
-                                    'Head (kJ/kg)': curve['head'],
-                                    'Efficiency (%)': curve['efficiency']
-                                })
-                                curve_df.to_csv(csv_buffer, index=False)
-                                csv_buffer.write("\n")
-                            csv_buffer.write("\n")
-                        
-                        # Detailed properties for each point
-                        for i, fp in enumerate(fluid_properties_list):
-                            csv_buffer.write(f"## POINT {i+1} - INLET (P={fp['inlet_P']:.2f} bara, T={fp['inlet_T']:.2f} °C, Speed={fp['speed']:.0f} RPM)\n")
-                            fp['inlet_df'].to_csv(csv_buffer, index=True)
-                            csv_buffer.write("\n")
-                            
-                            csv_buffer.write(f"## POINT {i+1} - OUTLET (P={fp['outlet_P']:.2f} bara, T={fp['outlet_T']:.2f} °C)\n")
-                            fp['outlet_df'].to_csv(csv_buffer, index=True)
-                            csv_buffer.write("\n\n")
-                        
-                        csv_data = csv_buffer.getvalue()
-                        
-                        st.download_button(
-                            label="📥 Download All Results (Text/CSV)",
-                            data=csv_data,
-                            file_name="compressor_detailed_results.txt",
-                            mime="text/plain"
-                        )
-                    
-                    # Summary of what's included
-                    sheets_info = [f"{len(fluid_properties_list)} operating points (inlet/outlet)"]
-                    if input_curves:
-                        sheets_info.append(f"{len(input_curves)} input curves")
-                    if gen_curves_export and gen_curves_export.get('curves'):
-                        sheets_info.append(f"{len(gen_curves_export['curves'])} generated curves")
-                    st.caption(f"💡 Excel file includes: {', '.join(sheets_info)}")
-                else:
-                    st.info("No fluid property data available. Run a calculation first.")
-                
-                st.divider()
-                
                 # Plots
                 st.subheader("📈 Performance Curves")
                 
@@ -3043,14 +2821,235 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 # Download results
                 st.divider()
                 st.subheader("📥 Download Results")
+                st.markdown("""
+                Download comprehensive results including input data, calculated performance, 
+                and detailed thermodynamic properties for all operating points.
+                """)
                 
-                csv = results_df.to_csv(index=False)
-                st.download_button(
-                    label="Download Results as CSV",
-                    data=csv,
-                    file_name=f"compressor_performance_{selected_fluid_name.replace(' ', '_')}.csv",
-                    mime="text/csv"
-                )
+                if fluid_properties_list:
+                    # Create Excel file with multiple sheets
+                    import io
+                    
+                    # Get curve data for export
+                    input_curves = st.session_state.get('compressor_curves', [])
+                    gen_curves_export = st.session_state.get('generated_curves', None)
+                    curve_flow_unit_export = st.session_state.get('curve_flow_unit', 'm3/hr')
+                    
+                    # Create buffer for Excel file
+                    excel_buffer = io.BytesIO()
+                    
+                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                        # Sheet 1: Summary Results
+                        display_df.to_excel(writer, sheet_name='Summary Results', index=False)
+                        
+                        # Sheet 2: Input Data
+                        input_data_for_export = edited_data.dropna().copy()
+                        input_data_for_export.to_excel(writer, sheet_name='Input Data', index=False)
+                        
+                        # Sheet 3: Fluid Composition
+                        fluid_comp = get_fluid_composition()
+                        if fluid_comp:
+                            fluid_comp_df = pd.DataFrame({
+                                'Component': list(fluid_comp.keys()),
+                                'Mole %': list(fluid_comp.values())
+                            })
+                            fluid_comp_df.to_excel(writer, sheet_name='Fluid Composition', index=False)
+                        
+                        # Sheets for Input Manufacturer Curves
+                        if input_curves:
+                            # Create combined curves sheet
+                            all_input_curves_data = []
+                            for curve in input_curves:
+                                for j in range(len(curve['flow'])):
+                                    all_input_curves_data.append({
+                                        'Speed (RPM)': curve['speed'],
+                                        f'Flow ({curve_flow_unit_export})': curve['flow'][j],
+                                        'Head (kJ/kg)': curve['head'][j],
+                                        'Efficiency (%)': curve['efficiency'][j]
+                                    })
+                            if all_input_curves_data:
+                                input_curves_df = pd.DataFrame(all_input_curves_data)
+                                input_curves_df.to_excel(writer, sheet_name='Input Curves (All)', index=False)
+                            
+                            # Individual sheets per speed
+                            for i, curve in enumerate(input_curves):
+                                sheet_name = f'InputCurve_{curve["speed"]:.0f}RPM'
+                                # Truncate sheet name if too long (Excel max 31 chars)
+                                if len(sheet_name) > 31:
+                                    sheet_name = sheet_name[:31]
+                                curve_df = pd.DataFrame({
+                                    f'Flow ({curve_flow_unit_export})': curve['flow'],
+                                    'Head (kJ/kg)': curve['head'],
+                                    'Efficiency (%)': curve['efficiency']
+                                })
+                                # Add metadata
+                                meta_df = pd.DataFrame({'Property': ['Speed (RPM)'], 'Value': [curve['speed']]})
+                                meta_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=0)
+                                curve_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=3)
+                        
+                        # Sheets for Generated/Adjusted Curves
+                        if gen_curves_export and gen_curves_export.get('curves'):
+                            gen_curves_list = gen_curves_export['curves']
+                            gen_flow_unit = gen_curves_export.get('flow_unit', 'm³/hr')
+                            
+                            # Create combined generated curves sheet
+                            all_gen_curves_data = []
+                            for curve in gen_curves_list:
+                                for j in range(len(curve['flow'])):
+                                    all_gen_curves_data.append({
+                                        'Speed (RPM)': curve['speed'],
+                                        f'Flow ({gen_flow_unit})': curve['flow'][j],
+                                        'Head (kJ/kg)': curve['head'][j],
+                                        'Efficiency (%)': curve['efficiency'][j]
+                                    })
+                            if all_gen_curves_data:
+                                gen_curves_df = pd.DataFrame(all_gen_curves_data)
+                                gen_curves_df.to_excel(writer, sheet_name='Generated Curves (All)', index=False)
+                            
+                            # Individual sheets per speed
+                            for i, curve in enumerate(gen_curves_list):
+                                sheet_name = f'GenCurve_{curve["speed"]:.0f}RPM'
+                                if len(sheet_name) > 31:
+                                    sheet_name = sheet_name[:31]
+                                curve_df = pd.DataFrame({
+                                    f'Flow ({gen_flow_unit})': curve['flow'],
+                                    'Head (kJ/kg)': curve['head'],
+                                    'Efficiency (%)': curve['efficiency']
+                                })
+                                meta_df = pd.DataFrame({'Property': ['Speed (RPM)'], 'Value': [curve['speed']]})
+                                meta_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=0)
+                                curve_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=3)
+                        
+                        # Sheets for each point: Inlet and Outlet properties
+                        for i, fp in enumerate(fluid_properties_list):
+                            # Inlet properties sheet
+                            inlet_sheet_name = f'Point{i+1}_Inlet'
+                            # Add metadata rows
+                            inlet_meta = pd.DataFrame({
+                                'Property': ['Point', 'Pressure (bara)', 'Temperature (°C)', 'Speed (RPM)'],
+                                'Value': [i+1, fp['inlet_P'], fp['inlet_T'], fp['speed']]
+                            })
+                            inlet_meta.to_excel(writer, sheet_name=inlet_sheet_name, index=False, startrow=0)
+                            fp['inlet_df'].to_excel(writer, sheet_name=inlet_sheet_name, index=True, startrow=5)
+                            
+                            # Outlet properties sheet
+                            outlet_sheet_name = f'Point{i+1}_Outlet'
+                            outlet_meta = pd.DataFrame({
+                                'Property': ['Point', 'Pressure (bara)', 'Temperature (°C)', 'Speed (RPM)'],
+                                'Value': [i+1, fp['outlet_P'], fp['outlet_T'], fp['speed']]
+                            })
+                            outlet_meta.to_excel(writer, sheet_name=outlet_sheet_name, index=False, startrow=0)
+                            fp['outlet_df'].to_excel(writer, sheet_name=outlet_sheet_name, index=True, startrow=5)
+                    
+                    excel_buffer.seek(0)
+                    
+                    col_dl1, col_dl2 = st.columns(2)
+                    
+                    with col_dl1:
+                        st.download_button(
+                            label="📥 Download All Results (Excel)",
+                            data=excel_buffer,
+                            file_name=f"compressor_detailed_results_{selected_fluid_name.replace(' ', '_')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
+                        )
+                    
+                    with col_dl2:
+                        # Also offer CSV option (combined into one file)
+                        csv_buffer = io.StringIO()
+                        
+                        # Write header info
+                        csv_buffer.write("# Compressor Performance Detailed Results\n")
+                        csv_buffer.write(f"# Generated: {pd.Timestamp.now()}\n")
+                        csv_buffer.write(f"# EoS Model: {st.session_state.get('eos_model', 'N/A')}\n")
+                        csv_buffer.write(f"# Calculation Method: {st.session_state.get('calc_method', 'N/A')}\n")
+                        csv_buffer.write("\n")
+                        
+                        # Summary results
+                        csv_buffer.write("## SUMMARY RESULTS\n")
+                        display_df.to_csv(csv_buffer, index=False)
+                        csv_buffer.write("\n\n")
+                        
+                        # Input data
+                        csv_buffer.write("## INPUT DATA\n")
+                        edited_data.dropna().to_csv(csv_buffer, index=False)
+                        csv_buffer.write("\n\n")
+                        
+                        # Fluid composition
+                        fluid_comp = get_fluid_composition()
+                        if fluid_comp:
+                            fluid_comp_df = pd.DataFrame({
+                                'Component': list(fluid_comp.keys()),
+                                'Mole %': list(fluid_comp.values())
+                            })
+                            csv_buffer.write("## FLUID COMPOSITION\n")
+                            fluid_comp_df.to_csv(csv_buffer, index=False)
+                            csv_buffer.write("\n\n")
+                        
+                        # Input manufacturer curves
+                        if input_curves:
+                            csv_buffer.write("## INPUT MANUFACTURER CURVES\n")
+                            for curve in input_curves:
+                                csv_buffer.write(f"# Speed: {curve['speed']:.0f} RPM\n")
+                                curve_df = pd.DataFrame({
+                                    f'Flow ({curve_flow_unit_export})': curve['flow'],
+                                    'Head (kJ/kg)': curve['head'],
+                                    'Efficiency (%)': curve['efficiency']
+                                })
+                                curve_df.to_csv(csv_buffer, index=False)
+                                csv_buffer.write("\n")
+                            csv_buffer.write("\n")
+                        
+                        # Generated curves
+                        if gen_curves_export and gen_curves_export.get('curves'):
+                            csv_buffer.write("## GENERATED/ADJUSTED CURVES\n")
+                            gen_flow_unit = gen_curves_export.get('flow_unit', 'm³/hr')
+                            for curve in gen_curves_export['curves']:
+                                csv_buffer.write(f"# Speed: {curve['speed']:.0f} RPM\n")
+                                curve_df = pd.DataFrame({
+                                    f'Flow ({gen_flow_unit})': curve['flow'],
+                                    'Head (kJ/kg)': curve['head'],
+                                    'Efficiency (%)': curve['efficiency']
+                                })
+                                curve_df.to_csv(csv_buffer, index=False)
+                                csv_buffer.write("\n")
+                            csv_buffer.write("\n")
+                        
+                        # Detailed properties for each point
+                        for i, fp in enumerate(fluid_properties_list):
+                            csv_buffer.write(f"## POINT {i+1} - INLET (P={fp['inlet_P']:.2f} bara, T={fp['inlet_T']:.2f} °C, Speed={fp['speed']:.0f} RPM)\n")
+                            fp['inlet_df'].to_csv(csv_buffer, index=True)
+                            csv_buffer.write("\n")
+                            
+                            csv_buffer.write(f"## POINT {i+1} - OUTLET (P={fp['outlet_P']:.2f} bara, T={fp['outlet_T']:.2f} °C)\n")
+                            fp['outlet_df'].to_csv(csv_buffer, index=True)
+                            csv_buffer.write("\n\n")
+                        
+                        csv_data = csv_buffer.getvalue()
+                        
+                        st.download_button(
+                            label="📥 Download All Results (Text/CSV)",
+                            data=csv_data,
+                            file_name=f"compressor_detailed_results_{selected_fluid_name.replace(' ', '_')}.txt",
+                            mime="text/plain"
+                        )
+                    
+                    # Summary of what's included
+                    sheets_info = [f"{len(fluid_properties_list)} operating points (inlet/outlet)"]
+                    if input_curves:
+                        sheets_info.append(f"{len(input_curves)} input curves")
+                    if gen_curves_export and gen_curves_export.get('curves'):
+                        sheets_info.append(f"{len(gen_curves_export['curves'])} generated curves")
+                    st.caption(f"💡 Excel file includes: {', '.join(sheets_info)}")
+                else:
+                    csv = results_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Results as CSV",
+                        data=csv,
+                        file_name=f"compressor_performance_{selected_fluid_name.replace(' ', '_')}.csv",
+                        mime="text/csv"
+                    )
+                    st.info("💡 Run calculation to get detailed fluid property data in the export.")
                 
             except Exception as e:
                 st.error(f"Calculation failed: {str(e)}")
