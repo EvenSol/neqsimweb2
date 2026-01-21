@@ -2887,10 +2887,53 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 meta_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=0)
                                 curve_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=3)
                         
-                        # Sheets for Generated/Adjusted Curves
+                        # Sheets for Generated/Adjusted Curves (from "Generate Updated Curves for New Gas")
                         if gen_curves_export and gen_curves_export.get('curves'):
                             gen_curves_list = gen_curves_export['curves']
                             gen_flow_unit = gen_curves_export.get('flow_unit', 'm³/hr')
+                            
+                            # Create metadata sheet for generated curves info
+                            gen_meta_info = {
+                                'Property': [
+                                    'Source',
+                                    'Flow Unit',
+                                    'Number of Curves',
+                                ],
+                                'Value': [
+                                    gen_curves_export.get('source', 'Generated from data'),
+                                    gen_flow_unit,
+                                    len(gen_curves_list),
+                                ]
+                            }
+                            # Add adjustment-specific metadata if available
+                            if gen_curves_export.get('adjustment_method'):
+                                gen_meta_info['Property'].extend([
+                                    'Adjustment Method',
+                                    'Head Correction Factor',
+                                    'Efficiency Correction Factor',
+                                    'Number of Reference Points'
+                                ])
+                                gen_meta_info['Value'].extend([
+                                    gen_curves_export.get('adjustment_method', 'N/A'),
+                                    f"{gen_curves_export.get('head_correction', 'N/A')}",
+                                    f"{gen_curves_export.get('eff_correction', 'N/A')}",
+                                    gen_curves_export.get('num_reference_points', 'N/A')
+                                ])
+                            # Add curve fitting metadata if available
+                            if gen_curves_export.get('r2_head') is not None:
+                                gen_meta_info['Property'].extend([
+                                    'Reference Speed (RPM)',
+                                    'R² (Head fit)',
+                                    'R² (Efficiency fit)'
+                                ])
+                                gen_meta_info['Value'].extend([
+                                    gen_curves_export.get('ref_speed', 'N/A'),
+                                    f"{gen_curves_export.get('r2_head', 0):.4f}",
+                                    f"{gen_curves_export.get('r2_eff', 0):.4f}"
+                                ])
+                            
+                            gen_meta_df = pd.DataFrame(gen_meta_info)
+                            gen_meta_df.to_excel(writer, sheet_name='NewGas Curves Info', index=False)
                             
                             # Create combined generated curves sheet
                             all_gen_curves_data = []
@@ -2904,11 +2947,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                     })
                             if all_gen_curves_data:
                                 gen_curves_df = pd.DataFrame(all_gen_curves_data)
-                                gen_curves_df.to_excel(writer, sheet_name='Generated Curves (All)', index=False)
+                                gen_curves_df.to_excel(writer, sheet_name='NewGas Curves (All)', index=False)
                             
                             # Individual sheets per speed
                             for i, curve in enumerate(gen_curves_list):
-                                sheet_name = f'GenCurve_{curve["speed"]:.0f}RPM'
+                                sheet_name = f'NewGas_{curve["speed"]:.0f}RPM'
                                 if len(sheet_name) > 31:
                                     sheet_name = sheet_name[:31]
                                 curve_df = pd.DataFrame({
@@ -3000,9 +3043,19 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 csv_buffer.write("\n")
                             csv_buffer.write("\n")
                         
-                        # Generated curves
+                        # Generated/Adjusted curves for New Gas
                         if gen_curves_export and gen_curves_export.get('curves'):
-                            csv_buffer.write("## GENERATED/ADJUSTED CURVES\n")
+                            csv_buffer.write("## NEW GAS CURVES (Generated/Adjusted)\n")
+                            # Write metadata
+                            csv_buffer.write(f"# Source: {gen_curves_export.get('source', 'Generated from data')}\n")
+                            if gen_curves_export.get('adjustment_method'):
+                                csv_buffer.write(f"# Adjustment Method: {gen_curves_export.get('adjustment_method')}\n")
+                                csv_buffer.write(f"# Head Correction: {gen_curves_export.get('head_correction', 'N/A')}\n")
+                                csv_buffer.write(f"# Efficiency Correction: {gen_curves_export.get('eff_correction', 'N/A')}\n")
+                            if gen_curves_export.get('r2_head') is not None:
+                                csv_buffer.write(f"# Reference Speed: {gen_curves_export.get('ref_speed', 'N/A')} RPM\n")
+                                csv_buffer.write(f"# R² (Head): {gen_curves_export.get('r2_head', 0):.4f}\n")
+                                csv_buffer.write(f"# R² (Efficiency): {gen_curves_export.get('r2_eff', 0):.4f}\n")
                             gen_flow_unit = gen_curves_export.get('flow_unit', 'm³/hr')
                             for curve in gen_curves_export['curves']:
                                 csv_buffer.write(f"# Speed: {curve['speed']:.0f} RPM\n")
@@ -3037,9 +3090,13 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Summary of what's included
                     sheets_info = [f"{len(fluid_properties_list)} operating points (inlet/outlet)"]
                     if input_curves:
-                        sheets_info.append(f"{len(input_curves)} input curves")
+                        sheets_info.append(f"{len(input_curves)} manufacturer curves")
                     if gen_curves_export and gen_curves_export.get('curves'):
-                        sheets_info.append(f"{len(gen_curves_export['curves'])} generated curves")
+                        source = gen_curves_export.get('source', '')
+                        if 'adjusted' in source:
+                            sheets_info.append(f"{len(gen_curves_export['curves'])} New Gas curves (MW-adjusted)")
+                        else:
+                            sheets_info.append(f"{len(gen_curves_export['curves'])} New Gas curves (fitted)")
                     st.caption(f"💡 Excel file includes: {', '.join(sheets_info)}")
                 else:
                     csv = results_df.to_csv(index=False)
