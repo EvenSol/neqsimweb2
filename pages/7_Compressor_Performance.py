@@ -2521,7 +2521,10 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                 )
                 
                 # Detailed Fluid Properties Section
-                with st.expander("🔬 **Detailed Fluid Properties (Inlet & Outlet)**", expanded=False):
+                # Track if user has interacted with this section to keep it expanded
+                fluid_props_expanded = st.session_state.get('fluid_props_expanded', False)
+                
+                with st.expander("🔬 **Detailed Fluid Properties (Inlet & Outlet)**", expanded=fluid_props_expanded):
                     st.markdown("""
                     This section shows detailed thermodynamic properties for each operating point, 
                     similar to TP-flash results. Select a point to view inlet and outlet fluid properties.
@@ -2536,10 +2539,15 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                                 label += f", {fp['speed']:.0f} RPM"
                             point_labels.append(label)
                         
+                        # Use on_change callback to keep expander open when selecting points
+                        def on_point_change():
+                            st.session_state['fluid_props_expanded'] = True
+                        
                         selected_point_label = st.selectbox(
                             "Select Operating Point",
                             options=point_labels,
-                            key='fluid_prop_point_selector'
+                            key='fluid_prop_point_selector',
+                            on_change=on_point_change
                         )
                         
                         # Get the selected point index
