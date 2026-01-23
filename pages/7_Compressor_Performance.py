@@ -847,6 +847,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
             for comp_name, comp_moles in fluid_composition.items():
                 display_fluid.addComponent(comp_name, float(comp_moles))
             display_fluid.setMixingRule('classic')
+            display_fluid.setMultiPhaseCheck(True)
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
             TPflash(display_fluid)
@@ -2048,6 +2049,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     for comp_name, comp_moles in fluid_composition.items():
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
                     inlet_fluid.setMixingRule('classic')
+                    inlet_fluid.setMultiPhaseCheck(True)
                     
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
@@ -2084,6 +2086,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         for comp_name, comp_moles in fluid_composition.items():
                             std_fluid.addComponent(comp_name, float(comp_moles))
                         std_fluid.setMixingRule('classic')
+                        std_fluid.setMultiPhaseCheck(True)
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
                         TPflash(std_fluid)
@@ -2176,7 +2179,12 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     is_valid = eta_poly_float is not None and not np.isnan(eta_poly_float) and eta_poly_float > 0 and eta_poly_float <= 1.0
                     
                     if not is_valid:
-                        st.warning(f"⚠️ Row {idx}: Invalid polytropic efficiency ({eta_poly_float}). Check inlet/outlet temperatures are thermodynamically consistent.")
+                        if eta_poly_float is not None and eta_poly_float > 1.0:
+                            st.warning(f"⚠️ Row {idx}: Efficiency > 100% ({eta_poly_float*100:.1f}%) - outlet temperature ({t_out}°C) is too LOW for this pressure ratio ({pr:.2f}). Check measured temperatures or use data appropriate for {selected_fluid_name}.")
+                        elif eta_poly_float is not None and eta_poly_float <= 0:
+                            st.warning(f"⚠️ Row {idx}: Efficiency ≤ 0% ({eta_poly_float*100:.1f}%) - outlet temperature ({t_out}°C) is too HIGH for this pressure ratio ({pr:.2f}). Check measured temperatures.")
+                        else:
+                            st.warning(f"⚠️ Row {idx}: Invalid polytropic efficiency ({eta_poly_float}). Check inlet/outlet temperatures are thermodynamically consistent.")
     
                     polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
                     
