@@ -583,15 +583,25 @@ with st.sidebar:
     st.divider()
     st.header("Calculation Method")
     
+    # Map old session state values to new options
+    calc_method_map = {
+        "NeqSim Process Model (Detailed)": "Detailed",
+        "NeqSim Process Model (Simple)": "Detailed",
+        "Schultz (Analytical)": "Schultz",
+        "NeqSim Detailed": "Detailed"
+    }
+    current_method = st.session_state.get('calc_method', 'Detailed')
+    current_method = calc_method_map.get(current_method, current_method)
+    
     calc_method = st.selectbox(
         "Select Method",
-        options=["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)", "Schultz (Analytical)"],
-        index=["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)", "Schultz (Analytical)"].index(st.session_state['calc_method']) if st.session_state['calc_method'] in ["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)", "Schultz (Analytical)"] else 0,
-        help="Schultz: Analytical polytropic analysis. NeqSim Simple: Faster calculation. NeqSim Detailed: Multi-step polytropic (more accurate but slower)."
+        options=["Detailed", "Schultz"],
+        index=["Detailed", "Schultz"].index(current_method) if current_method in ["Detailed", "Schultz"] else 0,
+        help="Schultz: Analytical polytropic analysis. Detailed: Multi-step polytropic (more accurate but slower)."
     )
     st.session_state['calc_method'] = calc_method
     
-    if calc_method == "NeqSim Process Model (Detailed)":
+    if calc_method == "Detailed":
         st.info("🔧 Uses NeqSim's detailed polytropic method with multi-step integration. More accurate but slower.")
         
         num_steps = st.slider(
@@ -603,8 +613,8 @@ with st.sidebar:
             help="More steps = higher accuracy but slower calculation"
         )
         st.session_state['num_calc_steps'] = num_steps
-    elif calc_method == "NeqSim Process Model (Simple)":
-        st.info("⚡ Uses NeqSim's simple polytropic method. Faster calculation with good accuracy.")
+    elif calc_method == "Schultz":
+        st.info("⚡ Uses Schultz simple polytropic method. Faster calculation with good accuracy.")
     
     # AI Analysis section - only show if AI is enabled
     if is_ai_enabled():
@@ -865,7 +875,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
             with col2:
                 st.metric("Z-factor @ 50 bara, 30°C", f"{display_fluid.getZ():.4f}")
             with col3:
-                st.metric("Cp/Cv (κ)", f"{display_fluid.getGamma():.4f}")
+                st.metric("Cp/Cv (κ)", f"{display_fluid.getGamma2():.4f}")
             with col4:
                 st.metric("EoS Model", st.session_state['eos_model'])
         except Exception as e:
@@ -1264,7 +1274,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     'Head (kJ/kg)': curve['head'],
                     'Eff (%)': curve['efficiency']
                 })
-                st.dataframe(curve_df, use_container_width=True, height=100)
+                st.dataframe(curve_df, width='stretch', height=100)
         
         if st.button("Clear All Curves", type='secondary'):
             st.session_state['compressor_curves'] = []
@@ -1357,13 +1367,14 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     for comp_name, comp_moles in new_fluid_composition.items():
                         new_fluid.addComponent(comp_name, float(comp_moles))
                     new_fluid.setMixingRule('classic')
+                    new_fluid.setMultiPhaseCheck(True)
                     new_fluid.setPressure(ref_pressure, 'bara')
                     new_fluid.setTemperature(ref_temp, 'C')
                     TPflash(new_fluid)
-                    new_fluid.initThermoProperties()
+                    new_fluid.initProperties()
                     
                     new_mw = new_fluid.getMolarMass() * 1000  # g/mol
-                    gamma_new = new_fluid.getGamma()
+                    gamma_new = new_fluid.getGamma2()
                     z_new = new_fluid.getZ()
                     T_new_K = ref_temp + 273.15
                     # More accurate speed of sound using selected EoS
@@ -1433,7 +1444,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                                 'Eff (%)': curve['efficiency']
                             })
                             st.write(f"**{curve['speed']:.0f} RPM:**")
-                            st.dataframe(corr_df, use_container_width=True, height=100)
+                            st.dataframe(corr_df, width='stretch', height=100)
                         
                         col_action1, col_action2 = st.columns(2)
                         with col_action1:
@@ -1847,7 +1858,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=450
                     )
-                    st.plotly_chart(fig_fit, use_container_width=True)
+                    st.plotly_chart(fig_fit, width='stretch')
                     
                     # Add efficiency plot
                     fig_eff = go.Figure()
@@ -1882,7 +1893,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=400
                     )
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    st.plotly_chart(fig_eff, width='stretch')
                     
                     # Show curve data tables
                     with st.expander("📋 View Curve Data Tables"):
@@ -1893,7 +1904,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                                 'Eff (%)': [f"{v:.1f}" for v in curve['efficiency']]
                             })
                             st.write(f"**{curve['speed']:.0f} RPM:**")
-                            st.dataframe(gen_df, use_container_width=True, height=100)
+                            st.dataframe(gen_df, width='stretch', height=100)
                     
                     st.divider()
                     st.subheader("💾 Save Generated Curves")
@@ -1993,18 +2004,16 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
     elif edited_data.empty or edited_data.dropna().empty:
         st.error('Please enter operating data before calculating.')
     else:
-        calc_method = st.session_state.get('calc_method', 'NeqSim Process Model (Detailed)')
+        calc_method = st.session_state.get('calc_method', 'Detailed')
         eos_name = st.session_state.get('eos_model', 'GERG-2008')
         spinner_msg = f'Calculating compressor performance using {eos_name}...'
-        if calc_method == "NeqSim Process Model (Detailed)":
+        if calc_method == "Detailed":
             spinner_msg = f'Calculating using NeqSim detailed model ({eos_name}, {st.session_state["num_calc_steps"]} steps)...'
-        elif calc_method == "NeqSim Process Model (Simple)":
-            spinner_msg = f'Calculating using NeqSim simple model ({eos_name})...'
+        elif calc_method == "Schultz":
+            spinner_msg = f'Calculating using Schultz model ({eos_name})...'
         
         with st.spinner(spinner_msg):
             try:
-                jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
-                
                 results = []
                 fluid_properties_list = []  # Store detailed fluid properties for each point
                 
@@ -2059,17 +2068,16 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
                     TPflash(inlet_fluid)
-                    inlet_fluid.initThermoProperties()
-                    inlet_fluid.initPhysicalProperties()
+                    inlet_fluid.initProperties()
                     
                     # Get inlet properties
                     z_in = inlet_fluid.getZ()
                     h_in = inlet_fluid.getEnthalpy("kJ/kg")  # Specific enthalpy in kJ/kg
                     cp_in = inlet_fluid.getCp("kJ/kgK")  # Specific Cp in kJ/kg/K
                     cv_in = inlet_fluid.getCv("kJ/kgK")  # Specific Cv in kJ/kg/K
-                    kappa_in = cp_in / cv_in if cv_in > 0 else inlet_fluid.getGamma()
+                    kappa_in = cp_in / cv_in if cv_in > 0 else inlet_fluid.getGamma2()
                     MW = inlet_fluid.getMolarMass() * 1000  # g/mol -> kg/kmol
-                    rho_in = inlet_fluid.getDensity()  # kg/m3
+                    rho_in = inlet_fluid.getDensity('kg/m3')  # kg/m3
                     T_in_K = t_in + 273.15
                     T_out_K = t_out + 273.15
                     pr = p_out / p_in if p_in > 0 else 1.0  # Pressure ratio, default to 1 if p_in is zero
@@ -2095,9 +2103,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
                         TPflash(std_fluid)
-                        std_fluid.initThermoProperties()
-                        std_fluid.initPhysicalProperties()
-                        rho_std = std_fluid.getDensity()  # kg/m3 at std conditions
+                        std_fluid.initProperties()
+                        rho_std = std_fluid.getDensity('kg/m3')  # kg/m3 at std conditions
                         # MSm3/day to kg/s: flow * 1e6 m3/day * rho_std / 86400 s/day
                         mass_flow = flow_value * 1e6 * rho_std / 86400.0
                     else:
@@ -2108,11 +2115,11 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     for comp_name, comp_moles in fluid_composition.items():
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
                     outlet_fluid.setMixingRule('classic')
+                    outlet_fluid.setMultiPhaseCheck(True)
                     outlet_fluid.setPressure(float(p_out), 'bara')
                     outlet_fluid.setTemperature(float(t_out), 'C')
                     TPflash(outlet_fluid)
-                    outlet_fluid.initThermoProperties()
-                    outlet_fluid.initPhysicalProperties()
+                    outlet_fluid.initProperties()
                     
                     # Capture detailed fluid properties for both inlet and outlet
                     inlet_df = dataFrame(inlet_fluid)
@@ -2131,8 +2138,8 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Get outlet properties
                     z_out = outlet_fluid.getZ()
                     h_out = outlet_fluid.getEnthalpy("kJ/kg")  # Specific enthalpy in kJ/kg
-                    kappa_out = outlet_fluid.getGamma()  # Use direct gamma for outlet
-                    rho_out = outlet_fluid.getDensity()
+                    kappa_out = outlet_fluid.getGamma2()  # Use direct gamma for outlet
+                    rho_out = outlet_fluid.getDensity('kg/m3')
                     
                     # Common calculated values
                     actual_work = h_out - h_in  # kJ/kg
@@ -2140,225 +2147,91 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     z_avg = (z_in + z_out) / 2
                     
                     # Check which calculation method to use
-                    calc_method = st.session_state.get('calc_method', 'NeqSim Process Model (Detailed)')
+                    calc_method = st.session_state.get('calc_method', 'Detailed')
                     
-                    if calc_method in ["NeqSim Process Model (Detailed)", "NeqSim Process Model (Simple)"]:
-                        # Use NeqSim process compressor with detailed polytropic method
-                        # Create a stream for the compressor inlet
-                        process_fluid = fluid(get_selected_eos_model())
-                        for comp_name, comp_moles in fluid_composition.items():
-                            process_fluid.addComponent(comp_name, float(comp_moles))
-                        process_fluid.setMixingRule('classic')
-                        process_fluid.setPressure(float(p_in), 'bara')
-                        process_fluid.setTemperature(float(t_in), 'C')
-                        process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
-                        TPflash(process_fluid)
-                        process_fluid.initThermoProperties()
-                        process_fluid.initPhysicalProperties()
-                        
-                        # Create stream and compressor
-                        inlet_stream = jneqsim.process.equipment.stream.Stream("inlet", process_fluid)
-                        inlet_stream.run()
-                        
-                        compressor = jneqsim.process.equipment.compressor.Compressor("compressor", inlet_stream)
-                        compressor.setOutletPressure(float(p_out), "bara")
-                        compressor.setUsePolytropicCalc(True)
-                        
-                        # Set polytropic method based on user selection
-                        if calc_method == "NeqSim Process Model (Detailed)":
-                            compressor.setPolytropicMethod("detailed")
-                            compressor.setNumberOfCompressorCalcSteps(st.session_state['num_calc_steps'])
-                        else:
-                            # Simple mode - faster calculation
-                            compressor.setPolytropicMethod("schultz")
-                        
-                        # Debug: verify method settings (only on first row)
-                        if idx == 0:
-                            method_used = compressor.getPolytropicMethod() if hasattr(compressor, 'getPolytropicMethod') else "N/A"
-                            steps_used = compressor.getNumberOfCompressorCalcSteps() if hasattr(compressor, 'getNumberOfCompressorCalcSteps') else "N/A"
-                            st.caption(f"🔧 Method: {method_used}, Steps: {steps_used}")
-                        
-                        # Solve for polytropic efficiency based on measured outlet temperature
-                        # Convert outlet temperature to Kelvin for solveEfficiency method
-                        t_out_K = t_out + 273.15
-                        eta_poly = compressor.solveEfficiency(t_out_K)
-                        
-                        # Validate the solved efficiency - must be between 0 and 1 (0-100%)
-                        # If invalid, the measured outlet temperature may be thermodynamically inconsistent
-                        eta_poly_float = float(eta_poly) if eta_poly is not None else None
-                        is_valid = eta_poly_float is not None and not np.isnan(eta_poly_float) and eta_poly_float > 0 and eta_poly_float <= 1.0
-                        
-                        if not is_valid:
-                            # Invalid efficiency - outlet temperature may be unrealistic
-                            # Fall back to Schultz method for this point
-                            eta_poly_str = f"{eta_poly_float:.3f}" if eta_poly_float is not None else "None"
-                            st.warning(f"⚠️ Row {idx}: NeqSim returned η={eta_poly_str} for T_out={t_out}°C, P_ratio={p_out/p_in:.2f}. Using Schultz method as fallback.")
-                            
-                            # Use Schultz analytical method as fallback
-                            # Calculate polytropic exponent from measured data
-                            n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
-                            
-                            # Polytropic efficiency using Schultz
-                            # From: n = 1 / (1 - (κ-1)/κ / η_p)
-                            # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
-                            if n > 1 and kappa_avg > 1:
-                                eta_poly_calc = (n * (kappa_avg - 1)) / (kappa_avg * (n - 1))
-                                # Check if calculated efficiency is unrealistic (>100%)
-                                if eta_poly_calc > 1.0:
-                                    st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly_calc*100:.1f}% (>100%), which is thermodynamically impossible. "
-                                            f"The outlet temperature {t_out}°C is too low for compression from {p_in} to {p_out} bara. "
-                                            f"Please increase the outlet temperature. Setting efficiency to 100% for display.")
-                                    eta_poly = 1.0  # Cap at 100% for display but flag the issue
-                                elif eta_poly_calc < 0.3:
-                                    st.warning(f"⚠️ Row {idx}: Calculated efficiency is very low ({eta_poly_calc*100:.1f}%). Check measured data.")
-                                    eta_poly = eta_poly_calc
-                                else:
-                                    eta_poly = eta_poly_calc
-                            else:
-                                eta_poly = 0.75  # Default fallback
-                            
-                            # Calculate polytropic head using enthalpy-based method
-                            # Hp = η_p × actual_work (consistent with NeqSim)
-                            polytropic_head = actual_work * eta_poly if actual_work > 0 and eta_poly > 0 else 0
-                            eta_isen = eta_poly * 0.98
-                            power_kW = mass_flow * actual_work
-                            power_MW = power_kW / 1000
-                        else:
-                            # Valid efficiency from NeqSim
-                            # Set the solved efficiency and run the compressor to get all results
-                            compressor.setPolytropicEfficiency(eta_poly)
-                            compressor.run()
-                            
-                            # Get results from compressor after running
-                            eta_isen = compressor.getIsentropicEfficiency()
-                            polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
-                            n = compressor.getPolytropicExponent()
-                            
-                            # Power from MEASURED enthalpy difference for consistency
-                            power_kW = mass_flow * actual_work  # kW
-                            power_MW = power_kW / 1000  # MW
-                            
-                            # If polytropic exponent is still 0, calculate from measured data
-                            if n == 0 or n is None:
-                                n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
-                        
-                        vol_flow_in = mass_flow / rho_in * 3600 if rho_in > 0 else 0  # m³/hr
-                        mass_flow_kg_hr = mass_flow * 3600  # kg/hr
-                        
-                        results.append({
-                            'Speed (RPM)': speed_rpm,
-                            'Mass Flow (kg/hr)': mass_flow_kg_hr,
-                            'Inlet P (bara)': p_in,
-                            'Outlet P (bara)': p_out,
-                            'Inlet T (°C)': t_in,
-                            'Outlet T (°C)': t_out,  # Use measured outlet temperature
-                            'Pressure Ratio': pr,
-                            'Density Inlet (kg/m³)': rho_in,
-                            'Density Outlet (kg/m³)': rho_out,
-                            'Z inlet': z_in,
-                            'Z outlet': z_out,
-                            'κ inlet': kappa_in,
-                            'κ outlet': kappa_out,
-                            'Polytropic Exp (n)': n,
-                            'Isentropic Eff (%)': eta_isen * 100 if eta_isen is not None else None,
-                            'Polytropic Eff (%)': eta_poly * 100,
-                            'Polytropic Head (kJ/kg)': polytropic_head,
-                            'Actual Work (kJ/kg)': actual_work,
-                            'Power (kW)': power_kW,
-                            'Power (MW)': power_MW,
-                            'Vol Flow Inlet (m³/hr)': vol_flow_in,
-                        })
-                        
-                        # Check point calculation time
-                        point_elapsed = time.time() - point_start_time
-                        if point_elapsed > MAX_POINT_TIME:
-                            st.warning(f"⚠️ Point {row_num + 1} took {point_elapsed:.1f}s (>{MAX_POINT_TIME}s limit)")
+                    # Use NeqSim process compressor with detailed polytropic method
+                    # Create a stream for the compressor inlet
+                    process_fluid = fluid(get_selected_eos_model())
+                    for comp_name, comp_moles in fluid_composition.items():
+                        process_fluid.addComponent(comp_name, float(comp_moles))
+                    process_fluid.setMixingRule('classic')
+                    process_fluid.setMultiPhaseCheck(True)
+                    process_fluid.setPressure(float(p_in), 'bara')
+                    process_fluid.setTemperature(float(t_in), 'C')
+                    process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
+                    TPflash(process_fluid)
+                    process_fluid.initProperties()
+                    
+                    # Create stream and compressor
+                    inlet_stream = jneqsim.process.equipment.stream.Stream("inlet", process_fluid)
+                    inlet_stream.run()
+                    
+                    compressor = jneqsim.process.equipment.compressor.Compressor("compressor", inlet_stream)
+                    compressor.setOutletPressure(float(p_out), "bara")
+                    compressor.setUsePolytropicCalc(True)
+                    
+                    # Set polytropic method based on user selection
+                    if calc_method == "Detailed":
+                        compressor.setPolytropicMethod("detailed")
+                        compressor.setNumberOfCompressorCalcSteps(st.session_state['num_calc_steps'])
                     else:
-                        # Use Schultz analytical method
-                        # Create isentropic outlet fluid (same entropy as inlet)
-                        isentropic_fluid = fluid(get_selected_eos_model())
-                        for comp_name, comp_moles in fluid_composition.items():
-                            isentropic_fluid.addComponent(comp_name, float(comp_moles))
-                        isentropic_fluid.setMixingRule('classic')
-                        isentropic_fluid.setPressure(float(p_out), 'bara')
-                        isentropic_fluid.setTemperature(float(t_out), 'C')  # Initial guess
-                        
-                        # Find isentropic temperature using PS flash
-                        thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(isentropic_fluid)
-                        s_in_total = inlet_fluid.getEntropy()  # Total entropy at inlet
-                        try:
-                            thermoOps.PSflash(s_in_total)
-                            isentropic_fluid.initProperties()
-                            h_out_isen = isentropic_fluid.getEnthalpy("kJ/kg")
-                        except Exception:
-                            # Fallback: estimate isentropic enthalpy using ideal gas relation
-                            t_out_isen = T_in_K * pr**((kappa_avg-1)/kappa_avg) - 273.15
-                            h_out_isen = h_in + cp_in * (t_out_isen - t_in)
-                        
-                        # Calculate isentropic work
-                        isentropic_work = h_out_isen - h_in  # kJ/kg
-                        
-                        # Isentropic efficiency
-                        eta_isen = isentropic_work / actual_work if actual_work > 0 else 0
-                        
-                        # Calculate polytropic exponent from measured data
+                        # Simple mode - faster calculation
+                        compressor.setPolytropicMethod("schultz")
+                    
+                    # Solve for polytropic efficiency based on measured outlet temperature
+                    # Convert outlet temperature to Kelvin for solveEfficiency method
+                    t_out_K = t_out + 273.15
+                    compressor.setOutTemperature(t_out_K)
+                    compressor.run()
+
+                    eta_poly = compressor.getPolytropicEfficiency()
+                    
+                    # Validate the solved efficiency - must be between 0 and 1 (0-100%)
+                    # If invalid, the measured outlet temperature may be thermodynamically inconsistent
+                    eta_poly_float = float(eta_poly) if eta_poly is not None else None
+                    is_valid = eta_poly_float is not None and not np.isnan(eta_poly_float) and eta_poly_float > 0 and eta_poly_float <= 1.0
+    
+                    polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
+                    eta_isen = compressor.getIsentropicEfficiency()
+                    power_kW = compressor.getPower('kW')  # kW
+                    power_MW = power_kW / 1000
+                    n = compressor.getPolytropicExponent()
+                    
+                    # Fallback: Calculate polytropic exponent from measured data if NeqSim returns 0 or invalid
+                    if n is None or n <= 0 or np.isnan(n):
                         n = calculate_polytropic_exponent(T_in_K, T_out_K, pr, kappa_avg)
-                        
-                        # Polytropic efficiency from Schultz formula
-                        # From: n = 1 / (1 - (κ-1)/κ / η_p)
-                        # Solving for η_p: η_p = n*(κ-1) / (κ*(n-1))
-                        if n > 1 and kappa_avg > 1:
-                            eta_poly = (n * (kappa_avg - 1)) / (kappa_avg * (n - 1))
-                            # Check for unrealistic efficiency values
-                            if eta_poly > 1.0:
-                                st.error(f"❌ Row {idx}: Schultz method gives efficiency {eta_poly*100:.1f}% (>100%). "
-                                        f"The outlet temperature {t_out}°C is too low for compression from {p_in:.1f} to {p_out:.1f} bara. "
-                                        f"Please check measured outlet temperature.")
-                                eta_poly = 1.0  # Cap at 100% for calculation
-                            elif eta_poly < 0.4:
-                                st.warning(f"⚠️ Row {idx}: Calculated efficiency is very low ({eta_poly*100:.1f}%). Check measured data.")
-                        else:
-                            eta_poly = eta_isen * 0.98 if eta_isen > 0 else 0.75  # Approximation
-                        
-                        # Polytropic head (enthalpy-based, consistent with NeqSim)
-                        polytropic_head = actual_work * eta_poly if actual_work > 0 and eta_poly > 0 else 0
-                        
-                        # Power calculation
-                        power_kW = mass_flow * actual_work  # Gas power in kW
-                        power_MW = power_kW / 1000  # MW
-                        
-                        # Volume flow at inlet conditions
-                        vol_flow_in = mass_flow / rho_in * 3600 if rho_in > 0 else 0  # m³/hr
-                        mass_flow_kg_hr = mass_flow * 3600  # kg/hr
-                        
-                        results.append({
-                            'Speed (RPM)': speed_rpm,
-                            'Mass Flow (kg/hr)': mass_flow_kg_hr,
-                            'Inlet P (bara)': p_in,
-                            'Outlet P (bara)': p_out,
-                            'Inlet T (°C)': t_in,
-                            'Outlet T (°C)': t_out,
-                            'Pressure Ratio': pr,
-                            'Density Inlet (kg/m³)': rho_in,
-                            'Density Outlet (kg/m³)': rho_out,
-                            'Z inlet': z_in,
-                            'Z outlet': z_out,
-                            'κ inlet': kappa_in,
-                            'κ outlet': kappa_out,
-                            'Polytropic Exp (n)': n,
-                            'Isentropic Eff (%)': eta_isen * 100,
-                            'Polytropic Eff (%)': eta_poly * 100,
-                            'Polytropic Head (kJ/kg)': polytropic_head,
-                            'Actual Work (kJ/kg)': actual_work,
-                            'Power (kW)': power_kW,
-                            'Power (MW)': power_MW,
-                            'Vol Flow Inlet (m³/hr)': vol_flow_in,
-                        })
-                        
-                        # Check point calculation time
-                        point_elapsed = time.time() - point_start_time
-                        if point_elapsed > MAX_POINT_TIME:
-                            st.warning(f"⚠️ Point {row_num + 1} took {point_elapsed:.1f}s (>{MAX_POINT_TIME}s limit)")
+                    
+                    vol_flow_in = mass_flow / rho_in * 3600 if rho_in > 0 else 0  # m³/hr
+                    mass_flow_kg_hr = mass_flow * 3600  # kg/hr
+                    
+                    results.append({
+                        'Speed (RPM)': speed_rpm,
+                        'Mass Flow (kg/hr)': mass_flow_kg_hr,
+                        'Inlet P (bara)': p_in,
+                        'Outlet P (bara)': p_out,
+                        'Inlet T (°C)': t_in,
+                        'Outlet T (°C)': t_out,  # Use measured outlet temperature
+                        'Pressure Ratio': pr,
+                        'Density Inlet (kg/m³)': rho_in,
+                        'Density Outlet (kg/m³)': rho_out,
+                        'Z inlet': z_in,
+                        'Z outlet': z_out,
+                        'κ inlet': kappa_in,
+                        'κ outlet': kappa_out,
+                        'Polytropic Exp (n)': n,
+                        'Isentropic Eff (%)': eta_isen * 100 if eta_isen is not None else None,
+                        'Polytropic Eff (%)': eta_poly * 100,
+                        'Polytropic Head (kJ/kg)': polytropic_head,
+                        'Actual Work (kJ/kg)': actual_work,
+                        'Power (kW)': power_kW,
+                        'Power (MW)': power_MW,
+                        'Vol Flow Inlet (m³/hr)': vol_flow_in,
+                    })
+                    
+                    # Check point calculation time
+                    point_elapsed = time.time() - point_start_time
+                    if point_elapsed > MAX_POINT_TIME:
+                        st.warning(f"⚠️ Point {row_num + 1} took {point_elapsed:.1f}s (>{MAX_POINT_TIME}s limit)")
                 
                 # Clear progress bar after completion
                 progress_bar.empty()
@@ -2522,7 +2395,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         color_deviation, subset=['Eff Deviation (%)', 'Head Deviation (%)']
                     )
                     
-                    st.dataframe(styled_dev_df, use_container_width=True)
+                    st.dataframe(styled_dev_df, width='stretch')
                     
                     st.caption("**Status Legend:** ✅ OK = Within ±2% eff / ±3% head | ⚠️ Warning = Within ±5% eff / ±7% head | ❌ Check = Outside tolerance")
                     
@@ -2556,7 +2429,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         'κ outlet': '{:.4f}',
                         'Polytropic Exp (n)': '{:.4f}',
                     }, na_rep='-'),
-                    use_container_width=True
+                    width='stretch'
                 )
                 
                 # Plots
@@ -2723,7 +2596,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    st.plotly_chart(fig_eff, width='stretch')
                 
                 with tab2:
                     fig_head = go.Figure()
@@ -2791,7 +2664,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_head, use_container_width=True)
+                    st.plotly_chart(fig_head, width='stretch')
                 
                 with tab3:
                     fig_power = go.Figure()
@@ -2816,7 +2689,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         yaxis_title='Power (MW)',
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_power, use_container_width=True)
+                    st.plotly_chart(fig_power, width='stretch')
                 
                 # Download results
                 st.divider()
