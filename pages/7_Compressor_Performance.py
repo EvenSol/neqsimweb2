@@ -408,7 +408,7 @@ st.divider()
 
 # Supported components (compatible with GERG-2008, PR, and SRK)
 gerg2008_components = [
-    "methane", "nitrogen", "CO2", "ethane", "propane", 
+    "nitrogen", "CO2", "methane", "ethane", "propane", 
     "i-butane", "n-butane", "i-pentane", "n-pentane", "n-hexane",
     "n-heptane", "n-octane", "hydrogen", "oxygen", "CO", 
     "water", "helium", "argon"
@@ -443,9 +443,9 @@ test_fluids = {
 default_custom_fluid = {
     'ComponentName': gerg2008_components,
     'MolarComposition[-]': [
-        100.0,  # methane
         0.0,    # nitrogen
         0.0,    # CO2
+        100.0,  # methane
         0.0,    # ethane
         0.0,    # propane
         0.0,    # i-butane
