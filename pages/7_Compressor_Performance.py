@@ -69,7 +69,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     ## 3. Calculation Methods
     
-    Three calculation methods are available, each with different trade-offs between speed and accuracy:
+    Two calculation methods are available, each with different trade-offs between speed and accuracy:
     
     ### 3.1 Schultz Analytical Method
     
@@ -120,23 +120,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     ---
     
-    ### 3.2 NeqSim Process Model (Simple)
-    
-    Uses NeqSim's compressor model with the Schultz polytropic method internally. 
-    The efficiency is solved iteratively to match the measured outlet temperature.
-    
-    **Algorithm:**
-    1. Create inlet stream at measured P, T, and composition
-    2. Set compressor outlet pressure to measured value
-    3. Use Newton-Raphson iteration to find efficiency that produces measured outlet temperature
-    4. Run compressor model with solved efficiency to get head and power
-    
-    **Advantages:** Good balance of accuracy and speed
-    **Limitations:** Single-step integration may have small errors for high pressure ratios
-    
-    ---
-    
-    ### 3.3 NeqSim Process Model (Detailed) (Default)
+    ### 3.2 NeqSim Process Model (Detailed) (Default)
     
     The most accurate method, using multi-step thermodynamic integration through the 
     compression path. Based on research from NTNU's thermal turbomachinery group.
@@ -2190,10 +2174,24 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # If invalid, the measured outlet temperature may be thermodynamically inconsistent
                     eta_poly_float = float(eta_poly) if eta_poly is not None else None
                     is_valid = eta_poly_float is not None and not np.isnan(eta_poly_float) and eta_poly_float > 0 and eta_poly_float <= 1.0
+                    
+                    if not is_valid:
+                        st.warning(f"⚠️ Row {idx}: Invalid polytropic efficiency ({eta_poly_float}). Check inlet/outlet temperatures are thermodynamically consistent.")
     
                     polytropic_head = compressor.getPolytropicFluidHead()  # kJ/kg
+                    
+                    # Validate polytropic head
+                    if polytropic_head is None or np.isnan(polytropic_head) or polytropic_head <= 0:
+                        st.warning(f"⚠️ Row {idx}: Invalid polytropic head calculated. Using enthalpy-based fallback.")
+                        polytropic_head = eta_poly_float * actual_work if is_valid and actual_work > 0 else actual_work
+                    
                     eta_isen = compressor.getIsentropicEfficiency()
                     power_kW = compressor.getPower('kW')  # kW
+                    
+                    # Validate power calculation
+                    if power_kW is None or np.isnan(power_kW):
+                        power_kW = mass_flow * actual_work  # kW fallback (kg/s * kJ/kg = kW)
+                    
                     power_MW = power_kW / 1000
                     n = compressor.getPolytropicExponent()
                     
