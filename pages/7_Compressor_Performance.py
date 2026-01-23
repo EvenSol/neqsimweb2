@@ -1843,7 +1843,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=450
                     )
-                    st.plotly_chart(fig_fit, width='stretch')
+                    st.plotly_chart(fig_fit, use_container_width=True)
                     
                     # Add efficiency plot
                     fig_eff = go.Figure()
@@ -1878,7 +1878,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=400
                     )
-                    st.plotly_chart(fig_eff, width='stretch')
+                    st.plotly_chart(fig_eff, use_container_width=True)
                     
                     # Show curve data tables
                     with st.expander("📋 View Curve Data Tables"):
@@ -2602,7 +2602,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_eff, width='stretch')
+                    st.plotly_chart(fig_eff, use_container_width=True)
                 
                 with tab2:
                     fig_head = go.Figure()
@@ -2670,7 +2670,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_head, width='stretch')
+                    st.plotly_chart(fig_head, use_container_width=True)
                 
                 with tab3:
                     fig_power = go.Figure()
@@ -2695,7 +2695,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         yaxis_title='Power (MW)',
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_power, width='stretch')
+                    st.plotly_chart(fig_power, use_container_width=True)
                 
                 # Download results
                 st.divider()
