@@ -74,6 +74,9 @@ st.write("## Welcome! 👋")
 NeqSim (Non-equilibrium Simulator) is a library for the simulation of fluid behavior, phase equilibrium, and process systems.
 Explore the various models and simulations NeqSim offer through this easy-to-use Streamlit interface.
 
+### Getting Started
+Use the left-hand menu to select the desired simulation or process. Enter any required inputs, and NeqSim will handle the calculations.
+
 ### Documentation & Tutorials
 For comprehensive documentation on how to use NeqSim for processing and fluid simulations, please refer to our resources:  
 - [NeqSim Documentation](https://equinor.github.io/neqsim/)
@@ -112,9 +115,6 @@ This web application is open source and built with Python. To develop and extend
 - [NeqSim Web App Repository](https://github.com/equinor/neqsimweb2)
 - [NeqSim Python Package](https://github.com/equinor/neqsim-python)
 - [Streamlit Documentation](https://docs.streamlit.io/)
-
-### Getting Started
-Use the left-hand menu to select the desired simulation or process. Enter any required inputs, and NeqSim will handle the calculations.
 """
 
 # Initialize AI enabled state (default OFF)
