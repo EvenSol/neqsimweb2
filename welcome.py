@@ -75,8 +75,9 @@ NeqSim (Non-equilibrium Simulator) is a library for the simulation of fluid beha
 Explore the various models and simulations NeqSim offer through this easy-to-use Streamlit interface.
 
 ### Documentation & Tutorials
-For comprehensive documentation on how to use NeqSim for processing and fluid simulations, please refer to our detailed tutorial:  
-[Introduction to Gas Processing Using NeqSim](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/examples_of_NeqSim_in_Colab.ipynb)
+For comprehensive documentation on how to use NeqSim for processing and fluid simulations, please refer to our resources:  
+- [NeqSim Documentation](https://equinor.github.io/neqsim/)
+- [Introduction to Gas Processing Using NeqSim](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/examples_of_NeqSim_in_Colab.ipynb)
 
 ### GitHub Repository
 NeqSim is developed in the Java programming language and is available as an open-source project via GitHub. You can access the complete source code and contribute to the project via the home page:
@@ -87,6 +88,30 @@ NeqSim is developed in the Java programming language and is available as an open
 We welcome any feedback, questions, or suggestions for further development. Join the conversation or contribute to discussions on our GitHub page:
 
 - [NeqSim GitHub Discussions](https://github.com/equinor/neqsim/discussions)
+
+### Request New Features
+Have an idea for a new simulation or feature? You can:
+- Open a feature request in [GitHub Issues](https://github.com/equinor/neqsim/issues)
+- Start a discussion in [GitHub Discussions](https://github.com/equinor/neqsim/discussions)
+
+### Extend the App Yourself
+This web application is open source and built with Python. To develop and extend it locally:
+
+**Tools needed:**
+- Python 3.10+
+- Git
+- A code editor (e.g., VS Code)
+
+**Quick start:**
+1. Clone the repository: `git clone https://github.com/equinor/neqsimweb2.git`
+2. Create a virtual environment: `python -m venv .venv`
+3. Activate it and install dependencies: `pip install -r requirements.txt`
+4. Run locally: `streamlit run welcome.py`
+
+**Resources:**
+- [NeqSim Web App Repository](https://github.com/equinor/neqsimweb2)
+- [NeqSim Python Package](https://github.com/equinor/neqsim-python)
+- [Streamlit Documentation](https://docs.streamlit.io/)
 
 ### Getting Started
 Use the left-hand menu to select the desired simulation or process. Enter any required inputs, and NeqSim will handle the calculations.
