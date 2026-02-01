@@ -37,150 +37,63 @@ st.set_page_config(
 st.title("🌱 Methane & CO₂ Emission Calculator")
 st.markdown("""
 Quantify greenhouse gas emissions (CO₂, CH₄, nmVOC) from offshore process streams using 
-rigorous thermodynamic modeling with the Cubic-Plus-Association (CPA) equation of state.
+rigorous thermodynamic modeling with the CPA equation of state.
 
-| Parameter | Value |
-|-----------|-------|
-| **Input** | Laboratory gas analysis OR first stage separator gas composition |
-| **Accuracy** | ±3.6% validated against field data (Gudrun platform) |
-| **Method** | Physics-based CPA equation of state with full component accounting |
-
-📚 [NeqSim Emissions & Sustainability Guide](https://equinor.github.io/neqsim/emissions/)
+📚 [NeqSim Emissions Guide](https://equinor.github.io/neqsim/emissions/) | 
+🔬 Validated ±3.6% accuracy against field data
 """)
 
-# Emission sources covered
-with st.expander("📍 Emission Sources Covered", expanded=False):
-    st.markdown("""
-    This calculator supports venting emission sources:
+with st.expander("📖 Documentation & Help", expanded=False):
+    doc_tab1, doc_tab2, doc_tab3 = st.tabs(["Emission Sources", "Methods", "References"])
     
-    | Source | Description | Typical Reduction Potential |
-    |--------|-------------|----------------------------|
-    | **Produced Water Degassing** | Multi-stage degassing (Degasser, CFU, Caisson) | 15–40% |
-    | **TEG Regeneration** | Flash drum off-gas from glycol dehydration | 10–25% |
-    | **Tank Breathing/Loading** | Storage tank vapor losses during operations | 20–50% |
-    | **Cold Vent Streams** | Pressure relief and maintenance vents | Variable |
+    with doc_tab1:
+        st.markdown("""
+        ### Supported Emission Sources
+        | Source | Description |
+        |--------|-------------|
+        | **Produced Water Degassing** | Multi-stage degassing (Degasser, CFU, Caisson) |
+        | **TEG Regeneration** | Flash drum off-gas from glycol dehydration |
+        | **Tank Breathing/Loading** | Storage tank vapor losses |
+        | **Cold Vent Streams** | Pressure relief and maintenance vents |
+        
+        ### Key Terms
+        | Term | Definition |
+        |------|------------|
+        | **nmVOC** | Non-methane Volatile Organic Compounds (C₂+ hydrocarbons) |
+        | **GWP-100** | Global Warming Potential over 100-year horizon |
+        | **CO₂eq** | Total emissions as CO₂ equivalent |
+        | **CPA** | Cubic-Plus-Association equation of state |
+        """)
     
-    Venting emissions represent 5–20% of platform total emissions but offer 
-    significant reduction potential through operational optimization.
-    """)
-
-with st.expander("🔬 Calculation Methods for Produced Water", expanded=False):
-    st.markdown("""
-    Two methods are available for produced water degassing calculations:
+    with doc_tab2:
+        st.markdown("""
+        ### Calculation Methods
+        
+        **Lab Sample Analysis**: Uses measured gas composition from flashing a water sample 
+        at standard conditions (1 atm, 15°C).
+        
+        **Separator/Absorber Equilibrium**: Calculates dissolved gas from thermodynamic 
+        equilibrium using the CPA equation of state.
+        
+        ### Thermodynamic Model
+        Uses **CPA-SRK-EOS (Statoil)** optimized for:
+        - Water-hydrocarbon VLE
+        - CO₂ and H₂S solubility in water
+        - North Sea reservoir fluids
+        """)
     
-    ### 1. Lab Sample Analysis (Default)
-    Uses measured gas composition from flashing a water sample at standard conditions (1 atm, 15°C).
-    
-    | Aspect | Description |
-    |--------|-------------|
-    | **Input** | Laboratory gas analysis of flash gas |
-    | **Best for** | When actual lab measurements are available |
-    | **Assumption** | Fixed dissolved gas content scaled by measured composition ratios |
-    
-    ### 2. Separator Equilibrium
-    Calculates dissolved gas content from thermodynamic equilibrium between first stage separator gas and water.
-    
-    | Aspect | Description |
-    |--------|-------------|
-    | **Input** | First stage separator gas composition |
-    | **Best for** | Design studies, what-if analysis, when lab data unavailable |
-    | **Method** | VLE flash at separator conditions determines actual dissolved gas content |
-    
-    The **Separator Equilibrium** method is more rigorous as it accounts for:
-    - Actual separator temperature and pressure
-    - Component-specific solubility (CO₂ is much more soluble than CH₄)
-    - Non-ideal behavior via CPA equation of state
-    """)
-
-with st.expander("📖 Regulatory Framework & Standards", expanded=False):
-    st.markdown("""
-    ### Applicable Regulations
-    
-    | Regulation | Jurisdiction | NeqSim Compliance |
-    |------------|--------------|-------------------|
-    | **Aktivitetsforskriften §70** | Norway | ✅ Virtual measurement methodology |
-    | **EU ETS Directive** | European Union | ✅ CO₂ equivalent reporting |
-    | **EU Methane Regulation 2024/1787** | European Union | ✅ Source-level CH₄ quantification |
-    | **OGMP 2.0** | International | ✅ Level 4/5 site-specific |
-    | **ISO 14064-1:2018** | International | ✅ Organization-level GHG |
-    
-    ### Norwegian Reporting Requirements
-    The Norwegian Petroleum Directorate accepts thermodynamic emission calculations 
-    as a **virtual measurement methodology** per Aktivitetsforskriften §70.
-    
-    **Key requirement:** Demonstrate that the model is validated and provides 
-    uncertainty estimates better than conventional handbook methods.
-    
-    ### References
-    - [IOGP Report 521 (2019)](https://www.iogp.org/bookstore/product/methods-for-estimating-atmospheric-emissions-from-e-p-operations/) — E&P emission estimation methods
-    - [EU Methane Regulation 2024/1787](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32024R1787) — EU methane requirements
-    """)
-
-with st.expander("🧪 Thermodynamic Method & Validation", expanded=False):
-    st.markdown("""
-    ### Why CPA-SRK-EOS (Statoil) Equation of State?
-    
-    This calculator uses the **CPA-SRK-EOS-statoil** (Cubic-Plus-Association with Soave-Redlich-Kwong) 
-    equation of state, specifically designed for systems containing polar and associating compounds 
-    like water, CO₂, and H₂S. This implementation is optimized for North Sea reservoir fluids.
-    
-    | Property | SRK/PR (Cubic) | CPA-SRK (Statoil) |
-    |----------|----------------|-------------------|
-    | Water-hydrocarbon VLE | Poor | ✅ Excellent |
-    | CO₂ solubility in water | Moderate | ✅ Accurate |
-    | H₂S partitioning | Poor | ✅ Good |
-    | Computation speed | Fast | Fast |
-    
-    ### Validation Results
-    
-    The method was validated against field data from the **Gudrun platform** (Norwegian Continental Shelf):
-    
-    | Metric | NeqSim | Handbook Method |
-    |--------|--------|-----------------|
-    | **Accuracy** | ±3.6% | ±50% or worse |
-    | **CO₂ capture** | ✅ Yes (50-80% of total) | ❌ Not measured |
-    | **Bias** | Low | High (conservative) |
-    
-    ### Key Publications
-    - Kontogeorgis & Folas (2010) — *Thermodynamic Models for Industrial Applications* 
-      [DOI: 10.1002/9780470747537](https://doi.org/10.1002/9780470747537)
-    - GFMW 2023 — NeqSim validation paper (internal Equinor)
-    """)
-
-with st.expander("📚 Glossary of Terms", expanded=False):
-    st.markdown("""
-    | Term | Definition |
-    |------|------------|
-    | **GWP** | Global Warming Potential — relative climate impact compared to CO₂ over 100 years |
-    | **GWP-100** | GWP evaluated over a 100-year time horizon |
-    | **CO₂eq** | CO₂ equivalent — total emissions expressed as equivalent CO₂ impact |
-    | **nmVOC** | Non-methane Volatile Organic Compounds — C₂+ hydrocarbons |
-    | **CPA** | Cubic-Plus-Association equation of state |
-    | **VLE** | Vapor-Liquid Equilibrium |
-    | **Setschenow coefficient** | Parameter describing how salt reduces gas solubility |
-    | **Salting-out** | Reduced gas solubility in saline water vs freshwater |
-    | **GWMF** | Gas-to-Water Mass Factor — emission factor in g/(m³·bar) |
-    | **CFU** | Compact Flotation Unit — degassing/water treatment equipment |
-    | **Caisson** | Final water discharge point (atmospheric pressure) |
-    | **TEG** | Triethylene Glycol — used for gas dehydration |
-    """)
-
-with st.expander("🔗 Additional Resources", expanded=False):
-    st.markdown("""
-    ### Interactive Tutorials
-    - [Produced Water Emissions Tutorial](https://equinor.github.io/neqsim/examples/ProducedWaterEmissions_Tutorial.html) — Jupyter notebook
-    - [Norwegian Methods Comparison](https://equinor.github.io/neqsim/examples/NorwegianEmissionMethods_Comparison.html) — Validation
-    - [Run in Google Colab](https://colab.research.google.com/github/equinor/neqsim/blob/master/docs/examples/ProducedWaterEmissions_Tutorial.ipynb) — No installation needed
-    
-    ### Technical Documentation
-    - [Offshore Emission Reporting Guide](https://equinor.github.io/neqsim/emissions/OFFSHORE_EMISSION_REPORTING.html) — Comprehensive reference
-    - [API Reference (Chapter 43)](https://equinor.github.io/neqsim/REFERENCE_MANUAL_INDEX.html#chapter-43-sustainability--emissions) — EmissionsCalculator class
-    - [Java Example](https://github.com/equinor/neqsim/blob/master/docs/examples/OffshoreEmissionReportingExample.java) — Code sample
-    
-    ### Support
-    - [GitHub Issues](https://github.com/equinor/neqsim/issues) — Bug reports and feature requests
-    - [GitHub Discussions](https://github.com/equinor/neqsim/discussions) — Q&A forum
-    """)
+    with doc_tab3:
+        st.markdown("""
+        ### Regulatory Compliance
+        - Norwegian: Aktivitetsforskriften §70
+        - EU: ETS Directive, Methane Regulation 2024/1787
+        - International: ISO 14064-1, OGMP 2.0
+        
+        ### Resources
+        - [Offshore Emission Reporting Guide](https://equinor.github.io/neqsim/emissions/OFFSHORE_EMISSION_REPORTING.html)
+        - [Produced Water Tutorial](https://equinor.github.io/neqsim/examples/ProducedWaterEmissions_Tutorial.html)
+        - [NeqSim GitHub](https://github.com/equinor/neqsim)
+        """)
 
 st.divider()
 
@@ -196,15 +109,19 @@ if 'emission_gas_df' not in st.session_state:
 
 if 'teg_fluid_df' not in st.session_state:
     st.session_state.teg_fluid_df = pd.DataFrame({
-        'ComponentName': ['TEG', 'water', 'methane', 'CO2', 'benzene'],
-        'MolarComposition[-]': [0.90, 0.05, 0.02, 0.01, 0.02]
+        'ComponentName': ['TEG', 'water', 'methane', 'ethane', 'propane', 'i-butane', 'n-butane', 
+                          'i-pentane', 'n-pentane', 'n-hexane', 'CO2', 'benzene'],
+        'MolarComposition[-]': [0.85, 0.05, 0.03, 0.015, 0.010, 0.003, 0.005, 
+                                0.002, 0.002, 0.002, 0.01, 0.021]
     })
 
 # TEG absorber inlet gas composition (for equilibrium method)
 if 'teg_absorber_gas_df' not in st.session_state:
     st.session_state.teg_absorber_gas_df = pd.DataFrame({
-        'ComponentName': ['methane', 'ethane', 'propane', 'CO2', 'nitrogen', 'benzene', 'toluene'],
-        'MolarComposition[-]': [0.85, 0.06, 0.03, 0.02, 0.01, 0.015, 0.015]
+        'ComponentName': ['methane', 'ethane', 'propane', 'i-butane', 'n-butane', 
+                          'i-pentane', 'n-pentane', 'n-hexane', 'CO2', 'nitrogen', 'benzene', 'toluene'],
+        'MolarComposition[-]': [0.82, 0.06, 0.03, 0.008, 0.012, 0.005, 0.005, 
+                                0.004, 0.02, 0.01, 0.013, 0.013]
     })
 
 # Typical first stage separator gas compositions
@@ -416,25 +333,20 @@ with st.sidebar:
     gwp_standard = st.selectbox(
         "GWP Standard", 
         ["IPCC AR5 (2014)", "IPCC AR6 (2021)"],
-        help="Global Warming Potential standard. AR6 is the latest IPCC assessment (2021). Most regulations still reference AR5."
+        help="Global Warming Potential standard"
     )
     
-    if gwp_standard == "IPCC AR5 (2014)":
-        gwp_ch4 = 28.0
-        gwp_n2o = 265.0
-    else:
-        gwp_ch4 = 29.8
-        gwp_n2o = 273.0
+    gwp_ch4 = 28.0 if gwp_standard == "IPCC AR5 (2014)" else 29.8
     
     gwp_nmvoc = st.number_input(
         "nmVOC GWP-100", 
         value=2.2, 
         min_value=0.1, 
         max_value=10.0,
-        help="GWP for non-methane VOCs (C₂+ hydrocarbons). Default 2.2 is an average for light hydrocarbons. Range: ethane ~1.4, propane ~2.3, butanes ~2.5"
+        help="GWP for non-methane VOCs (C₂+ hydrocarbons)"
     )
     
-    st.caption(f"CH₄ GWP: {gwp_ch4} | N₂O GWP: {gwp_n2o}")
+    st.caption(f"CH₄ GWP: {gwp_ch4}")
     
     st.divider()
     
@@ -673,34 +585,6 @@ with main_tab1:
                 height=350
             )
             st.plotly_chart(fig_comp, use_container_width=True)
-        
-        # Show method description
-        if emission_source == "Produced Water Degassing":
-            with st.expander("📖 Method Description", expanded=False):
-                if calc_method == "Lab Sample Analysis":
-                    st.markdown("""
-                    **Lab Sample Analysis Method:**
-                    1. A water sample is collected from the process
-                    2. The sample is flashed to standard conditions (1 atm, 15°C) in the laboratory
-                    3. The released gas composition is analyzed (this is the input above)
-                    4. The gas composition ratios are used to estimate dissolved gas in process water
-                    5. Multi-stage degassing is simulated to calculate total emissions
-                    
-                    **Advantage:** Based on actual measured data from your facility
-                    **Limitation:** Lab conditions differ from process conditions; assumes fixed dissolved gas content
-                    """)
-                else:
-                    st.markdown("""
-                    **Separator Equilibrium Method:**
-                    1. Enter the gas composition from the first stage separator
-                    2. NeqSim calculates thermodynamic equilibrium between gas and water at separator T & P
-                    3. The CPA equation of state determines how much of each component dissolves in water
-                    4. The saturated water is then flashed through the degassing stages
-                    5. Released gas at each stage is calculated using rigorous VLE
-                    
-                    **Advantage:** Physics-based; accounts for actual separator conditions (T, P, composition)
-                    **Limitation:** Assumes equilibrium is reached in separator (good for most cases)
-                    """)
     
     st.divider()
     
@@ -1123,20 +1007,6 @@ with main_tab1:
                         
                         with col1:
                             st.metric("🌍 CO₂ Equivalent", f"{co2eq_hr:.0f} kg/hr", f"{co2eq_year:.0f} tonnes CO₂eq/yr")
-                            
-                            # Carbon cost estimates
-                            co2_tax_nok = 1565
-                            co2_tax_eu = 80
-                            annual_cost_nok = co2eq_year * co2_tax_nok
-                            annual_cost_eu = co2eq_year * co2_tax_eu
-                            
-                            st.markdown(f"""
-                            **Estimated Annual Carbon Costs**
-                            | Scheme | Rate | Annual Cost |
-                            |--------|------|-------------|
-                            | Norwegian CO₂ Tax | NOK 1,565/t | NOK {annual_cost_nok:,.0f} |
-                            | EU ETS | ~€80/t | €{annual_cost_eu:,.0f} |
-                            """)
                         
                         with col2:
                             if total_gas > 0:
@@ -1163,98 +1033,203 @@ with main_tab1:
                             fig_bar.add_trace(go.Bar(name='CO₂', x=results_df['Stage'], y=results_df['CO2_kghr'], marker_color='#2196F3'))
                             fig_bar.add_trace(go.Bar(name='Methane', x=results_df['Stage'], y=results_df['CH4_kghr'], marker_color='#FF9800'))
                             fig_bar.add_trace(go.Bar(name='nmVOC', x=results_df['Stage'], y=results_df['nmVOC_kghr'], marker_color='#4CAF50'))
-                            fig_bar.update_layout(title="Emissions by Degassing Stage", xaxis_title="Stage", yaxis_title="Emission Rate (kg/hr)", barmode='group', height=400)
+                            chart_title = "Emissions by Process Stage" if emission_source == "TEG Regeneration" else "Emissions by Degassing Stage"
+                            fig_bar.update_layout(title=chart_title, xaxis_title="Stage", yaxis_title="Emission Rate (kg/hr)", barmode='group', height=400)
                             st.plotly_chart(fig_bar, use_container_width=True)
+                        
+                        # nmVOC breakdown for TEG Regeneration
+                        if emission_source == "TEG Regeneration" and total_nmvoc > 0:
+                            st.markdown("### nmVOC Composition Breakdown")
+                            st.caption("Non-methane volatile organic compounds (C₂+ hydrocarbons)")
+                            
+                            total_c2 = results_df['C2_kghr'].sum()
+                            total_c3 = results_df['C3_kghr'].sum()
+                            total_c4plus = results_df['C4plus_kghr'].sum()
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                nmvoc_breakdown = pd.DataFrame({
+                                    'Component': ['Ethane (C₂)', 'Propane (C₃)', 'C₄+ (butanes, pentanes, hexane, aromatics)'],
+                                    'kg/hr': [total_c2, total_c3, total_c4plus],
+                                    't/yr': [total_c2 * 8760 / 1000, total_c3 * 8760 / 1000, total_c4plus * 8760 / 1000],
+                                    '% of nmVOC': [total_c2 / total_nmvoc * 100 if total_nmvoc > 0 else 0,
+                                                  total_c3 / total_nmvoc * 100 if total_nmvoc > 0 else 0,
+                                                  total_c4plus / total_nmvoc * 100 if total_nmvoc > 0 else 0]
+                                })
+                                st.dataframe(nmvoc_breakdown.style.format({
+                                    'kg/hr': '{:.2f}',
+                                    't/yr': '{:.2f}',
+                                    '% of nmVOC': '{:.1f}%'
+                                }), use_container_width=True)
+                            
+                            with col2:
+                                fig_nmvoc = go.Figure(data=[go.Pie(
+                                    labels=['Ethane (C₂)', 'Propane (C₃)', 'C₄+ (incl. aromatics)'],
+                                    values=[total_c2, total_c3, total_c4plus],
+                                    hole=0.4,
+                                    marker=dict(colors=['#8BC34A', '#4CAF50', '#2E7D32']),
+                                    textinfo='label+percent'
+                                )])
+                                fig_nmvoc.update_layout(title="nmVOC Composition", height=280)
+                                st.plotly_chart(fig_nmvoc, use_container_width=True)
+                            
+                            st.info("""
+                            **nmVOC Definition**: Non-methane Volatile Organic Compounds include all hydrocarbons 
+                            except methane (C₂+). For TEG regeneration, this typically includes:
+                            - Light hydrocarbons absorbed from the gas (ethane, propane, butanes)
+                            - Heavier hydrocarbons (pentanes, hexane)
+                            - Aromatics (benzene, toluene, xylenes - BTEX)
+                            
+                            BTEX compounds are particularly important for environmental reporting due to their 
+                            health impacts and are regulated separately in some jurisdictions.
+                            """)
                     
                     with result_tab3:
                         st.subheader("NeqSim vs Norwegian Handbook Method")
                         
-                        st.markdown("""
-                        The **Norwegian Handbook Method** (Retningslinje 044) uses fixed emission factors:
-                        
-                        | Factor | Value | Scope |
-                        |--------|-------|-------|
-                        | f_CH₄ | 14 g/(m³·bar) | Methane only |
-                        | f_nmVOC | 3.5 g/(m³·bar) | C₂+ hydrocarbons only |
-                        
-                        ⚠️ **Critical Limitation:** The conventional method ignores CO₂ emissions entirely.
-                        CO₂ typically represents 50–80% of total dissolved gas in produced water, 
-                        yet is neither quantified nor reported using handbook factors.
-                        """)
-                        
-                        # Conventional calculation (tonnes/year)
-                        # Formula: emission = factor × volume × pressure_drop × 1e-6 (g→tonnes)
-                        water_vol_m3_year = water_flow_m3hr * 8760 if emission_source == "Produced Water Degassing" else total_flow / 1000 * 8760
-                        pressure_drop_bar = inlet_pressure - 1.01325
-                        
-                        conv_ch4 = 14.0 * water_vol_m3_year * pressure_drop_bar * 1e-6  # tonnes/year
-                        conv_nmvoc = 3.5 * water_vol_m3_year * pressure_drop_bar * 1e-6  # tonnes/year
-                        conv_co2eq = conv_ch4 * gwp_ch4 + conv_nmvoc * gwp_nmvoc
-                        
-                        neqsim_co2_t = total_co2 * 8760 / 1000
-                        neqsim_ch4_t = total_ch4 * 8760 / 1000
-                        neqsim_nmvoc_t = total_nmvoc * 8760 / 1000
-                        
-                        # Calculate differences - thermodynamic method typically shows LOWER emissions
-                        # because conventional factors are overly conservative
-                        ch4_diff = ((neqsim_ch4_t - conv_ch4) / conv_ch4 * 100) if conv_ch4 > 0 else 0
-                        nmvoc_diff = ((neqsim_nmvoc_t - conv_nmvoc) / conv_nmvoc * 100) if conv_nmvoc > 0 else 0
-                        co2eq_diff = ((co2eq_year - conv_co2eq) / conv_co2eq * 100) if conv_co2eq > 0 else 0
-                        
-                        comparison_data = {
-                            'Parameter': ['CO₂ (t/yr)', 'CH₄ (t/yr)', 'nmVOC (t/yr)', 'CO₂eq (t/yr)'],
-                            'Conventional': [f"Not measured", f"{conv_ch4:.1f}", f"{conv_nmvoc:.1f}", f"{conv_co2eq:.1f}"],
-                            'NeqSim Thermodynamic': [f"{neqsim_co2_t:.1f}", f"{neqsim_ch4_t:.1f}", f"{neqsim_nmvoc_t:.1f}", f"{co2eq_year:.1f}"],
-                            'Difference': [f"+{neqsim_co2_t:.1f} t/yr (ignored by conv.)", 
-                                          f"{ch4_diff:+.0f}%",
-                                          f"{nmvoc_diff:+.0f}%",
-                                          f"{co2eq_diff:+.0f}%"]
-                        }
-                        st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
-                        
-                        # Calculate GWMF for comparison (only meaningful for Produced Water Degassing)
-                        if emission_source == "Produced Water Degassing" and total_gas > 0 and pressure_drop_bar > 0:
-                            gwmf_total = (total_gas * 1000) / water_flow_m3hr / pressure_drop_bar
-                            gwmf_co2 = (total_co2 * 1000) / water_flow_m3hr / pressure_drop_bar
-                            gwmf_ch4 = (total_ch4 * 1000) / water_flow_m3hr / pressure_drop_bar
-                            gwmf_nmvoc = (total_nmvoc * 1000) / water_flow_m3hr / pressure_drop_bar
+                        if emission_source == "TEG Regeneration":
+                            st.markdown("""
+                            ### TEG Regeneration Emissions Analysis
                             
-                            # CO2 equivalent GWMF: CO2×1 + CH4×GWP + nmVOC×GWP
-                            gwmf_co2eq = gwmf_co2 * 1.0 + gwmf_ch4 * gwp_ch4 + gwmf_nmvoc * gwp_nmvoc
-                            # Conventional CO2eq: CH4(14)×GWP + nmVOC(3.5)×GWP (no CO2 measured)
-                            conv_gwmf_co2eq = 14.0 * gwp_ch4 + 3.5 * gwp_nmvoc
+                            **Note:** The Norwegian Handbook Method (Retningslinje 044) emission factors are designed 
+                            for produced water degassing and are **not directly applicable** to TEG regeneration emissions.
                             
-                            st.markdown(f"""
-                            **Gas-to-Water Mass Factors (GWMF):**
-                            | Component | NeqSim | Conventional |
-                            |-----------|--------|---------------|
-                            | CO₂ | {gwmf_co2:.1f} g/m³/bar | Not reported |
-                            | CH₄ | {gwmf_ch4:.1f} g/m³/bar | 14 g/m³/bar |
-                            | nmVOC | {gwmf_nmvoc:.1f} g/m³/bar | 3.5 g/m³/bar |
-                            | **Total** | **{gwmf_total:.1f} g/m³/bar** | ~17.5 g/m³/bar |
-                            | **CO₂eq** | **{gwmf_co2eq:.0f} g CO₂eq/m³/bar** | ~{conv_gwmf_co2eq:.0f} g CO₂eq/m³/bar |
+                            TEG regeneration emissions depend on:
+                            - TEG circulation rate and rich TEG composition
+                            - Flash drum and regenerator operating conditions
+                            - Hydrocarbon absorption in the contactor (function of gas composition, T, P)
+                            - BTEX content in the inlet gas
                             
-                            *Note: GWMF depends strongly on separator gas composition. CO₂ has higher intrinsic solubility 
-                            than CH₄ (per unit partial pressure), but actual dissolved amounts are proportional to gas 
-                            composition. With typical 3-12% CO₂ gas, expect GWMF(CO₂) ≈ 1-5 g/m³/bar.*
+                            **NeqSim Thermodynamic Method** provides component-specific emissions including:
                             """)
-                        
-                        if ch4_diff < 0:
-                            st.success(f"""
-                            **Key Finding:** Thermodynamic method calculates **{-ch4_diff:.0f}% lower CH₄** emissions than conventional factors.
                             
-                            The conventional method overestimates hydrocarbon emissions because:
-                            1. Fixed factors do not account for actual fluid composition
-                            2. Temperature and pressure effects on gas solubility are not considered
+                            neqsim_co2_t = total_co2 * 8760 / 1000
+                            neqsim_ch4_t = total_ch4 * 8760 / 1000
+                            neqsim_nmvoc_t = total_nmvoc * 8760 / 1000
                             
-                            **Important:** The thermodynamic method also quantifies {neqsim_co2_t:.1f} t/yr of CO₂ emissions 
-                            that are not captured by the conventional handbook method.
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                teg_summary = pd.DataFrame({
+                                    'Component': ['CO₂', 'Methane (CH₄)', 'nmVOC (C₂+)', 'Total Hydrocarbon'],
+                                    'kg/hr': [total_co2, total_ch4, total_nmvoc, total_ch4 + total_nmvoc],
+                                    't/yr': [neqsim_co2_t, neqsim_ch4_t, neqsim_nmvoc_t, neqsim_ch4_t + neqsim_nmvoc_t]
+                                })
+                                st.dataframe(teg_summary.style.format({
+                                    'kg/hr': '{:.2f}',
+                                    't/yr': '{:.2f}'
+                                }), use_container_width=True)
+                            
+                            with col2:
+                                # CO2 equivalent breakdown
+                                co2_from_co2 = total_co2 * 8760 / 1000  # t CO2eq/yr
+                                co2_from_ch4 = total_ch4 * gwp_ch4 * 8760 / 1000  # t CO2eq/yr
+                                co2_from_nmvoc = total_nmvoc * gwp_nmvoc * 8760 / 1000  # t CO2eq/yr
+                                
+                                fig_co2eq = go.Figure(data=[go.Pie(
+                                    labels=['From CO₂', f'From CH₄ (GWP={gwp_ch4})', f'From nmVOC (GWP={gwp_nmvoc})'],
+                                    values=[co2_from_co2, co2_from_ch4, co2_from_nmvoc],
+                                    hole=0.4,
+                                    marker=dict(colors=['#2196F3', '#FF9800', '#4CAF50']),
+                                    textinfo='label+percent'
+                                )])
+                                fig_co2eq.update_layout(title="CO₂eq Contribution by Source", height=280)
+                                st.plotly_chart(fig_co2eq, use_container_width=True)
+                            
+                            st.info(f"""
+                            **CO₂ Equivalent Summary (GWP-100):**
+                            - CO₂ direct: {co2_from_co2:.1f} t CO₂eq/yr
+                            - CH₄ contribution: {co2_from_ch4:.1f} t CO₂eq/yr (GWP = {gwp_ch4})
+                            - nmVOC contribution: {co2_from_nmvoc:.1f} t CO₂eq/yr (GWP = {gwp_nmvoc})
+                            - **Total: {co2eq_year:.1f} t CO₂eq/yr**
                             """)
                         else:
-                            st.info(f"""
-                            **Note:** The conventional method does not account for CO₂ emissions.
-                            The thermodynamic method quantifies {neqsim_co2_t:.1f} t/yr of CO₂ that would otherwise be unreported.
+                            st.markdown("""
+                            The **Norwegian Handbook Method** (Retningslinje 044) uses fixed emission factors:
+                            
+                            | Factor | Value | Scope |
+                            |--------|-------|-------|
+                            | f_CH₄ | 14 g/(m³·bar) | Methane only |
+                            | f_nmVOC | 3.5 g/(m³·bar) | C₂+ hydrocarbons only |
+                            
+                            ⚠️ **Critical Limitation:** The conventional method ignores CO₂ emissions entirely.
+                            CO₂ typically represents 50–80% of total dissolved gas in produced water, 
+                            yet is neither quantified nor reported using handbook factors.
                             """)
+                            
+                            # Conventional calculation (tonnes/year)
+                            # Formula: emission = factor × volume × pressure_drop × 1e-6 (g→tonnes)
+                            water_vol_m3_year = water_flow_m3hr * 8760 if emission_source == "Produced Water Degassing" else total_flow / 1000 * 8760
+                            pressure_drop_bar = inlet_pressure - 1.01325
+                            
+                            conv_ch4 = 14.0 * water_vol_m3_year * pressure_drop_bar * 1e-6  # tonnes/year
+                            conv_nmvoc = 3.5 * water_vol_m3_year * pressure_drop_bar * 1e-6  # tonnes/year
+                            conv_co2eq = conv_ch4 * gwp_ch4 + conv_nmvoc * gwp_nmvoc
+                            
+                            neqsim_co2_t = total_co2 * 8760 / 1000
+                            neqsim_ch4_t = total_ch4 * 8760 / 1000
+                            neqsim_nmvoc_t = total_nmvoc * 8760 / 1000
+                            
+                            # Calculate differences - thermodynamic method typically shows LOWER emissions
+                            # because conventional factors are overly conservative
+                            ch4_diff = ((neqsim_ch4_t - conv_ch4) / conv_ch4 * 100) if conv_ch4 > 0 else 0
+                            nmvoc_diff = ((neqsim_nmvoc_t - conv_nmvoc) / conv_nmvoc * 100) if conv_nmvoc > 0 else 0
+                            co2eq_diff = ((co2eq_year - conv_co2eq) / conv_co2eq * 100) if conv_co2eq > 0 else 0
+                            
+                            comparison_data = {
+                                'Parameter': ['CO₂ (t/yr)', 'CH₄ (t/yr)', 'nmVOC (t/yr)', 'CO₂eq (t/yr)'],
+                                'Conventional': [f"Not measured", f"{conv_ch4:.1f}", f"{conv_nmvoc:.1f}", f"{conv_co2eq:.1f}"],
+                                'NeqSim Thermodynamic': [f"{neqsim_co2_t:.1f}", f"{neqsim_ch4_t:.1f}", f"{neqsim_nmvoc_t:.1f}", f"{co2eq_year:.1f}"],
+                                'Difference': [f"+{neqsim_co2_t:.1f} t/yr (ignored by conv.)", 
+                                              f"{ch4_diff:+.0f}%",
+                                              f"{nmvoc_diff:+.0f}%",
+                                              f"{co2eq_diff:+.0f}%"]
+                            }
+                            st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
+                            
+                            # Calculate GWMF for comparison (only meaningful for Produced Water Degassing)
+                            if emission_source == "Produced Water Degassing" and total_gas > 0 and pressure_drop_bar > 0:
+                                gwmf_total = (total_gas * 1000) / water_flow_m3hr / pressure_drop_bar
+                                gwmf_co2 = (total_co2 * 1000) / water_flow_m3hr / pressure_drop_bar
+                                gwmf_ch4 = (total_ch4 * 1000) / water_flow_m3hr / pressure_drop_bar
+                                gwmf_nmvoc = (total_nmvoc * 1000) / water_flow_m3hr / pressure_drop_bar
+                                
+                                # CO2 equivalent GWMF: CO2×1 + CH4×GWP + nmVOC×GWP
+                                gwmf_co2eq = gwmf_co2 * 1.0 + gwmf_ch4 * gwp_ch4 + gwmf_nmvoc * gwp_nmvoc
+                                # Conventional CO2eq: CH4(14)×GWP + nmVOC(3.5)×GWP (no CO2 measured)
+                                conv_gwmf_co2eq = 14.0 * gwp_ch4 + 3.5 * gwp_nmvoc
+                                
+                                st.markdown(f"""
+                                **Gas-to-Water Mass Factors (GWMF):**
+                                | Component | NeqSim | Conventional |
+                                |-----------|--------|---------------|
+                                | CO₂ | {gwmf_co2:.1f} g/m³/bar | Not reported |
+                                | CH₄ | {gwmf_ch4:.1f} g/m³/bar | 14 g/m³/bar |
+                                | nmVOC | {gwmf_nmvoc:.1f} g/m³/bar | 3.5 g/m³/bar |
+                                | **Total** | **{gwmf_total:.1f} g/m³/bar** | ~17.5 g/m³/bar |
+                                | **CO₂eq** | **{gwmf_co2eq:.0f} g CO₂eq/m³/bar** | ~{conv_gwmf_co2eq:.0f} g CO₂eq/m³/bar |
+                                
+                                *Note: GWMF depends strongly on separator gas composition. CO₂ has higher intrinsic solubility 
+                                than CH₄ (per unit partial pressure), but actual dissolved amounts are proportional to gas 
+                                composition. With typical 3-12% CO₂ gas, expect GWMF(CO₂) ≈ 1-5 g/m³/bar.*
+                                """)
+                            
+                            if ch4_diff < 0:
+                                st.success(f"""
+                                **Key Finding:** Thermodynamic method calculates **{-ch4_diff:.0f}% lower CH₄** emissions than conventional factors.
+                                
+                                The conventional method overestimates hydrocarbon emissions because:
+                                1. Fixed factors do not account for actual fluid composition
+                                2. Temperature and pressure effects on gas solubility are not considered
+                                
+                                **Important:** The thermodynamic method also quantifies {neqsim_co2_t:.1f} t/yr of CO₂ emissions 
+                                that are not captured by the conventional handbook method.
+                                """)
+                            else:
+                                st.info(f"""
+                                **Note:** The conventional method does not account for CO₂ emissions.
+                                The thermodynamic method quantifies {neqsim_co2_t:.1f} t/yr of CO₂ that would otherwise be unreported.
+                                """)
                     
                     with result_tab4:
                         st.subheader("Export Results")
@@ -1734,84 +1709,3 @@ with main_tab3:
                     st.plotly_chart(fig_hist, use_container_width=True)
                     
                     st.success(f"Analysis completed: {len(mc_results)} simulations")
-
-# ===================== INFORMATION EXPANDERS =====================
-st.divider()
-
-with st.expander("📚 Regulatory Framework"):
-    st.markdown("""
-    ### Norwegian Continental Shelf (NCS)
-    | Regulation | Scope |
-    |------------|-------|
-    | **Aktivitetsforskriften §70** | Requirements for measurement and calculation of emissions |
-    | **Norwegian CO₂ Tax** | ~NOK 1,565/tonne CO₂ (2024 rate) |
-    
-    ### European Union
-    | Regulation | Scope |
-    |------------|-------|
-    | **EU ETS Directive 2003/87/EC** | Emissions trading system for installations |
-    | **EU Methane Regulation 2024/1787** | Source-level methane emission requirements |
-    | **MRV Regulation 2015/757** | Monitoring, Reporting, and Verification requirements |
-    
-    ### International Standards
-    | Standard | Scope |
-    |----------|-------|
-    | **ISO 14064-1:2018** | Organization-level GHG quantification |
-    | **IOGP Report 521** | Methods for estimating fugitive emissions |
-    | **OGMP 2.0** | Oil & Gas Methane Partnership reporting framework |
-    """)
-
-with st.expander("🔬 Thermodynamic Method"):
-    st.markdown("""
-    ### CPA Equation of State
-    
-    NeqSim employs the **Cubic-Plus-Association (CPA)** equation of state, which provides accurate 
-    vapor-liquid equilibrium calculations for water-hydrocarbon systems.
-    
-    **Binary Interaction Parameters (kij):**
-    
-    | System | kij | Data Source |
-    |--------|-----|-------------|
-    | Water–CO₂ | -0.112 | High-pressure VLE data |
-    | Water–CH₄ | 0.0115 | Solubility measurements |
-    | Water–C₂H₆ | 0.48 | Solubility measurements |
-    | Water–C₃H₈ | 0.49 | Solubility measurements |
-    
-    The negative kij for CO₂ reflects attractive water-CO₂ interactions, 
-    resulting in higher CO₂ solubility compared to non-polar hydrocarbons.
-    
-    ### Validation Results
-    | Study | Accuracy | Notes |
-    |-------|----------|-------|
-    | North Sea field (12 months) | ±3.6% | Continuous operation |
-    | PVT laboratory | ±2.1% | Controlled conditions |
-    | Conventional handbook | ±50% or worse | Fixed factors only |
-    
-    ### Key Advantage
-    The thermodynamic method provides **full component accounting**, including CO₂ emissions 
-    (typically 40–80% of dissolved gas) that are not captured by conventional handbook methods.
-    """)
-
-with st.expander("📖 References & Documentation"):
-    st.markdown("""
-    ### NeqSim Documentation
-    - [Emissions & Sustainability Guide](https://equinor.github.io/neqsim/emissions/) — Comprehensive reference for emission calculations
-    - [Offshore Emission Reporting Guide](https://equinor.github.io/neqsim/emissions/OFFSHORE_EMISSION_REPORTING.html) — Regulatory framework and methodology
-    - [Produced Water Emissions Tutorial](https://equinor.github.io/neqsim/examples/ProducedWaterEmissions_Tutorial.html) — Interactive Jupyter notebook
-    - [Norwegian Methods Comparison](https://equinor.github.io/neqsim/examples/NorwegianEmissionMethods_Comparison.html) — Validation against handbook method
-    
-    ### Scientific References
-    1. Kontogeorgis, G.M. & Folas, G.K. (2010). *Thermodynamic Models for Industrial Applications*. Wiley. [DOI: 10.1002/9780470747537](https://doi.org/10.1002/9780470747537)
-    2. Duan, Z. & Sun, R. (2003). An improved model calculating CO₂ solubility in pure water and aqueous NaCl solutions. *Chemical Geology*, 193(3-4), 257-271.
-    3. IPCC (2014, 2021). *Assessment Reports AR5/AR6* — Global Warming Potential values.
-    
-    ### Industry Guidelines
-    - IOGP Report 521 (2019) — Methods for estimating atmospheric emissions from E&P operations
-    - Norsk olje og gass — Handbook for quantification of direct emissions (Retningslinje 044)
-    - [EU Methane Regulation 2024/1787](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32024R1787)
-    
-    ### Software Resources
-    - [NeqSim GitHub Repository](https://github.com/equinor/neqsim)
-    - [NeqSim Python Package](https://github.com/equinor/neqsim-python)
-    - [Run in Google Colab](https://colab.research.google.com/github/equinor/neqsim/blob/master/docs/examples/ProducedWaterEmissions_Tutorial.ipynb) (no installation required)
-    """)
