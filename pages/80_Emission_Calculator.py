@@ -606,11 +606,13 @@ with main_tab1:
                             # =============== SEPARATOR EQUILIBRIUM METHOD ===============
                             # Create a gas-water system at separator conditions
                             # Let it equilibrate, then extract the water phase with dissolved gas
+                            # Apply salting-out correction using Setschenow equation if salinity > 0
                             
-                            # Determine if we need electrolyte CPA (salinity > 0)
-                            use_electrolyte = salinity_ppm > 0
-                            if use_electrolyte:
-                                st.info("Using Separator Equilibrium method with **Electrolyte-CPA-EoS** (salinity effects enabled)...")
+                            # Note: We use standard CPA for equilibrium calculation and apply
+                            # Setschenow salting-out correction analytically. This is more robust
+                            # than Electrolyte-CPA which has limitations with heavier hydrocarbons.
+                            if salinity_ppm > 0:
+                                st.info(f"Using Separator Equilibrium method with **Setschenow salting-out correction** (salinity: {salinity_ppm:,} ppm, factor: {salting_out_factor:.3f})...")
                             else:
                                 st.info("Using Separator Equilibrium method: calculating dissolved gas from VLE...")
                             
@@ -624,16 +626,15 @@ with main_tab1:
                                 st.error("No valid gas components found. Please enter at least one gas component with non-zero mole fraction.")
                                 st.stop()
                             
-                            # Create gas-water equilibrium system
-                            # Use iterative approach: double water until two phases exist
-                            # This ensures gas composition matches input while having proper aqueous phase
+                            # Create gas-water equilibrium system using standard CPA
+                            # Salting-out effect will be applied as a correction factor
                             gas_scale = 100.0  # Large gas excess to preserve composition
-                            # Start with more water for electrolyte CPA (needs proper water/ion ratio for stability)
-                            water_moles = 1000.0 if use_electrolyte else 100.0
+                            water_moles = 1000.0  # Consistent water amount
                             max_iterations = 10
                             
                             for iteration in range(max_iterations):
-                                equilibrium_fluid = create_cpa_fluid(use_electrolyte=use_electrolyte)
+                                # Always use standard CPA - salting-out applied analytically
+                                equilibrium_fluid = create_cpa_fluid(use_electrolyte=False)
                                 
                                 # Add gas components (scaled to preserve composition at equilibrium)
                                 components_added = []
@@ -643,16 +644,6 @@ with main_tab1:
                                 
                                 # Add water
                                 equilibrium_fluid.addComponent('water', water_moles)
-                                
-                                # Add ions if salinity > 0 (for electrolyte CPA)
-                                if use_electrolyte:
-                                    # Calculate Na+ and Cl- moles based on salinity and water amount
-                                    # molality (mol/kg) was already calculated from ppm
-                                    # water_moles * 18.015 g/mol / 1000 = kg of water
-                                    kg_water = water_moles * 18.015 / 1000.0
-                                    ion_moles = molality * kg_water
-                                    equilibrium_fluid.addComponent('Na+', ion_moles)
-                                    equilibrium_fluid.addComponent('Cl-', ion_moles)
                                 
                                 # Configure CPA model
                                 equilibrium_fluid.createDatabase(True)
@@ -685,27 +676,48 @@ with main_tab1:
                             aqueous_phase = equilibrium_fluid.getPhase('aqueous')
                             
                             # Create a new CPA fluid representing just the produced water
-                            # For process calculations (degassing), we don't need electrolyte CPA
-                            # since we're flashing the water phase (ions don't flash)
                             process_fluid = create_cpa_fluid(use_electrolyte=False)
                             
-                            # Get composition of aqueous phase (exclude ions for process fluid)
+                            # Get composition of aqueous phase
+                            # Apply salting-out correction to gas components if salinity > 0
                             dissolved_gas_info = []
                             components_in_water = 0
+                            total_gas_x = 0.0  # Track total gas mole fraction for renormalization
+                            water_x = 0.0
+                            
+                            # First pass: collect compositions and calculate corrected values
+                            comp_data = []
                             for idx in range(aqueous_phase.getNumberOfComponents()):
                                 comp = aqueous_phase.getComponent(idx)
-                                comp_name = str(comp.getComponentName())  # Convert Java String to Python
-                                x_i = float(comp.getx())  # mole fraction in aqueous phase
-                                # Skip ions for process fluid (they don't flash)
-                                if x_i > 1e-10 and comp_name not in ['Na+', 'Cl-', 'K+', 'Ca++', 'Mg++', 'Ba++', 'SO4--', 'CO3--']:
-                                    process_fluid.addComponent(comp_name, x_i)
+                                comp_name = str(comp.getComponentName())
+                                x_i = float(comp.getx())
+                                if x_i > 1e-10:
+                                    if comp_name == 'water':
+                                        water_x = x_i
+                                    else:
+                                        # Apply salting-out factor to gas components
+                                        x_corrected = x_i * salting_out_factor
+                                        total_gas_x += x_corrected
+                                    comp_data.append((comp_name, x_i))
+                            
+                            # Renormalize: water + corrected gas = 1.0
+                            # water_new + gas_corrected = 1.0
+                            # We need to adjust water to compensate for reduced gas
+                            water_new = 1.0 - total_gas_x
+                            
+                            for comp_name, x_i in comp_data:
+                                if comp_name == 'water':
+                                    process_fluid.addComponent(comp_name, water_new)
                                     components_in_water += 1
-                                    if comp_name != 'water':
-                                        dissolved_gas_info.append({
-                                            'Component': comp_name,
-                                            'Mole Fraction': x_i,
-                                            'ppm (molar)': x_i * 1e6
-                                        })
+                                else:
+                                    x_corrected = x_i * salting_out_factor
+                                    process_fluid.addComponent(comp_name, x_corrected)
+                                    components_in_water += 1
+                                    dissolved_gas_info.append({
+                                        'Component': comp_name,
+                                        'Mole Fraction': x_corrected,
+                                        'ppm (molar)': x_corrected * 1e6
+                                    })
                             
                             # Verify process_fluid has components
                             if components_in_water == 0:
