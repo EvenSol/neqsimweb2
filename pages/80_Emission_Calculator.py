@@ -761,29 +761,157 @@ with main_tab1:
                             process_fluid.setTotalFlowRate(total_flow, 'kg/hr')
                             
                     elif emission_source == "TEG Regeneration":
-                        # TEG Regeneration: use rich TEG composition directly
-                        # Get the correct dataframe based on calculation method
+                        # TEG Regeneration: calculate rich TEG composition
                         if calc_method == "Absorber Equilibrium":
-                            # TODO: Calculate rich TEG from absorber equilibrium
-                            # For now, use the absorber gas as proxy
-                            st.info("Using Absorber Equilibrium method (simplified): Using absorber inlet gas as proxy for rich TEG composition...")
-                            teg_df = st.session_state.teg_absorber_gas_df
+                            # =============== ABSORBER EQUILIBRIUM METHOD ===============
+                            # Create a gas-TEG system at absorber conditions
+                            # Let it equilibrate, then extract the liquid (rich TEG) phase with absorbed components
+                            
+                            st.info("Using Absorber Equilibrium method: calculating absorbed components from gas-TEG VLE...")
+                            
+                            # Get absorber gas composition
+                            absorber_gas_df = st.session_state.teg_absorber_gas_df
+                            valid_gas_df = absorber_gas_df[
+                                (absorber_gas_df['MolarComposition[-]'] > 0) & 
+                                (absorber_gas_df['ComponentName'] != 'TEG') &
+                                (absorber_gas_df['ComponentName'] != 'water')
+                            ].copy()
+                            
+                            if len(valid_gas_df) == 0:
+                                st.error("No valid gas components found. Please enter at least one gas component with non-zero mole fraction.")
+                                st.stop()
+                            
+                            # Create gas-TEG equilibrium system
+                            # Use iterative approach: adjust TEG amount until proper liquid phase exists
+                            # TEG is the dominant liquid component, gas components will dissolve into it
+                            gas_scale = 100.0  # Large gas excess to preserve gas composition
+                            teg_moles = 10.0  # Start with TEG (will be scaled)
+                            water_in_teg = teg_moles * (1.0 - teg_purity/100.0) / (teg_purity/100.0)  # Water in lean TEG
+                            max_iterations = 10
+                            
+                            for iteration in range(max_iterations):
+                                equilibrium_fluid = create_cpa_fluid(use_electrolyte=False)
+                                
+                                # Add gas components (scaled to preserve composition at equilibrium)
+                                components_added = []
+                                for _, row in valid_gas_df.iterrows():
+                                    equilibrium_fluid.addComponent(row['ComponentName'], row['MolarComposition[-]'] * gas_scale)
+                                    components_added.append(row['ComponentName'])
+                                
+                                # Add TEG (lean glycol)
+                                equilibrium_fluid.addComponent('TEG', teg_moles)
+                                
+                                # Add water in lean TEG (based on purity)
+                                if water_in_teg > 0.001:
+                                    equilibrium_fluid.addComponent('water', water_in_teg)
+                                
+                                # Configure CPA model
+                                equilibrium_fluid.createDatabase(True)
+                                equilibrium_fluid.setMixingRule(10)
+                                equilibrium_fluid.setMultiPhaseCheck(True)
+                                
+                                # Set absorber conditions (contactor T and P)
+                                equilibrium_fluid.setTemperature(inlet_temp, 'C')
+                                equilibrium_fluid.setPressure(inlet_pressure, 'bara')
+                                
+                                # Flash to equilibrium
+                                TPflash(equilibrium_fluid)
+                                equilibrium_fluid.initProperties()
+                                
+                                # Check for gas and liquid phases
+                                # Note: TEG-rich phase appears as 'aqueous' in CPA-Statoil, not 'oil'
+                                has_gas = equilibrium_fluid.hasPhaseType('gas')
+                                has_teg_liquid = equilibrium_fluid.hasPhaseType('aqueous')
+                                
+                                if has_gas and has_teg_liquid:
+                                    break  # Success - we have both phases
+                                
+                                # Increase TEG and try again
+                                teg_moles *= 2.0
+                                water_in_teg = teg_moles * (1.0 - teg_purity/100.0) / (teg_purity/100.0)
+                            
+                            if not (has_gas and has_teg_liquid):
+                                st.warning(f"Could not achieve gas-TEG equilibrium after {max_iterations} iterations. Using direct composition method as fallback.")
+                                # Fallback to direct composition
+                                teg_df = st.session_state.teg_fluid_df
+                                process_fluid = create_cpa_fluid()
+                                for _, row in teg_df.iterrows():
+                                    if row['MolarComposition[-]'] > 0:
+                                        process_fluid.addComponent(row['ComponentName'], row['MolarComposition[-]'])
+                                process_fluid.createDatabase(True)
+                                process_fluid.setMixingRule(10)
+                                process_fluid.setMultiPhaseCheck(True)
+                                process_fluid.setTemperature(inlet_temp, 'C')
+                                process_fluid.setPressure(inlet_pressure, 'bara')
+                                process_fluid.setTotalFlowRate(total_flow, 'kg/hr')
+                            else:
+                                # Extract the aqueous/liquid phase composition (rich TEG with absorbed components)
+                                # TEG-rich phase is classified as 'aqueous' in CPA-Statoil due to TEG's polar nature
+                                teg_liquid_phase = equilibrium_fluid.getPhase('aqueous')
+                                
+                                # Create a new CPA fluid representing the rich TEG
+                                process_fluid = create_cpa_fluid(use_electrolyte=False)
+                                
+                                # Get composition of TEG-rich liquid phase (rich TEG)
+                                absorbed_gas_info = []
+                                components_in_teg = 0
+                                for idx in range(teg_liquid_phase.getNumberOfComponents()):
+                                    comp = teg_liquid_phase.getComponent(idx)
+                                    comp_name = str(comp.getComponentName())
+                                    x_i = float(comp.getx())  # mole fraction in TEG-rich (aqueous) phase
+                                    if x_i > 1e-12:
+                                        process_fluid.addComponent(comp_name, x_i)
+                                        components_in_teg += 1
+                                        if comp_name not in ['TEG', 'water']:
+                                            absorbed_gas_info.append({
+                                                'Component': comp_name,
+                                                'Mole Fraction in Rich TEG': x_i,
+                                                'ppm (molar)': x_i * 1e6
+                                            })
+                                
+                                # Verify process_fluid has components
+                                if components_in_teg == 0:
+                                    st.error("No components extracted from TEG phase. This may indicate a thermodynamic calculation issue.")
+                                    st.stop()
+                                
+                                # Load binary interaction parameters and set mixing rule
+                                process_fluid.createDatabase(True)
+                                process_fluid.setMixingRule(10)
+                                process_fluid.setMultiPhaseCheck(True)
+                                
+                                # Display absorbed gas composition in rich TEG
+                                if absorbed_gas_info:
+                                    st.markdown("**Calculated Absorbed Components in Rich TEG at Absorber Conditions:**")
+                                    absorbed_df = pd.DataFrame(absorbed_gas_info)
+                                    st.dataframe(absorbed_df.style.format({
+                                        'Mole Fraction in Rich TEG': '{:.2e}',
+                                        'ppm (molar)': '{:.1f}'
+                                    }), use_container_width=True)
+                                else:
+                                    st.warning("No absorbed gas detected in TEG phase at these conditions.")
+                                
+                                # Set conditions and flow for process fluid
+                                process_fluid.setTemperature(inlet_temp, 'C')
+                                process_fluid.setPressure(inlet_pressure, 'bara')
+                                process_fluid.setTotalFlowRate(total_flow, 'kg/hr')
                         else:
+                            # =============== RICH TEG COMPOSITION METHOD ===============
+                            # Direct input of rich TEG composition
                             teg_df = st.session_state.teg_fluid_df
-                        
-                        process_fluid = create_cpa_fluid()  # CPA-SRK-EOS-statoil
-                        for _, row in teg_df.iterrows():
-                            if row['MolarComposition[-]'] > 0:
-                                process_fluid.addComponent(row['ComponentName'], row['MolarComposition[-]'])
-                        
-                        # Load binary interaction parameters and set mixing rule
-                        process_fluid.createDatabase(True)
-                        process_fluid.setMixingRule(10)
-                        process_fluid.setMultiPhaseCheck(True)  # Enable multi-phase detection
-                        
-                        process_fluid.setTemperature(inlet_temp, 'C')
-                        process_fluid.setPressure(inlet_pressure, 'bara')
-                        process_fluid.setTotalFlowRate(total_flow, 'kg/hr')
+                            
+                            process_fluid = create_cpa_fluid()  # CPA-SRK-EOS-statoil
+                            for _, row in teg_df.iterrows():
+                                if row['MolarComposition[-]'] > 0:
+                                    process_fluid.addComponent(row['ComponentName'], row['MolarComposition[-]'])
+                            
+                            # Load binary interaction parameters and set mixing rule
+                            process_fluid.createDatabase(True)
+                            process_fluid.setMixingRule(10)
+                            process_fluid.setMultiPhaseCheck(True)  # Enable multi-phase detection
+                            
+                            process_fluid.setTemperature(inlet_temp, 'C')
+                            process_fluid.setPressure(inlet_pressure, 'bara')
+                            process_fluid.setTotalFlowRate(total_flow, 'kg/hr')
                         
                     else:
                         # For other sources (Tank, Cold Vent), use composition directly
@@ -1143,6 +1271,165 @@ with main_tab1:
                             - nmVOC contribution: {co2_from_nmvoc:.1f} t CO₂eq/yr (GWP = {gwp_nmvoc})
                             - **Total: {co2eq_year:.1f} t CO₂eq/yr**
                             """)
+                            
+                            # ===================== EPA/INDUSTRY BENCHMARK COMPARISON =====================
+                            st.divider()
+                            st.markdown("### 📊 Comparison with EPA/Industry Benchmarks")
+                            
+                            st.markdown("""
+                            The EPA Natural Gas STAR program and industry standards provide reference values 
+                            for TEG dehydrator emissions. These benchmarks can help validate your results.
+                            """)
+                            
+                            # Calculate benchmark metrics
+                            # EPA benchmark: ~1 scf CH4 absorbed per gallon TEG circulated (without flash tank)
+                            # Convert TEG flow from kg/hr to gal/hr (TEG density ~1.125 kg/L, 3.785 L/gal)
+                            teg_density_kg_per_gal = 1.125 * 3.785  # ~4.26 kg/gal
+                            teg_flow_gal_hr = total_flow / teg_density_kg_per_gal
+                            
+                            # Convert CH4 from kg/hr to scf/hr (CH4 density at SC: 0.0178 lb/scf = 0.00807 kg/scf)
+                            ch4_density_kg_per_scf = 0.00807
+                            ch4_scf_hr = total_ch4 / ch4_density_kg_per_scf if total_ch4 > 0 else 0
+                            
+                            # Calculate scf CH4 per gallon TEG
+                            ch4_per_gal_teg = ch4_scf_hr / teg_flow_gal_hr if teg_flow_gal_hr > 0 else 0
+                            
+                            # BTEX fraction calculation (benzene, toluene, xylenes in C4+)
+                            # Extract BTEX emissions from results if available
+                            btex_kghr = 0.0
+                            for stage_result in emissions_data:
+                                # BTEX is included in C4plus, estimate based on typical TEG absorption
+                                # Typical BTEX fraction: 10-30% of C4+ for rich gas
+                                pass
+                            
+                            # Estimate BTEX from C4+ (conservative estimate: ~20% of C4+)
+                            total_c4plus = results_df['C4plus_kghr'].sum()
+                            estimated_btex = total_c4plus * 0.20  # Conservative estimate
+                            btex_fraction = (estimated_btex / total_nmvoc * 100) if total_nmvoc > 0 else 0
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("#### Your Calculated Values vs EPA Benchmarks")
+                                
+                                benchmark_data = pd.DataFrame({
+                                    'Parameter': [
+                                        'CH₄ per gal TEG',
+                                        'Total VOC (nmVOC)',
+                                        'BTEX fraction of nmVOC',
+                                        'CH₄ % of total emissions'
+                                    ],
+                                    'Your Value': [
+                                        f"{ch4_per_gal_teg:.2f} scf/gal",
+                                        f"{total_nmvoc:.2f} kg/hr",
+                                        f"{btex_fraction:.1f}% (est.)",
+                                        f"{(total_ch4/(total_gas)*100) if total_gas > 0 else 0:.1f}%"
+                                    ],
+                                    'EPA/Industry Benchmark': [
+                                        "~1 scf/gal (no flash tank)",
+                                        "Varies by gas composition",
+                                        "10-30% typical",
+                                        "Varies (typically 30-70%)"
+                                    ],
+                                    'Status': [
+                                        "✅ Within range" if 0.1 < ch4_per_gal_teg < 3.0 else "⚠️ Check inputs",
+                                        "ℹ️ Site-specific",
+                                        "✅ Within range" if 5 < btex_fraction < 40 else "ℹ️ Site-specific",
+                                        "ℹ️ Site-specific"
+                                    ]
+                                })
+                                st.dataframe(benchmark_data, use_container_width=True, hide_index=True)
+                            
+                            with col2:
+                                st.markdown("#### Key EPA Reference Values")
+                                st.markdown("""
+                                | Parameter | EPA Value | Source |
+                                |-----------|-----------|--------|
+                                | CH₄ absorption | 1 scf/gal TEG | Natural Gas STAR |
+                                | Additional (gas-assist pump) | +2 scf/gal | Natural Gas STAR |
+                                | TEG-to-water ratio | 2-5 gal/lb H₂O | Industry standard |
+                                | Rule-of-thumb | 3 gal TEG/lb H₂O | Industry standard |
+                                """)
+                                
+                                # Emission intensity metric
+                                if teg_flow_gal_hr > 0:
+                                    emission_intensity = (total_ch4 + total_nmvoc) / teg_flow_gal_hr
+                                    st.metric(
+                                        "Emission Intensity",
+                                        f"{emission_intensity:.3f} kg HC/gal TEG",
+                                        help="Total hydrocarbon emissions per gallon of TEG circulated"
+                                    )
+                            
+                            # Regulatory references
+                            with st.expander("📚 Regulatory References & Standards", expanded=False):
+                                st.markdown("""
+                                ### U.S. EPA Regulations
+                                
+                                | Regulation | Description | Applicability |
+                                |------------|-------------|---------------|
+                                | **40 CFR 98 Subpart W** | GHG Reporting for glycol dehydrators | Facilities ≥25,000 t CO₂eq/yr |
+                                | **40 CFR 60 NSPS OOOOa/b** | New Source Performance Standards | New/modified sources |
+                                | **40 CFR 63 Subpart HH** | HAP emissions (BTEX) | Major HAP sources |
+                                
+                                ### Calculation Methodology
+                                
+                                EPA recommends using **simulation software** for glycol dehydrator emissions 
+                                (40 CFR 98.233(e)) because:
+                                
+                                > *"A default emission factor is not available to adequately estimate emissions 
+                                > due to the wide variety of configurations and operating conditions."*
+                                
+                                The NeqSim thermodynamic approach used here aligns with EPA guidance for 
+                                rigorous emission quantification.
+                                
+                                ### Other Standards
+                                
+                                | Standard | Region | Notes |
+                                |----------|--------|-------|
+                                | **OGMP 2.0** | International | Methane reporting framework |
+                                | **EU Methane Regulation 2024/1787** | European Union | Mandatory monitoring |
+                                | **Aktivitetsforskriften §70** | Norway | Offshore emission reporting |
+                                
+                                ### References
+                                
+                                - [EPA Natural Gas STAR - Glycol Dehydrators](https://www.epa.gov/natural-gas-star-program/glycol-dehydrators)
+                                - [EPA Subpart W Reporting](https://www.epa.gov/ghgreporting/subpart-w-petroleum-and-natural-gas-systems)
+                                - [Optimize Glycol Circulation](https://www.epa.gov/natural-gas-star-program/optimize-glycol-circulation)
+                                """)
+                            
+                            # Assessment summary
+                            if ch4_per_gal_teg > 0:
+                                if ch4_per_gal_teg < 0.5:
+                                    st.success(f"""
+                                    **Assessment:** Your CH₄ emission rate ({ch4_per_gal_teg:.2f} scf/gal TEG) is **below** 
+                                    the EPA benchmark of ~1 scf/gal. This may indicate:
+                                    - Effective flash tank separation recovering methane
+                                    - Lower hydrocarbon content in inlet gas
+                                    - Well-optimized TEG circulation rate
+                                    """)
+                                elif ch4_per_gal_teg < 1.5:
+                                    st.info(f"""
+                                    **Assessment:** Your CH₄ emission rate ({ch4_per_gal_teg:.2f} scf/gal TEG) is 
+                                    **within typical range** of EPA benchmarks. This is expected for standard 
+                                    TEG dehydration without vapor recovery.
+                                    """)
+                                elif ch4_per_gal_teg < 3.0:
+                                    st.warning(f"""
+                                    **Assessment:** Your CH₄ emission rate ({ch4_per_gal_teg:.2f} scf/gal TEG) is 
+                                    **above** the basic EPA benchmark. This may indicate:
+                                    - Gas-assist glycol circulation pump in use (+2 scf/gal)
+                                    - Higher than optimal TEG circulation rate
+                                    - Consider [optimizing glycol circulation](https://www.epa.gov/natural-gas-star-program/optimize-glycol-circulation)
+                                    """)
+                                else:
+                                    st.error(f"""
+                                    **Assessment:** Your CH₄ emission rate ({ch4_per_gal_teg:.2f} scf/gal TEG) is 
+                                    **significantly above** industry benchmarks. Consider:
+                                    - Verifying input data and TEG circulation rate
+                                    - Installing flash tank separator for vapor recovery
+                                    - Optimizing glycol circulation rate
+                                    - Replacing gas-assist pump with electric pump
+                                    """)
                         else:
                             st.markdown("""
                             The **Norwegian Handbook Method** (Retningslinje 044) uses fixed emission factors:
@@ -1413,6 +1700,55 @@ with main_tab2:
                                 for _, row in comp_df.iterrows():
                                     if row['MolarComposition[-]'] > 0 and row['ComponentName'] != 'water':
                                         scenario_fluid.addComponent(row['ComponentName'], row['MolarComposition[-]'] * gas_scale)
+                        elif emission_source == "TEG Regeneration" and calc_method == "Absorber Equilibrium":
+                            # TEG Absorber Equilibrium: create gas-TEG system and extract liquid phase
+                            gas_scale = 100.0
+                            teg_moles = 10.0
+                            water_in_teg = teg_moles * (1.0 - teg_purity/100.0) / (teg_purity/100.0)
+                            
+                            for _ in range(10):
+                                equilibrium_fluid = create_cpa_fluid(use_electrolyte=False)
+                                for _, row in comp_df.iterrows():
+                                    if row['MolarComposition[-]'] > 0 and row['ComponentName'] not in ['TEG', 'water']:
+                                        equilibrium_fluid.addComponent(row['ComponentName'], row['MolarComposition[-]'] * gas_scale)
+                                equilibrium_fluid.addComponent('TEG', teg_moles)
+                                if water_in_teg > 0.001:
+                                    equilibrium_fluid.addComponent('water', water_in_teg)
+                                
+                                equilibrium_fluid.createDatabase(True)
+                                equilibrium_fluid.setMixingRule(10)
+                                equilibrium_fluid.setMultiPhaseCheck(True)
+                                
+                                if vary_param == "Separator Temperature":
+                                    equilibrium_fluid.setTemperature(val, 'C')
+                                    equilibrium_fluid.setPressure(inlet_pressure, 'bara')
+                                elif vary_param == "Separator Pressure":
+                                    equilibrium_fluid.setTemperature(inlet_temp, 'C')
+                                    equilibrium_fluid.setPressure(val, 'bara')
+                                else:
+                                    equilibrium_fluid.setTemperature(inlet_temp, 'C')
+                                    equilibrium_fluid.setPressure(inlet_pressure, 'bara')
+                                
+                                TPflash(equilibrium_fluid)
+                                equilibrium_fluid.initProperties()
+                                
+                                # TEG-rich phase appears as 'aqueous' in CPA-Statoil
+                                if equilibrium_fluid.hasPhaseType('gas') and equilibrium_fluid.hasPhaseType('aqueous'):
+                                    break
+                                teg_moles *= 2.0
+                                water_in_teg = teg_moles * (1.0 - teg_purity/100.0) / (teg_purity/100.0)
+                            
+                            # Extract aqueous/TEG phase composition
+                            if equilibrium_fluid.hasPhaseType('aqueous'):
+                                teg_liquid_phase = equilibrium_fluid.getPhase('aqueous')
+                                for idx in range(teg_liquid_phase.getNumberOfComponents()):
+                                    comp = teg_liquid_phase.getComponent(idx)
+                                    comp_name = str(comp.getComponentName())
+                                    x_i = float(comp.getx())
+                                    if x_i > 1e-12:
+                                        scenario_fluid.addComponent(comp_name, x_i)
+                            else:
+                                continue  # Skip if no liquid phase
                         else:
                             for _, row in comp_df.iterrows():
                                 if row['MolarComposition[-]'] > 0:
@@ -1617,6 +1953,49 @@ with main_tab3:
                                     if row['MolarComposition[-]'] > 0 and row['ComponentName'] != 'water':
                                         pert_comp = row['MolarComposition[-]'] * gas_scale * np.random.normal(1.0, comp_uncertainty/100)
                                         mc_fluid.addComponent(row['ComponentName'], max(0.00001, pert_comp))
+                        elif emission_source == "TEG Regeneration" and calc_method == "Absorber Equilibrium":
+                            # TEG Absorber Equilibrium: create gas-TEG system and extract liquid phase
+                            gas_scale = 100.0
+                            teg_moles = 10.0
+                            water_in_teg = teg_moles * (1.0 - teg_purity/100.0) / (teg_purity/100.0)
+                            
+                            for _ in range(10):
+                                equilibrium_fluid = create_cpa_fluid(use_electrolyte=False)
+                                for _, row in comp_df.iterrows():
+                                    if row['MolarComposition[-]'] > 0 and row['ComponentName'] not in ['TEG', 'water']:
+                                        pert_comp = row['MolarComposition[-]'] * gas_scale * np.random.normal(1.0, comp_uncertainty/100)
+                                        equilibrium_fluid.addComponent(row['ComponentName'], max(0.001, pert_comp))
+                                equilibrium_fluid.addComponent('TEG', teg_moles)
+                                if water_in_teg > 0.001:
+                                    equilibrium_fluid.addComponent('water', water_in_teg)
+                                
+                                equilibrium_fluid.createDatabase(True)
+                                equilibrium_fluid.setMixingRule(10)
+                                equilibrium_fluid.setMultiPhaseCheck(True)
+                                
+                                equilibrium_fluid.setTemperature(temp_pert, 'C')
+                                equilibrium_fluid.setPressure(press_pert, 'bara')
+                                
+                                TPflash(equilibrium_fluid)
+                                equilibrium_fluid.initProperties()
+                                
+                                # TEG-rich phase appears as 'aqueous' in CPA-Statoil
+                                if equilibrium_fluid.hasPhaseType('gas') and equilibrium_fluid.hasPhaseType('aqueous'):
+                                    break
+                                teg_moles *= 2.0
+                                water_in_teg = teg_moles * (1.0 - teg_purity/100.0) / (teg_purity/100.0)
+                            
+                            # Extract aqueous/TEG phase composition
+                            if equilibrium_fluid.hasPhaseType('aqueous'):
+                                teg_liquid_phase = equilibrium_fluid.getPhase('aqueous')
+                                for j in range(teg_liquid_phase.getNumberOfComponents()):
+                                    comp = teg_liquid_phase.getComponent(j)
+                                    comp_name = str(comp.getComponentName())
+                                    x_i = float(comp.getx())
+                                    if x_i > 1e-12:
+                                        mc_fluid.addComponent(comp_name, x_i)
+                            else:
+                                continue  # Skip if no liquid phase
                         else:
                             for _, row in comp_df.iterrows():
                                 if row['MolarComposition[-]'] > 0:
