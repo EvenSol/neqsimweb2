@@ -1154,7 +1154,7 @@ with main_tab1:
                         st.subheader("Emissions by Stage")
                         
                         display_df = results_df.copy()
-                        display_df.columns = ['Stage', 'Pressure (bara)', 'Total (kg/hr)', 'CO₂ (kg/hr)', 
+                        display_df.columns = ['Stage', 'Pressure (bara)', 'Temperature (°C)', 'Total (kg/hr)', 'CO₂ (kg/hr)', 
                                              'CH₄ (kg/hr)', 'C₂ (kg/hr)', 'C₃ (kg/hr)', 'C₄+ (kg/hr)', 'nmVOC (kg/hr)', 'H₂S (kg/hr)']
                         st.dataframe(display_df, use_container_width=True)
                         
