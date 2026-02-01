@@ -598,6 +598,7 @@ with main_tab1:
                         # Calculate GWMF for comparison (only meaningful for Produced Water Degassing)
                         if emission_source == "Produced Water Degassing" and total_gas > 0 and pressure_drop_bar > 0:
                             gwmf_total = (total_gas * 1000) / water_flow_m3hr / pressure_drop_bar
+                            gwmf_co2 = (total_co2 * 1000) / water_flow_m3hr / pressure_drop_bar
                             gwmf_ch4 = (total_ch4 * 1000) / water_flow_m3hr / pressure_drop_bar
                             gwmf_nmvoc = (total_nmvoc * 1000) / water_flow_m3hr / pressure_drop_bar
                             
@@ -605,9 +606,10 @@ with main_tab1:
                             **Gas-to-Water Mass Factors (GWMF):**
                             | Component | NeqSim | Conventional |
                             |-----------|--------|---------------|
+                            | CO₂ | {gwmf_co2:.1f} g/m³/bar | Not reported |
                             | CH₄ | {gwmf_ch4:.1f} g/m³/bar | 14 g/m³/bar |
                             | nmVOC | {gwmf_nmvoc:.1f} g/m³/bar | 3.5 g/m³/bar |
-                            | Total | {gwmf_total:.1f} g/m³/bar | ~17.5 g/m³/bar |
+                            | **Total** | **{gwmf_total:.1f} g/m³/bar** | ~17.5 g/m³/bar |
                             """)
                         
                         if ch4_diff < 0:
