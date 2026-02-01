@@ -1,10 +1,11 @@
 neqsim
-altair
+altair>=5.0.0
 pandas
-streamlit
+streamlit>=1.30.0
 matplotlib
-openai
+google-generativeai
 xlsxwriter
 plotly>=5.0.0
 numpy
 scipy
+openpyxl
