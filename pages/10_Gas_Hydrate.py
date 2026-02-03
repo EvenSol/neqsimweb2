@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import neqsim
 import time
-from neqsim.thermo.thermoTools import fluidcreator, fluid_df, hydt, dataFrame
+from neqsim.thermo.thermoTools import fluidcreator, fluid_df, hydt, dataFrame, TPflash
 from neqsim.thermo import fluid
 from neqsim import jneqsim
 from fluids import default_fluid
@@ -576,13 +576,42 @@ if st.button('Run Hydrate Calculation'):
             pres_list = []
             fluid_results_list = []
             
-            for pres in st.edited_dfTP.dropna():
-                pressure = pres
+            # Define a reasonable initial temperature guess for hydrate calculations
+            initial_temp_guess = 25.0  # °C - typical starting point
+            
+            # Sort pressures to improve convergence (start from lower pressures)
+            pressures_sorted = sorted(st.edited_dfTP.dropna().tolist())
+            
+            # Store a pristine copy of the fluid for display purposes
+            # This ensures display fluids always have correct settings
+            pristine_fluid = neqsim_fluid.clone()
+            
+            for i, pressure in enumerate(pressures_sorted):
                 pres_list.append(pressure)
-                neqsim_fluid.setPressure(pressure, 'bara')
-                hydrate_temp = hydt(neqsim_fluid) - 273.15
+                
+                # Clone fluid for each calculation to prevent state pollution
+                # This is critical for electrolyte systems with ions (Na+, Cl-)
+                # where cumulative state changes can cause convergence issues
+                fluid_clone = neqsim_fluid.clone()
+                fluid_clone.setPressure(pressure, 'bara')
+                fluid_clone.setTemperature(initial_temp_guess, 'C')
+                
+                # For electrolyte systems, disable multiPhaseCheck after first calculation
+                # to speed up convergence (stability analysis is expensive for ions)
+                if i > 0 and has_ions:
+                    fluid_clone.setMultiPhaseCheck(False)
+                
+                hydrate_temp = hydt(fluid_clone) - 273.15
                 results_list.append(hydrate_temp)
-                fluid_results_list.append(dataFrame(neqsim_fluid))
+                
+                # Create a fresh clone from pristine fluid for property display
+                # For electrolyte systems, disable multiPhaseCheck to avoid spurious
+                # oil phases from stability analysis (false positives with CPA-EoS)
+                display_fluid = pristine_fluid.clone()
+                display_fluid.setPressure(pressure, 'bara')
+                display_fluid.setTemperature(hydrate_temp, 'C')
+                TPflash(display_fluid)
+                fluid_results_list.append(dataFrame(display_fluid))
             
             # Store results
             st.session_state['hydrate_tp_data'] = pd.DataFrame({

@@ -55,7 +55,8 @@ st.set_page_config(
 st.title("🌱 Methane & CO₂ Emission Calculator")
 st.markdown("""
 Quantify greenhouse gas emissions (CO₂, CH₄, nmVOC) from offshore process streams using 
-rigorous thermodynamic modeling with the CPA equation of state.
+rigorous thermodynamic modeling with the CPA equation of state. Also supports the Søreide-Whitson 
+method for accurate gas solubility calculations in saline water systems.
 
 📚 [NeqSim Emissions Guide](https://equinor.github.io/neqsim/emissions/) | 
 🔬 Validated ±3.6% accuracy against field data
