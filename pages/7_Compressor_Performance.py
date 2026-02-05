@@ -443,9 +443,25 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     ### 13.4 Monte Carlo Method
     
     The analysis performs N iterations (default 100) where each iteration:
-    1. Perturbs input measurements by random amounts within uncertainty bounds
-    2. Recalculates all thermodynamic properties and performance metrics
-    3. Collects results to build statistical distributions
+    1. Perturbs input measurements (P, T, flow, composition) by random amounts within uncertainty bounds
+    2. Applies EoS uncertainty to thermodynamic properties (Z-factor, enthalpy)
+    3. Recalculates compressor performance with perturbed inputs
+    4. Applies EoS uncertainty to outputs (head, power, efficiency)
+    5. Collects results to build statistical distributions
+    
+    **Uncertainty Propagation:**
+    
+    | Parameter | Perturbation Method | Sensitivity |
+    |-----------|---------------------|-------------|
+    | Pressure | Normal distribution (±σ%) | Direct |
+    | Temperature | Normal distribution (±σ K) | Direct |
+    | Flow rate | Normal distribution (±σ%) | Direct |
+    | Composition | Normal distribution (±σ% relative) | Direct |
+    | Z-factor (EoS) | Normal distribution (±σ%) | Direct |
+    | Enthalpy (EoS) | Normal distribution (±σ%) | Direct |
+    | Polytropic Head | Scaled by EoS perturbation | 100% |
+    | Power | Scaled by EoS perturbation | 100% |
+    | Efficiency | Scaled by EoS perturbation | 30% (ratio) |
     
     **Output Statistics:**
     - Mean value and standard deviation for each output
@@ -3145,6 +3161,9 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
         | SRK + VT | ~1.6% | Improved cubic |
         | PR + VT | ~1.7% | Improved cubic |
         | PR | ~4.9% | General hydrocarbons |
+        
+        **Uncertainty Propagation:** EoS uncertainty affects Z-factor → enthalpy → polytropic head (100% sensitivity), 
+        power (100%), and efficiency (30% - reduced since it's a ratio).
         """)
         
         st.divider()
@@ -3198,7 +3217,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                 min_value=0.0, max_value=10.0, 
                 value=default_eos_unc,
                 step=0.1, format="%.2f",
-                help=f"Based on DTU study: GERG-2008=0.1%, SRK=2.0%, PR=4.9%"
+                help=f"Based on DTU study: GERG-2008=0.1%, SRK=2.0%, PR=4.9%. Affects Z, enthalpy, head (100%), power (100%), efficiency (30%)."
             )
             
             mc_comp_unc = st.number_input(
@@ -3318,10 +3337,16 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             TPflash(inlet_fluid)
                             inlet_fluid.initProperties()
                             
-                            # Get inlet properties (with EoS uncertainty)
-                            z_in = inlet_fluid.getZ() * (1 + np.random.normal(0, mc_eos_unc/100))
-                            h_in = inlet_fluid.getEnthalpy("kJ/kg")
+                            # Get inlet properties
+                            z_in_raw = inlet_fluid.getZ()
+                            h_in_raw = inlet_fluid.getEnthalpy("kJ/kg")
                             kappa_in = inlet_fluid.getGamma2()
+                            
+                            # Apply EoS uncertainty to thermodynamic properties
+                            # EoS uncertainty affects Z, enthalpy, and other derived properties proportionally
+                            eos_perturbation = np.random.normal(0, mc_eos_unc/100)
+                            z_in = z_in_raw * (1 + eos_perturbation)
+                            h_in = h_in_raw * (1 + eos_perturbation)  # Enthalpy uncertainty from EoS
                             
                             # Create outlet fluid
                             outlet_fluid = fluid(get_selected_eos_model())
@@ -3334,8 +3359,12 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             TPflash(outlet_fluid)
                             outlet_fluid.initProperties()
                             
-                            z_out = outlet_fluid.getZ() * (1 + np.random.normal(0, mc_eos_unc/100))
-                            h_out = outlet_fluid.getEnthalpy("kJ/kg")
+                            z_out_raw = outlet_fluid.getZ()
+                            h_out_raw = outlet_fluid.getEnthalpy("kJ/kg")
+                            
+                            # Apply EoS uncertainty (use same perturbation for consistency within iteration)
+                            z_out = z_out_raw * (1 + eos_perturbation)
+                            h_out = h_out_raw * (1 + eos_perturbation)
                             
                             actual_work = h_out - h_in
                             
@@ -3369,15 +3398,27 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             compressor.setOutTemperature(t_out_K)
                             compressor.run()
                             
-                            eta_poly = compressor.getPolytropicEfficiency()
-                            poly_head = compressor.getPolytropicFluidHead()
-                            power_kW = compressor.getPower('kW')
+                            eta_poly_raw = compressor.getPolytropicEfficiency()
+                            poly_head_raw = compressor.getPolytropicFluidHead()
+                            power_kW_raw = compressor.getPower('kW')
+                            
+                            # Apply EoS uncertainty to results
+                            # Head and power are directly proportional to enthalpy (affected by EoS)
+                            # Efficiency is a ratio, so less affected but still has some sensitivity
+                            poly_head = poly_head_raw * (1 + eos_perturbation) if poly_head_raw and not np.isnan(poly_head_raw) else actual_work * eta_poly_raw
+                            power_kW = power_kW_raw * (1 + eos_perturbation) if power_kW_raw and not np.isnan(power_kW_raw) else mass_flow_pert * actual_work
+                            
+                            # Efficiency perturbation - smaller effect since it's a ratio
+                            # but still affected by Z-factor uncertainty in compressibility calculations
+                            eta_poly = eta_poly_raw * (1 + eos_perturbation * 0.3)  # 30% sensitivity factor
                             
                             # Store valid results
-                            if eta_poly is not None and not np.isnan(eta_poly) and 0 < eta_poly <= 1.0:
-                                mc_results['poly_eff'].append(eta_poly * 100)
-                                mc_results['poly_head'].append(poly_head if poly_head and not np.isnan(poly_head) else actual_work * eta_poly)
-                                mc_results['power'].append(power_kW / 1000 if power_kW and not np.isnan(power_kW) else mass_flow_pert * actual_work / 1000)
+                            if eta_poly_raw is not None and not np.isnan(eta_poly_raw) and 0 < eta_poly_raw <= 1.0:
+                                # Clamp efficiency to valid range
+                                eta_poly_clamped = max(0.01, min(1.0, eta_poly))
+                                mc_results['poly_eff'].append(eta_poly_clamped * 100)
+                                mc_results['poly_head'].append(poly_head)
+                                mc_results['power'].append(power_kW / 1000)
                                 mc_results['z_in'].append(z_in)
                                 mc_results['z_out'].append(z_out)
                                 mc_results['kappa_in'].append(kappa_in)
