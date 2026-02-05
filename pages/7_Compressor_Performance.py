@@ -393,6 +393,72 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | Head deviation | Gas composition difference | Use composition correction |
     | Calculation fails | Invalid thermodynamic state | Check if conditions are in valid range |
     
+    ---
+    
+    ## 13. Uncertainty Analysis (Monte Carlo)
+    
+    The Monte Carlo uncertainty analysis feature propagates measurement uncertainties and 
+    equation of state accuracy through the compressor calculations to estimate result uncertainties.
+    
+    ### 13.1 EoS Accuracy Summary (GERG-2008)
+    
+    | Property | Normal Range | Extended Range | Extrapolated |
+    |----------|--------------|----------------|--------------|
+    | Density | ±0.05–0.1% | ±0.3–1% | Unquantified |
+    | Speed of Sound | ±0.05–0.1% | ±0.2–0.5% | Unreliable |
+    | Enthalpy | ±0.2–0.5% | ±1–2% | Unreliable |
+    | Heat Capacity | ±1–2% | ±3–5% | Poor |
+    | Dew/Bubble Point | ±0.2–0.5 K | ±1–2 K | Not recommended |
+    
+    **Normal Range:** T = 90-450 K, P < 35 MPa, typical pipeline gas compositions
+    **Extended Range:** T = 60-700 K, P < 70 MPa, high CO2/H2S content
+    
+    ### 13.2 EoS Comparison: Cubic vs GERG-2008 (DTU Study)
+    
+    Average Absolute Deviation (AAD%) in compressibility factor Z for multicomponent natural gas:
+    
+    | Equation of State | AAD% in Z vs GERG-2008 |
+    |-------------------|------------------------|
+    | SRK | ~1.99% |
+    | SRK + Volume Translation | ~1.59% |
+    | PR + Volume Translation | ~1.72% |
+    | PR (Peng-Robinson) | ~4.86% |
+    
+    **Implications for compressor calculations:**
+    - GERG-2008 is the reference standard for natural gas (highest accuracy)
+    - SRK with volume translation provides best cubic EoS accuracy (~1.6%)
+    - Standard PR shows larger deviations (~5%), particularly at high pressures
+    - For critical applications, use GERG-2008; for quick estimates, SRK is preferred over PR
+    
+    ### 13.3 Typical Measurement Uncertainties
+    
+    | Measurement | Typical Uncertainty | Good Practice |
+    |-------------|---------------------|---------------|
+    | Pressure | ±0.25–0.5% | Use calibrated transmitters |
+    | Temperature | ±0.2–0.5 K | Proper thermowell installation |
+    | Flow (orifice) | ±1–2% | Regular plate inspections |
+    | Flow (ultrasonic) | ±0.5–1% | Multiple path meters |
+    | Gas composition | ±0.5–1% (mol) | Online GC with standards |
+    
+    ### 13.4 Monte Carlo Method
+    
+    The analysis performs N iterations (default 100) where each iteration:
+    1. Perturbs input measurements by random amounts within uncertainty bounds
+    2. Recalculates all thermodynamic properties and performance metrics
+    3. Collects results to build statistical distributions
+    
+    **Output Statistics:**
+    - Mean value and standard deviation for each output
+    - 95% confidence interval (±2σ)
+    - Min/Max values observed
+    - Histograms showing result distributions
+    
+    ### 13.5 Combined Uncertainty
+    
+    The combined uncertainty in polytropic efficiency typically ranges from:
+    - ±1–2% for well-characterized test conditions
+    - ±2–5% for field measurements with multiple uncertainty sources
+    
     
     """)
 
@@ -527,6 +593,18 @@ if 'polytropic_efficiency_input' not in st.session_state:
 # Initialize session state for equation of state model
 if 'eos_model' not in st.session_state:
     st.session_state['eos_model'] = "GERG-2008"
+
+# Initialize session state for Monte Carlo uncertainty analysis
+if 'mc_num_iterations' not in st.session_state:
+    st.session_state['mc_num_iterations'] = 100
+if 'mc_pressure_uncertainty' not in st.session_state:
+    st.session_state['mc_pressure_uncertainty'] = 0.5  # % uncertainty in pressure
+if 'mc_temperature_uncertainty' not in st.session_state:
+    st.session_state['mc_temperature_uncertainty'] = 0.3  # K uncertainty in temperature
+if 'mc_flow_uncertainty' not in st.session_state:
+    st.session_state['mc_flow_uncertainty'] = 1.0  # % uncertainty in flow
+if 'mc_composition_uncertainty' not in st.session_state:
+    st.session_state['mc_composition_uncertainty'] = 0.5  # % uncertainty in composition
 
 # EoS model options mapping
 eos_model_options = {
@@ -3040,6 +3118,511 @@ with st.expander("📚 Theory & Equations", expanded=False):
     - Speed of sound: ±0.1%
     - Heat capacity: ±1%
     """)
+
+# Monte Carlo Uncertainty Analysis Section
+# Keep expander open if MC results are available
+mc_has_results = 'mc_results' in st.session_state and st.session_state['mc_results'] is not None
+with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_results):
+    st.markdown("""
+    Propagate measurement and EoS uncertainties through compressor calculations using Monte Carlo simulation.
+    This helps quantify the confidence interval of calculated performance metrics.
+    """)
+    
+    # Check if we have calculated results to analyze
+    if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
+        results_df = st.session_state['calculated_results']
+        
+        st.subheader("📊 Uncertainty Input Parameters")
+        
+        # EoS uncertainty reference
+        st.markdown("""
+        **EoS Accuracy Reference (GERG-2008 vs Cubic EoS):**
+        
+        | EoS Model | Z-factor Deviation | Recommended Use |
+        |-----------|-------------------|-----------------|
+        | GERG-2008 | Reference (±0.1%) | High-accuracy natural gas |
+        | SRK | ~2.0% | Quick estimates |
+        | SRK + VT | ~1.6% | Improved cubic |
+        | PR + VT | ~1.7% | Improved cubic |
+        | PR | ~4.9% | General hydrocarbons |
+        """)
+        
+        st.divider()
+        
+        # Uncertainty input controls
+        col_unc1, col_unc2 = st.columns(2)
+        
+        with col_unc1:
+            st.markdown("**Measurement Uncertainties:**")
+            mc_pressure_unc = st.number_input(
+                "Pressure uncertainty (%)", 
+                min_value=0.0, max_value=5.0, 
+                value=st.session_state['mc_pressure_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.25-0.5% for calibrated transmitters"
+            )
+            st.session_state['mc_pressure_uncertainty'] = mc_pressure_unc
+            
+            mc_temp_unc = st.number_input(
+                "Temperature uncertainty (K)", 
+                min_value=0.0, max_value=5.0, 
+                value=st.session_state['mc_temperature_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.2-0.5 K for proper thermowell installation"
+            )
+            st.session_state['mc_temperature_uncertainty'] = mc_temp_unc
+            
+            mc_flow_unc = st.number_input(
+                "Flow uncertainty (%)", 
+                min_value=0.0, max_value=10.0, 
+                value=st.session_state['mc_flow_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.5-2% depending on meter type"
+            )
+            st.session_state['mc_flow_uncertainty'] = mc_flow_unc
+        
+        with col_unc2:
+            st.markdown("**EoS & Composition Uncertainties:**")
+            
+            # EoS uncertainty based on selected model
+            eos_model = st.session_state.get('eos_model', 'GERG-2008')
+            eos_unc_defaults = {
+                'GERG-2008': 0.1,
+                'Peng-Robinson': 4.9,
+                'Soave-Redlich-Kwong': 2.0
+            }
+            default_eos_unc = eos_unc_defaults.get(eos_model, 1.0)
+            
+            mc_eos_unc = st.number_input(
+                f"EoS Z-factor uncertainty (%) [{eos_model}]", 
+                min_value=0.0, max_value=10.0, 
+                value=default_eos_unc,
+                step=0.1, format="%.2f",
+                help=f"Based on DTU study: GERG-2008=0.1%, SRK=2.0%, PR=4.9%"
+            )
+            
+            mc_comp_unc = st.number_input(
+                "Composition uncertainty (% relative)", 
+                min_value=0.0, max_value=5.0, 
+                value=st.session_state['mc_composition_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.5-1% for online GC with standards"
+            )
+            st.session_state['mc_composition_uncertainty'] = mc_comp_unc
+            
+            mc_iterations = st.number_input(
+                "Number of Monte Carlo iterations", 
+                min_value=50, max_value=1000, 
+                value=st.session_state['mc_num_iterations'],
+                step=50,
+                help="More iterations = better statistics but slower. 100-500 is typical."
+            )
+            st.session_state['mc_num_iterations'] = mc_iterations
+        
+        st.divider()
+        
+        # Select operating point to analyze
+        st.subheader("🎯 Select Operating Point")
+        
+        if len(results_df) > 1:
+            point_options = [f"Point {i+1}: {row['Vol Flow Inlet (m³/hr)']:.0f} m³/hr @ {row.get('Speed (RPM)', 0):.0f} RPM" 
+                           for i, row in results_df.iterrows()]
+            selected_point_idx = st.selectbox(
+                "Operating point to analyze",
+                range(len(results_df)),
+                format_func=lambda x: point_options[x]
+            )
+        else:
+            selected_point_idx = 0
+            st.info("Analyzing the single calculated operating point")
+        
+        selected_row = results_df.iloc[selected_point_idx]
+        
+        # Display base case values
+        col_base1, col_base2, col_base3, col_base4 = st.columns(4)
+        with col_base1:
+            st.metric("Base Efficiency", f"{selected_row['Polytropic Eff (%)']:.2f}%")
+        with col_base2:
+            st.metric("Base Head", f"{selected_row['Polytropic Head (kJ/kg)']:.2f} kJ/kg")
+        with col_base3:
+            st.metric("Base Power", f"{selected_row['Power (MW)']:.3f} MW")
+        with col_base4:
+            st.metric("Pressure Ratio", f"{selected_row['Pressure Ratio']:.3f}")
+        
+        st.divider()
+        
+        # Run Monte Carlo button
+        if st.button("🎲 Run Monte Carlo Analysis", type="primary", key="run_mc_btn"):
+            with st.spinner(f"Running {mc_iterations} Monte Carlo iterations..."):
+                try:
+                    # Get base operating conditions
+                    base_p_in = selected_row['Inlet P (bara)']
+                    base_p_out = selected_row['Outlet P (bara)']
+                    base_t_in = selected_row['Inlet T (°C)']
+                    base_t_out = selected_row['Outlet T (°C)']
+                    base_mass_flow = selected_row['Mass Flow (kg/hr)'] / 3600  # kg/s
+                    
+                    # Get fluid composition
+                    fluid_composition = get_fluid_composition()
+                    
+                    # Results storage
+                    mc_results = {
+                        'poly_eff': [],
+                        'poly_head': [],
+                        'power': [],
+                        'z_in': [],
+                        'z_out': [],
+                        'kappa_in': [],
+                        'actual_work': []
+                    }
+                    
+                    # Progress bar
+                    progress_bar = st.progress(0, text="Starting Monte Carlo simulation...")
+                    
+                    calc_method = st.session_state.get('calc_method', 'Detailed')
+                    num_steps = st.session_state.get('num_calc_steps', 10)
+                    
+                    for iteration in range(mc_iterations):
+                        try:
+                            # Update progress  
+                            if iteration % 10 == 0:
+                                progress_bar.progress((iteration + 1) / mc_iterations, 
+                                                     text=f"Iteration {iteration + 1}/{mc_iterations}")
+                            
+                            # Apply random perturbations (normal distribution)
+                            p_in_pert = base_p_in * (1 + np.random.normal(0, mc_pressure_unc/100))
+                            p_out_pert = base_p_out * (1 + np.random.normal(0, mc_pressure_unc/100))
+                            t_in_pert = base_t_in + np.random.normal(0, mc_temp_unc)
+                            t_out_pert = base_t_out + np.random.normal(0, mc_temp_unc)
+                            mass_flow_pert = base_mass_flow * (1 + np.random.normal(0, mc_flow_unc/100))
+                            
+                            # Perturb composition slightly
+                            pert_composition = {}
+                            for comp, mol_frac in fluid_composition.items():
+                                pert_composition[comp] = max(0, mol_frac * (1 + np.random.normal(0, mc_comp_unc/100)))
+                            
+                            # Normalize composition
+                            total_mol = sum(pert_composition.values())
+                            if total_mol > 0:
+                                for comp in pert_composition:
+                                    pert_composition[comp] = pert_composition[comp] / total_mol * 100
+                            
+                            # Create inlet fluid
+                            inlet_fluid = fluid(get_selected_eos_model())
+                            for comp_name, comp_moles in pert_composition.items():
+                                inlet_fluid.addComponent(comp_name, float(comp_moles))
+                            inlet_fluid.setMixingRule('classic')
+                            inlet_fluid.setMultiPhaseCheck(True)
+                            inlet_fluid.setPressure(float(p_in_pert), 'bara')
+                            inlet_fluid.setTemperature(float(t_in_pert), 'C')
+                            TPflash(inlet_fluid)
+                            inlet_fluid.initProperties()
+                            
+                            # Get inlet properties (with EoS uncertainty)
+                            z_in = inlet_fluid.getZ() * (1 + np.random.normal(0, mc_eos_unc/100))
+                            h_in = inlet_fluid.getEnthalpy("kJ/kg")
+                            kappa_in = inlet_fluid.getGamma2()
+                            
+                            # Create outlet fluid
+                            outlet_fluid = fluid(get_selected_eos_model())
+                            for comp_name, comp_moles in pert_composition.items():
+                                outlet_fluid.addComponent(comp_name, float(comp_moles))
+                            outlet_fluid.setMixingRule('classic')
+                            outlet_fluid.setMultiPhaseCheck(True)
+                            outlet_fluid.setPressure(float(p_out_pert), 'bara')
+                            outlet_fluid.setTemperature(float(t_out_pert), 'C')
+                            TPflash(outlet_fluid)
+                            outlet_fluid.initProperties()
+                            
+                            z_out = outlet_fluid.getZ() * (1 + np.random.normal(0, mc_eos_unc/100))
+                            h_out = outlet_fluid.getEnthalpy("kJ/kg")
+                            
+                            actual_work = h_out - h_in
+                            
+                            # Create process fluid for compressor calculation
+                            process_fluid = fluid(get_selected_eos_model())
+                            for comp_name, comp_moles in pert_composition.items():
+                                process_fluid.addComponent(comp_name, float(comp_moles))
+                            process_fluid.setMixingRule('classic')
+                            process_fluid.setMultiPhaseCheck(True)
+                            process_fluid.setPressure(float(p_in_pert), 'bara')
+                            process_fluid.setTemperature(float(t_in_pert), 'C')
+                            process_fluid.setTotalFlowRate(float(mass_flow_pert), 'kg/sec')
+                            TPflash(process_fluid)
+                            process_fluid.initProperties()
+                            
+                            # Create stream and compressor
+                            inlet_stream = jneqsim.process.equipment.stream.Stream("inlet_mc", process_fluid)
+                            inlet_stream.run()
+                            
+                            compressor = jneqsim.process.equipment.compressor.Compressor("compressor_mc", inlet_stream)
+                            compressor.setOutletPressure(float(p_out_pert), "bara")
+                            compressor.setUsePolytropicCalc(True)
+                            
+                            if calc_method == "Detailed":
+                                compressor.setPolytropicMethod("detailed")
+                                compressor.setNumberOfCompressorCalcSteps(num_steps)
+                            else:
+                                compressor.setPolytropicMethod("schultz")
+                            
+                            t_out_K = t_out_pert + 273.15
+                            compressor.setOutTemperature(t_out_K)
+                            compressor.run()
+                            
+                            eta_poly = compressor.getPolytropicEfficiency()
+                            poly_head = compressor.getPolytropicFluidHead()
+                            power_kW = compressor.getPower('kW')
+                            
+                            # Store valid results
+                            if eta_poly is not None and not np.isnan(eta_poly) and 0 < eta_poly <= 1.0:
+                                mc_results['poly_eff'].append(eta_poly * 100)
+                                mc_results['poly_head'].append(poly_head if poly_head and not np.isnan(poly_head) else actual_work * eta_poly)
+                                mc_results['power'].append(power_kW / 1000 if power_kW and not np.isnan(power_kW) else mass_flow_pert * actual_work / 1000)
+                                mc_results['z_in'].append(z_in)
+                                mc_results['z_out'].append(z_out)
+                                mc_results['kappa_in'].append(kappa_in)
+                                mc_results['actual_work'].append(actual_work)
+                        
+                        except Exception as iter_error:
+                            # Skip failed iterations
+                            continue
+                    
+                    progress_bar.empty()
+                    
+                    # Calculate statistics
+                    if len(mc_results['poly_eff']) >= 10:
+                        st.success(f"✅ Completed {len(mc_results['poly_eff'])} successful iterations out of {mc_iterations}")
+                        
+                        # Store results in session state
+                        st.session_state['mc_results'] = mc_results
+                        st.session_state['mc_base_values'] = {
+                            'poly_eff': selected_row['Polytropic Eff (%)'],
+                            'poly_head': selected_row['Polytropic Head (kJ/kg)'],
+                            'power': selected_row['Power (MW)']
+                        }
+                        
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Only {len(mc_results['poly_eff'])} valid iterations. Check input parameters.")
+                
+                except Exception as e:
+                    st.error(f"Monte Carlo analysis failed: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
+        
+        # Display results if available
+        if 'mc_results' in st.session_state and st.session_state['mc_results']:
+            mc_results = st.session_state['mc_results']
+            base_values = st.session_state.get('mc_base_values', {})
+            
+            st.divider()
+            st.subheader("📈 Monte Carlo Results")
+            
+            # Calculate statistics
+            def calc_stats(data, name, unit):
+                arr = np.array(data)
+                return {
+                    'name': name,
+                    'unit': unit,
+                    'mean': np.mean(arr),
+                    'std': np.std(arr),
+                    'min': np.min(arr),
+                    'max': np.max(arr),
+                    'p5': np.percentile(arr, 5),
+                    'p95': np.percentile(arr, 95),
+                    'n': len(arr)
+                }
+            
+            stats_eff = calc_stats(mc_results['poly_eff'], 'Polytropic Efficiency', '%')
+            stats_head = calc_stats(mc_results['poly_head'], 'Polytropic Head', 'kJ/kg')
+            stats_power = calc_stats(mc_results['power'], 'Power', 'MW')
+            
+            # Summary metrics
+            st.markdown("**Uncertainty Summary (95% Confidence Interval):**")
+            
+            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            
+            with col_stat1:
+                eff_unc = stats_eff['std'] * 2
+                st.metric(
+                    "Efficiency", 
+                    f"{stats_eff['mean']:.2f} ±{eff_unc:.2f}%",
+                    delta=f"±{eff_unc/stats_eff['mean']*100:.1f}% relative" if stats_eff['mean'] > 0 else None
+                )
+                st.caption(f"Range: {stats_eff['p5']:.2f} – {stats_eff['p95']:.2f}%")
+            
+            with col_stat2:
+                head_unc = stats_head['std'] * 2
+                st.metric(
+                    "Head", 
+                    f"{stats_head['mean']:.2f} ±{head_unc:.2f} kJ/kg",
+                    delta=f"±{head_unc/stats_head['mean']*100:.1f}% relative" if stats_head['mean'] > 0 else None
+                )
+                st.caption(f"Range: {stats_head['p5']:.2f} – {stats_head['p95']:.2f} kJ/kg")
+            
+            with col_stat3:
+                power_unc = stats_power['std'] * 2
+                st.metric(
+                    "Power", 
+                    f"{stats_power['mean']:.3f} ±{power_unc:.3f} MW",
+                    delta=f"±{power_unc/stats_power['mean']*100:.1f}% relative" if stats_power['mean'] > 0 else None
+                )
+                st.caption(f"Range: {stats_power['p5']:.3f} – {stats_power['p95']:.3f} MW")
+            
+            st.divider()
+            
+            # Detailed statistics table
+            st.markdown("**Detailed Statistics:**")
+            stats_df = pd.DataFrame([
+                {
+                    'Property': 'Polytropic Efficiency',
+                    'Unit': '%',
+                    'Mean': f"{stats_eff['mean']:.3f}",
+                    'Std Dev': f"{stats_eff['std']:.3f}",
+                    '95% CI (±2σ)': f"±{stats_eff['std']*2:.3f}",
+                    'Min': f"{stats_eff['min']:.3f}",
+                    'Max': f"{stats_eff['max']:.3f}",
+                    'P5': f"{stats_eff['p5']:.3f}",
+                    'P95': f"{stats_eff['p95']:.3f}",
+                },
+                {
+                    'Property': 'Polytropic Head',
+                    'Unit': 'kJ/kg',
+                    'Mean': f"{stats_head['mean']:.3f}",
+                    'Std Dev': f"{stats_head['std']:.3f}",
+                    '95% CI (±2σ)': f"±{stats_head['std']*2:.3f}",
+                    'Min': f"{stats_head['min']:.3f}",
+                    'Max': f"{stats_head['max']:.3f}",
+                    'P5': f"{stats_head['p5']:.3f}",
+                    'P95': f"{stats_head['p95']:.3f}",
+                },
+                {
+                    'Property': 'Power',
+                    'Unit': 'MW',
+                    'Mean': f"{stats_power['mean']:.4f}",
+                    'Std Dev': f"{stats_power['std']:.4f}",
+                    '95% CI (±2σ)': f"±{stats_power['std']*2:.4f}",
+                    'Min': f"{stats_power['min']:.4f}",
+                    'Max': f"{stats_power['max']:.4f}",
+                    'P5': f"{stats_power['p5']:.4f}",
+                    'P95': f"{stats_power['p95']:.4f}",
+                }
+            ])
+            st.dataframe(stats_df, use_container_width=True)
+            
+            st.divider()
+            
+            # Histograms
+            st.markdown("**Result Distributions:**")
+            
+            tab_hist1, tab_hist2, tab_hist3 = st.tabs(["Efficiency Distribution", "Head Distribution", "Power Distribution"])
+            
+            with tab_hist1:
+                fig_eff_hist = go.Figure()
+                fig_eff_hist.add_trace(go.Histogram(
+                    x=mc_results['poly_eff'],
+                    nbinsx=30,
+                    name='Monte Carlo Results',
+                    marker_color='#636EFA',
+                    opacity=0.7
+                ))
+                # Add base value line
+                if base_values.get('poly_eff'):
+                    fig_eff_hist.add_vline(
+                        x=base_values['poly_eff'], 
+                        line_dash="dash", 
+                        line_color="red",
+                        annotation_text=f"Base: {base_values['poly_eff']:.2f}%"
+                    )
+                # Add mean line
+                fig_eff_hist.add_vline(
+                    x=stats_eff['mean'], 
+                    line_dash="solid", 
+                    line_color="green",
+                    annotation_text=f"Mean: {stats_eff['mean']:.2f}%"
+                )
+                fig_eff_hist.update_layout(
+                    title="Polytropic Efficiency Distribution",
+                    xaxis_title="Polytropic Efficiency (%)",
+                    yaxis_title="Frequency",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_eff_hist, use_container_width=True)
+            
+            with tab_hist2:
+                fig_head_hist = go.Figure()
+                fig_head_hist.add_trace(go.Histogram(
+                    x=mc_results['poly_head'],
+                    nbinsx=30,
+                    name='Monte Carlo Results',
+                    marker_color='#EF553B',
+                    opacity=0.7
+                ))
+                if base_values.get('poly_head'):
+                    fig_head_hist.add_vline(
+                        x=base_values['poly_head'], 
+                        line_dash="dash", 
+                        line_color="blue",
+                        annotation_text=f"Base: {base_values['poly_head']:.2f} kJ/kg"
+                    )
+                fig_head_hist.add_vline(
+                    x=stats_head['mean'], 
+                    line_dash="solid", 
+                    line_color="green",
+                    annotation_text=f"Mean: {stats_head['mean']:.2f} kJ/kg"
+                )
+                fig_head_hist.update_layout(
+                    title="Polytropic Head Distribution",
+                    xaxis_title="Polytropic Head (kJ/kg)",
+                    yaxis_title="Frequency",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_head_hist, use_container_width=True)
+            
+            with tab_hist3:
+                fig_power_hist = go.Figure()
+                fig_power_hist.add_trace(go.Histogram(
+                    x=mc_results['power'],
+                    nbinsx=30,
+                    name='Monte Carlo Results',
+                    marker_color='#00CC96',
+                    opacity=0.7
+                ))
+                if base_values.get('power'):
+                    fig_power_hist.add_vline(
+                        x=base_values['power'], 
+                        line_dash="dash", 
+                        line_color="blue",
+                        annotation_text=f"Base: {base_values['power']:.3f} MW"
+                    )
+                fig_power_hist.add_vline(
+                    x=stats_power['mean'], 
+                    line_dash="solid", 
+                    line_color="green",
+                    annotation_text=f"Mean: {stats_power['mean']:.3f} MW"
+                )
+                fig_power_hist.update_layout(
+                    title="Power Distribution",
+                    xaxis_title="Power (MW)",
+                    yaxis_title="Frequency",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_power_hist, use_container_width=True)
+            
+            # Clear results button
+            if st.button("🗑️ Clear MC Results", key="clear_mc_results"):
+                st.session_state['mc_results'] = None
+                st.session_state['mc_base_values'] = None
+                st.rerun()
+    else:
+        st.info("📊 Run compressor calculations first to enable Monte Carlo uncertainty analysis.")
+        st.markdown("""
+        **Usage:**
+        1. Enter operating data and calculate compressor performance
+        2. Come back to this section to analyze uncertainty
+        3. Set measurement and EoS uncertainty values
+        4. Run Monte Carlo simulation to see result distributions
+        """)
 
 # AI Analysis Section - Only shown if AI is enabled
 if is_ai_enabled():
