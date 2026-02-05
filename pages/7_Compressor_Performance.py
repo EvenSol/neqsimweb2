@@ -3120,9 +3120,15 @@ with st.expander("📚 Theory & Equations", expanded=False):
     """)
 
 # Monte Carlo Uncertainty Analysis Section
-# Keep expander open if MC results are available
+# Keep expander open if MC results are available or if user is actively configuring MC
 mc_has_results = 'mc_results' in st.session_state and st.session_state['mc_results'] is not None
-with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_results):
+mc_section_active = st.session_state.get('mc_section_active', False)
+mc_expanded = mc_has_results or mc_section_active
+with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_expanded):
+    # Mark section as active when user interacts with it
+    if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
+        st.session_state['mc_section_active'] = True
+    
     st.markdown("""
     Propagate measurement and EoS uncertainties through compressor calculations using Monte Carlo simulation.
     This helps quantify the confidence interval of calculated performance metrics.
@@ -3613,8 +3619,10 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
             if st.button("🗑️ Clear MC Results", key="clear_mc_results"):
                 st.session_state['mc_results'] = None
                 st.session_state['mc_base_values'] = None
+                st.session_state['mc_section_active'] = False
                 st.rerun()
     else:
+        st.session_state['mc_section_active'] = False
         st.info("📊 Run compressor calculations first to enable Monte Carlo uncertainty analysis.")
         st.markdown("""
         **Usage:**
