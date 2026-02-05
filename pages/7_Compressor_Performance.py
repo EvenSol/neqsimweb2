@@ -3158,8 +3158,6 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
         |-----------|-------------------|-----------------|
         | GERG-2008 | Reference (±0.1%) | High-accuracy natural gas |
         | SRK | ~2.0% | Quick estimates |
-        | SRK + VT | ~1.6% | Improved cubic |
-        | PR + VT | ~1.7% | Improved cubic |
         | PR | ~4.9% | General hydrocarbons |
         
         **Uncertainty Propagation:** EoS uncertainty affects Z-factor → enthalpy → polytropic head (100% sensitivity), 
@@ -3649,6 +3647,705 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                     showlegend=False
                 )
                 st.plotly_chart(fig_power_hist, use_container_width=True)
+            
+            st.divider()
+            
+            # ===== 4. PERFORMANCE GUARANTEE VERIFICATION =====
+            st.subheader("✅ Performance Guarantee Verification")
+            st.markdown("""
+            Test whether measured efficiency meets contractual guarantee with statistical confidence.
+            Based on ASME PTC 10 and ISO 5389 test acceptance methodology.
+            """)
+            
+            col_guar1, col_guar2, col_guar3 = st.columns(3)
+            with col_guar1:
+                guarantee_eff = st.number_input(
+                    "Efficiency Guarantee (%)", 
+                    min_value=50.0, max_value=95.0, 
+                    value=78.0, step=0.5,
+                    help="Contractual minimum polytropic efficiency guarantee"
+                )
+            with col_guar2:
+                confidence_level = st.selectbox(
+                    "Confidence Level",
+                    [90, 95, 99],
+                    index=1,
+                    format_func=lambda x: f"{x}%",
+                    help="Statistical confidence for test interpretation"
+                )
+            with col_guar3:
+                test_method = st.selectbox(
+                    "Test Method",
+                    ["ASME PTC 10", "Hypothesis Test"],
+                    index=0,
+                    help="ASME PTC 10: Industry standard approach. Hypothesis Test: Statistical t-test."
+                )
+            
+            # Button to run the verification
+            if st.button("🔍 Run Guarantee Verification", type="primary", key="run_guarantee_test"):
+                from scipy import stats as scipy_stats
+                
+                eff_arr = np.array(mc_results['poly_eff'])
+                n_samples = len(eff_arr)
+                mean_eff = np.mean(eff_arr)
+                std_eff = np.std(eff_arr, ddof=1)  # Sample std dev
+                
+                # Store results in session state
+                st.session_state['guarantee_test_results'] = {
+                    'mean_eff': mean_eff,
+                    'std_eff': std_eff,
+                    'n_samples': n_samples,
+                    'guarantee_eff': guarantee_eff,
+                    'confidence_level': confidence_level,
+                    'test_method': test_method
+                }
+                
+                if test_method == "ASME PTC 10":
+                    # ASME PTC 10 approach: measured value - uncertainty allowance >= guarantee
+                    # Use coverage factor k for the confidence level
+                    k_factors = {90: 1.645, 95: 1.96, 99: 2.576}
+                    k = k_factors[confidence_level]
+                    
+                    # Total uncertainty (expanded uncertainty)
+                    expanded_uncertainty = k * std_eff
+                    
+                    # Lower bound of measured efficiency
+                    lower_bound = mean_eff - expanded_uncertainty
+                    
+                    # Test result
+                    guarantee_met = lower_bound >= guarantee_eff
+                    margin = mean_eff - guarantee_eff
+                    
+                    st.session_state['guarantee_test_results'].update({
+                        'lower_bound': lower_bound,
+                        'expanded_uncertainty': expanded_uncertainty,
+                        'k': k,
+                        'guarantee_met': guarantee_met,
+                        'margin': margin,
+                        'margin_in_k': margin / std_eff if std_eff > 0 else 0
+                    })
+                else:
+                    # Hypothesis test approach
+                    # One-sample t-test: H0: mean <= guarantee, H1: mean > guarantee
+                    t_stat = (mean_eff - guarantee_eff) / (std_eff / np.sqrt(n_samples))
+                    p_value = 1 - scipy_stats.t.cdf(t_stat, df=n_samples-1)
+                    
+                    # Critical value for one-tailed test
+                    alpha = 1 - confidence_level/100
+                    t_critical = scipy_stats.t.ppf(1-alpha, df=n_samples-1)
+                    
+                    # Lower confidence bound (one-sided)
+                    lower_bound = mean_eff - t_critical * (std_eff / np.sqrt(n_samples))
+                    
+                    margin = mean_eff - guarantee_eff
+                    guarantee_met = p_value < alpha
+                    
+                    st.session_state['guarantee_test_results'].update({
+                        'lower_bound': lower_bound,
+                        't_stat': t_stat,
+                        't_critical': t_critical,
+                        'p_value': p_value,
+                        'alpha': alpha,
+                        'guarantee_met': guarantee_met,
+                        'margin': margin,
+                        'margin_in_sigma': margin / std_eff if std_eff > 0 else 0
+                    })
+            
+            # Display results if available
+            if 'guarantee_test_results' in st.session_state and st.session_state['guarantee_test_results']:
+                results = st.session_state['guarantee_test_results']
+                
+                col_res1, col_res2, col_res3 = st.columns(3)
+                
+                with col_res1:
+                    if results['guarantee_met']:
+                        st.success(f"✅ **GUARANTEE MET**")
+                    else:
+                        st.error(f"❌ **GUARANTEE NOT MET**")
+                    
+                    st.metric("Measured Efficiency", f"{results['mean_eff']:.2f}%", 
+                             delta=f"{results['margin']:+.2f}% vs guarantee")
+                
+                with col_res2:
+                    st.metric(f"{results['confidence_level']}% Lower Bound", f"{results['lower_bound']:.2f}%",
+                             delta=f"{results['lower_bound'] - results['guarantee_eff']:+.2f}% vs guarantee")
+                    st.caption(f"Confidence: {results['confidence_level']}%")
+                
+                with col_res3:
+                    if results['test_method'] == "ASME PTC 10":
+                        st.metric("Expanded Uncertainty", f"±{results['expanded_uncertainty']:.2f}%",
+                                 delta=f"k={results['k']:.2f}")
+                        st.caption("Coverage factor × std dev")
+                    else:
+                        st.metric("Margin", f"{abs(results['margin']):.2f}%", 
+                                 delta=f"{results['margin_in_sigma']:.1f}σ")
+                        st.caption(f"p-value: {results['p_value']:.4f}")
+                
+                with st.expander("📊 Test Details & Methodology"):
+                    if results['test_method'] == "ASME PTC 10":
+                        st.markdown(f"""
+                        **ASME PTC 10 / ISO 5389 Test Methodology:**
+                        
+                        Per industry standards, the test acceptance criterion is:
+                        
+                        > **η_measured - U ≥ η_guarantee**
+                        
+                        Where:
+                        - η_measured = Mean measured efficiency = {results['mean_eff']:.3f}%
+                        - U = Expanded uncertainty = k × σ = {results['k']:.2f} × {results['std_eff']:.3f} = {results['expanded_uncertainty']:.3f}%
+                        - k = Coverage factor for {results['confidence_level']}% confidence = {results['k']:.2f}
+                        - η_guarantee = Guaranteed efficiency = {results['guarantee_eff']:.1f}%
+                        
+                        **Calculation:**
+                        - Lower bound = {results['mean_eff']:.3f} - {results['expanded_uncertainty']:.3f} = {results['lower_bound']:.3f}%
+                        - Test: {results['lower_bound']:.3f}% {'≥' if results['guarantee_met'] else '<'} {results['guarantee_eff']:.1f}%
+                        - **Result: {'PASS ✅' if results['guarantee_met'] else 'FAIL ❌'}**
+                        
+                        **Reference Standards:**
+                        - ASME PTC 10-1997: Performance Test Code on Compressors and Exhausters
+                        - ISO 5389:2005: Turbocompressors - Performance test code
+                        - API 617: Axial and Centrifugal Compressors
+                        """)
+                    else:
+                        st.markdown(f"""
+                        **Statistical Hypothesis Test Results:**
+                        
+                        - Null hypothesis (H₀): True efficiency ≤ {results['guarantee_eff']:.1f}%
+                        - Alternative (H₁): True efficiency > {results['guarantee_eff']:.1f}%
+                        - Sample size: n = {results['n_samples']}
+                        - Sample mean: {results['mean_eff']:.3f}%
+                        - Sample std dev: {results['std_eff']:.3f}%
+                        - t-statistic: {results['t_stat']:.3f}
+                        - t-critical ({results['confidence_level']}%): {results['t_critical']:.3f}
+                        - p-value: {results['p_value']:.4f}
+                        - α (significance level): {results['alpha']:.2f}
+                        
+                        **Interpretation:**
+                        {"✅ Reject H₀: Sufficient evidence that efficiency exceeds guarantee." if results['guarantee_met'] else "❌ Fail to reject H₀: Cannot conclude efficiency exceeds guarantee with stated confidence."}
+                        
+                        **{results['confidence_level']}% One-Sided Confidence Interval:**
+                        Efficiency ≥ {results['lower_bound']:.2f}% with {results['confidence_level']}% confidence
+                        """)
+                    
+                    st.info("""
+                    **Which method to use?**
+                    - **ASME PTC 10**: Industry standard for compressor acceptance tests. Uses simple uncertainty bands.
+                    - **Hypothesis Test**: More rigorous statistical approach. Accounts for sample size in confidence bounds.
+                    
+                    For formal acceptance tests, the ASME PTC 10 method is typically contractually specified.
+                    """)
+            else:
+                st.info("👆 Enter guarantee value and click 'Run Guarantee Verification' to evaluate.")
+            
+            st.divider()
+            
+            # ===== 5. MEASUREMENT PRIORITY RECOMMENDATIONS =====
+            st.subheader("🎯 Measurement Priority Recommendations")
+            st.markdown("""
+            Analysis of which instrument improvements would give the biggest uncertainty reduction.
+            """)
+            
+            # Run sensitivity analysis by varying each parameter while fixing others
+            # We'll estimate sensitivity coefficients from the MC data
+            
+            # Get current uncertainties from session state
+            current_p_unc = st.session_state.get('mc_pressure_uncertainty', 0.5)
+            current_t_unc = st.session_state.get('mc_temperature_uncertainty', 0.5)
+            current_flow_unc = st.session_state.get('mc_flow_uncertainty', 2.0)
+            current_eos_unc = mc_eos_unc  # From earlier in this section
+            current_comp_unc = st.session_state.get('mc_composition_uncertainty', 1.0)
+            
+            # Theoretical sensitivity analysis based on typical compressor relationships
+            # These are approximate sensitivities for efficiency uncertainty
+            # Based on error propagation through polytropic efficiency calculation
+            sensitivity_factors = {
+                'Pressure': {
+                    'current_unc': current_p_unc,
+                    'sensitivity': 1.8,  # Efficiency is ~1.8x sensitive to pressure ratio error  
+                    'upgrade_unc': 0.1,  # Best achievable with premium transmitters
+                    'typical_cost': '$$',
+                    'description': 'Pressure transmitters (inlet/outlet)'
+                },
+                'Temperature': {
+                    'current_unc': current_t_unc,
+                    'sensitivity': 1.2,  # Lower sensitivity than pressure
+                    'upgrade_unc': 0.1,  # Best achievable with calibrated RTDs
+                    'typical_cost': '$',
+                    'description': 'Temperature sensors (inlet/outlet)'
+                },
+                'Flow': {
+                    'current_unc': current_flow_unc,
+                    'sensitivity': 0.3,  # Flow affects power but not efficiency directly
+                    'upgrade_unc': 0.5,  # Best achievable with ultrasonic
+                    'typical_cost': '$$$', 
+                    'description': 'Flow meter calibration'
+                },
+                'Composition': {
+                    'current_unc': current_comp_unc,
+                    'sensitivity': 0.8,  # Affects gas properties
+                    'upgrade_unc': 0.1,  # Premium GC with standards
+                    'typical_cost': '$$',
+                    'description': 'Gas chromatograph (GC)'
+                },
+                'EoS': {
+                    'current_unc': current_eos_unc,
+                    'sensitivity': 0.3 if 'Efficiency' in stats_eff['name'] else 1.0,  # 30% for efficiency (ratio)
+                    'upgrade_unc': 0.1,  # GERG-2008
+                    'typical_cost': '-',
+                    'description': 'Equation of State model'
+                }
+            }
+            
+            # Calculate contribution to total uncertainty and potential reduction
+            current_total_var = stats_eff['std'] ** 2
+            
+            improvement_results = []
+            for param, data in sensitivity_factors.items():
+                current_contribution = (data['current_unc'] * data['sensitivity']) ** 2
+                upgraded_contribution = (data['upgrade_unc'] * data['sensitivity']) ** 2
+                
+                # Estimate uncertainty reduction (assumes independent, additive variances)
+                variance_reduction = current_contribution - upgraded_contribution
+                
+                # Estimate new std dev
+                if current_total_var > variance_reduction:
+                    new_var = current_total_var - variance_reduction
+                    new_std = np.sqrt(new_var)
+                    pct_reduction = (1 - new_std/stats_eff['std']) * 100
+                else:
+                    pct_reduction = 100  # Would dominate
+                
+                improvement_results.append({
+                    'Parameter': param,
+                    'Description': data['description'],
+                    'Current Uncertainty': f"{data['current_unc']:.2f}{'%' if param != 'Temperature' else ' K'}",
+                    'Upgraded Uncertainty': f"{data['upgrade_unc']:.2f}{'%' if param != 'Temperature' else ' K'}",
+                    'Efficiency Unc. Reduction': f"{pct_reduction:.1f}%",
+                    'reduction_pct': pct_reduction,
+                    'Cost': data['typical_cost']
+                })
+            
+            # Sort by improvement potential
+            improvement_results.sort(key=lambda x: x['reduction_pct'], reverse=True)
+            
+            # Display recommendations
+            st.markdown("**Ranked Improvement Opportunities:**")
+            
+            for i, result in enumerate(improvement_results[:3], 1):
+                icon = "🥇" if i == 1 else "🥈" if i == 2 else "🥉"
+                st.markdown(f"""
+                {icon} **Priority {i}: {result['Parameter']}** ({result['Description']})
+                - Current: {result['Current Uncertainty']} → Upgraded: {result['Upgraded Uncertainty']}
+                - Potential efficiency uncertainty reduction: **{result['Efficiency Unc. Reduction']}**
+                - Typical cost: {result['Cost']}
+                """)
+            
+            # Summary table
+            with st.expander("📋 Full Sensitivity Analysis"):
+                priority_df = pd.DataFrame(improvement_results)
+                priority_df = priority_df.drop(columns=['reduction_pct'])
+                st.dataframe(priority_df, use_container_width=True, hide_index=True)
+                
+                st.info("""
+                **Cost Legend:** $ = Low (<$5k), $$ = Medium ($5k-$20k), $$$ = High (>$20k), - = Software change
+                
+                **Note:** Actual uncertainty reductions depend on specific operating conditions and 
+                measurement setup. Consider consulting instrumentation specialists for detailed assessment.
+                """)
+            
+            st.divider()
+            
+            # ===== 6. MULTI-POINT ANALYSIS =====
+            st.subheader("📊 Multi-Point Uncertainty Analysis")
+            
+            if len(results_df) > 1:
+                st.markdown("""
+                Run uncertainty analysis across all operating points to show confidence bands on performance curves.
+                Uses linearized sensitivity coefficients for speed (faster than full MC recalculation).
+                """)
+                
+                col_mp1, col_mp2 = st.columns(2)
+                with col_mp1:
+                    mp_iterations = st.number_input(
+                        "Iterations per point", 
+                        min_value=20, max_value=200, 
+                        value=50, step=10,
+                        help="Fewer iterations for speed (50 recommended for overview)"
+                    )
+                with col_mp2:
+                    st.info(f"Will analyze {len(results_df)} operating points")
+                
+                if st.button("🔄 Run Multi-Point Analysis", type="secondary", key="run_mp_analysis"):
+                    with st.spinner(f"Analyzing {len(results_df)} points × {mp_iterations} iterations..."):
+                        try:
+                            mp_results = []
+                            progress_mp = st.progress(0, text="Starting multi-point analysis...")
+                            
+                            for i, (_, row) in enumerate(results_df.iterrows()):
+                                point_results = {
+                                    'point': i + 1,
+                                    'flow': row['Vol Flow Inlet (m³/hr)'],
+                                    'speed': row.get('Speed (RPM)', 0),
+                                    'eff_samples': [],
+                                    'head_samples': [],
+                                    'power_samples': []
+                                }
+                                
+                                # Get base values for this point
+                                base_p_in = row['Inlet P (bara)']
+                                base_p_out = row['Outlet P (bara)']
+                                base_t_in = row['Inlet T (°C)']
+                                base_t_out = row['Outlet T (°C)']
+                                base_mass_flow = row['Mass Flow (kg/hr)'] / 3600
+                                base_eff = row['Polytropic Eff (%)']
+                                base_head = row['Polytropic Head (kJ/kg)']
+                                base_power = row['Power (MW)']
+                                
+                                # Simple perturbation-based approach (faster than full recalc)
+                                for _ in range(mp_iterations):
+                                    # Apply measurement + EoS uncertainties (as relative perturbations)
+                                    p_pert = np.random.normal(0, current_p_unc/100)  # e.g. 0.005 for 0.5%
+                                    t_pert = np.random.normal(0, current_t_unc)  # °C absolute
+                                    flow_pert = np.random.normal(0, current_flow_unc/100)  # relative
+                                    eos_pert = np.random.normal(0, current_eos_unc/100)  # relative
+                                    
+                                    # Convert temperature perturbation to relative (use Kelvin for proper scaling)
+                                    t_kelvin = base_t_in + 273.15
+                                    t_rel_pert = t_pert / t_kelvin if t_kelvin > 0 else 0
+                                    
+                                    # Propagate uncertainties (simplified model using sensitivity coefficients)
+                                    # Head: sensitive to EoS (100%), pressure ratio (~50% per inlet/outlet), temperature (~30%)
+                                    head_pert = base_head * (1 + eos_pert + 0.5*p_pert + 0.3*t_rel_pert)
+                                    # Efficiency: sensitive to EoS (30% - ratio), pressure (~30%), temperature (~20%)
+                                    eff_pert = base_eff * (1 + 0.3*eos_pert + 0.3*p_pert + 0.2*t_rel_pert)
+                                    # Power: sensitive to EoS (100%), pressure (~50%), flow (100%)
+                                    power_pert = base_power * (1 + eos_pert + 0.5*p_pert + flow_pert)
+                                    
+                                    point_results['eff_samples'].append(eff_pert)
+                                    point_results['head_samples'].append(head_pert)
+                                    point_results['power_samples'].append(power_pert)
+                                
+                                # Calculate stats
+                                point_results['eff_mean'] = np.mean(point_results['eff_samples'])
+                                point_results['eff_std'] = np.std(point_results['eff_samples'])
+                                point_results['eff_p5'] = np.percentile(point_results['eff_samples'], 5)
+                                point_results['eff_p95'] = np.percentile(point_results['eff_samples'], 95)
+                                
+                                point_results['head_mean'] = np.mean(point_results['head_samples'])
+                                point_results['head_std'] = np.std(point_results['head_samples'])
+                                point_results['head_p5'] = np.percentile(point_results['head_samples'], 5)
+                                point_results['head_p95'] = np.percentile(point_results['head_samples'], 95)
+                                
+                                point_results['power_mean'] = np.mean(point_results['power_samples'])
+                                point_results['power_std'] = np.std(point_results['power_samples'])
+                                
+                                mp_results.append(point_results)
+                                progress_mp.progress((i + 1) / len(results_df))
+                            
+                            progress_mp.empty()
+                            
+                            # Store results
+                            st.session_state['mp_results'] = mp_results
+                            
+                        except Exception as e:
+                            st.error(f"Multi-point analysis failed: {str(e)}")
+                
+                # Display multi-point results
+                if 'mp_results' in st.session_state and st.session_state['mp_results']:
+                    mp_results = st.session_state['mp_results']
+                    
+                    tab_mp1, tab_mp2 = st.tabs(["📈 Efficiency Curve", "📊 Head Curve"])
+                    
+                    with tab_mp1:
+                        fig_mp_eff = go.Figure()
+                        
+                        flows = [r['flow'] for r in mp_results]
+                        eff_means = [r['eff_mean'] for r in mp_results]
+                        eff_p5 = [r['eff_p5'] for r in mp_results]
+                        eff_p95 = [r['eff_p95'] for r in mp_results]
+                        
+                        # Sort by flow
+                        sorted_idx = np.argsort(flows)
+                        flows = np.array(flows)[sorted_idx]
+                        eff_means = np.array(eff_means)[sorted_idx]
+                        eff_p5 = np.array(eff_p5)[sorted_idx]
+                        eff_p95 = np.array(eff_p95)[sorted_idx]
+                        
+                        # 90% confidence band
+                        fig_mp_eff.add_trace(go.Scatter(
+                            x=np.concatenate([flows, flows[::-1]]),
+                            y=np.concatenate([eff_p95, eff_p5[::-1]]),
+                            fill='toself',
+                            fillcolor='rgba(0,100,200,0.2)',
+                            line=dict(color='rgba(255,255,255,0)'),
+                            name='90% Confidence Band'
+                        ))
+                        
+                        # Mean line
+                        fig_mp_eff.add_trace(go.Scatter(
+                            x=flows,
+                            y=eff_means,
+                            mode='lines+markers',
+                            name='Mean Efficiency',
+                            line=dict(color='blue', width=2)
+                        ))
+                        
+                        # Original data points
+                        orig_flows = [r['flow'] for r in mp_results]
+                        orig_eff = results_df['Polytropic Eff (%)'].values
+                        fig_mp_eff.add_trace(go.Scatter(
+                            x=orig_flows,
+                            y=orig_eff,
+                            mode='markers',
+                            name='Calculated Points',
+                            marker=dict(color='red', size=10, symbol='x')
+                        ))
+                        
+                        fig_mp_eff.update_layout(
+                            title="Efficiency Curve with Uncertainty Band",
+                            xaxis_title="Volume Flow (m³/hr)",
+                            yaxis_title="Polytropic Efficiency (%)",
+                            hovermode='x'
+                        )
+                        st.plotly_chart(fig_mp_eff, use_container_width=True)
+                    
+                    with tab_mp2:
+                        fig_mp_head = go.Figure()
+                        
+                        head_means = [r['head_mean'] for r in mp_results]
+                        head_p5 = [r['head_p5'] for r in mp_results]
+                        head_p95 = [r['head_p95'] for r in mp_results]
+                        
+                        head_means = np.array(head_means)[sorted_idx]
+                        head_p5 = np.array(head_p5)[sorted_idx]
+                        head_p95 = np.array(head_p95)[sorted_idx]
+                        
+                        # 90% confidence band
+                        fig_mp_head.add_trace(go.Scatter(
+                            x=np.concatenate([flows, flows[::-1]]),
+                            y=np.concatenate([head_p95, head_p5[::-1]]),
+                            fill='toself',
+                            fillcolor='rgba(0,200,100,0.2)',
+                            line=dict(color='rgba(255,255,255,0)'),
+                            name='90% Confidence Band'
+                        ))
+                        
+                        # Mean line
+                        fig_mp_head.add_trace(go.Scatter(
+                            x=flows,
+                            y=head_means,
+                            mode='lines+markers',
+                            name='Mean Head',
+                            line=dict(color='green', width=2)
+                        ))
+                        
+                        # Original data points
+                        orig_head = results_df['Polytropic Head (kJ/kg)'].values
+                        fig_mp_head.add_trace(go.Scatter(
+                            x=orig_flows,
+                            y=orig_head,
+                            mode='markers',
+                            name='Calculated Points',
+                            marker=dict(color='red', size=10, symbol='x')
+                        ))
+                        
+                        fig_mp_head.update_layout(
+                            title="Head Curve with Uncertainty Band",
+                            xaxis_title="Volume Flow (m³/hr)",
+                            yaxis_title="Polytropic Head (kJ/kg)",
+                            hovermode='x'
+                        )
+                        st.plotly_chart(fig_mp_head, use_container_width=True)
+                    
+                    # Summary table
+                    mp_summary_df = pd.DataFrame([{
+                        'Point': r['point'],
+                        'Flow (m³/hr)': f"{r['flow']:.1f}",
+                        'Eff Mean (%)': f"{r['eff_mean']:.2f}",
+                        'Eff ±2σ (%)': f"±{r['eff_std']*2:.2f}",
+                        'Head Mean (kJ/kg)': f"{r['head_mean']:.2f}",
+                        'Head ±2σ (kJ/kg)': f"±{r['head_std']*2:.2f}",
+                        'Power Mean (MW)': f"{r['power_mean']:.3f}",
+                        'Power ±2σ (MW)': f"±{r['power_std']*2:.3f}"
+                    } for r in mp_results])
+                    
+                    st.markdown("**Multi-Point Summary:**")
+                    st.dataframe(mp_summary_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Multi-point analysis requires multiple operating points. Currently only one point is available.")
+            
+            st.divider()
+            
+            # ===== 7. EXPORT UNCERTAINTY REPORT =====
+            st.subheader("📥 Export Uncertainty Report")
+            st.markdown("""
+            Generate a comprehensive uncertainty report for documentation, audits, and maintenance planning.
+            """)
+            
+            # Prepare report data
+            report_date = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')
+            
+            # Create Excel report in memory
+            import io
+            
+            def generate_uncertainty_report():
+                output = io.BytesIO()
+                
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Sheet 1: Summary
+                    summary_data = {
+                        'Parameter': ['Report Date', 'Analysis Type', 'Number of Iterations', 
+                                      'Selected Operating Point', 'EoS Model'],
+                        'Value': [report_date, 'Monte Carlo Uncertainty Analysis', 
+                                  st.session_state.get('mc_num_iterations', 100),
+                                  f"Point {selected_point_idx + 1}", 
+                                  st.session_state.get('eos_model', 'GERG-2008')]
+                    }
+                    pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+                    
+                    # Sheet 2: Input Uncertainties
+                    input_unc_data = {
+                        'Parameter': ['Pressure', 'Temperature', 'Flow Rate', 'Composition', 'EoS Z-factor'],
+                        'Uncertainty': [f"{current_p_unc}%", f"{current_t_unc} K", 
+                                       f"{current_flow_unc}%", f"{current_comp_unc}%", 
+                                       f"{current_eos_unc}%"],
+                        'Type': ['Measurement', 'Measurement', 'Measurement', 'Measurement', 'Model'],
+                        'Notes': ['Pressure transmitter spec', 'RTD/thermocouple spec',
+                                 'Flow meter calibration', 'GC uncertainty', 
+                                 f'{st.session_state.get("eos_model", "GERG-2008")} typical accuracy']
+                    }
+                    pd.DataFrame(input_unc_data).to_excel(writer, sheet_name='Input Uncertainties', index=False)
+                    
+                    # Sheet 3: Base Operating Conditions
+                    base_conditions = {
+                        'Parameter': ['Inlet Pressure', 'Outlet Pressure', 'Inlet Temperature', 
+                                      'Outlet Temperature', 'Mass Flow', 'Volume Flow'],
+                        'Value': [selected_row['Inlet P (bara)'], selected_row['Outlet P (bara)'],
+                                 selected_row['Inlet T (°C)'], selected_row['Outlet T (°C)'],
+                                 selected_row['Mass Flow (kg/hr)'], selected_row['Vol Flow Inlet (m³/hr)']],
+                        'Unit': ['bara', 'bara', '°C', '°C', 'kg/hr', 'm³/hr']
+                    }
+                    pd.DataFrame(base_conditions).to_excel(writer, sheet_name='Operating Conditions', index=False)
+                    
+                    # Sheet 4: Results with Uncertainty
+                    results_unc = {
+                        'Property': ['Polytropic Efficiency', 'Polytropic Head', 'Shaft Power'],
+                        'Mean': [stats_eff['mean'], stats_head['mean'], stats_power['mean']],
+                        'Std Dev': [stats_eff['std'], stats_head['std'], stats_power['std']],
+                        '95% CI (±2σ)': [stats_eff['std']*2, stats_head['std']*2, stats_power['std']*2],
+                        'Min': [stats_eff['min'], stats_head['min'], stats_power['min']],
+                        'Max': [stats_eff['max'], stats_head['max'], stats_power['max']],
+                        'P5': [stats_eff['p5'], stats_head['p5'], stats_power['p5']],
+                        'P95': [stats_eff['p95'], stats_head['p95'], stats_power['p95']],
+                        'Unit': ['%', 'kJ/kg', 'MW']
+                    }
+                    pd.DataFrame(results_unc).to_excel(writer, sheet_name='Results Uncertainty', index=False)
+                    
+                    # Sheet 5: Guarantee Test (if run)
+                    if 'guarantee_test_results' in st.session_state and st.session_state['guarantee_test_results']:
+                        gtr = st.session_state['guarantee_test_results']
+                        if gtr.get('test_method') == "ASME PTC 10":
+                            guarantee_data = {
+                                'Parameter': ['Test Method', 'Guaranteed Efficiency', 'Measured Mean', 
+                                              'Expanded Uncertainty', 'Coverage Factor (k)', 'Lower Bound',
+                                              'Confidence Level', 'Test Result'],
+                                'Value': ['ASME PTC 10', f"{gtr['guarantee_eff']}%", f"{gtr['mean_eff']:.2f}%",
+                                         f"±{gtr['expanded_uncertainty']:.2f}%", f"{gtr['k']:.2f}",
+                                         f"{gtr['lower_bound']:.2f}%", f"{gtr['confidence_level']}%", 
+                                         'PASS' if gtr['guarantee_met'] else 'FAIL']
+                            }
+                        else:
+                            guarantee_data = {
+                                'Parameter': ['Test Method', 'Guaranteed Efficiency', 'Measured Mean', 
+                                              'Lower Confidence Bound', 'Confidence Level', 
+                                              't-statistic', 'p-value', 'Test Result'],
+                                'Value': ['Hypothesis Test', f"{gtr['guarantee_eff']}%", f"{gtr['mean_eff']:.2f}%",
+                                         f"{gtr['lower_bound']:.2f}%", f"{gtr['confidence_level']}%",
+                                         f"{gtr['t_stat']:.3f}", f"{gtr['p_value']:.4f}",
+                                         'PASS' if gtr['guarantee_met'] else 'FAIL']
+                            }
+                        pd.DataFrame(guarantee_data).to_excel(writer, sheet_name='Guarantee Test', index=False)
+                    else:
+                        # No guarantee test run - create placeholder sheet
+                        pd.DataFrame({'Note': ['Guarantee test not run']}).to_excel(writer, sheet_name='Guarantee Test', index=False)
+                    
+                    # Sheet 6: Measurement Priority
+                    priority_export = pd.DataFrame(improvement_results)
+                    priority_export = priority_export.drop(columns=['reduction_pct'], errors='ignore')
+                    priority_export.to_excel(writer, sheet_name='Measurement Priority', index=False)
+                    
+                    # Sheet 7: Raw MC Data (sample)
+                    mc_raw = pd.DataFrame({
+                        'Iteration': range(1, len(mc_results['poly_eff']) + 1),
+                        'Efficiency (%)': mc_results['poly_eff'],
+                        'Head (kJ/kg)': mc_results['poly_head'],
+                        'Power (MW)': mc_results['power']
+                    })
+                    mc_raw.to_excel(writer, sheet_name='MC Raw Data', index=False)
+                    
+                    # Sheet 8: Multi-Point Results (if available)
+                    if 'mp_results' in st.session_state and st.session_state['mp_results']:
+                        mp_export = pd.DataFrame([{
+                            'Point': r['point'],
+                            'Flow (m³/hr)': r['flow'],
+                            'Eff Mean (%)': r['eff_mean'],
+                            'Eff Std (%)': r['eff_std'],
+                            'Eff P5 (%)': r['eff_p5'],
+                            'Eff P95 (%)': r['eff_p95'],
+                            'Head Mean (kJ/kg)': r['head_mean'],
+                            'Head Std (kJ/kg)': r['head_std'],
+                            'Power Mean (MW)': r['power_mean'],
+                            'Power Std (MW)': r['power_std']
+                        } for r in st.session_state['mp_results']])
+                        mp_export.to_excel(writer, sheet_name='Multi-Point Results', index=False)
+                
+                output.seek(0)
+                return output
+            
+            col_export1, col_export2 = st.columns(2)
+            
+            with col_export1:
+                report_filename = st.text_input(
+                    "Report filename",
+                    value=f"uncertainty_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                )
+            
+            with col_export2:
+                st.write("")  # Spacer
+                st.write("")
+                try:
+                    excel_data = generate_uncertainty_report()
+                    st.download_button(
+                        label="📥 Download Excel Report",
+                        data=excel_data,
+                        file_name=report_filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+                except Exception as e:
+                    st.error(f"Error generating report: {str(e)}")
+            
+            with st.expander("📋 Report Contents"):
+                st.markdown("""
+                The Excel report includes the following sheets:
+                
+                1. **Summary** - Analysis metadata and configuration
+                2. **Input Uncertainties** - All uncertainty parameters used
+                3. **Operating Conditions** - Base case operating point data
+                4. **Results Uncertainty** - Full statistical summary of outputs
+                5. **Guarantee Test** - Performance guarantee verification results
+                6. **Measurement Priority** - Instrument improvement recommendations
+                7. **MC Raw Data** - All Monte Carlo iteration results
+                8. **Multi-Point Results** - Multi-point analysis (if run)
+                
+                This report provides full documentation for:
+                - Performance acceptance tests
+                - Maintenance planning
+                - Regulatory compliance audits
+                - Engineering studies
+                """)
+            
+            st.divider()
             
             # Clear results button
             if st.button("🗑️ Clear MC Results", key="clear_mc_results"):
