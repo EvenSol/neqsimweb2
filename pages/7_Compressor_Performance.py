@@ -8,7 +8,8 @@ from theme import apply_theme
 import json
 import concurrent.futures
 import time
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 def get_gemini_api_key():
     """Get Gemini API key from secrets or session state."""
@@ -1937,7 +1938,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=450
                     )
-                    st.plotly_chart(fig_fit, use_container_width=True)
+                    st.plotly_chart(fig_fit, width='stretch')
                     
                     # Add efficiency plot
                     fig_eff = go.Figure()
@@ -1972,7 +1973,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=400
                     )
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    st.plotly_chart(fig_eff, width='stretch')
                     
                     # Show curve data tables
                     with st.expander("📋 View Curve Data Tables"):
@@ -2696,7 +2697,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    st.plotly_chart(fig_eff, width='stretch')
                 
                 with tab2:
                     fig_head = go.Figure()
@@ -2764,7 +2765,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_head, use_container_width=True)
+                    st.plotly_chart(fig_head, width='stretch')
                 
                 with tab3:
                     fig_power = go.Figure()
@@ -2789,7 +2790,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         yaxis_title='Power (MW)',
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_power, use_container_width=True)
+                    st.plotly_chart(fig_power, width='stretch')
                 
                 # Download results
                 st.divider()
@@ -3547,7 +3548,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                     'P95': f"{stats_power['p95']:.4f}",
                 }
             ])
-            st.dataframe(stats_df, use_container_width=True)
+            st.dataframe(stats_df, width='stretch')
             
             st.divider()
             
@@ -3586,7 +3587,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                     yaxis_title="Frequency",
                     showlegend=False
                 )
-                st.plotly_chart(fig_eff_hist, use_container_width=True)
+                st.plotly_chart(fig_eff_hist, width='stretch')
             
             with tab_hist2:
                 fig_head_hist = go.Figure()
@@ -3616,7 +3617,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                     yaxis_title="Frequency",
                     showlegend=False
                 )
-                st.plotly_chart(fig_head_hist, use_container_width=True)
+                st.plotly_chart(fig_head_hist, width='stretch')
             
             with tab_hist3:
                 fig_power_hist = go.Figure()
@@ -3646,7 +3647,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                     yaxis_title="Frequency",
                     showlegend=False
                 )
-                st.plotly_chart(fig_power_hist, use_container_width=True)
+                st.plotly_chart(fig_power_hist, width='stretch')
             
             st.divider()
             
@@ -3944,7 +3945,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
             with st.expander("📋 Full Sensitivity Analysis"):
                 priority_df = pd.DataFrame(improvement_results)
                 priority_df = priority_df.drop(columns=['reduction_pct'])
-                st.dataframe(priority_df, use_container_width=True, hide_index=True)
+                st.dataframe(priority_df, width='stretch', hide_index=True)
                 
                 st.info("""
                 **Cost Legend:** $ = Low (<$5k), $$ = Medium ($5k-$20k), $$$ = High (>$20k), - = Software change
@@ -4107,7 +4108,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             yaxis_title="Polytropic Efficiency (%)",
                             hovermode='x'
                         )
-                        st.plotly_chart(fig_mp_eff, use_container_width=True)
+                        st.plotly_chart(fig_mp_eff, width='stretch')
                     
                     with tab_mp2:
                         fig_mp_head = go.Figure()
@@ -4155,7 +4156,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             yaxis_title="Polytropic Head (kJ/kg)",
                             hovermode='x'
                         )
-                        st.plotly_chart(fig_mp_head, use_container_width=True)
+                        st.plotly_chart(fig_mp_head, width='stretch')
                     
                     # Summary table
                     mp_summary_df = pd.DataFrame([{
@@ -4170,7 +4171,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                     } for r in mp_results])
                     
                     st.markdown("**Multi-Point Summary:**")
-                    st.dataframe(mp_summary_df, use_container_width=True, hide_index=True)
+                    st.dataframe(mp_summary_df, width='stretch', hide_index=True)
             else:
                 st.info("Multi-point analysis requires multiple operating points. Currently only one point is available.")
             
@@ -4552,7 +4553,7 @@ if is_ai_enabled():
                     """
                     
                     with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-2.0-flash')}..."):
-                        genai.configure(api_key=gemini_api_key)
+                        client = genai.Client(api_key=gemini_api_key)
                         selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
                         
                         system_instruction = """You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting.
@@ -4587,13 +4588,11 @@ REFERENCE BOOKS:
 Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5389 acceptance criteria when evaluating performance deviations. Cite specific standards where applicable."""
                         
                         try:
-                            model = genai.GenerativeModel(
-                                selected_model,
-                                system_instruction=system_instruction
-                            )
-                            response = model.generate_content(
-                                prompt,
-                                generation_config=genai.types.GenerationConfig(
+                            response = client.models.generate_content(
+                                model=selected_model,
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_instruction,
                                     max_output_tokens=1500,
                                     temperature=0.3
                                 )
@@ -4602,13 +4601,11 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                         except Exception as model_error:
                             # Try fallback to gemini-2.0-flash if primary model fails
                             st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.0-flash...")
-                            model = genai.GenerativeModel(
-                                'gemini-2.0-flash',
-                                system_instruction=system_instruction
-                            )
-                            response = model.generate_content(
-                                prompt,
-                                generation_config=genai.types.GenerationConfig(
+                            response = client.models.generate_content(
+                                model='gemini-2.0-flash',
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_instruction,
                                     max_output_tokens=1500,
                                     temperature=0.3
                                 )
@@ -4693,13 +4690,13 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                     # Get AI response
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
-                            genai.configure(api_key=gemini_api_key)
+                            client = genai.Client(api_key=gemini_api_key)
                             selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
                             try:
-                                model = genai.GenerativeModel(selected_model)
-                                response = model.generate_content(
-                                    context_prompt,
-                                    generation_config=genai.types.GenerationConfig(
+                                response = client.models.generate_content(
+                                    model=selected_model,
+                                    contents=context_prompt,
+                                    config=types.GenerateContentConfig(
                                         max_output_tokens=1000,
                                         temperature=0.3
                                     )
@@ -4707,10 +4704,10 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                                 assistant_response = response.text
                             except Exception:
                                 # Fallback to gemini-2.0-flash
-                                model = genai.GenerativeModel('gemini-2.0-flash')
-                                response = model.generate_content(
-                                    context_prompt,
-                                    generation_config=genai.types.GenerationConfig(
+                                response = client.models.generate_content(
+                                    model='gemini-2.0-flash',
+                                    contents=context_prompt,
+                                    config=types.GenerateContentConfig(
                                         max_output_tokens=1000,
                                         temperature=0.3
                                     )

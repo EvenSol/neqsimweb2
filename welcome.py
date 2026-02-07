@@ -2,7 +2,8 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from theme import apply_theme, theme_toggle
 
 def get_gemini_api_key():
@@ -24,9 +25,11 @@ def make_request(question_input: str):
     if not api_key or api_key.strip() == "":
         return ""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        response = model.generate_content(question_input)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=question_input
+        )
         return response.text
     except Exception:
         return ""

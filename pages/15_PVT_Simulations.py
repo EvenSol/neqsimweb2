@@ -147,7 +147,7 @@ with st.expander("Edit Fluid Composition", expanded=False):
             "RelativeDensity[-]": st.column_config.NumberColumn("Density [g/cm³]", min_value=0.0, format="%.4f"),
         },
         num_rows='dynamic',
-        use_container_width=True
+        width='stretch'
     )
     # Store edited df for later use (don't update main session state to avoid reruns)
     st.session_state.pvt_edited_df = edited_fluid_df
@@ -440,7 +440,7 @@ with tab_char:
                 "RelativeDensity[-]": st.column_config.NumberColumn("Density [g/cm³]", min_value=0.0, format="%.4f"),
             },
             height=400,
-            use_container_width=True
+            width='stretch'
         )
         st.session_state.extended_fluid_df = extended_edited_df
         char_input_df = extended_edited_df[extended_edited_df['MolarComposition[-]'] > 0].copy()
@@ -532,7 +532,7 @@ with tab_char:
                                 'Pc [bara]': '{:.2f}',
                                 'Acentric Factor': '{:.4f}'
                             }),
-                            use_container_width=True,
+                            width='stretch',
                             height=400
                         )
                     
@@ -594,7 +594,7 @@ with tab_char:
                     fig.update_yaxes(title_text="Mole Fraction [-]", row=1, col=1)
                     fig.update_yaxes(title_text="Mole Fraction [-]", row=1, col=2, type="log")
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Flash results at reservoir conditions
                     st.subheader("⚡ Flash Results at Reservoir Conditions")
@@ -754,7 +754,7 @@ with tab_char:
                     help="Whether this is a pseudo-component from characterization"
                 ),
             },
-            use_container_width=True,
+            width='stretch',
             height=400,
             key="param_editor"
         )
@@ -924,7 +924,7 @@ with tab_char:
         # Editable kij table (upper triangle only)
         edited_kij_df = st.data_editor(
             kij_upper,
-            use_container_width=True,
+            width='stretch',
             key="kij_editor",
             column_config=col_config
         )
@@ -1193,11 +1193,11 @@ with tab_cce:
                     fig.update_yaxes(title_text="Density [kg/m³]", row=2, col=1)
                     fig.update_yaxes(title_text="Z-gas [-]", row=2, col=2)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Display results table
                     st.subheader("📋 Results Table")
-                    st.dataframe(cce_results.round(4), use_container_width=True)
+                    st.dataframe(cce_results.round(4), width='stretch')
                     
                 except Exception as e:
                     st.error(f"Error running CCE simulation: {e}")
@@ -1298,7 +1298,7 @@ with tab_cvd:
                     fig.update_yaxes(title_text="Relative Volume [-]", row=2, col=1)
                     fig.update_yaxes(title_text="Cumulative Depleted [mol%]", row=2, col=2)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Display results table
                     st.subheader("📋 Results Table")
@@ -1309,7 +1309,7 @@ with tab_cvd:
                         'Relative Volume [-]': rel_vol,
                         'Cumulative Depleted [mol%]': cum_depleted
                     })
-                    st.dataframe(cvd_results.round(4), use_container_width=True)
+                    st.dataframe(cvd_results.round(4), width='stretch')
                     
                     # Key metrics
                     col1, col2, col3 = st.columns(3)
@@ -1427,7 +1427,7 @@ with tab_dl:
                     fig.update_yaxes(title_text="Bg [m³/Sm³]", row=2, col=1)
                     fig.update_yaxes(title_text="Density [kg/m³]", row=2, col=2)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Results table
                     dl_results = pd.DataFrame({
@@ -1439,7 +1439,7 @@ with tab_dl:
                     })
                     
                     st.subheader("📋 Results Table")
-                    st.dataframe(dl_results.round(4), use_container_width=True)
+                    st.dataframe(dl_results.round(4), width='stretch')
                     
                 except Exception as e:
                     st.error(f"Error running Differential Liberation: {e}")
@@ -1479,7 +1479,7 @@ with tab_sep:
             'Temperature [°C]': st.column_config.NumberColumn('Temperature [°C]', min_value=-50.0, max_value=200.0)
         },
         num_rows='dynamic',
-        use_container_width=True
+        width='stretch'
     )
     st.session_state.sep_stages = sep_stages
     
@@ -1528,7 +1528,7 @@ with tab_sep:
                     fig.update_yaxes(title_text="GOR [Sm³/Sm³]", row=1, col=1)
                     fig.update_yaxes(title_text="Bo [m³/Sm³]", row=1, col=2)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Results table
                     sep_results = pd.DataFrame({
@@ -1540,7 +1540,7 @@ with tab_sep:
                     })
                     
                     st.subheader("📋 Results Table")
-                    st.dataframe(sep_results.round(4), use_container_width=True)
+                    st.dataframe(sep_results.round(4), width='stretch')
                     
                     # Total GOR and final Bo
                     if len(gor) > 0:
@@ -1629,7 +1629,7 @@ with tab_swell:
                     fig.update_yaxes(title_text="Saturation Pressure [bara]", row=1, col=1)
                     fig.update_yaxes(title_text="Relative Oil Volume [-]", row=1, col=2)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Results table
                     swell_results = pd.DataFrame({
@@ -1639,7 +1639,7 @@ with tab_swell:
                     })
                     
                     st.subheader("📋 Results Table")
-                    st.dataframe(swell_results.round(4), use_container_width=True)
+                    st.dataframe(swell_results.round(4), width='stretch')
                     
                     # Key metrics
                     if len(rel_oil_vol) > 1:
@@ -1733,7 +1733,7 @@ with tab_gorbo:
                     fig.update_yaxes(title_text="GOR [Sm³/Sm³]", secondary_y=False, color="green")
                     fig.update_yaxes(title_text="Bo [m³/Sm³]", secondary_y=True, color="blue")
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Individual plots
                     col1, col2 = st.columns(2)
@@ -1748,7 +1748,7 @@ with tab_gorbo:
                                              xaxis_title="Pressure [bara]",
                                              yaxis_title="GOR [Sm³/Sm³]",
                                              height=350)
-                        st.plotly_chart(fig_gor, use_container_width=True)
+                        st.plotly_chart(fig_gor, width='stretch')
                     
                     with col2:
                         fig_bo = go.Figure()
@@ -1760,7 +1760,7 @@ with tab_gorbo:
                                             xaxis_title="Pressure [bara]",
                                             yaxis_title="Bo [m³/Sm³]",
                                             height=350)
-                        st.plotly_chart(fig_bo, use_container_width=True)
+                        st.plotly_chart(fig_bo, width='stretch')
                     
                     # Results table
                     gorbo_results = pd.DataFrame({
@@ -1770,7 +1770,7 @@ with tab_gorbo:
                     })
                     
                     st.subheader("📋 Results Table")
-                    st.dataframe(gorbo_results.round(4), use_container_width=True)
+                    st.dataframe(gorbo_results.round(4), width='stretch')
                     
                     # Key metrics
                     col1, col2, col3 = st.columns(3)

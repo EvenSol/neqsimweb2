@@ -433,7 +433,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="lab_gas_editor"
                 )
                 st.session_state.emission_gas_df = edited_df
@@ -480,7 +480,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="sep_gas_editor"
                 )
                 st.session_state.separator_gas_df = edited_df
@@ -519,7 +519,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="teg_editor"
                 )
                 st.session_state.teg_fluid_df = edited_df
@@ -550,7 +550,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="teg_absorber_gas_editor"
                 )
                 st.session_state.teg_absorber_gas_df = edited_df
@@ -590,7 +590,7 @@ with main_tab1:
                     )
                 },
                 num_rows='dynamic',
-                use_container_width=True,
+                width='stretch',
                 key="other_editor"
             )
             st.session_state.emission_gas_df = edited_df
@@ -625,12 +625,12 @@ with main_tab1:
                 showlegend=True,
                 height=350
             )
-            st.plotly_chart(fig_comp, use_container_width=True)
+            st.plotly_chart(fig_comp, width='stretch')
     
     st.divider()
     
     # Calculate button
-    if st.button("🔬 Calculate Emissions", type="primary", use_container_width=True):
+    if st.button("🔬 Calculate Emissions", type="primary", width='stretch'):
         
         if edited_df['MolarComposition[-]'].sum() <= 0:
             st.error("Gas composition required. Enter component mole fractions above.")
@@ -814,7 +814,7 @@ with main_tab1:
                                 st.dataframe(dissolved_df.style.format({
                                     'Mole Fraction': '{:.2e}',
                                     'ppm (molar)': '{:.1f}'
-                                }), use_container_width=True)
+                                }), width='stretch')
                             else:
                                 st.warning("No dissolved gas detected in aqueous phase at these conditions.")
                             
@@ -976,7 +976,7 @@ with main_tab1:
                                     st.dataframe(absorbed_df.style.format({
                                         'Mole Fraction in Rich TEG': '{:.2e}',
                                         'ppm (molar)': '{:.1f}'
-                                    }), use_container_width=True)
+                                    }), width='stretch')
                                 else:
                                     st.warning("No absorbed gas detected in TEG phase at these conditions.")
                                 
@@ -1236,7 +1236,7 @@ with main_tab1:
                                     textinfo='label+percent'
                                 )])
                                 fig_pie.update_layout(title="Emission Composition (by mass)", height=300)
-                                st.plotly_chart(fig_pie, use_container_width=True)
+                                st.plotly_chart(fig_pie, width='stretch')
                     
                     with result_tab2:
                         st.subheader("Emissions by Stage")
@@ -1244,7 +1244,7 @@ with main_tab1:
                         display_df = results_df.copy()
                         display_df.columns = ['Stage', 'Pressure (bara)', 'Temperature (°C)', 'Total (kg/hr)', 'CO₂ (kg/hr)', 
                                              'CH₄ (kg/hr)', 'C₂ (kg/hr)', 'C₃ (kg/hr)', 'C₄+ (kg/hr)', 'nmVOC (kg/hr)', 'H₂S (kg/hr)']
-                        st.dataframe(display_df, use_container_width=True)
+                        st.dataframe(display_df, width='stretch')
                         
                         if len(results_df) > 0:
                             fig_bar = go.Figure()
@@ -1253,7 +1253,7 @@ with main_tab1:
                             fig_bar.add_trace(go.Bar(name='nmVOC', x=results_df['Stage'], y=results_df['nmVOC_kghr'], marker_color='#4CAF50'))
                             chart_title = "Emissions by Process Stage" if emission_source == "TEG Regeneration" else "Emissions by Degassing Stage"
                             fig_bar.update_layout(title=chart_title, xaxis_title="Stage", yaxis_title="Emission Rate (kg/hr)", barmode='group', height=400)
-                            st.plotly_chart(fig_bar, use_container_width=True)
+                            st.plotly_chart(fig_bar, width='stretch')
                         
                         # nmVOC breakdown for TEG Regeneration
                         if emission_source == "TEG Regeneration" and total_nmvoc > 0:
@@ -1279,7 +1279,7 @@ with main_tab1:
                                     'kg/hr': '{:.2f}',
                                     't/yr': '{:.2f}',
                                     '% of nmVOC': '{:.1f}%'
-                                }), use_container_width=True)
+                                }), width='stretch')
                             
                             with col2:
                                 fig_nmvoc = go.Figure(data=[go.Pie(
@@ -1290,7 +1290,7 @@ with main_tab1:
                                     textinfo='label+percent'
                                 )])
                                 fig_nmvoc.update_layout(title="nmVOC Composition", height=280)
-                                st.plotly_chart(fig_nmvoc, use_container_width=True)
+                                st.plotly_chart(fig_nmvoc, width='stretch')
                             
                             st.info("""
                             **nmVOC Definition**: Non-methane Volatile Organic Compounds include all hydrocarbons 
@@ -1336,7 +1336,7 @@ with main_tab1:
                                 st.dataframe(teg_summary.style.format({
                                     'kg/hr': '{:.2f}',
                                     't/yr': '{:.2f}'
-                                }), use_container_width=True)
+                                }), width='stretch')
                             
                             with col2:
                                 # CO2 equivalent breakdown
@@ -1352,7 +1352,7 @@ with main_tab1:
                                     textinfo='label+percent'
                                 )])
                                 fig_co2eq.update_layout(title="CO₂eq Contribution by Source", height=280)
-                                st.plotly_chart(fig_co2eq, use_container_width=True)
+                                st.plotly_chart(fig_co2eq, width='stretch')
                             
                             st.info(f"""
                             **CO₂ Equivalent Summary (GWP-100):**
@@ -1428,7 +1428,7 @@ with main_tab1:
                                         "ℹ️ Site-specific"
                                     ]
                                 })
-                                st.dataframe(benchmark_data, use_container_width=True, hide_index=True)
+                                st.dataframe(benchmark_data, width='stretch', hide_index=True)
                             
                             with col2:
                                 st.markdown("#### Key EPA Reference Values")
@@ -1562,7 +1562,7 @@ with main_tab1:
                                               f"{nmvoc_diff:+.0f}%",
                                               f"{co2eq_diff:+.0f}%"]
                             }
-                            st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
+                            st.dataframe(pd.DataFrame(comparison_data), width='stretch')
                             
                             # Calculate GWMF for comparison (only meaningful for Produced Water Degassing)
                             if emission_source == "Produced Water Degassing" and total_gas > 0 and pressure_drop_bar > 0:
@@ -1628,7 +1628,7 @@ with main_tab1:
                                 csv_summary,
                                 "emission_summary.csv",
                                 "text/csv",
-                                use_container_width=True
+                                width='stretch'
                             )
                         
                         with col2:
@@ -1638,7 +1638,7 @@ with main_tab1:
                                 csv_stages,
                                 "emission_stages.csv",
                                 "text/csv",
-                                use_container_width=True
+                                width='stretch'
                             )
                         
                         st.markdown("### Calculation Parameters")
@@ -1655,7 +1655,7 @@ with main_tab1:
                             'Value': [emission_source, method_display, f"{inlet_temp} °C", f"{inlet_pressure} bara",
                                      flow_display, gwp_standard, str(gwp_ch4), str(gwp_nmvoc), f"{salinity_ppm} ppm", eos_display]
                         })
-                        st.dataframe(params_df, use_container_width=True)
+                        st.dataframe(params_df, width='stretch')
                         
                         st.markdown("### Audit Trail")
                         st.caption("""
@@ -1701,7 +1701,7 @@ with main_tab2:
         
         num_points = st.slider("Number of Points", 5, 20, 10)
         
-        run_whatif = st.button("▶️ Run What-If Analysis", use_container_width=True)
+        run_whatif = st.button("▶️ Run What-If Analysis", width='stretch')
     
     with col2:
         if run_whatif:
@@ -1919,9 +1919,9 @@ with main_tab2:
                     fig_whatif.update_yaxes(title_text="CO₂eq (kg/hr)", row=1, col=2)
                     
                     fig_whatif.update_layout(height=400, showlegend=True)
-                    st.plotly_chart(fig_whatif, use_container_width=True)
+                    st.plotly_chart(fig_whatif, width='stretch')
                     
-                    st.dataframe(scenario_df, use_container_width=True)
+                    st.dataframe(scenario_df, width='stretch')
 
 # ===================== TAB 3: UNCERTAINTY ANALYSIS =====================
 with main_tab3:
@@ -1948,7 +1948,7 @@ with main_tab3:
         
         n_samples = st.slider("Number of Monte Carlo samples", 100, 2000, 500)
         
-        run_mc = st.button("▶️ Run Uncertainty Analysis", use_container_width=True)
+        run_mc = st.button("▶️ Run Uncertainty Analysis", width='stretch')
     
     with col2:
         if run_mc:
@@ -2162,7 +2162,7 @@ with main_tab3:
                         ]
                     }
                     
-                    st.dataframe(pd.DataFrame(stats), use_container_width=True)
+                    st.dataframe(pd.DataFrame(stats), width='stretch')
                     
                     # Histogram
                     fig_hist = make_subplots(rows=1, cols=3, subplot_titles=("CO₂ Distribution", "CH₄ Distribution", "CO₂eq Distribution"))
@@ -2175,6 +2175,6 @@ with main_tab3:
                     fig_hist.update_xaxes(title_text="kg/hr")
                     fig_hist.update_yaxes(title_text="Frequency")
                     
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width='stretch')
                     
                     st.success(f"Analysis completed: {len(mc_results)} simulations")
