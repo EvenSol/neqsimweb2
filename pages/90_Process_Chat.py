@@ -61,6 +61,8 @@ with st.sidebar:
                     st.success(f"✓ Model loaded: {uploaded_file.name}")
                 except Exception as e:
                     st.error(f"Failed to load model: {str(e)}")
+                    with st.expander("📋 Error Details"):
+                        st.code(traceback.format_exc())
                     st.session_state.pop("process_model", None)
         else:
             st.success(f"✓ {uploaded_file.name}")

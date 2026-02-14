@@ -310,10 +310,10 @@ When you receive simulation results, ALWAYS:
 4. Never claim values are "the same" unless the delta is truly zero or negligible (<0.1%).
 5. Mention downstream propagation effects — changes to upstream units affect everything downstream.
 """
-  system_prompt = system_prompt.replace("__MODEL_SUMMARY__", model_summary)
-  system_prompt = system_prompt.replace("__TAG_REF__", tag_ref)
-  system_prompt = system_prompt.replace("__EQUIP_TEMPLATES__", equip_templates)
-  return system_prompt
+    system_prompt = system_prompt.replace("__MODEL_SUMMARY__", model_summary)
+    system_prompt = system_prompt.replace("__TAG_REF__", tag_ref)
+    system_prompt = system_prompt.replace("__EQUIP_TEMPLATES__", equip_templates)
+    return system_prompt
 
 
 # ---------------------------------------------------------------------------
