@@ -83,54 +83,183 @@ def _set_inlet_stream(unit, stream):
     return False
 
 
+def _get_java_class(java_class_path: str):
+    """Import and return a Java class from its dotted path."""
+    from neqsim import jneqsim
+    parts = java_class_path.rsplit(".", 1)
+    pkg_path, cls_name = parts[0], parts[1]
+    java_pkg = jneqsim
+    for p in pkg_path.split(".")[1:]:
+        java_pkg = getattr(java_pkg, p)
+    return getattr(java_pkg, cls_name)
+
+
+# Reverse map: Java class simple names -> equipment class paths
+_JAVA_CLASS_TO_PATH = {}
+for eq_name, path in _EQUIPMENT_CLASSES.items():
+    cls = path.rsplit(".", 1)[1]
+    _JAVA_CLASS_TO_PATH[cls] = path
+# Add Stream mapping
+_JAVA_CLASS_TO_PATH["Stream"] = "neqsim.process.equipment.stream.Stream"
+
+
+def _recreate_unit(original_unit, inlet_stream):
+    """
+    Create a fresh copy of a unit operation using a new inlet stream.
+    
+    This is necessary because NeqSim units create internal stream references
+    during construction. Simply calling setInletStream() doesn't propagate
+    to gas/liquid outlet streams in separators etc.
+    
+    Returns the new unit with parameters copied from the original.
+    """
+    from neqsim import jneqsim
+    
+    name = str(original_unit.getName())
+    java_class = str(original_unit.getClass().getSimpleName())
+    
+    # Special case: Stream objects just need their fluid updated
+    if java_class == "Stream":
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        new_stream = StreamClass(name, inlet_stream)
+        return new_stream
+    
+    # Get the Java class path
+    class_path = _JAVA_CLASS_TO_PATH.get(java_class)
+    if class_path is None:
+        # Unknown type — try using setInletStream as fallback
+        _set_inlet_stream(original_unit, inlet_stream)
+        return original_unit
+    
+    # Create new instance
+    JavaClass = _get_java_class(class_path)
+    
+    # Most equipment constructors take (name, inletStream)
+    try:
+        new_unit = JavaClass(name, inlet_stream)
+    except Exception:
+        # Some might need different constructor args
+        try:
+            new_unit = JavaClass(inlet_stream)
+            new_unit.setName(name)
+        except Exception:
+            # Last resort: reuse original with setInletStream
+            _set_inlet_stream(original_unit, inlet_stream)
+            return original_unit
+    
+    # Copy configurable parameters from original
+    param_getters_setters = [
+        ("getOutletPressure", "setOutletPressure", None),
+        ("getIsentropicEfficiency", "setIsentropicEfficiency", None),
+        ("getPolytropicEfficiency", "setPolytropicEfficiency", None),
+    ]
+    
+    for getter, setter, unit_arg in param_getters_setters:
+        if hasattr(original_unit, getter) and hasattr(new_unit, setter):
+            try:
+                val = getattr(original_unit, getter)()
+                if val is not None and float(val) != 0.0:
+                    if unit_arg:
+                        getattr(new_unit, setter)(float(val), unit_arg)
+                    else:
+                        getattr(new_unit, setter)(float(val))
+            except Exception:
+                pass
+    
+    # Copy outlet temperature if cooler/heater
+    if java_class in ("Cooler", "Heater"):
+        try:
+            # Get outlet temperature spec from original
+            out_t = float(original_unit.getOutletStream().getTemperature("C"))
+            # Check if it was actually specified (not just inlet T passing through)
+            in_t = float(original_unit.getInletStream().getTemperature("C"))
+            if abs(out_t - in_t) > 0.1:  # Temperature was actually changed
+                new_unit.setOutTemperature(out_t, "C")
+        except Exception:
+            pass
+    
+    # Copy outlet pressure settings
+    if hasattr(original_unit, "getOutPressure") and hasattr(new_unit, "setOutPressure"):
+        try:
+            val = float(original_unit.getOutPressure())
+            if val > 0:
+                new_unit.setOutPressure(val, "bara")
+        except Exception:
+            pass
+    
+    return new_unit
+
+
 def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> List[Dict[str, Any]]:
     """
-    Insert new equipment into the process topology.
+    Insert new equipment into the process topology by rebuilding process.
+    
+    NeqSim's ProcessSystem requires units to be added in order during construction
+    for proper stream wiring. Simply inserting a unit mid-process doesn't work
+    because the process runner doesn't initialize newly inserted units.
+    
+    Strategy: rebuild the process from scratch with new units in the right positions.
     
     For each AddUnitOp:
-      1. Find the 'insert_after' unit and its position
-      2. Get its outlet stream
-      3. Create the new equipment with that stream as inlet
-      4. Configure the new equipment with params
-      5. Find the downstream unit and reconnect its inlet
-      6. Insert the new unit at the right position
-      7. Re-index the model objects
+      1. Find the 'insert_after' unit position
+      2. Extract the ordered unit list
+      3. Create new equipment using the upstream unit's outlet stream
+      4. Reconnect downstream units to the new equipment's outlet
+      5. Rebuild the process in the correct order
     
     Returns a log of operations.
     """
     from neqsim import jneqsim
+    from neqsim.process import clearProcess, getProcess
 
     log = []
     proc = model.get_process()
 
+    # Collect all current units in order
+    original_units = list(proc.getUnitOperations())
+    
+    # Build an insertion plan: list of (position, AddUnitOp) 
+    # Process all add_units first to determine where each goes
+    insertions = []  # (after_index, add_op)
+    
     for add_op in add_units:
+        # Find the 'insert_after' unit by name
+        after_idx = None
+        for i, u in enumerate(original_units):
+            try:
+                if str(u.getName()) == add_op.insert_after:
+                    after_idx = i
+                    break
+            except Exception:
+                pass
+        
+        if after_idx is None:
+            log.append({
+                "key": f"add_unit.{add_op.name}",
+                "status": "FAILED",
+                "error": f"Unit '{add_op.insert_after}' not found in process"
+            })
+            continue
+        
+        insertions.append((after_idx, add_op))
+    
+    if not insertions:
+        return log
+    
+    # Sort insertions by position (descending so indices don't shift)
+    insertions.sort(key=lambda x: x[0], reverse=True)
+    
+    # Build the new unit sequence
+    new_sequence = list(original_units)  # copy of references
+    
+    # Track which new units we create (to configure and log)
+    created_units = []
+    
+    for after_idx, add_op in insertions:
         try:
-            # 1. Find the 'insert_after' unit
-            after_unit = proc.getUnit(add_op.insert_after)
-            if after_unit is None:
-                log.append({
-                    "key": f"add_unit.{add_op.name}",
-                    "status": "FAILED",
-                    "error": f"Unit '{add_op.insert_after}' not found in process"
-                })
-                continue
-
-            after_idx = int(proc.getUnitNumber(add_op.insert_after))
-
-            # 2. Get the outlet stream of the 'insert_after' unit
-            outlet_stream = _find_outlet_stream(after_unit)
-            if outlet_stream is None:
-                log.append({
-                    "key": f"add_unit.{add_op.name}",
-                    "status": "FAILED",
-                    "error": f"Cannot find outlet stream for '{add_op.insert_after}'"
-                })
-                continue
-
-            # 3. Create the new equipment
             eq_type = add_op.equipment_type.lower().replace(" ", "_")
             java_class_path = _EQUIPMENT_CLASSES.get(eq_type)
-
+            
             if java_class_path is None:
                 log.append({
                     "key": f"add_unit.{add_op.name}",
@@ -139,22 +268,32 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                              f"Available: {', '.join(_EQUIPMENT_CLASSES.keys())}"
                 })
                 continue
-
-            # Import the Java class and create instance with inlet stream
+            
+            # Get outlet stream from upstream unit
+            upstream_unit = new_sequence[after_idx]
+            outlet_stream = _find_outlet_stream(upstream_unit)
+            if outlet_stream is None:
+                log.append({
+                    "key": f"add_unit.{add_op.name}",
+                    "status": "FAILED",
+                    "error": f"Cannot find outlet stream for '{add_op.insert_after}'"
+                })
+                continue
+            
+            # Create the Java class
             parts = java_class_path.rsplit(".", 1)
             pkg = parts[0]
             cls_name = parts[1]
-
-            # Navigate to the Java package
             java_pkg = jneqsim
-            for p in pkg.split(".")[1:]:  # skip 'neqsim' since jneqsim is already neqsim
+            for p in pkg.split(".")[1:]:
                 java_pkg = getattr(java_pkg, p)
             JavaClass = getattr(java_pkg, cls_name)
-
+            
+            # Create new unit with upstream outlet as inlet
             new_unit = JavaClass(add_op.name, outlet_stream)
-
-            # 4. Configure the new equipment with params
-            params = dict(add_op.params)  # copy
+            
+            # Configure params
+            params = dict(add_op.params)
             for pkey, pval in params.items():
                 pk = pkey.lower()
                 try:
@@ -165,7 +304,6 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                     elif "out_pressure" in pk or "outpressure" in pk:
                         new_unit.setOutPressure(float(pval), "bara")
                     elif "pressure_drop" in pk or "pressuredrop" in pk:
-                        # For coolers/heaters: set outlet pressure = inlet - drop
                         inlet_p = float(outlet_stream.getPressure("bara"))
                         new_unit.setOutPressure(inlet_p - float(pval), "bara")
                     elif "isentropic_efficiency" in pk or "efficiency" in pk:
@@ -175,7 +313,6 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                         if hasattr(new_unit, "setPolytropicEfficiency"):
                             new_unit.setPolytropicEfficiency(float(pval))
                     else:
-                        # Try generic setter
                         setter = f"set{pkey[0].upper()}{pkey[1:]}"
                         if hasattr(new_unit, setter):
                             getattr(new_unit, setter)(pval)
@@ -185,41 +322,70 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                         "status": "WARN",
                         "error": f"Failed to set param {pkey}={pval}: {e}"
                     })
-
-            # 5. Find the downstream unit and reconnect its inlet
-            units_list = list(proc.getUnitOperations())
+            
+            # Insert into sequence at the right position
             insert_pos = after_idx + 1
-
-            if insert_pos < len(units_list):
-                downstream_unit = units_list[insert_pos]
-                new_outlet = _find_outlet_stream(new_unit)
-                if new_outlet is not None:
-                    reconnected = _set_inlet_stream(downstream_unit, new_outlet)
-                    if not reconnected:
-                        log.append({
-                            "key": f"add_unit.{add_op.name}",
-                            "status": "WARN",
-                            "error": f"Could not reconnect downstream unit '{downstream_unit.getName()}' inlet"
-                        })
-
-            # 6. Insert the new unit at the right position
-            proc.add(insert_pos, new_unit)
-
+            new_sequence.insert(insert_pos, new_unit)
+            created_units.append((add_op, new_unit, params))
+            
             log.append({
                 "key": f"add_unit.{add_op.name}",
                 "value": f"{add_op.equipment_type} after '{add_op.insert_after}'",
                 "status": "OK",
                 "params": params,
             })
-
+            
         except Exception as e:
             log.append({
                 "key": f"add_unit.{add_op.name}",
                 "status": "FAILED",
                 "error": str(e)
             })
+    
+    # -----------------------------------------------------------------------
+    # CRITICAL: Rebuild ALL downstream units with fresh stream connections.
+    #
+    # NeqSim units create internal outlet stream objects during construction.
+    # Calling setInletStream() on an existing unit does NOT rewire its
+    # gas/liquid outlet streams. The ONLY way to propagate a change (e.g. a
+    # new cooler) downstream is to create FRESH instances of every unit after
+    # the insertion point, each constructed with the previous unit's outlet.
+    # -----------------------------------------------------------------------
+    
+    # Find the earliest insertion point (all downstream units must be recreated)
+    earliest_insert = min(after_idx + 1 for after_idx, _ in insertions)
+    
+    # Walk the sequence from earliest insertion onward and recreate each unit
+    for i in range(earliest_insert, len(new_sequence)):
+        unit = new_sequence[i]
+        # Get outlet stream of previous unit as the new inlet
+        prev_unit = new_sequence[i - 1]
+        prev_outlet = _find_outlet_stream(prev_unit)
+        if prev_outlet is None:
+            log.append({
+                "key": f"rebuild.{i}",
+                "status": "WARN",
+                "error": f"Cannot find outlet of unit {i-1} for downstream reconnect"
+            })
+            continue
+        
+        # Skip units we just created (they already have correct inlet)
+        is_newly_created = any(u is unit for _, u, _ in created_units)
+        if is_newly_created:
+            continue
+        
+        # Recreate this existing unit with the new inlet stream
+        recreated = _recreate_unit(unit, prev_outlet)
+        new_sequence[i] = recreated
+    
+    # Clear the process and re-add all units (new + recreated)
+    unit_ops = proc.getUnitOperations()
+    unit_ops.clear()
+    
+    for unit in new_sequence:
+        proc.add(unit)
 
-    # 7. Re-index the model objects so introspection sees the new units/streams
+    # Re-index the model objects so introspection sees the new units/streams
     model._index_model_objects()
 
     return log
