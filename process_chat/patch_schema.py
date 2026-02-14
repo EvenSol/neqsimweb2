@@ -39,9 +39,58 @@ class AddUnitOp:
 
 
 @dataclass
+class AddComponentOp:
+    """
+    Add chemical components to an existing stream's fluid.
+    
+    Used when the engineer wants to add new substances to the feed
+    (e.g. add inhibitor, add heavy hydrocarbons, inject water).
+    
+    Example:
+        AddComponentOp(
+            stream_name="feed gas",
+            components={"n-decane": 500.0, "benzene": 300.0, "water": 200.0},
+            flow_unit="kg/hr",
+        )
+    """
+    stream_name: str                        # name of stream to modify
+    components: Dict[str, float]            # component_name -> flow_rate
+    flow_unit: str = "kg/hr"                # "kg/hr", "mol/sec", etc.
+
+
+@dataclass
+class TargetSpec:
+    """
+    Iterative target-seeking specification.
+    
+    The solver adjusts a scale factor applied to the inputs until
+    the target KPI reaches the desired value.
+    
+    Example: "Add heavy components until separator liquid = 1000 kg/hr"
+        TargetSpec(
+            target_kpi="inlet separator.liquidOutStream.flow_kg_hr",
+            target_value=1000.0,
+            tolerance_pct=2.0,
+            variable="component_scale",
+            initial_guess=1.0,
+            min_value=0.01,
+            max_value=50.0,
+        )
+    """
+    target_kpi: str                         # KPI key to match (from _extract_results)
+    target_value: float                     # desired value
+    tolerance_pct: float = 2.0              # acceptable relative error %
+    variable: str = "component_scale"       # what to scale (currently: component flows)
+    initial_guess: float = 1.0              # starting scale factor
+    min_value: float = 0.01                 # lower bound
+    max_value: float = 50.0                 # upper bound
+    max_iterations: int = 20                # iteration limit
+
+
+@dataclass
 class InputPatch:
     """
-    Change one or more ProcessInput fields, and optionally add new units.
+    Change one or more ProcessInput fields, and optionally add new units/components.
     
     Supports absolute values and relative operations:
         Absolute:  {"Psep1": 25.0}
@@ -49,9 +98,13 @@ class InputPatch:
         Scale:     {"feed_rate": {"op": "scale", "value": 1.1}}
     
     Supports adding new equipment via add_units list.
+    Supports adding chemical components via add_components list.
+    Supports iterative target-seeking via targets list.
     """
     changes: Dict[str, Any]
     add_units: List[AddUnitOp] = field(default_factory=list)
+    add_components: List[AddComponentOp] = field(default_factory=list)
+    targets: List[TargetSpec] = field(default_factory=list)
     note: Optional[str] = None
 
     def apply_to(self, base_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -151,9 +204,34 @@ def scenario_from_dict(d: dict) -> Scenario:
             params=au.get("params", {}),
         ))
 
+    # Parse add_components if present
+    add_components = []
+    for ac in patch_data.get("add_components", []):
+        add_components.append(AddComponentOp(
+            stream_name=ac["stream_name"],
+            components=ac["components"],
+            flow_unit=ac.get("flow_unit", "kg/hr"),
+        ))
+
+    # Parse targets if present
+    targets = []
+    for t in patch_data.get("targets", []):
+        targets.append(TargetSpec(
+            target_kpi=t["target_kpi"],
+            target_value=float(t["target_value"]),
+            tolerance_pct=float(t.get("tolerance_pct", 2.0)),
+            variable=t.get("variable", "component_scale"),
+            initial_guess=float(t.get("initial_guess", 1.0)),
+            min_value=float(t.get("min_value", 0.01)),
+            max_value=float(t.get("max_value", 50.0)),
+            max_iterations=int(t.get("max_iterations", 20)),
+        ))
+
     patch = InputPatch(
         changes=patch_data.get("changes", {}),
         add_units=add_units,
+        add_components=add_components,
+        targets=targets,
         note=patch_data.get("note")
     )
     return Scenario(

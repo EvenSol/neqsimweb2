@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from .patch_schema import InputPatch, Scenario, AddUnitOp
+from .patch_schema import InputPatch, Scenario, AddUnitOp, AddComponentOp, TargetSpec
 from .process_model import NeqSimProcessModel, ModelRunResult, KPI, ConstraintStatus
 
 
@@ -188,6 +188,311 @@ def _recreate_unit(original_unit, inlet_stream):
             pass
     
     return new_unit
+
+
+# ---------------------------------------------------------------------------
+# Adding chemical components to a stream's fluid
+# ---------------------------------------------------------------------------
+
+def apply_add_components(
+    model: NeqSimProcessModel,
+    add_components: List[AddComponentOp],
+    scale_factor: float = 1.0,
+) -> List[Dict[str, Any]]:
+    """
+    Add chemical components to stream fluids.
+    
+    Each AddComponentOp specifies a stream and a dict of component→flow_rate.
+    The scale_factor multiplies all flow rates (used by iterative solver).
+    
+    Returns a log of operations.
+    """
+    from neqsim import jneqsim
+    log = []
+
+    for ac in add_components:
+        try:
+            # Find the stream (try qualified and unqualified names)
+            stream_obj = None
+            try:
+                stream_obj = model.get_stream(ac.stream_name)
+            except KeyError:
+                # Try to find via units
+                for uname, u in model._units.items():
+                    if uname == ac.stream_name:
+                        stream_obj = u
+                        break
+                    # Try outlet
+                    out = _find_outlet_stream(u)
+                    if out is not None:
+                        try:
+                            if str(out.getName()) == ac.stream_name:
+                                stream_obj = out
+                                break
+                        except Exception:
+                            pass
+            
+            if stream_obj is None:
+                log.append({
+                    "key": f"add_components.{ac.stream_name}",
+                    "status": "FAILED",
+                    "error": f"Stream '{ac.stream_name}' not found",
+                })
+                continue
+
+            # Get the fluid (thermoSystem) from the stream
+            fluid = None
+            for getter in ("getFluid", "getThermoSystem"):
+                if hasattr(stream_obj, getter):
+                    try:
+                        fluid = getattr(stream_obj, getter)()
+                        if fluid is not None:
+                            break
+                    except Exception:
+                        pass
+
+            if fluid is None:
+                log.append({
+                    "key": f"add_components.{ac.stream_name}",
+                    "status": "FAILED",
+                    "error": "Cannot access fluid from stream",
+                })
+                continue
+
+            # Add each component
+            added = []
+            for comp_name, base_flow in ac.components.items():
+                scaled_flow = base_flow * scale_factor
+                try:
+                    fluid.addComponent(comp_name, scaled_flow, ac.flow_unit)
+                    added.append(f"{comp_name}={scaled_flow:.2f} {ac.flow_unit}")
+                except Exception as e:
+                    log.append({
+                        "key": f"add_components.{ac.stream_name}.{comp_name}",
+                        "status": "FAILED",
+                        "error": f"Failed to add {comp_name}: {e}",
+                    })
+
+            # Re-apply mixing rule after adding components
+            try:
+                fluid.setMixingRule(2)
+            except Exception:
+                pass
+
+            if added:
+                log.append({
+                    "key": f"add_components.{ac.stream_name}",
+                    "value": "; ".join(added),
+                    "status": "OK",
+                    "scale_factor": scale_factor,
+                })
+
+        except Exception as e:
+            log.append({
+                "key": f"add_components.{ac.stream_name}",
+                "status": "FAILED",
+                "error": str(e),
+            })
+
+    return log
+
+
+# ---------------------------------------------------------------------------
+# Iterative target-seeking solver
+# ---------------------------------------------------------------------------
+
+def solve_for_target(
+    model: NeqSimProcessModel,
+    scenario: Scenario,
+    timeout_ms: int = 120000,
+) -> 'Comparison':
+    """
+    Iteratively adjust inputs until a target KPI is reached.
+    
+    Uses bisection method on the scale factor for add_components.
+    The target is specified in scenario.patch.targets[0].
+    
+    Returns a Comparison with the converged result.
+    """
+    target = scenario.patch.targets[0]
+    
+    lo = target.min_value
+    hi = target.max_value
+    best_scale = target.initial_guess
+    best_result = None
+    best_error = float('inf')
+    
+    iteration_log = []
+    
+    # First: run base case
+    base_clone = model.clone()
+    base_result = base_clone.run(timeout_ms=timeout_ms)
+    base_scenario = Scenario(
+        name="BASE", description="Base case (no changes)",
+        patch=InputPatch(changes={})
+    )
+    base_sr = ScenarioResult(scenario=base_scenario, result=base_result)
+    
+    # Check if target KPI exists in base
+    base_kpi_val = base_result.kpis.get(target.target_kpi)
+    if base_kpi_val is None:
+        # Try partial match
+        for k, v in base_result.kpis.items():
+            if target.target_kpi in k:
+                target.target_kpi = k  # use the full qualified name
+                base_kpi_val = v
+                break
+    
+    consecutive_failures = 0
+    MAX_CONSECUTIVE_FAILURES = 3   # bail if the same error repeats
+    
+    # Bisection iterations
+    for iteration in range(target.max_iterations):
+        mid = (lo + hi) / 2.0 if iteration > 0 else best_scale
+        
+        try:
+            clone = model.clone()
+            
+            # Apply add_components with current scale
+            if scenario.patch.add_components:
+                comp_log = apply_add_components(clone, scenario.patch.add_components, scale_factor=mid)
+                failed = [e for e in comp_log if e.get("status") == "FAILED"]
+                if failed:
+                    consecutive_failures += 1
+                    iteration_log.append({
+                        "iteration": iteration, "scale": mid,
+                        "status": "FAILED", "error": str(failed)
+                    })
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        iteration_log[-1]["status"] = "ABORT"
+                        iteration_log[-1]["error"] += " (aborting — repeated failures)"
+                        break
+                    hi = mid
+                    continue
+            
+            # Apply add_units if any
+            if scenario.patch.add_units:
+                apply_add_units(clone, scenario.patch.add_units)
+            
+            # Apply parameter changes if any
+            if scenario.patch.changes:
+                apply_patch_to_model(clone, scenario.patch)
+            
+            # Run
+            result = clone.run(timeout_ms=timeout_ms)
+            
+            # Read the target KPI
+            kpi = result.kpis.get(target.target_kpi)
+            if kpi is None:
+                # Try partial match
+                for k, v in result.kpis.items():
+                    if target.target_kpi in k:
+                        kpi = v
+                        target.target_kpi = k
+                        break
+            
+            if kpi is None:
+                iteration_log.append({
+                    "iteration": iteration, "scale": mid,
+                    "status": "FAILED",
+                    "error": f"KPI '{target.target_kpi}' not found. Available: {list(result.kpis.keys())}"
+                })
+                break
+            
+            consecutive_failures = 0  # success — reset counter
+            current_val = kpi.value
+            error_pct = abs(current_val - target.target_value) / max(abs(target.target_value), 1e-10) * 100
+            
+            iteration_log.append({
+                "iteration": iteration, "scale": round(mid, 4),
+                "kpi_value": round(current_val, 2),
+                "target": target.target_value,
+                "error_pct": round(error_pct, 2),
+                "status": "OK",
+            })
+            
+            # Track best result
+            if error_pct < best_error:
+                best_error = error_pct
+                best_scale = mid
+                best_result = result
+            
+            # Converged?
+            if error_pct <= target.tolerance_pct:
+                iteration_log[-1]["status"] = "CONVERGED"
+                break
+            
+            # Bisection: adjust bounds
+            if current_val < target.target_value:
+                lo = mid  # need more
+            else:
+                hi = mid  # need less
+                
+        except Exception as e:
+            iteration_log.append({
+                "iteration": iteration, "scale": mid,
+                "status": "FAILED", "error": str(e)
+            })
+            hi = mid
+    
+    # Build the Comparison result
+    if best_result is None:
+        case_sr = ScenarioResult(
+            scenario=scenario,
+            result=ModelRunResult(kpis={}, constraints=[], raw={}),
+            success=False,
+            error=f"Iterative solver failed to converge. Log: {iteration_log}"
+        )
+        return Comparison(
+            base=base_sr, cases=[case_sr],
+            delta_kpis=[], constraint_summary=[],
+            patch_log=[{"scenario": scenario.name, "key": "solver", "status": "FAILED",
+                       "iterations": iteration_log}],
+        )
+    
+    # Successful convergence (or best effort)
+    case_sr = ScenarioResult(scenario=scenario, result=best_result)
+    deltas = compare_results(base_result, best_result, scenario.name)
+    
+    constraints_summary = []
+    for c in best_result.constraints:
+        constraints_summary.append({
+            "scenario": scenario.name,
+            "constraint": c.name,
+            "status": c.status,
+            "detail": c.detail,
+        })
+    
+    # Build detailed patch log
+    patch_log = [
+        {
+            "scenario": scenario.name,
+            "key": "iterative_solver",
+            "status": "CONVERGED" if best_error <= target.tolerance_pct else "BEST_EFFORT",
+            "value": f"scale={best_scale:.4f}, target={target.target_kpi}={target.target_value}, achieved_error={best_error:.2f}%",
+            "iterations": len(iteration_log),
+            "iteration_log": iteration_log,
+        }
+    ]
+    
+    # Add what components were added at the final scale
+    if scenario.patch.add_components:
+        for ac in scenario.patch.add_components:
+            comp_detail = [f"{comp}: {flow * best_scale:.2f} {ac.flow_unit}" 
+                          for comp, flow in ac.components.items()]
+            patch_log.append({
+                "scenario": scenario.name,
+                "key": f"add_components.{ac.stream_name}",
+                "value": "; ".join(sorted(comp_detail)),
+                "status": "OK",
+                "scale_factor": round(best_scale, 4),
+            })
+    
+    return Comparison(
+        base=base_sr, cases=[case_sr],
+        delta_kpis=deltas, constraint_summary=constraints_summary,
+        patch_log=patch_log,
+    )
 
 
 def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> List[Dict[str, Any]]:
@@ -644,6 +949,16 @@ def run_scenarios(
 
     for sc in scenarios:
         try:
+            # If the scenario has targets, dispatch to iterative solver
+            if sc.patch.targets:
+                target_comparison = solve_for_target(model, sc, timeout_ms=timeout_ms)
+                # Merge results (use the target solver's base if this is the first scenario)
+                case_results.extend(target_comparison.cases)
+                all_delta_kpis.extend(target_comparison.delta_kpis)
+                all_constraints.extend(target_comparison.constraint_summary)
+                patch_log.extend(target_comparison.patch_log)
+                continue
+
             clone = model.clone()
 
             # First: add any new equipment units
@@ -658,6 +973,20 @@ def run_scenarios(
                         result=ModelRunResult(kpis={}, constraints=[], raw={}),
                         success=False,
                         error=f"Add unit errors: {add_failed}"
+                    ))
+                    continue
+
+            # Second: add chemical components to streams
+            if sc.patch.add_components:
+                comp_log = apply_add_components(clone, sc.patch.add_components)
+                patch_log.extend([{"scenario": sc.name, **entry} for entry in comp_log])
+                comp_failed = [e for e in comp_log if e.get("status") == "FAILED"]
+                if comp_failed:
+                    case_results.append(ScenarioResult(
+                        scenario=sc,
+                        result=ModelRunResult(kpis={}, constraints=[], raw={}),
+                        success=False,
+                        error=f"Add component errors: {comp_failed}"
                     ))
                     continue
 

@@ -149,6 +149,65 @@ Supported params by equipment type:
 You can combine "add_units" with "changes" in the same scenario (e.g., add a cooler AND change a compressor's pressure).
 When the user asks to "add" or "install" equipment, use "add_units". When they ask to "change" or "modify", use "changes".
 
+ADD COMPONENTS (for adding new chemicals to a stream):
+Use the "add_components" array inside "patch" to add chemical substances to a stream's fluid.
+{{
+  "patch": {{
+    "add_components": [
+      {{
+        "stream_name": "feed gas",
+        "components": {{
+          "nC10": 500.0,
+          "benzene": 300.0,
+          "water": 200.0
+        }},
+        "flow_unit": "kg/hr"
+      }}
+    ]
+  }}
+}}
+Component names must match NeqSim database naming (case-sensitive, lowercase):
+  Alkanes: methane, ethane, propane, i-butane, n-butane, i-pentane, n-pentane, 
+           n-hexane, n-heptane, n-octane, n-nonane, nC10, nC11, nC12
+  Aromatics: benzene, toluene
+  Gases: nitrogen, CO2, H2S, oxygen, hydrogen, helium
+  Water/glycols: water, MEG, TEG, DEG
+  Alcohols: methanol, ethanol
+  Plus fractions: C7, C8, C9 (pseudo-components)
+IMPORTANT: Use "nC10" NOT "n-decane", use "water" NOT "Water", use "benzene" NOT "Benzene".
+
+ITERATIVE TARGET-SEEKING (for "add X until Y = Z" questions):
+When the user wants to achieve a specific output value by adjusting inputs, use "targets" combined 
+with "add_components" (or "changes"). The system will automatically iterate (bisection method) to 
+converge on the target.
+{{
+  "patch": {{
+    "add_components": [
+      {{
+        "stream_name": "feed gas",
+        "components": {{"nC10": 500.0, "benzene": 300.0, "water": 200.0}},
+        "flow_unit": "kg/hr"
+      }}
+    ],
+    "targets": [
+      {{
+        "target_kpi": "inlet separator.liquidOutStream.flow_kg_hr",
+        "target_value": 1000.0,
+        "tolerance_pct": 2.0,
+        "variable": "component_scale",
+        "initial_guess": 1.0,
+        "min_value": 0.01,
+        "max_value": 50.0,
+        "max_iterations": 20
+      }}
+    ]
+  }}
+}}
+The solver scales ALL component flow rates by the same factor until the target KPI converges.
+For the target_kpi, use qualified stream names like "unitName.streamName.property" 
+(e.g., "inlet separator.liquidOutStream.flow_kg_hr").
+Available KPI suffixes: .flow_kg_hr, .temperature_C, .pressure_bara, .power_kW, .duty_kW
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -234,8 +293,24 @@ def format_comparison_for_llm(comparison) -> str:
         lines.append("\n=== APPLIED CHANGES ===")
         for entry in comparison.patch_log:
             status = entry.get("status", "?")
-            if status == "OK":
+            if status in ("CONVERGED", "BEST_EFFORT"):
+                # Iterative solver result
+                lines.append(f"  🔄 {entry['key']}: {entry.get('value', '?')}")
+                lines.append(f"     Iterations: {entry.get('iterations', '?')}")
+                # Show iteration log summary
+                iter_log = entry.get("iteration_log", [])
+                if iter_log:
+                    for il in iter_log:
+                        icon = "✓" if il.get("status") == "CONVERGED" else "→"
+                        kpi_val = il.get("kpi_value", "?")
+                        err = il.get("error_pct", "?")
+                        lines.append(f"     {icon} iter {il.get('iteration', '?')}: "
+                                     f"scale={il.get('scale', '?')}, "
+                                     f"value={kpi_val}, error={err}%")
+            elif status == "OK":
                 lines.append(f"  ✓ {entry['key']} = {entry.get('value', '?')}")
+                if "scale_factor" in entry:
+                    lines.append(f"    (scale factor: {entry['scale_factor']})")
             else:
                 lines.append(f"  ✗ {entry['key']}: {entry.get('error', 'unknown error')}")
     
