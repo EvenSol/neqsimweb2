@@ -94,28 +94,65 @@ class NeqSimProcessModel:
 
     # ----- Factory methods -----
 
+    @staticmethod
+    def _deserialize_xml_string(xml_string: str):
+        """Deserialize a NeqSim object from an XML string using XStream."""
+        import jpype
+
+        XStream = jpype.JClass("com.thoughtworks.xstream.XStream")
+        AnyTypePermission = jpype.JClass(
+            "com.thoughtworks.xstream.security.AnyTypePermission"
+        )
+        xstream = XStream()
+        xstream.addPermission(AnyTypePermission.ANY)
+        return xstream.fromXML(xml_string)
+
     @classmethod
     def from_file(cls, filepath: str) -> "NeqSimProcessModel":
         """Load a ProcessSystem from a .neqsim or .xml file."""
+        import zipfile
         import neqsim
         from neqsim import jneqsim
 
         with open(filepath, "rb") as f:
             file_bytes = f.read()
 
+        loaded = None
         ext = os.path.splitext(filepath)[1].lower()
-        if ext in (".neqsim", ".zip"):
-            loaded = neqsim.open_neqsim(filepath)
-            if loaded is None:
-                # Some .neqsim files are actually plain XML
+
+        if ext in (".neqsim", ".zip") or ext not in (".xml",):
+            # Try the library's Java-based ZIP reader first
+            try:
+                loaded = neqsim.open_neqsim(filepath)
+            except Exception:
+                loaded = None
+
+            # Fallback: extract XML from ZIP in Python (avoids Java stream issues)
+            if loaded is None and zipfile.is_zipfile(filepath):
+                try:
+                    with zipfile.ZipFile(filepath, "r") as zf:
+                        # Look for process.xml or any .xml inside
+                        xml_name = None
+                        for name in zf.namelist():
+                            if name.lower().endswith(".xml"):
+                                xml_name = name
+                                break
+                        if xml_name:
+                            xml_content = zf.read(xml_name).decode("utf-8")
+                            loaded = cls._deserialize_xml_string(xml_content)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to extract/deserialize XML from ZIP: {e}"
+                    ) from e
+
+        if loaded is None:
+            # Plain XML file or unknown extension – read as text
+            try:
                 loaded = neqsim.open_xml(filepath)
-        elif ext == ".xml":
-            loaded = neqsim.open_xml(filepath)
-        else:
-            # Try .neqsim format first, fall back to xml
-            loaded = neqsim.open_neqsim(filepath)
-            if loaded is None:
-                loaded = neqsim.open_xml(filepath)
+            except (UnicodeDecodeError, Exception) as e:
+                raise RuntimeError(
+                    f"Failed to load process from: {filepath}  ({e})"
+                ) from e
 
         if loaded is None:
             raise RuntimeError(f"Failed to load process from: {filepath}")
