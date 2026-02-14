@@ -1,3 +1,15 @@
+import os as _os
+
+# JVM module-access flags required by XStream on Java 17+.
+# Must be set before *any* import triggers jpype.startJVM().
+if "add-opens" not in _os.environ.get("JAVA_TOOL_OPTIONS", ""):
+    _os.environ["JAVA_TOOL_OPTIONS"] = (
+        "--add-opens=java.base/java.util=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
+        "--add-opens=java.base/java.io=ALL-UNNAMED"
+    )
+
 import altair as alt
 import numpy as np
 import pandas as pd

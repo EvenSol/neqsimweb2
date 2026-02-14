@@ -22,6 +22,58 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
+# Ensure JVM starts with --add-opens flags for XStream / Java 17+ compat
+# ---------------------------------------------------------------------------
+
+# JAVA_TOOL_OPTIONS is picked up by JNI_CreateJavaVM regardless of who starts
+# the JVM (our monkey-patch, neqsim, or another library).  Setting it early
+# guarantees the flags are present even when the JVM is already running by the
+# time _patch_jvm_startup() executes.
+_ADD_OPENS = (
+    "--add-opens=java.base/java.util=ALL-UNNAMED "
+    "--add-opens=java.base/java.lang=ALL-UNNAMED "
+    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
+    "--add-opens=java.base/java.io=ALL-UNNAMED"
+)
+_existing = os.environ.get("JAVA_TOOL_OPTIONS", "")
+if "add-opens" not in _existing:
+    os.environ["JAVA_TOOL_OPTIONS"] = (
+        f"{_existing} {_ADD_OPENS}".strip() if _existing else _ADD_OPENS
+    )
+
+
+def _patch_jvm_startup():
+    """
+    Monkey-patch ``jpype.startJVM`` so that ``--add-opens`` flags are injected
+    *before* the JVM is created (neqsim triggers JVM start on import).
+
+    Belt-and-suspenders alongside the JAVA_TOOL_OPTIONS env var above.
+    """
+    try:
+        import jpype
+        if jpype.isJVMStarted():
+            return                                     # too late – JVM already up
+
+        _real = jpype.startJVM
+
+        def _start_with_opens(*args, **kwargs):
+            opens = [
+                "--add-opens=java.base/java.util=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                "--add-opens=java.base/java.io=ALL-UNNAMED",
+            ]
+            _real(*args, *opens, **kwargs)
+
+        jpype.startJVM = _start_with_opens
+    except Exception:
+        pass  # best-effort; the converter workaround below handles the rest
+
+
+_patch_jvm_startup()          # runs once at module-import time
+
+
+# ---------------------------------------------------------------------------
 # Data classes for structured results
 # ---------------------------------------------------------------------------
 
@@ -96,15 +148,60 @@ class NeqSimProcessModel:
 
     @staticmethod
     def _deserialize_xml_string(xml_string: str):
-        """Deserialize a NeqSim object from an XML string using XStream."""
+        """Deserialize a NeqSim object from an XML string using XStream.
+
+        Registers a custom converter at elevated priority so that
+        ``ReflectionConverter`` is used for *neqsim* classes instead of
+        ``SerializableConverter``.  This avoids the
+        "Cannot deserialize object with new readObject()/writeObject() methods"
+        error on JVMs / neqsim versions where ``Separator`` (or other
+        equipment classes) carry custom Java-serialization methods that
+        XStream's fake ``ObjectInputStream`` cannot replay.
+        """
         import jpype
 
         XStream = jpype.JClass("com.thoughtworks.xstream.XStream")
         AnyTypePermission = jpype.JClass(
             "com.thoughtworks.xstream.security.AnyTypePermission"
         )
+        ReflectionConverter = jpype.JClass(
+            "com.thoughtworks.xstream.converters.reflection.ReflectionConverter"
+        )
+
         xstream = XStream()
         xstream.addPermission(AnyTypePermission.ANY)
+        xstream.ignoreUnknownElements()          # tolerate field changes
+
+        # Build a proxy Converter whose canConvert() only matches neqsim.*
+        # classes, delegating marshal/unmarshal to a plain ReflectionConverter.
+        rc = ReflectionConverter(
+            xstream.getMapper(), xstream.getReflectionProvider()
+        )
+
+        @jpype.JImplements("com.thoughtworks.xstream.converters.Converter")
+        class _NeqSimReflectionProxy:
+            """Converter that forces field-level reflection for neqsim types."""
+
+            @jpype.JOverride
+            def canConvert(self, cls):
+                try:
+                    return str(cls.getName()).startswith("neqsim.")
+                except Exception:
+                    return False
+
+            @jpype.JOverride
+            def marshal(self, source, writer, context):
+                rc.marshal(source, writer, context)
+
+            @jpype.JOverride
+            def unmarshal(self, reader, context):
+                return rc.unmarshal(reader, context)
+
+        # Priority 1 beats SerializableConverter (priority 0) but does NOT
+        # beat built-in type converters (String, Collection, Map, …) because
+        # canConvert filters to neqsim.* only.
+        xstream.registerConverter(_NeqSimReflectionProxy(), 1)
+
         return xstream.fromXML(xml_string)
 
     @classmethod
