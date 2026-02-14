@@ -570,6 +570,28 @@ def apply_add_streams(
 # Iterative target-seeking solver
 # ---------------------------------------------------------------------------
 
+def _resolve_kpi_name(kpis: dict, target_kpi: str) -> Optional[str]:
+    """Find exact or partial-match KPI key, return the resolved name or None."""
+    if target_kpi in kpis:
+        return target_kpi
+    for k in kpis:
+        if target_kpi in k:
+            return k
+    # Try case-insensitive match
+    lower = target_kpi.lower()
+    for k in kpis:
+        if lower in k.lower():
+            return k
+    return None
+
+
+def _scale_stream_flow(model: NeqSimProcessModel, stream_name: str, scale: float):
+    """Scale a stream's flow rate by *scale* relative to its current value."""
+    stream = model.get_stream(stream_name)       # raises KeyError if not found
+    current = float(stream.getFlowRate("kg/hr"))
+    stream.setFlowRate(current * scale, "kg/hr")
+
+
 def solve_for_target(
     model: NeqSimProcessModel,
     scenario: Scenario,
@@ -578,7 +600,11 @@ def solve_for_target(
     """
     Iteratively adjust inputs until a target KPI is reached.
     
-    Uses bisection method on the scale factor for add_components.
+    Supports two modes via ``target.variable``:
+      * ``"component_scale"`` — scale add_component flows by the bisection factor
+      * ``"stream_scale"`` — multiply the named stream's flow rate by the factor
+    
+    Uses bisection on the scale factor.
     The target is specified in scenario.patch.targets[0].
     
     Returns a Comparison with the converged result.
@@ -591,6 +617,13 @@ def solve_for_target(
     best_result = None
     best_error = float('inf')
     
+    use_stream_scale = (target.variable or "").lower() == "stream_scale"
+    stream_name = target.stream_name or ""
+    # Strip "streams." prefix the LLM sometimes adds
+    for prefix in ("streams.",):
+        if stream_name.startswith(prefix):
+            stream_name = stream_name[len(prefix):]
+    
     iteration_log = []
     
     # First: run base case
@@ -602,15 +635,10 @@ def solve_for_target(
     )
     base_sr = ScenarioResult(scenario=base_scenario, result=base_result)
     
-    # Check if target KPI exists in base
-    base_kpi_val = base_result.kpis.get(target.target_kpi)
-    if base_kpi_val is None:
-        # Try partial match
-        for k, v in base_result.kpis.items():
-            if target.target_kpi in k:
-                target.target_kpi = k  # use the full qualified name
-                base_kpi_val = v
-                break
+    # Resolve the target KPI name against the base result
+    resolved = _resolve_kpi_name(base_result.kpis, target.target_kpi)
+    if resolved:
+        target.target_kpi = resolved
     
     consecutive_failures = 0
     MAX_CONSECUTIVE_FAILURES = 3   # bail if the same error repeats
@@ -622,9 +650,21 @@ def solve_for_target(
         try:
             clone = model.clone()
             
-            # Apply add_components with current scale
+            # ---- Apply the manipulated variable ----
+            if use_stream_scale and stream_name:
+                try:
+                    _scale_stream_flow(clone, stream_name, mid)
+                except KeyError as e:
+                    iteration_log.append({
+                        "iteration": iteration, "scale": mid,
+                        "status": "FAILED", "error": f"Stream not found: {e}"
+                    })
+                    break
+            
+            # Apply add_components with current scale (component_scale mode)
             if scenario.patch.add_components:
-                comp_log = apply_add_components(clone, scenario.patch.add_components, scale_factor=mid)
+                sf = mid if not use_stream_scale else 1.0
+                comp_log = apply_add_components(clone, scenario.patch.add_components, scale_factor=sf)
                 failed = [e for e in comp_log if e.get("status") == "FAILED"]
                 if failed:
                     consecutive_failures += 1
@@ -655,14 +695,12 @@ def solve_for_target(
             result = clone.run(timeout_ms=timeout_ms)
             
             # Read the target KPI
-            kpi = result.kpis.get(target.target_kpi)
-            if kpi is None:
-                # Try partial match
-                for k, v in result.kpis.items():
-                    if target.target_kpi in k:
-                        kpi = v
-                        target.target_kpi = k
-                        break
+            resolved_key = _resolve_kpi_name(result.kpis, target.target_kpi)
+            if resolved_key:
+                target.target_kpi = resolved_key
+                kpi = result.kpis[resolved_key]
+            else:
+                kpi = None
             
             if kpi is None:
                 iteration_log.append({
@@ -760,6 +798,16 @@ def solve_for_target(
                 "status": "OK",
                 "scale_factor": round(best_scale, 4),
             })
+
+    # Log stream scaling info
+    if use_stream_scale and stream_name:
+        patch_log.append({
+            "scenario": scenario.name,
+            "key": f"stream_scale.{stream_name}",
+            "value": f"flow scaled by {best_scale:.4f}x",
+            "status": "OK",
+            "scale_factor": round(best_scale, 4),
+        })
     
     return Comparison(
         base=base_sr, cases=[case_sr],

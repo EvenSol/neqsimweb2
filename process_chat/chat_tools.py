@@ -298,6 +298,28 @@ For the target_kpi, use qualified stream names like "unitName.streamName.propert
 (e.g., "inlet separator.liquidOutStream.flow_kg_hr").
 Available KPI suffixes: .flow_kg_hr, .temperature_C, .pressure_bara, .power_kW, .duty_kW
 
+STREAM FLOW SCALING (for "increase/decrease feed flow until Y = Z" questions):
+When the user wants to adjust an existing stream's flow rate to hit a target, use
+variable="stream_scale" with stream_name. The solver scales the named stream's total
+flow rate each iteration (no add_components needed).
+{{
+  "patch": {{
+    "targets": [
+      {{
+        "target_kpi": "1st stage compressor.power_kW",
+        "target_value": 2000.0,
+        "tolerance_pct": 1.0,
+        "variable": "stream_scale",
+        "stream_name": "feed gas",
+        "initial_guess": 1.2,
+        "min_value": 0.5,
+        "max_value": 5.0,
+        "max_iterations": 15
+      }}
+    ]
+  }}
+}}
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 

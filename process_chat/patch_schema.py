@@ -101,11 +101,24 @@ class TargetSpec:
             min_value=0.01,
             max_value=50.0,
         )
+    
+    Example: "Increase feed flow until compressor power = 2000 kW"
+        TargetSpec(
+            target_kpi="1st stage compressor.power_kW",
+            target_value=2000.0,
+            tolerance_pct=1.0,
+            variable="stream_scale",
+            stream_name="feed gas",
+            initial_guess=1.2,
+            min_value=1.0,
+            max_value=5.0,
+        )
     """
     target_kpi: str                         # KPI key to match (from _extract_results)
     target_value: float                     # desired value
     tolerance_pct: float = 2.0              # acceptable relative error %
-    variable: str = "component_scale"       # what to scale (currently: component flows)
+    variable: str = "component_scale"       # "component_scale" or "stream_scale"
+    stream_name: Optional[str] = None       # stream to scale (for variable="stream_scale")
     initial_guess: float = 1.0              # starting scale factor
     min_value: float = 0.01                 # lower bound
     max_value: float = 50.0                 # upper bound
