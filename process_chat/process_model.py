@@ -150,13 +150,18 @@ class NeqSimProcessModel:
     def _deserialize_xml_string(xml_string: str):
         """Deserialize a NeqSim object from an XML string using XStream.
 
-        Registers a custom converter at elevated priority so that
-        ``ReflectionConverter`` is used for *neqsim* classes instead of
-        ``SerializableConverter``.  This avoids the
-        "Cannot deserialize object with new readObject()/writeObject() methods"
-        error on JVMs / neqsim versions where ``Separator`` (or other
-        equipment classes) carry custom Java-serialization methods that
-        XStream's fake ``ObjectInputStream`` cannot replay.
+        Registers a plain ``ReflectionConverter`` at priority **-5**, which
+        sits between the built-in type converters (priority 0 – String,
+        Collection, Map …) and ``SerializableConverter`` (priority -10).
+
+        Because ``ReflectionConverter.canConvert()`` returns ``True`` for
+        every class, it intercepts all types that don't already have a
+        higher-priority converter — in particular the *neqsim.* equipment
+        classes that ``SerializableConverter`` would otherwise try (and fail)
+        to deserialize via ``readObject()/writeObject()``.
+
+        This is intentionally a *direct* Java object rather than a JPype
+        proxy so that it works reliably across JPype / JVM versions.
         """
         import jpype
 
@@ -172,35 +177,13 @@ class NeqSimProcessModel:
         xstream.addPermission(AnyTypePermission.ANY)
         xstream.ignoreUnknownElements()          # tolerate field changes
 
-        # Build a proxy Converter whose canConvert() only matches neqsim.*
-        # classes, delegating marshal/unmarshal to a plain ReflectionConverter.
+        # A plain ReflectionConverter at priority -5:
+        #   • beats SerializableConverter (-10)  → no readObject/writeObject
+        #   • loses to built-in converters (0+)  → String/Collection/Map safe
         rc = ReflectionConverter(
             xstream.getMapper(), xstream.getReflectionProvider()
         )
-
-        @jpype.JImplements("com.thoughtworks.xstream.converters.Converter")
-        class _NeqSimReflectionProxy:
-            """Converter that forces field-level reflection for neqsim types."""
-
-            @jpype.JOverride
-            def canConvert(self, cls):
-                try:
-                    return str(cls.getName()).startswith("neqsim.")
-                except Exception:
-                    return False
-
-            @jpype.JOverride
-            def marshal(self, source, writer, context):
-                rc.marshal(source, writer, context)
-
-            @jpype.JOverride
-            def unmarshal(self, reader, context):
-                return rc.unmarshal(reader, context)
-
-        # Priority 1 beats SerializableConverter (priority 0) but does NOT
-        # beat built-in type converters (String, Collection, Map, …) because
-        # canConvert filters to neqsim.* only.
-        xstream.registerConverter(_NeqSimReflectionProxy(), 1)
+        xstream.registerConverter(rc, -5)
 
         return xstream.fromXML(xml_string)
 
