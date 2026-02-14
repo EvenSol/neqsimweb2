@@ -45,7 +45,7 @@ def build_system_prompt(model: NeqSimProcessModel) -> str:
     tag_ref = "\n".join(tag_lines)
     equip_templates = template_help_text()
 
-    return f"""You are a process engineering assistant for an oil & gas process simulation.
+    system_prompt = """You are a process engineering assistant for an oil & gas process simulation.
 You help engineers understand, analyze, and optimize their process using the NeqSim simulation engine.
 
 CRITICAL RULES:
@@ -105,12 +105,12 @@ INTENT CLASSIFICATION:
   → The outlet of unit [N] typically feeds the inlet of unit [N+1].
 
 CURRENT PROCESS MODEL:
-{model_summary}
+__MODEL_SUMMARY__
 
 MODEL TAGS (for resolving engineer language to model objects):
-{tag_ref}
+__TAG_REF__
 
-{equip_templates}
+__EQUIP_TEMPLATES__
 
 SCENARIO JSON FORMAT (for what-if and planning questions):
 When you need to run a scenario, output a JSON block wrapped in ```json ... ``` with this structure:
@@ -138,14 +138,14 @@ When you need to run a scenario, output a JSON block wrapped in ```json ... ``` 
           }}
         ],
         "add_streams": [
-          {
+          {{
             "name": "liquid feed",
             "insert_after": "inlet separator",
-            "components": {"nC10": 500.0, "benzene": 300.0, "water": 200.0},
+            "components": {{"nC10": 500.0, "benzene": 300.0, "water": 200.0}},
             "flow_unit": "kg/hr",
             "temperature_C": 30.0,
             "pressure_bara": 30.0
-          }
+          }}
         ]
       }},
       "assumptions": {{
@@ -198,22 +198,22 @@ When the user asks to "add" or "install" equipment, use "add_units". When they a
 ADD STREAMS (for adding new inlet streams and mixing them into the process):
 Use "add_streams" to create a new stream and insert a mixer after an existing unit.
 The mixer combines the upstream outlet with the new stream, then reconnects downstream units.
-{
-  "patch": {
+{{
+  "patch": {{
     "add_streams": [
-      {
+      {{
         "name": "liquid feed",
         "insert_after": "inlet separator",
-        "components": {"nC10": 500.0, "benzene": 300.0, "water": 200.0},
+        "components": {{"nC10": 500.0, "benzene": 300.0, "water": 200.0}},
         "flow_unit": "kg/hr",
         "temperature_C": 30.0,
         "pressure_bara": 30.0,
         "base_stream": "feed gas",
         "mixer_name": "liquid feed mixer"
-      }
+      }}
     ]
-  }
-}
+  }}
+}}
 Notes:
   - "base_stream" is used to clone the thermodynamic model (EOS/mixing rule).
   - If temperature/pressure are not set, the base stream conditions are used.
@@ -310,6 +310,10 @@ When you receive simulation results, ALWAYS:
 4. Never claim values are "the same" unless the delta is truly zero or negligible (<0.1%).
 5. Mention downstream propagation effects — changes to upstream units affect everything downstream.
 """
+  system_prompt = system_prompt.replace("__MODEL_SUMMARY__", model_summary)
+  system_prompt = system_prompt.replace("__TAG_REF__", tag_ref)
+  system_prompt = system_prompt.replace("__EQUIP_TEMPLATES__", equip_templates)
+  return system_prompt
 
 
 # ---------------------------------------------------------------------------
