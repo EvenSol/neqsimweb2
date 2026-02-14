@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Streamlit secrets (API keys)
+.streamlit/secrets.toml
+
 # C extensions
 *.so
 
