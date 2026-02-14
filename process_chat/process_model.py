@@ -202,25 +202,42 @@ class NeqSimProcessModel:
             except Exception:
                 pass
 
-        # Discover streams from unit in/out connections
+        # Discover streams from unit in/out connections.
+        # Always use qualified keys ("unitName.streamName") as primary to
+        # guarantee stable KPI comparisons across base vs scenario runs.
+        # Also add short aliases for stream names that are globally unique.
+        seen_java_ids = set()  # track Java object identity to skip duplicates
+        raw_name_count: Dict[str, int] = {}  # count how many units produce same stream name
+
         for u in units:
+            try:
+                uname = str(u.getName()) if u.getName() else "unknown"
+            except Exception:
+                uname = "unknown"
+
+            # Only index OUTLET streams — inlet streams are always the
+            # same Java object as a prior unit's outlet, so indexing them
+            # would double-count or create key collisions within a unit
+            # (e.g. compressor inlet and outlet both named "gasOutStream").
             for method_name in (
-                "getInletStream", "getOutletStream", "getOutStream",
-                "getInStream", "getGasOutStream", "getOilOutStream",
+                "getOutletStream", "getOutStream",
+                "getGasOutStream", "getOilOutStream",
                 "getLiquidOutStream", "getWaterOutStream",
                 "getSplitStream",
             ):
                 if hasattr(u, method_name):
                     try:
                         if method_name == "getSplitStream":
-                            # Splitters can have multiple split streams
                             for i in range(10):
                                 try:
                                     s = u.getSplitStream(i)
                                     if s is not None:
                                         sname = str(s.getName()) if s.getName() else None
                                         if sname:
-                                            self._streams[sname] = s
+                                            key = f"{uname}.{sname}"
+                                            if key not in self._streams:
+                                                self._streams[key] = s
+                                            raw_name_count[sname] = raw_name_count.get(sname, 0) + 1
                                 except Exception:
                                     break
                         else:
@@ -228,7 +245,13 @@ class NeqSimProcessModel:
                             if s is not None:
                                 sname = str(s.getName()) if s.getName() else None
                                 if sname:
-                                    self._streams[sname] = s
+                                    java_id = id(s)
+                                    if java_id in seen_java_ids:
+                                        continue  # same Java object already indexed
+                                    seen_java_ids.add(java_id)
+                                    key = f"{uname}.{sname}"
+                                    self._streams[key] = s
+                                    raw_name_count[sname] = raw_name_count.get(sname, 0) + 1
                     except Exception:
                         pass
 
@@ -237,6 +260,18 @@ class NeqSimProcessModel:
             java_class = u.getClass().getSimpleName()
             if "Stream" in java_class and name not in self._streams:
                 self._streams[name] = u
+                raw_name_count[name] = raw_name_count.get(name, 0) + 1
+
+        # Add short (unqualified) aliases for globally unique stream names
+        # so users / LLM can reference them with short names.
+        unique_streams = {sname for sname, cnt in raw_name_count.items() if cnt == 1}
+        for key, s in list(self._streams.items()):
+            try:
+                sname = str(s.getName()) if s.getName() else None
+            except Exception:
+                sname = None
+            if sname and sname in unique_streams and sname not in self._streams:
+                self._streams[sname] = s
 
     def get_process(self):
         """Return the underlying Java ProcessSystem object."""
@@ -337,9 +372,13 @@ class NeqSimProcessModel:
             raise KeyError(f"Unit not found: {name}")
 
     def get_stream(self, name: str):
-        """Get a stream by name."""
+        """Get a stream by name (supports both qualified and unqualified names)."""
         if name in self._streams:
             return self._streams[name]
+        # Try matching as unqualified name (e.g. "outStream" -> "intercooler.outStream")
+        for key, s in self._streams.items():
+            if key.endswith(f".{name}"):
+                return s
         raise KeyError(f"Stream not found: {name}")
 
     # ----- Run and report -----
@@ -425,22 +464,71 @@ class NeqSimProcessModel:
             except Exception:
                 pass
 
-        # Mass balance check (if feed and product streams can be identified)
+        # Mass balance check — compare feed to the sum of ALL terminal
+        # streams: last unit's outlets PLUS liquid drains from intermediate
+        # separators (which leave the process boundary).
         try:
+            proc = self._proc
+            all_units = list(proc.getUnitOperations())
             feed_flow = 0.0
             product_flow = 0.0
-            for name, s in self._streams.items():
-                flow = float(s.getFlowRate("kg/hr"))
-                lower = name.lower()
-                if any(kw in lower for kw in ("feed", "inlet", "well", "input")):
-                    feed_flow += flow
-                elif any(kw in lower for kw in ("export", "product", "outlet", "output", "fuel")):
-                    product_flow += flow
-            
+
+            if all_units:
+                # Feed flow: first unit in the process
+                first = all_units[0]
+                try:
+                    feed_flow = float(first.getFlowRate("kg/hr"))
+                except Exception:
+                    for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+                        if hasattr(first, m):
+                            try:
+                                feed_flow = float(getattr(first, m)().getFlowRate("kg/hr"))
+                                break
+                            except Exception:
+                                pass
+
+                # Product flow: last unit's outlets
+                last = all_units[-1]
+                for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+                    if hasattr(last, m):
+                        try:
+                            product_flow += float(getattr(last, m)().getFlowRate("kg/hr"))
+                            break
+                        except Exception:
+                            pass
+                if hasattr(last, "getLiquidOutStream"):
+                    try:
+                        product_flow += float(last.getLiquidOutStream().getFlowRate("kg/hr"))
+                    except Exception:
+                        pass
+
+                # Add liquid drains from ALL intermediate separators
+                # (these leave the process boundary and are not consumed downstream)
+                for u in all_units[:-1]:  # exclude last unit, already counted
+                    java_class = str(u.getClass().getSimpleName())
+                    if "Separator" in java_class or "Scrubber" in java_class:
+                        if hasattr(u, "getLiquidOutStream"):
+                            try:
+                                liq_flow = float(u.getLiquidOutStream().getFlowRate("kg/hr"))
+                                if liq_flow > 0.01:  # non-trivial liquid drain
+                                    product_flow += liq_flow
+                            except Exception:
+                                pass
+
+            # Fallback: match by stream name keywords
+            if feed_flow == 0.0:
+                for name, s in self._streams.items():
+                    flow = float(s.getFlowRate("kg/hr"))
+                    lower = name.lower()
+                    if any(kw in lower for kw in ("feed", "inlet", "well", "input")):
+                        feed_flow += flow
+                    elif any(kw in lower for kw in ("export", "product", "outlet", "output", "fuel")):
+                        product_flow += flow
+
             if feed_flow > 0:
-                balance_pct = (feed_flow - product_flow) / feed_flow * 100
+                balance_pct = abs(feed_flow - product_flow) / feed_flow * 100
                 kpis["mass_balance_pct"] = KPI("mass_balance_pct", balance_pct, "%")
-                status = "OK" if abs(balance_pct) < 1.0 else "WARN" if abs(balance_pct) < 5.0 else "VIOLATION"
+                status = "OK" if balance_pct < 1.0 else "WARN" if balance_pct < 5.0 else "VIOLATION"
                 constraints.append(ConstraintStatus(
                     "mass_balance", status,
                     f"Feed={feed_flow:.0f} kg/hr, Products={product_flow:.0f} kg/hr, imbalance={balance_pct:.2f}%"
