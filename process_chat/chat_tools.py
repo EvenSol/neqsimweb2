@@ -156,15 +156,37 @@ When you need to run a scenario, output a JSON block wrapped in ```json ... ``` 
 }}
 
 Supported patch keys:
-- streams.<name>.pressure_bara — set stream pressure
+- streams.<name>.pressure_bara — set stream pressure (bara)
+- streams.<name>.pressure_barg — set stream pressure (barg)
 - streams.<name>.temperature_C — set stream temperature
-- streams.<name>.flow_kg_hr — set stream flow rate
+- streams.<name>.flow_kg_hr — set stream flow rate (kg/hr)
+- streams.<name>.flow_mol_sec — set stream flow rate (mol/sec)
+- streams.<name>.flow_Am3_hr — set stream actual volumetric flow
+- streams.<name>.flow_Sm3_day — set stream standard volumetric flow
 - units.<name>.outletpressure_bara — set unit outlet pressure (compressors, valves)
 - units.<name>.outletpressure_barg — set unit outlet pressure in barg
 - units.<name>.outtemperature_C — set unit outlet temperature (heaters, coolers)
 - units.<name>.outpressure_bara — set unit outlet pressure (heaters)
 - units.<name>.outpressure_barg — set unit outlet pressure in barg
-- units.<name>.isentropicEfficiency — set compressor efficiency
+- units.<name>.isentropicEfficiency — set compressor isentropic efficiency (0-1)
+- units.<name>.polytropicEfficiency — set compressor polytropic efficiency (0-1)
+- units.<name>.speed — set compressor speed (rpm)
+- units.<name>.compressionRatio — set compressor pressure ratio
+- units.<name>.power_kW — set compressor power setpoint (kW)
+- units.<name>.usePolytropicCalc — use polytropic calculation (true/false)
+- units.<name>.pressure_drop_bar — set pressure drop across unit (bar)
+- units.<name>.cv — set valve Cv (flow coefficient)
+- units.<name>.percentValveOpening — set valve opening percentage
+- units.<name>.duty_kW — set heater/cooler duty (kW)
+- units.<name>.energyInput_kW — set energy input (kW)
+- units.<name>.uaValue — set UA value for heat exchangers
+- units.<name>.head — set pump head
+- units.<name>.length — set pipe length (m)
+- units.<name>.diameter — set pipe diameter (m)
+- units.<name>.roughness — set pipe roughness (m)
+- units.<name>.splitFactor — set splitter split factor (0-1)
+- units.<name>.numberOfStages — set number of stages (columns)
+- units.<name>.flowRate_kg_hr — set unit flow rate
 
 For relative changes, use:
   "streams.<name>.pressure_bara": {{"op": "add", "value": 5.0}}
@@ -178,15 +200,15 @@ Use the "add_units" array inside "patch" to insert new equipment. Each entry nee
   - "params": configuration parameters for the new unit
 
 Supported params by equipment type:
-  cooler/heater/air_cooler/water_cooler: outlet_temperature_C, pressure_drop_bar
-  compressor: outlet_pressure_bara, isentropic_efficiency (default 0.75)
+  cooler/heater/air_cooler/water_cooler: outlet_temperature_C, pressure_drop_bar, duty_kW, uaValue
+  compressor: outlet_pressure_bara, isentropic_efficiency (default 0.75), polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
   separator/two_phase_separator/three_phase_separator/gas_scrubber: (no special params needed)
-  valve/control_valve: outlet_pressure_bara
+  valve/control_valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening
   expander: outlet_pressure_bara, isentropic_efficiency
-  pump/esp_pump: outlet_pressure_bara, efficiency
+  pump/esp_pump: outlet_pressure_bara, efficiency, head
   mixer: (no params needed, combines streams)
-  splitter: split_fractions (list of fractions summing to 1.0)
-  pipeline/adiabatic_pipe: length_m, diameter_m, roughness_m
+  splitter: split_factor (0-1 fraction to first outlet)
+  pipeline/adiabatic_pipe: length (m), diameter (m), roughness (m)
   simple_absorber/simple_teg_absorber: number_of_stages
   ejector, flare, filter, membrane_separator, gas_turbine, tank, adsorber: (type-specific defaults)
   recycle: tolerance
@@ -319,6 +341,36 @@ flow rate each iteration (no add_components needed).
     ]
   }}
 }}
+
+UNIT PARAMETER ADJUSTMENT (for "adjust X until Y = Z" questions):
+When the user wants to find the right setting of a unit parameter (e.g., compressor outlet
+pressure, cooler outlet temperature, valve pressure drop) to achieve a specific target KPI,
+use variable="unit_param" with unit_name and unit_param. The solver uses bisection where
+min_value/max_value are the parameter bounds (NOT scale factors) and initial_guess is the
+starting parameter value.
+{{
+  "patch": {{
+    "targets": [
+      {{
+        "target_kpi": "1st stage compressor.gasOutStream.temperature_C",
+        "target_value": 150.0,
+        "tolerance_pct": 1.0,
+        "variable": "unit_param",
+        "unit_name": "1st stage compressor",
+        "unit_param": "outletpressure_bara",
+        "initial_guess": 80.0,
+        "min_value": 30.0,
+        "max_value": 200.0,
+        "max_iterations": 20
+      }}
+    ]
+  }}
+}}
+Use "unit_param" when the user asks things like:
+  - "What compressor discharge pressure gives 150°C outlet temperature?"
+  - "Adjust the cooler outlet temperature until the compressor power is minimized"
+  - "Find the valve outlet pressure that gives 50 kg/hr liquid in the separator"
+The unit_param field can be any of the supported patch keys for units (see above).
 
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.

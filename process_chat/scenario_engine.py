@@ -600,11 +600,12 @@ def solve_for_target(
     """
     Iteratively adjust inputs until a target KPI is reached.
     
-    Supports two modes via ``target.variable``:
+    Supports three modes via ``target.variable``:
       * ``"component_scale"`` — scale add_component flows by the bisection factor
       * ``"stream_scale"`` — multiply the named stream's flow rate by the factor
+      * ``"unit_param"`` — set a unit parameter directly to the bisection mid-point
     
-    Uses bisection on the scale factor.
+    Uses bisection on the scale factor (or parameter value for unit_param).
     The target is specified in scenario.patch.targets[0].
     
     Returns a Comparison with the converged result.
@@ -618,7 +619,10 @@ def solve_for_target(
     best_error = float('inf')
     
     use_stream_scale = (target.variable or "").lower() == "stream_scale"
+    use_unit_param = (target.variable or "").lower() == "unit_param"
     stream_name = target.stream_name or ""
+    unit_name = target.unit_name or ""
+    unit_param = target.unit_param or ""
     # Strip "streams." prefix the LLM sometimes adds
     for prefix in ("streams.",):
         if stream_name.startswith(prefix):
@@ -661,9 +665,26 @@ def solve_for_target(
                     })
                     break
             
+            if use_unit_param and unit_name and unit_param:
+                try:
+                    u = clone.get_unit(unit_name)
+                    _set_unit_value(u, unit_param, mid)
+                except KeyError as e:
+                    iteration_log.append({
+                        "iteration": iteration, "value": mid,
+                        "status": "FAILED", "error": f"Unit not found: {e}"
+                    })
+                    break
+                except Exception as e:
+                    iteration_log.append({
+                        "iteration": iteration, "value": mid,
+                        "status": "FAILED", "error": f"Cannot set {unit_param}: {e}"
+                    })
+                    break
+            
             # Apply add_components with current scale (component_scale mode)
             if scenario.patch.add_components:
-                sf = mid if not use_stream_scale else 1.0
+                sf = mid if not (use_stream_scale or use_unit_param) else 1.0
                 comp_log = apply_add_components(clone, scenario.patch.add_components, scale_factor=sf)
                 failed = [e for e in comp_log if e.get("status") == "FAILED"]
                 if failed:
@@ -775,12 +796,24 @@ def solve_for_target(
         })
     
     # Build detailed patch log
+    if use_unit_param:
+        solver_value = (
+            f"{unit_name}.{unit_param}={best_scale:.4f}, "
+            f"target={target.target_kpi}={target.target_value}, "
+            f"achieved_error={best_error:.2f}%"
+        )
+    else:
+        solver_value = (
+            f"scale={best_scale:.4f}, target={target.target_kpi}={target.target_value}, "
+            f"achieved_error={best_error:.2f}%"
+        )
+
     patch_log = [
         {
             "scenario": scenario.name,
             "key": "iterative_solver",
             "status": "CONVERGED" if best_error <= target.tolerance_pct else "BEST_EFFORT",
-            "value": f"scale={best_scale:.4f}, target={target.target_kpi}={target.target_value}, achieved_error={best_error:.2f}%",
+            "value": solver_value,
             "iterations": len(iteration_log),
             "iteration_log": iteration_log,
         }
@@ -807,6 +840,16 @@ def solve_for_target(
             "value": f"flow scaled by {best_scale:.4f}x",
             "status": "OK",
             "scale_factor": round(best_scale, 4),
+        })
+    
+    # Log unit_param adjustment info
+    if use_unit_param and unit_name and unit_param:
+        patch_log.append({
+            "scenario": scenario.name,
+            "key": f"unit_param.{unit_name}.{unit_param}",
+            "value": f"{unit_param} set to {best_scale:.4f}",
+            "status": "OK",
+            "final_value": round(best_scale, 4),
         })
     
     return Comparison(
@@ -1194,10 +1237,18 @@ def _get_stream_value(stream, prop: str) -> float:
     """Get a stream property value."""
     prop_lower = prop.lower()
     if "pressure" in prop_lower:
+        if "barg" in prop_lower:
+            return float(stream.getPressure("barg"))
         return float(stream.getPressure("bara"))
     elif "temperature" in prop_lower:
         return float(stream.getTemperature("C"))
     elif "flow" in prop_lower:
+        if "mol" in prop_lower and "sec" in prop_lower:
+            return float(stream.getFlowRate("mol/sec"))
+        elif "m3" in prop_lower or "am3" in prop_lower:
+            return float(stream.getFlowRate("Am3/hr"))
+        elif "sm3" in prop_lower or "std" in prop_lower:
+            return float(stream.getFlowRate("Sm3/day"))
         return float(stream.getFlowRate("kg/hr"))
     else:
         raise KeyError(f"Unknown stream property: {prop}")
@@ -1213,10 +1264,17 @@ def _set_stream_value(stream, prop: str, value: Any):
             stream.setPressure(float(value), "bara")
     elif "temperature" in prop_lower:
         stream.setTemperature(float(value), "C")
-    elif "flow" in prop_lower and "kg" in prop_lower:
-        stream.setFlowRate(float(value), "kg/hr")
-    elif "flow" in prop_lower and "mol" in prop_lower:
-        stream.setFlowRate(float(value), "mol/sec")
+    elif "flow" in prop_lower:
+        if "mol" in prop_lower and "sec" in prop_lower:
+            stream.setFlowRate(float(value), "mol/sec")
+        elif "m3" in prop_lower and ("am3" in prop_lower or "actual" in prop_lower):
+            stream.setFlowRate(float(value), "Am3/hr")
+        elif "m3" in prop_lower and ("sm3" in prop_lower or "std" in prop_lower or "standard" in prop_lower):
+            stream.setFlowRate(float(value), "Sm3/day")
+        elif "kg" in prop_lower:
+            stream.setFlowRate(float(value), "kg/hr")
+        else:
+            stream.setFlowRate(float(value), "kg/hr")  # default to kg/hr
     else:
         raise KeyError(f"Unknown stream property: {prop}")
 
@@ -1225,17 +1283,99 @@ def _get_unit_value(unit, prop: str) -> float:
     """Get a unit property value by trying common getter patterns."""
     prop_lower = prop.lower()
     
+    # ---- Power / duty ----
     if "power" in prop_lower and hasattr(unit, "getPower"):
         return float(unit.getPower()) / 1000.0  # W -> kW
     if "duty" in prop_lower and hasattr(unit, "getDuty"):
         return float(unit.getDuty()) / 1000.0
-    if "efficiency" in prop_lower and hasattr(unit, "getIsentropicEfficiency"):
-        return float(unit.getIsentropicEfficiency())
-    
-    # Try generic getter
+
+    # ---- Efficiency ----
+    if "polytropic" in prop_lower and "efficiency" in prop_lower and hasattr(unit, "getPolytropicEfficiency"):
+        return float(unit.getPolytropicEfficiency())
+    if ("isentropic" in prop_lower and "efficiency" in prop_lower) or prop_lower == "efficiency":
+        if hasattr(unit, "getIsentropicEfficiency"):
+            return float(unit.getIsentropicEfficiency())
+    if prop_lower == "efficiency" and hasattr(unit, "getEfficiency"):
+        return float(unit.getEfficiency())
+
+    # ---- Pressure ----
+    if "outletpressure" in prop_lower or "outlet_pressure" in prop_lower:
+        if hasattr(unit, "getOutletPressure"):
+            return float(unit.getOutletPressure())
+    if "outpressure" in prop_lower or "out_pressure" in prop_lower:
+        if hasattr(unit, "getOutPressure"):
+            return float(unit.getOutPressure())
+    if "pressure" in prop_lower and hasattr(unit, "getPressure"):
+        return float(unit.getPressure())
+
+    # ---- Temperature ----
+    if "outtemperature" in prop_lower or "out_temperature" in prop_lower:
+        # Try reading from outlet stream
+        for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+            if hasattr(unit, m):
+                try:
+                    return float(getattr(unit, m)().getTemperature("C"))
+                except Exception:
+                    pass
+    if "temperature" in prop_lower:
+        for m in ("getTemperature",):
+            if hasattr(unit, m):
+                try:
+                    return float(getattr(unit, m)("C"))
+                except Exception:
+                    try:
+                        return float(getattr(unit, m)())
+                    except Exception:
+                        pass
+
+    # ---- Compressor specific ----
+    if "speed" in prop_lower and hasattr(unit, "getSpeed"):
+        return float(unit.getSpeed())
+    if ("compressionratio" in prop_lower or "compression_ratio" in prop_lower):
+        if hasattr(unit, "getCompressionRatio"):
+            return float(unit.getCompressionRatio())
+    if "polytropichead" in prop_lower or "polytropic_head" in prop_lower:
+        if hasattr(unit, "getPolytropicHead"):
+            return float(unit.getPolytropicHead())
+
+    # ---- Valve specific ----
+    if prop_lower in ("cv", "valve_cv") and hasattr(unit, "getCv"):
+        return float(unit.getCv())
+    if "opening" in prop_lower and hasattr(unit, "getPercentValveOpening"):
+        return float(unit.getPercentValveOpening())
+
+    # ---- Heat exchanger specific ----
+    if "uavalue" in prop_lower or "ua_value" in prop_lower:
+        if hasattr(unit, "getUAvalue"):
+            return float(unit.getUAvalue())
+
+    # ---- Flow rate ----
+    if "flow" in prop_lower:
+        for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+            if hasattr(unit, m):
+                try:
+                    return float(getattr(unit, m)().getFlowRate("kg/hr"))
+                except Exception:
+                    pass
+
+    # ---- Pipeline specific ----
+    if "length" in prop_lower and hasattr(unit, "getLength"):
+        return float(unit.getLength())
+    if "diameter" in prop_lower and hasattr(unit, "getDiameter"):
+        return float(unit.getDiameter())
+
+    # ---- Generic getter ----
     getter = f"get{prop[0].upper()}{prop[1:]}" if prop else None
     if getter and hasattr(unit, getter):
         return float(getattr(unit, getter)())
+    
+    # Try snake_case to camelCase
+    if "_" in prop:
+        parts = prop.split("_")
+        camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+        getter = f"get{camel[0].upper()}{camel[1:]}"
+        if hasattr(unit, getter):
+            return float(getattr(unit, getter)())
     
     raise KeyError(f"Cannot get property '{prop}' on unit")
 
@@ -1244,10 +1384,15 @@ def _set_unit_value(unit, prop: str, value: Any):
     """Set a unit property value by trying common setter patterns."""
     prop_lower = prop.lower()
 
-    # Common setters
+    # ---- Temperature setters ----
     if "outtemperature" in prop_lower or "out_temperature" in prop_lower or prop_lower == "outtemp_c":
         unit.setOutTemperature(float(value), "C")
         return
+    if prop_lower in ("temperature", "temperature_c") and hasattr(unit, "setTemperature"):
+        unit.setTemperature(float(value), "C")
+        return
+
+    # ---- Pressure setters ----
     if "outpressure" in prop_lower or "out_pressure" in prop_lower:
         if "barg" in prop_lower:
             unit.setOutPressure(float(value), "barg")
@@ -1260,26 +1405,163 @@ def _set_unit_value(unit, prop: str, value: Any):
         else:
             unit.setOutletPressure(float(value))
         return
-    if "efficiency" in prop_lower and hasattr(unit, "setIsentropicEfficiency"):
-        unit.setIsentropicEfficiency(float(value))
+    if prop_lower in ("pressure", "pressure_bara") and hasattr(unit, "setPressure"):
+        unit.setPressure(float(value), "bara")
         return
-    if "pressure" in prop_lower and hasattr(unit, "setPressure"):
-        if "barg" in prop_lower:
-            unit.setPressure(float(value), "barg")
-        else:
-            unit.setPressure(float(value), "bara")
+    if prop_lower == "pressure_barg" and hasattr(unit, "setPressure"):
+        unit.setPressure(float(value), "barg")
         return
-    if "temperature" in prop_lower and hasattr(unit, "setTemperature"):
-        unit.setTemperature(float(value), "C")
+    if "pressure_drop" in prop_lower or "pressuredrop" in prop_lower or prop_lower == "dp_bar":
+        # Apply pressure drop by reducing outlet pressure relative to inlet
+        inlet_p = None
+        for m in ("getInletStream", "getInStream", "getFeed"):
+            if hasattr(unit, m):
+                try:
+                    inlet_p = float(getattr(unit, m)().getPressure("bara"))
+                    break
+                except Exception:
+                    pass
+        if inlet_p is not None and hasattr(unit, "setOutPressure"):
+            unit.setOutPressure(inlet_p - float(value), "bara")
+            return
+        elif inlet_p is not None and hasattr(unit, "setOutletPressure"):
+            unit.setOutletPressure(inlet_p - float(value))
+            return
+        raise KeyError(f"Cannot apply pressure_drop: no inlet stream found")
+
+    # ---- Efficiency setters ----
+    if ("isentropic" in prop_lower and "efficiency" in prop_lower) or prop_lower == "efficiency":
+        if hasattr(unit, "setIsentropicEfficiency"):
+            unit.setIsentropicEfficiency(float(value))
+            return
+    if "polytropic" in prop_lower and "efficiency" in prop_lower:
+        if hasattr(unit, "setPolytropicEfficiency"):
+            unit.setPolytropicEfficiency(float(value))
+            return
+    if prop_lower in ("efficiency",) and hasattr(unit, "setEfficiency"):
+        unit.setEfficiency(float(value))
         return
 
-    # Try generic setter
+    # ---- Compressor-specific ----
+    if "speed" in prop_lower and hasattr(unit, "setSpeed"):
+        unit.setSpeed(float(value))
+        return
+    if ("compressionratio" in prop_lower or "compression_ratio" in prop_lower) and hasattr(unit, "setCompressionRatio"):
+        unit.setCompressionRatio(float(value))
+        return
+    if "usepolytropic" in prop_lower or "use_polytropic" in prop_lower:
+        if hasattr(unit, "setUsePolytropicCalc"):
+            unit.setUsePolytropicCalc(bool(value))
+            return
+    if "powersetpoint" in prop_lower or "power_setpoint" in prop_lower or "power_kw" in prop_lower:
+        if hasattr(unit, "setPower"):
+            unit.setPower(float(value) * 1000.0)  # kW -> W
+            return
+
+    # ---- Valve-specific ----
+    if prop_lower in ("cv", "valve_cv") and hasattr(unit, "setCv"):
+        unit.setCv(float(value))
+        return
+    if prop_lower in ("cgv", "valve_cgv") or ("opening" in prop_lower and "percent" in prop_lower):
+        if hasattr(unit, "setPercentValveOpening"):
+            unit.setPercentValveOpening(float(value))
+            return
+
+    # ---- Heat exchanger specific ----
+    if ("duty" in prop_lower or "energyinput" in prop_lower or "energy_input" in prop_lower):
+        if hasattr(unit, "setEnergyInput"):
+            unit.setEnergyInput(float(value) * 1000.0)  # kW -> W
+            return
+        if hasattr(unit, "setDuty"):
+            unit.setDuty(float(value) * 1000.0)  # kW -> W
+            return
+    if "uavalue" in prop_lower or "ua_value" in prop_lower:
+        if hasattr(unit, "setUAvalue"):
+            unit.setUAvalue(float(value))
+            return
+
+    # ---- Separator specific ----
+    if "internalmaterial" in prop_lower or "internal_material" in prop_lower:
+        if hasattr(unit, "setInternalDiameter"):
+            unit.setInternalDiameter(float(value))
+            return
+
+    # ---- Pump specific ----
+    if "head" in prop_lower and hasattr(unit, "setHead"):
+        unit.setHead(float(value))
+        return
+
+    # ---- Pipeline specific ----
+    if ("length" in prop_lower or "pipe_length" in prop_lower) and hasattr(unit, "setLength"):
+        unit.setLength(float(value))
+        return
+    if ("diameter" in prop_lower or "pipe_diameter" in prop_lower) and hasattr(unit, "setDiameter"):
+        unit.setDiameter(float(value))
+        return
+    if "roughness" in prop_lower and hasattr(unit, "setRoughness"):
+        unit.setRoughness(float(value))
+        return
+
+    # ---- Splitter specific ----
+    if "splitfactor" in prop_lower or "split_factor" in prop_lower:
+        if hasattr(unit, "setSplitFactors"):
+            if isinstance(value, list):
+                unit.setSplitFactors(value)
+            else:
+                unit.setSplitFactors([float(value), 1.0 - float(value)])
+            return
+
+    # ---- Column/absorber specific ----
+    if "numberofstages" in prop_lower or "number_of_stages" in prop_lower:
+        if hasattr(unit, "setNumberOfStages"):
+            unit.setNumberOfStages(int(value))
+            return
+
+    # ---- Flow rate setters ----
+    if "flowrate" in prop_lower or "flow_rate" in prop_lower:
+        if "kg" in prop_lower:
+            if hasattr(unit, "setFlowRate"):
+                unit.setFlowRate(float(value), "kg/hr")
+                return
+        elif "mol" in prop_lower:
+            if hasattr(unit, "setFlowRate"):
+                unit.setFlowRate(float(value), "mol/sec")
+                return
+        elif hasattr(unit, "setFlowRate"):
+            unit.setFlowRate(float(value), "kg/hr")  # default to kg/hr
+            return
+
+    # ---- Generic setter fallback ----
+    # Try camelCase setter: "outletPressure" → "setOutletPressure"
     setter = f"set{prop[0].upper()}{prop[1:]}" if prop else None
     if setter and hasattr(unit, setter):
-        getattr(unit, setter)(value)
-        return
+        try:
+            getattr(unit, setter)(float(value))
+            return
+        except Exception:
+            try:
+                getattr(unit, setter)(value)
+                return
+            except Exception:
+                pass
 
-    raise KeyError(f"Cannot set property '{prop}' on unit")
+    # Try snake_case to camelCase: "outlet_pressure" -> "setOutletPressure"
+    if "_" in prop:
+        parts = prop.split("_")
+        camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+        setter = f"set{camel[0].upper()}{camel[1:]}"
+        if hasattr(unit, setter):
+            try:
+                getattr(unit, setter)(float(value))
+                return
+            except Exception:
+                try:
+                    getattr(unit, setter)(value)
+                    return
+                except Exception:
+                    pass
+
+    raise KeyError(f"Cannot set property '{prop}' on unit '{unit.getName() if hasattr(unit, 'getName') else unit}'")
 
 
 # ---------------------------------------------------------------------------
@@ -1347,11 +1629,13 @@ def run_scenarios(
 
             clone = model.clone()
 
-            # First: add any new equipment units
+            # Track whether we have partial failures (warn but continue)
+            has_warnings = False
+
+            # First: add any new equipment units (topology changes — abort on failure)
             if sc.patch.add_units:
                 add_log = apply_add_units(clone, sc.patch.add_units)
                 patch_log.extend([{"scenario": sc.name, **entry} for entry in add_log])
-                # Check for add failures
                 add_failed = [e for e in add_log if e.get("status") == "FAILED"]
                 if add_failed:
                     case_results.append(ScenarioResult(
@@ -1362,7 +1646,7 @@ def run_scenarios(
                     ))
                     continue
 
-            # Add sub-process systems (groups of units)
+            # Add sub-process systems (topology changes — abort on failure)
             if sc.patch.add_process:
                 proc_log = apply_add_process(clone, sc.patch.add_process)
                 patch_log.extend([{"scenario": sc.name, **entry} for entry in proc_log])
@@ -1376,7 +1660,7 @@ def run_scenarios(
                     ))
                     continue
 
-            # Add new inlet streams (with mixers)
+            # Add new inlet streams (topology changes — abort on failure)
             if sc.patch.add_streams:
                 stream_log = apply_add_streams(clone, sc.patch.add_streams)
                 patch_log.extend([{"scenario": sc.name, **entry} for entry in stream_log])
@@ -1390,34 +1674,42 @@ def run_scenarios(
                     ))
                     continue
 
-            # Second: add chemical components to streams
+            # Second: add chemical components (non-critical — warn but continue)
             if sc.patch.add_components:
                 comp_log = apply_add_components(clone, sc.patch.add_components)
                 patch_log.extend([{"scenario": sc.name, **entry} for entry in comp_log])
                 comp_failed = [e for e in comp_log if e.get("status") == "FAILED"]
                 if comp_failed:
-                    case_results.append(ScenarioResult(
-                        scenario=sc,
-                        result=ModelRunResult(kpis={}, constraints=[], raw={}),
-                        success=False,
-                        error=f"Add component errors: {comp_failed}"
-                    ))
-                    continue
+                    has_warnings = True
+                    # Only abort if ALL components failed
+                    comp_ok = [e for e in comp_log if e.get("status") == "OK"]
+                    if not comp_ok:
+                        case_results.append(ScenarioResult(
+                            scenario=sc,
+                            result=ModelRunResult(kpis={}, constraints=[], raw={}),
+                            success=False,
+                            error=f"All add_component operations failed: {comp_failed}"
+                        ))
+                        continue
 
-            # Then: apply parameter changes
-            ops_log = apply_patch_to_model(clone, sc.patch)
-            patch_log.extend([{"scenario": sc.name, **entry} for entry in ops_log])
+            # Then: apply parameter changes (non-critical — warn but continue)
+            if sc.patch.changes:
+                ops_log = apply_patch_to_model(clone, sc.patch)
+                patch_log.extend([{"scenario": sc.name, **entry} for entry in ops_log])
 
-            # Check for failed patches
-            failed = [e for e in ops_log if e.get("status") == "FAILED"]
-            if failed:
-                case_results.append(ScenarioResult(
-                    scenario=sc,
-                    result=ModelRunResult(kpis={}, constraints=[], raw={}),
-                    success=False,
-                    error=f"Patch errors: {failed}"
-                ))
-                continue
+                # Only abort if ALL patches failed
+                failed = [e for e in ops_log if e.get("status") == "FAILED"]
+                succeeded = [e for e in ops_log if e.get("status") == "OK"]
+                if failed:
+                    has_warnings = True
+                    if not succeeded:
+                        case_results.append(ScenarioResult(
+                            scenario=sc,
+                            result=ModelRunResult(kpis={}, constraints=[], raw={}),
+                            success=False,
+                            error=f"All patch operations failed: {failed}"
+                        ))
+                        continue
 
             result = clone.run(timeout_ms=timeout_ms)
             case_results.append(ScenarioResult(scenario=sc, result=result))

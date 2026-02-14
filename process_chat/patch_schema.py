@@ -113,13 +113,28 @@ class TargetSpec:
             min_value=1.0,
             max_value=5.0,
         )
+    
+    Example: "Adjust compressor outlet pressure until discharge temperature = 150°C"
+        TargetSpec(
+            target_kpi="1st stage compressor.gasOutStream.temperature_C",
+            target_value=150.0,
+            tolerance_pct=1.0,
+            variable="unit_param",
+            unit_name="1st stage compressor",
+            unit_param="outletpressure_bara",
+            initial_guess=80.0,
+            min_value=30.0,
+            max_value=200.0,
+        )
     """
     target_kpi: str                         # KPI key to match (from _extract_results)
     target_value: float                     # desired value
     tolerance_pct: float = 2.0              # acceptable relative error %
-    variable: str = "component_scale"       # "component_scale" or "stream_scale"
+    variable: str = "component_scale"       # "component_scale", "stream_scale", or "unit_param"
     stream_name: Optional[str] = None       # stream to scale (for variable="stream_scale")
-    initial_guess: float = 1.0              # starting scale factor
+    unit_name: Optional[str] = None         # unit to adjust (for variable="unit_param")
+    unit_param: Optional[str] = None        # parameter to adjust (for variable="unit_param")
+    initial_guess: float = 1.0              # starting scale factor or initial param value
     min_value: float = 0.01                 # lower bound
     max_value: float = 50.0                 # upper bound
     max_iterations: int = 20                # iteration limit
@@ -299,10 +314,13 @@ def scenario_from_dict(d: dict) -> Scenario:
             target_value=float(t["target_value"]),
             tolerance_pct=float(t.get("tolerance_pct", 2.0)),
             variable=t.get("variable", "component_scale"),
+            stream_name=t.get("stream_name"),
             initial_guess=float(t.get("initial_guess", 1.0)),
             min_value=float(t.get("min_value", 0.01)),
             max_value=float(t.get("max_value", 50.0)),
             max_iterations=int(t.get("max_iterations", 20)),
+            unit_name=t.get("unit_name"),
+            unit_param=t.get("unit_param"),
         ))
 
     # Parse add_process if present
