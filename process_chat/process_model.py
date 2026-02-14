@@ -106,6 +106,9 @@ class NeqSimProcessModel:
         ext = os.path.splitext(filepath)[1].lower()
         if ext in (".neqsim", ".zip"):
             loaded = neqsim.open_neqsim(filepath)
+            if loaded is None:
+                # Some .neqsim files are actually plain XML
+                loaded = neqsim.open_xml(filepath)
         elif ext == ".xml":
             loaded = neqsim.open_xml(filepath)
         else:
