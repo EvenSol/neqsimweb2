@@ -15,7 +15,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from .patch_schema import InputPatch, Scenario, AddUnitOp, AddComponentOp, TargetSpec
+from .patch_schema import (
+    InputPatch,
+    Scenario,
+    AddUnitOp,
+    AddComponentOp,
+    AddStreamOp,
+    TargetSpec,
+    AddProcessOp,
+)
 from .process_model import NeqSimProcessModel, ModelRunResult, KPI, ConstraintStatus
 
 
@@ -44,17 +52,80 @@ class Comparison:
 # Equipment insertion — add new units to the process topology
 # ---------------------------------------------------------------------------
 
-# Map template names to Java class paths
+# Map template names to Java class paths — covers all major NeqSim equipment
 _EQUIPMENT_CLASSES = {
+    # Heat exchangers
     "cooler": "neqsim.process.equipment.heatexchanger.Cooler",
     "heater": "neqsim.process.equipment.heatexchanger.Heater",
-    "compressor": "neqsim.process.equipment.compressor.Compressor",
-    "separator": "neqsim.process.equipment.separator.Separator",
-    "valve": "neqsim.process.equipment.valve.ThrottlingValve",
-    "expander": "neqsim.process.equipment.expander.Expander",
-    "pump": "neqsim.process.equipment.pump.Pump",
     "heat_exchanger": "neqsim.process.equipment.heatexchanger.HeatExchanger",
+    "air_cooler": "neqsim.process.equipment.heatexchanger.AirCooler",
+    "water_cooler": "neqsim.process.equipment.heatexchanger.WaterCooler",
+    "multi_stream_heat_exchanger": "neqsim.process.equipment.heatexchanger.MultiStreamHeatExchanger",
+    # Compressors
+    "compressor": "neqsim.process.equipment.compressor.Compressor",
+    # Expanders
+    "expander": "neqsim.process.equipment.expander.Expander",
+    "turbo_expander_compressor": "neqsim.process.equipment.expander.TurboExpanderCompressor",
+    # Separators
+    "separator": "neqsim.process.equipment.separator.Separator",
+    "two_phase_separator": "neqsim.process.equipment.separator.TwoPhaseSeparator",
     "three_phase_separator": "neqsim.process.equipment.separator.ThreePhaseSeparator",
+    "gas_scrubber": "neqsim.process.equipment.separator.GasScrubber",
+    "gas_scrubber_simple": "neqsim.process.equipment.separator.GasScrubberSimple",
+    "hydrocyclone": "neqsim.process.equipment.separator.Hydrocyclone",
+    # Valves
+    "valve": "neqsim.process.equipment.valve.ThrottlingValve",
+    "control_valve": "neqsim.process.equipment.valve.ControlValve",
+    "check_valve": "neqsim.process.equipment.valve.CheckValve",
+    # Pumps
+    "pump": "neqsim.process.equipment.pump.Pump",
+    "esp_pump": "neqsim.process.equipment.pump.ESPPump",
+    # Mixers / Splitters
+    "mixer": "neqsim.process.equipment.mixer.Mixer",
+    "splitter": "neqsim.process.equipment.splitter.Splitter",
+    "component_splitter": "neqsim.process.equipment.splitter.ComponentSplitter",
+    # Absorbers / columns
+    "simple_absorber": "neqsim.process.equipment.absorber.SimpleAbsorber",
+    "simple_teg_absorber": "neqsim.process.equipment.absorber.SimpleTEGAbsorber",
+    "water_stripper_column": "neqsim.process.equipment.absorber.WaterStripperColumn",
+    "distillation_column": "neqsim.process.equipment.distillation.DistillationColumn",
+    # Pipeline / pipe
+    "pipeline": "neqsim.process.equipment.pipeline.Pipeline",
+    "adiabatic_pipe": "neqsim.process.equipment.pipeline.AdiabaticPipe",
+    "adiabatic_two_phase_pipe": "neqsim.process.equipment.pipeline.AdiabaticTwoPhasePipe",
+    "simple_tp_out_pipeline": "neqsim.process.equipment.pipeline.SimpleTPoutPipeline",
+    # Reactors
+    "gibbs_reactor": "neqsim.process.equipment.reactor.GibbsReactor",
+    # Ejectors
+    "ejector": "neqsim.process.equipment.ejector.Ejector",
+    # Flare
+    "flare": "neqsim.process.equipment.flare.Flare",
+    # Filter
+    "filter": "neqsim.process.equipment.filter.Filter",
+    # Membrane
+    "membrane_separator": "neqsim.process.equipment.membrane.MembraneSeparator",
+    # Power generation
+    "gas_turbine": "neqsim.process.equipment.powergeneration.GasTurbine",
+    # Reservoir / well
+    "well_flow": "neqsim.process.equipment.reservoir.WellFlow",
+    "simple_reservoir": "neqsim.process.equipment.reservoir.SimpleReservoir",
+    # Tank
+    "tank": "neqsim.process.equipment.tank.Tank",
+    # Subsea
+    "simple_flow_line": "neqsim.process.equipment.subsea.SimpleFlowLine",
+    # Streams
+    "stream": "neqsim.process.equipment.stream.Stream",
+    "equilibrium_stream": "neqsim.process.equipment.stream.EquilibriumStream",
+    # Utilities (adjuster, recycle, setter)
+    "adjuster": "neqsim.process.equipment.util.Adjuster",
+    "recycle": "neqsim.process.equipment.util.Recycle",
+    "calculator": "neqsim.process.equipment.util.Calculator",
+    "set_point": "neqsim.process.equipment.util.SetPoint",
+    # Electrolyzer
+    "electrolyzer": "neqsim.process.equipment.electrolyzer.Electrolyzer",
+    "co2_electrolyzer": "neqsim.process.equipment.electrolyzer.CO2Electrolyzer",
+    # Adsorber
+    "adsorber": "neqsim.process.equipment.adsorber.SimpleAdsorber",
 }
 
 
@@ -298,6 +369,204 @@ def apply_add_components(
 
 
 # ---------------------------------------------------------------------------
+# Adding a new inlet stream and mixing into the process
+# ---------------------------------------------------------------------------
+
+def apply_add_streams(
+    model: NeqSimProcessModel,
+    add_streams: List[AddStreamOp],
+) -> List[Dict[str, Any]]:
+    """
+    Add new inlet streams and mix them into the process using a Mixer.
+
+    Each AddStreamOp creates a new Stream with the specified composition and
+    inserts a Mixer after the specified unit to combine the upstream outlet
+    with the new stream.
+    """
+    from neqsim import jneqsim
+
+    log = []
+
+    for ast in add_streams:
+        try:
+            proc = model.get_process()
+            original_units = list(proc.getUnitOperations())
+
+            after_idx = None
+            for i, u in enumerate(original_units):
+                try:
+                    if str(u.getName()) == ast.insert_after:
+                        after_idx = i
+                        break
+                except Exception:
+                    pass
+
+            if after_idx is None:
+                log.append({
+                    "key": f"add_stream.{ast.name}",
+                    "status": "FAILED",
+                    "error": f"Unit '{ast.insert_after}' not found in process",
+                })
+                continue
+
+            upstream_unit = original_units[after_idx]
+            upstream_outlet = _find_outlet_stream(upstream_unit)
+            if upstream_outlet is None:
+                log.append({
+                    "key": f"add_stream.{ast.name}",
+                    "status": "FAILED",
+                    "error": f"Cannot find outlet stream for '{ast.insert_after}'",
+                })
+                continue
+
+            # Resolve a base stream for cloning the thermo system
+            base_stream = None
+            if ast.base_stream:
+                try:
+                    base_stream = model.get_stream(ast.base_stream)
+                except KeyError:
+                    log.append({
+                        "key": f"add_stream.{ast.name}.base_stream",
+                        "status": "WARN",
+                        "error": f"Base stream '{ast.base_stream}' not found; using upstream outlet",
+                    })
+            if base_stream is None:
+                base_stream = upstream_outlet
+
+            # Clone thermo system
+            fluid = None
+            for getter in ("getFluid", "getThermoSystem"):
+                if hasattr(base_stream, getter):
+                    try:
+                        fluid = getattr(base_stream, getter)()
+                        if fluid is not None:
+                            break
+                    except Exception:
+                        pass
+
+            if fluid is None:
+                log.append({
+                    "key": f"add_stream.{ast.name}",
+                    "status": "FAILED",
+                    "error": "Cannot access thermo system from base stream",
+                })
+                continue
+
+            new_fluid = fluid.clone()
+            # Reset total flow before adding components
+            try:
+                new_fluid.setTotalFlowRate(0.0, ast.flow_unit)
+            except Exception:
+                try:
+                    new_fluid.setTotalFlowRate(0.0, "kg/hr")
+                except Exception:
+                    pass
+
+            if ast.temperature_C is not None:
+                try:
+                    new_fluid.setTemperature(float(ast.temperature_C), "C")
+                except Exception:
+                    pass
+            if ast.pressure_bara is not None:
+                try:
+                    new_fluid.setPressure(float(ast.pressure_bara), "bara")
+                except Exception:
+                    pass
+
+            added = []
+            for comp_name, flow in ast.components.items():
+                try:
+                    new_fluid.addComponent(comp_name, float(flow), ast.flow_unit)
+                    added.append(f"{comp_name}={float(flow):.2f} {ast.flow_unit}")
+                except Exception as e:
+                    log.append({
+                        "key": f"add_stream.{ast.name}.{comp_name}",
+                        "status": "FAILED",
+                        "error": f"Failed to add {comp_name}: {e}",
+                    })
+
+            try:
+                new_fluid.setMixingRule(2)
+            except Exception:
+                pass
+
+            # Create new Stream unit
+            StreamClass = jneqsim.process.equipment.stream.Stream
+            new_stream = StreamClass(ast.name, new_fluid)
+
+            # Create Mixer and connect streams
+            MixerClass = jneqsim.process.equipment.mixer.Mixer
+            mixer_name = ast.mixer_name or f"mixer_{ast.name}"
+            try:
+                mixer = MixerClass(mixer_name, upstream_outlet)
+            except Exception:
+                mixer = MixerClass(mixer_name)
+                try:
+                    mixer.addStream(upstream_outlet)
+                except Exception:
+                    pass
+
+            try:
+                mixer.addStream(new_stream)
+            except Exception as e:
+                log.append({
+                    "key": f"add_stream.{ast.name}.mixer",
+                    "status": "FAILED",
+                    "error": f"Failed to connect new stream to mixer: {e}",
+                })
+                continue
+
+            # Build the new unit sequence: upstream -> new stream -> mixer -> downstream
+            new_sequence = list(original_units)
+            insert_pos = after_idx + 1
+            new_sequence.insert(insert_pos, new_stream)
+            new_sequence.insert(insert_pos + 1, mixer)
+
+            # Recreate all downstream units after the mixer
+            downstream_start = insert_pos + 2
+            for i in range(downstream_start, len(new_sequence)):
+                prev_unit = new_sequence[i - 1]
+                prev_outlet = _find_outlet_stream(prev_unit)
+                if prev_outlet is None:
+                    log.append({
+                        "key": f"add_stream.{ast.name}.rebuild.{i}",
+                        "status": "WARN",
+                        "error": f"Cannot find outlet of unit {i-1} for downstream reconnect",
+                    })
+                    continue
+
+                unit = new_sequence[i]
+                if unit is new_stream or unit is mixer:
+                    continue
+                new_sequence[i] = _recreate_unit(unit, prev_outlet)
+
+            # Rebuild process
+            unit_ops = proc.getUnitOperations()
+            unit_ops.clear()
+            for unit in new_sequence:
+                proc.add(unit)
+
+            model._index_model_objects()
+
+            log.append({
+                "key": f"add_stream.{ast.name}",
+                "value": f"stream + mixer after '{ast.insert_after}'",
+                "status": "OK",
+                "components": "; ".join(added) if added else "",
+                "mixer": mixer_name,
+            })
+
+        except Exception as e:
+            log.append({
+                "key": f"add_stream.{ast.name}",
+                "status": "FAILED",
+                "error": str(e),
+            })
+
+    return log
+
+
+# ---------------------------------------------------------------------------
 # Iterative target-seeking solver
 # ---------------------------------------------------------------------------
 
@@ -373,6 +642,10 @@ def solve_for_target(
             # Apply add_units if any
             if scenario.patch.add_units:
                 apply_add_units(clone, scenario.patch.add_units)
+
+            # Apply add_streams if any
+            if scenario.patch.add_streams:
+                apply_add_streams(clone, scenario.patch.add_streams)
             
             # Apply parameter changes if any
             if scenario.patch.changes:
@@ -697,6 +970,71 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
 
 
 # ---------------------------------------------------------------------------
+# Adding a sub-process (multiple units as a group)
+# ---------------------------------------------------------------------------
+
+def apply_add_process(
+    model: NeqSimProcessModel,
+    add_process: List[AddProcessOp],
+) -> List[Dict[str, Any]]:
+    """
+    Add a sub-process system (a sequence of connected units) into the model.
+    
+    Each AddProcessOp defines a list of units to create and insert as a group
+    after a specified existing unit. This is equivalent to calling apply_add_units
+    for each unit in sequence, but the units are treated as a logical group.
+    
+    Returns a log of operations.
+    """
+    log = []
+    
+    for proc_op in add_process:
+        try:
+            # Convert each unit definition to an AddUnitOp, chaining them together.
+            # Process units ONE AT A TIME so each newly-added unit is visible
+            # to the next unit's insert_after lookup.
+            prev_unit_name = proc_op.insert_after
+            sub_unit_names = []
+            
+            for i, unit_def in enumerate(proc_op.units):
+                add_unit = AddUnitOp(
+                    name=unit_def.get("name", f"{proc_op.name}_{i}"),
+                    equipment_type=unit_def["equipment_type"],
+                    insert_after=prev_unit_name,
+                    params=unit_def.get("params", {}),
+                )
+                sub_unit_names.append(add_unit.name)
+                
+                # Apply this single unit immediately so the next unit can find it
+                sub_log = apply_add_units(model, [add_unit])
+                for entry in sub_log:
+                    entry["process_group"] = proc_op.name
+                log.extend(sub_log)
+                
+                # Only advance prev_unit_name if the insertion succeeded
+                if sub_log and sub_log[0].get("status") == "OK":
+                    prev_unit_name = add_unit.name
+                else:
+                    # Stop chaining if a unit failed
+                    break
+            
+            log.append({
+                "key": f"add_process.{proc_op.name}",
+                "status": "OK",
+                "value": f"Added {len(sub_unit_names)} units: {sub_unit_names}",
+            })
+            
+        except Exception as e:
+            log.append({
+                "key": f"add_process.{proc_op.name}",
+                "status": "FAILED",
+                "error": str(e),
+            })
+    
+    return log
+
+
+# ---------------------------------------------------------------------------
 # Applying patches to a loaded model
 # ---------------------------------------------------------------------------
 
@@ -973,6 +1311,34 @@ def run_scenarios(
                         result=ModelRunResult(kpis={}, constraints=[], raw={}),
                         success=False,
                         error=f"Add unit errors: {add_failed}"
+                    ))
+                    continue
+
+            # Add sub-process systems (groups of units)
+            if sc.patch.add_process:
+                proc_log = apply_add_process(clone, sc.patch.add_process)
+                patch_log.extend([{"scenario": sc.name, **entry} for entry in proc_log])
+                proc_failed = [e for e in proc_log if e.get("status") == "FAILED"]
+                if proc_failed:
+                    case_results.append(ScenarioResult(
+                        scenario=sc,
+                        result=ModelRunResult(kpis={}, constraints=[], raw={}),
+                        success=False,
+                        error=f"Add process errors: {proc_failed}"
+                    ))
+                    continue
+
+            # Add new inlet streams (with mixers)
+            if sc.patch.add_streams:
+                stream_log = apply_add_streams(clone, sc.patch.add_streams)
+                patch_log.extend([{"scenario": sc.name, **entry} for entry in stream_log])
+                stream_failed = [e for e in stream_log if e.get("status") == "FAILED"]
+                if stream_failed:
+                    case_results.append(ScenarioResult(
+                        scenario=sc,
+                        result=ModelRunResult(kpis={}, constraints=[], raw={}),
+                        success=False,
+                        error=f"Add stream errors: {stream_failed}"
                     ))
                     continue
 

@@ -59,6 +59,34 @@ INTENT CLASSIFICATION:
   → Answer directly from the MODEL TOPOLOGY and STREAMS data below. No simulation needed.
   → The topology lists every unit IN PROCESS ORDER with its inlet and outlet stream conditions (temperature, pressure).
   → Use this data to answer questions about specific unit temperatures, pressures, flows, duties, etc.
+
+- PROPERTY QUERY: Questions about detailed fluid/stream properties ("What is the TVP?", "What is the density?", "What is the viscosity?", "Show me the RVP of the feed gas", "What is the gas composition?")
+  → These properties require running the simulation. Output a ```query ... ``` block (NOT ```json):
+  ```query
+  {{"properties": ["feed gas TVP", "feed gas RVP", "feed gas density"]}}
+  ```
+  The system will run the simulation and return ALL matching properties. Then explain the results.
+  Search terms are matched case-insensitively against property keys. Use terms like:
+    - Stream name + property: "feed gas TVP", "feed gas density", "feed gas viscosity"
+    - Report properties: "report feed gas composition", "report compressor power"
+    - Phase-specific: "feed gas gas_phase_fraction", "feed gas oil_density"
+  
+  Available property types per stream:
+    Basic: pressure_bara, temperature_C, flow_kg_hr
+    Transport: viscosity_Pa_s, kinematic_viscosity_m2_s, thermal_conductivity_W_mK
+    Thermodynamic: Z_factor, density_kg_m3, molar_mass_kg_mol, Cp_kJ_kgK, Cv_kJ_kgK
+    Energy: enthalpy_J_kg, entropy_J_kgK, JT_coefficient_K_bar, sound_speed_m_s
+    Vapor pressure: TVP_bara (true vapor pressure at stream T), RVP_bara (Reid vapor pressure at 37.8°C)
+    Phase: number_of_phases, gas_phase_fraction, oil_phase_fraction, aqueous_phase_fraction
+    Phase density: gas_density_kg_m3, oil_density_kg_m3
+    Phase viscosity: gas_viscosity_Pa_s, oil_viscosity_Pa_s
+    
+    From JSON report (prefix with "report.unit_name."): 
+      Compressor: power, polytropicHead, polytropicEfficiency, suctionTemperature, dischargeTemperature, etc.
+      Separator: gasLoadFactor, feed/gas stream properties and compositions
+      Stream: properties (density, Cp, Cv, entropy, enthalpy, molar mass, relative density, GCV, WI, flow rate)
+      Stream: conditions (temperature, pressure, mass flow, molar flow, fluid model)
+      Stream: composition per phase (mole fractions of each component)
   
 - WHAT-IF: Questions about changes ("What if we increase pressure to X?", "What happens if...")
   → Produce a scenario JSON. The system will run it and give you results to explain.
@@ -108,6 +136,16 @@ When you need to run a scenario, output a JSON block wrapped in ```json ... ``` 
               "pressure_drop_bar": 0.2
             }}
           }}
+        ],
+        "add_streams": [
+          {
+            "name": "liquid feed",
+            "insert_after": "inlet separator",
+            "components": {"nC10": 500.0, "benzene": 300.0, "water": 200.0},
+            "flow_unit": "kg/hr",
+            "temperature_C": 30.0,
+            "pressure_bara": 30.0
+          }
         ]
       }},
       "assumptions": {{
@@ -135,19 +173,71 @@ For relative changes, use:
 ADD EQUIPMENT (for planning questions like "add a cooler", "install an intercooler"):
 Use the "add_units" array inside "patch" to insert new equipment. Each entry needs:
   - "name": descriptive name for the new unit (e.g., "new intercooler")
-  - "equipment_type": one of: cooler, heater, compressor, separator, valve, expander, pump, heat_exchanger, three_phase_separator
+  - "equipment_type": one of: cooler, heater, air_cooler, water_cooler, compressor, separator, two_phase_separator, three_phase_separator, gas_scrubber, valve, control_valve, expander, pump, esp_pump, mixer, splitter, component_splitter, simple_absorber, simple_teg_absorber, distillation_column, pipeline, adiabatic_pipe, gibbs_reactor, ejector, flare, filter, membrane_separator, gas_turbine, well_flow, tank, recycle, adjuster, electrolyzer, adsorber
   - "insert_after": name of the existing unit to insert after (the new unit's inlet is the existing unit's outlet)
   - "params": configuration parameters for the new unit
 
 Supported params by equipment type:
-  cooler/heater: outlet_temperature_C, pressure_drop_bar
+  cooler/heater/air_cooler/water_cooler: outlet_temperature_C, pressure_drop_bar
   compressor: outlet_pressure_bara, isentropic_efficiency (default 0.75)
-  separator: (no special params needed)
-  valve/expander: outlet_pressure_bara
-  pump: outlet_pressure_bara, efficiency
+  separator/two_phase_separator/three_phase_separator/gas_scrubber: (no special params needed)
+  valve/control_valve: outlet_pressure_bara
+  expander: outlet_pressure_bara, isentropic_efficiency
+  pump/esp_pump: outlet_pressure_bara, efficiency
+  mixer: (no params needed, combines streams)
+  splitter: split_fractions (list of fractions summing to 1.0)
+  pipeline/adiabatic_pipe: length_m, diameter_m, roughness_m
+  simple_absorber/simple_teg_absorber: number_of_stages
+  ejector, flare, filter, membrane_separator, gas_turbine, tank, adsorber: (type-specific defaults)
+  recycle: tolerance
+  adjuster: target_variable, target_value
 
 You can combine "add_units" with "changes" in the same scenario (e.g., add a cooler AND change a compressor's pressure).
 When the user asks to "add" or "install" equipment, use "add_units". When they ask to "change" or "modify", use "changes".
+
+ADD STREAMS (for adding new inlet streams and mixing them into the process):
+Use "add_streams" to create a new stream and insert a mixer after an existing unit.
+The mixer combines the upstream outlet with the new stream, then reconnects downstream units.
+{
+  "patch": {
+    "add_streams": [
+      {
+        "name": "liquid feed",
+        "insert_after": "inlet separator",
+        "components": {"nC10": 500.0, "benzene": 300.0, "water": 200.0},
+        "flow_unit": "kg/hr",
+        "temperature_C": 30.0,
+        "pressure_bara": 30.0,
+        "base_stream": "feed gas",
+        "mixer_name": "liquid feed mixer"
+      }
+    ]
+  }
+}
+Notes:
+  - "base_stream" is used to clone the thermodynamic model (EOS/mixing rule).
+  - If temperature/pressure are not set, the base stream conditions are used.
+
+ADD PROCESS SYSTEM (for adding a group of connected units as a sub-process):
+Use "add_process" to insert a whole sub-process (multiple connected units) at once.
+This is useful when the engineer asks to "add a dew point control module" or "add a compression train".
+{{
+  "patch": {{
+    "add_process": [
+      {{
+        "name": "dew point control",
+        "insert_after": "inlet separator",
+        "units": [
+          {{"name": "JT valve", "equipment_type": "valve", "params": {{"outlet_pressure_bara": 45.0}}}},
+          {{"name": "LP separator", "equipment_type": "separator", "params": {{}}}},
+          {{"name": "recompressor", "equipment_type": "compressor", "params": {{"outlet_pressure_bara": 60.0}}}}
+        ]
+      }}
+    ]
+  }}
+}}
+Each unit in the sub-process is connected in sequence: the first unit's inlet is the outlet of "insert_after",
+and subsequent units chain together. The last unit's outlet feeds the unit that previously received from "insert_after".
 
 ADD COMPONENTS (for adding new chemicals to a stream):
 Use the "add_components" array inside "patch" to add chemical substances to a stream's fluid.
@@ -251,6 +341,26 @@ def extract_scenario_json(text: str) -> Optional[dict]:
     except json.JSONDecodeError:
         pass
 
+    return None
+
+
+def extract_property_query(text: str) -> Optional[dict]:
+    """
+    Extract a property query specification from LLM output text.
+    Looks for ```query ... ``` blocks with JSON containing {"properties": ...}.
+    """
+    import re
+    pattern = r'```query\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if "properties" in data:
+                return data
+        except json.JSONDecodeError:
+            continue
+    
     return None
 
 
@@ -368,6 +478,7 @@ class ProcessChatSession:
 
         # Check if the LLM produced a scenario to run
         scenario_data = extract_scenario_json(assistant_text)
+        property_query = extract_property_query(assistant_text)
         
         if scenario_data:
             # Execute the scenarios
@@ -421,6 +532,57 @@ class ProcessChatSession:
                     ),
                 )
                 
+                final_text = response2.text
+                self.history.append({"role": "assistant", "content": final_text})
+                return final_text
+        elif property_query:
+            # Property query — run model and extract matching properties
+            try:
+                queries = property_query.get("properties", [])
+                all_results = []
+                for q in queries:
+                    result_text = self.model.query_properties(q)
+                    all_results.append(result_text)
+                
+                properties_text = "\n\n".join(all_results)
+                
+                # Feed results back to LLM for explanation
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": f"[SYSTEM: Property query completed. Results below. Present these results clearly to the engineer.]\n\n{properties_text}"
+                })
+                
+                contents = self._build_contents()
+                response2 = client.models.generate_content(
+                    model=self.ai_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._system_prompt,
+                        temperature=0.3,
+                    ),
+                )
+                
+                final_text = response2.text
+                self.history.append({"role": "assistant", "content": final_text})
+                self._last_comparison = None
+                return final_text
+                
+            except Exception as e:
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": f"[SYSTEM: Property query failed: {str(e)}. Inform the engineer.]"
+                })
+                contents = self._build_contents()
+                response2 = client.models.generate_content(
+                    model=self.ai_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._system_prompt,
+                        temperature=0.3,
+                    ),
+                )
                 final_text = response2.text
                 self.history.append({"role": "assistant", "content": final_text})
                 return final_text

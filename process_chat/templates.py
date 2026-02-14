@@ -58,6 +58,36 @@ TEMPLATES: Dict[str, TemplateDef] = {
         },
     ),
 
+    "air_cooler": TemplateDef(
+        name="air_cooler",
+        display_name="Air Cooler (Fin-fan)",
+        description="Air-cooled heat exchanger (fin-fan cooler)",
+        required_params=["outlet_temperature_C"],
+        optional_params=["pressure_drop_bar"],
+        default_values={
+            "outlet_temperature_C": 40.0,
+            "pressure_drop_bar": 0.3,
+        },
+        constraints={
+            "min_approach_C": "Typically 10-15°C above ambient",
+        },
+    ),
+
+    "water_cooler": TemplateDef(
+        name="water_cooler",
+        display_name="Water Cooler",
+        description="Water-cooled heat exchanger",
+        required_params=["outlet_temperature_C"],
+        optional_params=["pressure_drop_bar"],
+        default_values={
+            "outlet_temperature_C": 30.0,
+            "pressure_drop_bar": 0.2,
+        },
+        constraints={
+            "min_approach_C": "5°C above cooling water temperature",
+        },
+    ),
+
     "compressor_stage": TemplateDef(
         name="compressor_stage",
         display_name="Compressor Stage",
@@ -77,15 +107,37 @@ TEMPLATES: Dict[str, TemplateDef] = {
 
     "separator": TemplateDef(
         name="separator",
-        display_name="Separator (2-phase or 3-phase)",
-        description="Vessel for phase separation",
-        required_params=["separator_type"],
+        display_name="Separator (2-phase)",
+        description="Two-phase gas/liquid separation vessel",
+        required_params=[],
         optional_params=["pressure_bara", "temperature_C"],
-        default_values={
-            "separator_type": "two_phase",
-        },
+        default_values={},
         constraints={
-            "liquid_residence_time": "Minimum 2 minutes for 2-phase, 5 for 3-phase",
+            "liquid_residence_time": "Minimum 2 minutes",
+        },
+    ),
+
+    "three_phase_separator": TemplateDef(
+        name="three_phase_separator",
+        display_name="Three-phase Separator",
+        description="Vessel for gas/oil/water separation",
+        required_params=[],
+        optional_params=["pressure_bara", "temperature_C"],
+        default_values={},
+        constraints={
+            "liquid_residence_time": "Minimum 5 minutes for three-phase",
+        },
+    ),
+
+    "gas_scrubber": TemplateDef(
+        name="gas_scrubber",
+        display_name="Gas Scrubber",
+        description="Knock-out drum / scrubber for removing liquid from gas",
+        required_params=[],
+        optional_params=["pressure_bara", "temperature_C"],
+        default_values={},
+        constraints={
+            "gas_load_factor": "Max gas load per separator internals",
         },
     ),
 
@@ -101,10 +153,20 @@ TEMPLATES: Dict[str, TemplateDef] = {
         },
     ),
 
+    "control_valve": TemplateDef(
+        name="control_valve",
+        display_name="Control Valve",
+        description="Automated control valve for pressure/flow regulation",
+        required_params=["outlet_pressure_bara"],
+        optional_params=["Cv"],
+        default_values={},
+        constraints={},
+    ),
+
     "heat_exchanger": TemplateDef(
         name="heat_exchanger",
         display_name="Heat Exchanger",
-        description="Shell-and-tube or plate heat exchanger",
+        description="Shell-and-tube or plate heat exchanger (2-stream)",
         required_params=["UA_value"],
         optional_params=["outlet_temperature_C", "pressure_drop_bar"],
         default_values={
@@ -142,6 +204,193 @@ TEMPLATES: Dict[str, TemplateDef] = {
         constraints={
             "liquid_formation": "Check for liquid at outlet",
         },
+    ),
+
+    "mixer": TemplateDef(
+        name="mixer",
+        display_name="Mixer",
+        description="Combines multiple streams into one",
+        required_params=[],
+        optional_params=[],
+        default_values={},
+        constraints={},
+    ),
+
+    "splitter": TemplateDef(
+        name="splitter",
+        display_name="Splitter",
+        description="Splits a stream into multiple streams (by fraction)",
+        required_params=["split_fractions"],
+        optional_params=[],
+        default_values={
+            "split_fractions": [0.5, 0.5],
+        },
+        constraints={
+            "sum_to_1": "Split fractions must sum to 1.0",
+        },
+    ),
+
+    "simple_absorber": TemplateDef(
+        name="simple_absorber",
+        display_name="Absorber Column",
+        description="Simple absorption column (e.g. TEG dehydration, amine scrubbing)",
+        required_params=[],
+        optional_params=["number_of_stages"],
+        default_values={
+            "number_of_stages": 5,
+        },
+        constraints={},
+    ),
+
+    "simple_teg_absorber": TemplateDef(
+        name="simple_teg_absorber",
+        display_name="TEG Absorber",
+        description="Triethylene glycol (TEG) dehydration absorber",
+        required_params=[],
+        optional_params=["number_of_stages", "teg_flow_rate_kg_hr"],
+        default_values={
+            "number_of_stages": 5,
+        },
+        constraints={},
+    ),
+
+    "pipeline": TemplateDef(
+        name="pipeline",
+        display_name="Pipeline",
+        description="Pipeline segment for flow simulation",
+        required_params=["length_m", "diameter_m"],
+        optional_params=["roughness_m", "elevation_m"],
+        default_values={
+            "roughness_m": 0.00005,
+            "elevation_m": 0.0,
+        },
+        constraints={},
+    ),
+
+    "adiabatic_pipe": TemplateDef(
+        name="adiabatic_pipe",
+        display_name="Adiabatic Pipe",
+        description="Adiabatic pipe segment (no heat loss)",
+        required_params=["length_m", "diameter_m"],
+        optional_params=["roughness_m"],
+        default_values={
+            "roughness_m": 0.00005,
+        },
+        constraints={},
+    ),
+
+    "ejector": TemplateDef(
+        name="ejector",
+        display_name="Ejector",
+        description="Gas ejector for compression using motive gas",
+        required_params=[],
+        optional_params=[],
+        default_values={},
+        constraints={},
+    ),
+
+    "flare": TemplateDef(
+        name="flare",
+        display_name="Flare",
+        description="Flare for combustion of waste gases",
+        required_params=[],
+        optional_params=[],
+        default_values={},
+        constraints={},
+    ),
+
+    "gas_turbine": TemplateDef(
+        name="gas_turbine",
+        display_name="Gas Turbine",
+        description="Gas turbine for power generation",
+        required_params=[],
+        optional_params=["efficiency"],
+        default_values={
+            "efficiency": 0.35,
+        },
+        constraints={},
+    ),
+
+    "membrane_separator": TemplateDef(
+        name="membrane_separator",
+        display_name="Membrane Separator",
+        description="Membrane-based gas separation unit",
+        required_params=[],
+        optional_params=[],
+        default_values={},
+        constraints={},
+    ),
+
+    "gibbs_reactor": TemplateDef(
+        name="gibbs_reactor",
+        display_name="Gibbs Reactor",
+        description="Chemical reactor using Gibbs energy minimization",
+        required_params=[],
+        optional_params=["temperature_C", "pressure_bara"],
+        default_values={},
+        constraints={},
+    ),
+
+    "well_flow": TemplateDef(
+        name="well_flow",
+        display_name="Well Flow",
+        description="Well flow / tubing performance model",
+        required_params=["wellhead_pressure_bara"],
+        optional_params=["reservoir_pressure_bara", "depth_m"],
+        default_values={},
+        constraints={},
+    ),
+
+    "recycle": TemplateDef(
+        name="recycle",
+        display_name="Recycle",
+        description="Recycle stream for iterative convergence of recycle loops",
+        required_params=[],
+        optional_params=["tolerance"],
+        default_values={
+            "tolerance": 1e-4,
+        },
+        constraints={},
+    ),
+
+    "adjuster": TemplateDef(
+        name="adjuster",
+        display_name="Adjuster / Controller",
+        description="Adjusts a variable to meet a target specification",
+        required_params=["target_variable", "target_value"],
+        optional_params=["tolerance"],
+        default_values={},
+        constraints={},
+    ),
+
+    "electrolyzer": TemplateDef(
+        name="electrolyzer",
+        display_name="Electrolyzer",
+        description="Water electrolyzer for hydrogen production",
+        required_params=[],
+        optional_params=["efficiency"],
+        default_values={},
+        constraints={},
+    ),
+
+    "adsorber": TemplateDef(
+        name="adsorber",
+        display_name="Adsorber",
+        description="Adsorption unit (e.g. molecular sieve, activated carbon)",
+        required_params=[],
+        optional_params=[],
+        default_values={},
+        constraints={},
+    ),
+
+    "tank": TemplateDef(
+        name="tank",
+        display_name="Storage Tank",
+        description="Atmospheric or pressurized storage tank",
+        required_params=[],
+        optional_params=["pressure_bara"],
+        default_values={},
+        constraints={},
     ),
 }
 

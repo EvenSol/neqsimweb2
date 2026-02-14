@@ -59,6 +59,31 @@ class AddComponentOp:
 
 
 @dataclass
+class AddStreamOp:
+    """
+    Add a new inlet stream and (optionally) mix it into the process.
+
+    Example:
+        AddStreamOp(
+            name="liquid feed",
+            insert_after="inlet separator",
+            components={"nC10": 500.0, "benzene": 300.0, "water": 200.0},
+            flow_unit="kg/hr",
+            temperature_C=30.0,
+            pressure_bara=30.0,
+        )
+    """
+    name: str
+    insert_after: str                        # unit to insert mixer after
+    components: Dict[str, float]             # component_name -> flow_rate
+    flow_unit: str = "kg/hr"                 # "kg/hr", "mol/sec", etc.
+    temperature_C: Optional[float] = None
+    pressure_bara: Optional[float] = None
+    base_stream: Optional[str] = None        # stream to clone thermo system from
+    mixer_name: Optional[str] = None         # optional mixer unit name
+
+
+@dataclass
 class TargetSpec:
     """
     Iterative target-seeking specification.
@@ -88,6 +113,28 @@ class TargetSpec:
 
 
 @dataclass
+class AddProcessOp:
+    """
+    Add a sub-process system (ProcessModule) to the main process.
+    
+    Allows composing multiple process systems, e.g. adding a gas treatment
+    module or a compression train module to an existing process.
+    
+    Example:
+        AddProcessOp(
+            name="dew point control module",
+            process_file="dewpoint_control.neqsim",
+            connect_inlet_to="inlet separator.gasOutStream",
+            connect_outlet_to="1st stage compressor",
+        )
+    """
+    name: str                               # name for the sub-process
+    units: List[Dict[str, Any]]             # list of units to create [{equipment_type, name, params}, ...]
+    insert_after: str                       # insert the whole sub-process after this unit
+    connect_outlet_to: Optional[str] = None # connect the last unit's outlet to this existing unit's inlet
+
+
+@dataclass
 class InputPatch:
     """
     Change one or more ProcessInput fields, and optionally add new units/components.
@@ -98,13 +145,17 @@ class InputPatch:
         Scale:     {"feed_rate": {"op": "scale", "value": 1.1}}
     
     Supports adding new equipment via add_units list.
+    Supports adding new inlet streams via add_streams list.
     Supports adding chemical components via add_components list.
     Supports iterative target-seeking via targets list.
+    Supports adding sub-process systems via add_process list.
     """
     changes: Dict[str, Any]
     add_units: List[AddUnitOp] = field(default_factory=list)
+    add_streams: List[AddStreamOp] = field(default_factory=list)
     add_components: List[AddComponentOp] = field(default_factory=list)
     targets: List[TargetSpec] = field(default_factory=list)
+    add_process: List[AddProcessOp] = field(default_factory=list)
     note: Optional[str] = None
 
     def apply_to(self, base_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -204,6 +255,20 @@ def scenario_from_dict(d: dict) -> Scenario:
             params=au.get("params", {}),
         ))
 
+    # Parse add_streams if present
+    add_streams = []
+    for ast in patch_data.get("add_streams", []):
+        add_streams.append(AddStreamOp(
+            name=ast["name"],
+            insert_after=ast["insert_after"],
+            components=ast.get("components", {}),
+            flow_unit=ast.get("flow_unit", "kg/hr"),
+            temperature_C=ast.get("temperature_C"),
+            pressure_bara=ast.get("pressure_bara"),
+            base_stream=ast.get("base_stream"),
+            mixer_name=ast.get("mixer_name"),
+        ))
+
     # Parse add_components if present
     add_components = []
     for ac in patch_data.get("add_components", []):
@@ -227,11 +292,23 @@ def scenario_from_dict(d: dict) -> Scenario:
             max_iterations=int(t.get("max_iterations", 20)),
         ))
 
+    # Parse add_process if present
+    add_process = []
+    for ap in patch_data.get("add_process", []):
+        add_process.append(AddProcessOp(
+            name=ap["name"],
+            units=ap.get("units", []),
+            insert_after=ap["insert_after"],
+            connect_outlet_to=ap.get("connect_outlet_to"),
+        ))
+
     patch = InputPatch(
         changes=patch_data.get("changes", {}),
         add_units=add_units,
+        add_streams=add_streams,
         add_components=add_components,
         targets=targets,
+        add_process=add_process,
         note=patch_data.get("note")
     )
     return Scenario(
