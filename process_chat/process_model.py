@@ -150,17 +150,16 @@ class NeqSimProcessModel:
     def _deserialize_xml_string(xml_string: str):
         """Deserialize a NeqSim object from an XML string using XStream.
 
-        Tries two strategies:
+        Tries multiple strategies combining two axes:
 
-        1. **Custom ReflectionConverter at priority -5** — intercepts neqsim
-           classes before ``SerializableConverter`` (-10) which would fail on
-           ``readObject()/writeObject()``.  Works for most files.
+        - **Converter**: custom ``ReflectionConverter`` at priority -5
+          (bypasses broken ``readObject``/``writeObject``) vs. plain default
+          converter stack.
+        - **Reference mode**: XStream's default XPath-relative references
+          vs. ``ID_REFERENCES`` (numeric ``reference="9"`` style used by
+          many NeqSim-saved files).
 
-        2. **Plain XStream (no custom converter)** — falls back here when
-           strategy 1 fails, typically due to XStream *Invalid reference*
-           errors.  The custom ``ReflectionConverter`` can break XStream's
-           internal ID/IDREF back-reference resolution; the default converter
-           stack handles references correctly.
+        Returns the first successfully deserialized object.
         """
         import jpype
 
@@ -172,24 +171,37 @@ class NeqSimProcessModel:
             "com.thoughtworks.xstream.converters.reflection.ReflectionConverter"
         )
 
-        # --- Strategy 1: custom ReflectionConverter at priority -5 ---
-        try:
-            xstream = XStream()
-            xstream.addPermission(AnyTypePermission.ANY)
-            xstream.ignoreUnknownElements()
-            rc = ReflectionConverter(
-                xstream.getMapper(), xstream.getReflectionProvider()
-            )
-            xstream.registerConverter(rc, -5)
-            return xstream.fromXML(xml_string)
-        except Exception:
-            pass
+        # XStream mode constants
+        ID_REFERENCES = int(XStream.ID_REFERENCES)
+        # Default mode is XPath-relative (no explicit setMode needed)
 
-        # --- Strategy 2: plain XStream (handles ID/IDREF references) ---
-        xstream = XStream()
-        xstream.addPermission(AnyTypePermission.ANY)
-        xstream.ignoreUnknownElements()
-        return xstream.fromXML(xml_string)
+        strategies = [
+            # (use_custom_converter, use_id_references)
+            (True,  False),   # custom converter + default XPath refs
+            (True,  True),    # custom converter + numeric ID refs
+            (False, True),    # plain XStream  + numeric ID refs
+            (False, False),   # plain XStream  + default XPath refs
+        ]
+
+        last_err = None
+        for use_custom, use_id_refs in strategies:
+            try:
+                xstream = XStream()
+                xstream.addPermission(AnyTypePermission.ANY)
+                xstream.ignoreUnknownElements()
+                if use_id_refs:
+                    xstream.setMode(ID_REFERENCES)
+                if use_custom:
+                    rc = ReflectionConverter(
+                        xstream.getMapper(), xstream.getReflectionProvider()
+                    )
+                    xstream.registerConverter(rc, -5)
+                return xstream.fromXML(xml_string)
+            except Exception as e:
+                last_err = e
+
+        # All strategies exhausted — raise the last error
+        raise last_err
 
     @classmethod
     def from_file(cls, filepath: str) -> "NeqSimProcessModel":
