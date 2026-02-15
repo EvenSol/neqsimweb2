@@ -397,8 +397,14 @@ class NeqSimProcessModel:
         """Return the underlying Java ProcessSystem object."""
         return self._proc
 
+    # Unit types that legitimately produce power or duty
+    _POWER_UNITS = {"Compressor", "Pump", "ESPPump", "Expander", "GasTurbine"}
+    _DUTY_UNITS = {"Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler",
+                   "MultiStreamHeatExchanger"}
+    _HEAT_EXCHANGE_UNITS = _DUTY_UNITS  # units where outlet temperature matters
+
     def list_units(self) -> List[UnitInfo]:
-        """List all unit operations with type info."""
+        """List all unit operations with type info and key properties."""
         result = []
         for name, u in self._units.items():
             try:
@@ -412,18 +418,52 @@ class NeqSimProcessModel:
                 ("power_kW", "getPower"),
                 ("duty_kW", "getDuty"),
                 ("isentropicEfficiency", "getIsentropicEfficiency"),
+                ("polytropicEfficiency", "getPolytropicEfficiency"),
                 ("outletPressure_bara", "getOutletPressure"),
             ]:
                 if hasattr(u, getter):
                     try:
                         val = getattr(u, getter)()
+                        if val is None:
+                            continue
+                        fval = float(val)
                         if prop in ("power_kW", "duty_kW"):
-                            val = float(val) / 1000.0  # W -> kW
-                        else:
-                            val = float(val)
-                        props[prop] = val
+                            fval = fval / 1000.0  # W -> kW
+                        # Skip zero power/duty for units that don't produce them
+                        if fval == 0.0 and prop == "power_kW" and java_class not in self._POWER_UNITS:
+                            continue
+                        if fval == 0.0 and prop == "duty_kW" and java_class not in self._DUTY_UNITS:
+                            continue
+                        props[prop] = fval
                     except Exception:
                         pass
+
+            # Outlet temperature for heaters/coolers/heat exchangers
+            if java_class in self._HEAT_EXCHANGE_UNITS:
+                for m in ("getOutletStream", "getOutStream"):
+                    if hasattr(u, m):
+                        try:
+                            s = getattr(u, m)()
+                            if s is not None:
+                                props["outTemperature_C"] = float(s.getTemperature("C"))
+                                break
+                        except Exception:
+                            pass
+
+            # Flow rate, T, P for Stream-type units
+            if java_class == "Stream":
+                try:
+                    props["flow_kg_hr"] = float(u.getFlowRate("kg/hr"))
+                except Exception:
+                    pass
+                try:
+                    props["temperature_C"] = float(u.getTemperature("C"))
+                except Exception:
+                    pass
+                try:
+                    props["pressure_bara"] = float(u.getPressure("bara"))
+                except Exception:
+                    pass
 
             result.append(UnitInfo(name=name, unit_type=java_class, java_class=java_class, properties=props))
         return result
@@ -573,14 +613,25 @@ class NeqSimProcessModel:
         # Extract calculated fluid properties from streams (viscosity, Z, JT, TVP, RVP, etc.)
         self._extract_stream_fluid_properties(kpis)
 
-        # Mass balance check — compare feed to the sum of ALL terminal
-        # streams: last unit's outlets PLUS liquid drains from intermediate
-        # separators (which leave the process boundary).
+        # Mass balance check — identify true terminal product streams.
+        #
+        # Strategy: In processes with recycles, mixers, and multiple product
+        # streams, we cannot blindly count separator liquid drains as products
+        # because many are recirculated back into the process.
+        #
+        # Instead, we detect terminal product streams by looking for explicit
+        # Stream-type units added AFTER all process equipment (a common
+        # NeqSim convention for marking product streams like "export gas",
+        # "export oil", "fuel gas").  If none are found, we fall back to
+        # the last non-utility unit's ALL outlets.
         try:
             proc = self._proc
             all_units = list(proc.getUnitOperations())
             feed_flow = 0.0
             product_flow = 0.0
+            product_details = []  # for diagnostic output
+
+            _utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
 
             if all_units:
                 # Feed flow: first unit in the process
@@ -596,38 +647,92 @@ class NeqSimProcessModel:
                             except Exception:
                                 pass
 
-                # Product flow: last unit's outlets
-                last = all_units[-1]
-                for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
-                    if hasattr(last, m):
+                # --- Detect terminal product streams ---
+                # Find the last non-Stream, non-utility unit in process order.
+                # Any Stream-type unit appearing AFTER it is a terminal product.
+                last_equip_idx = -1
+                for i, u in enumerate(all_units):
+                    uclass = str(u.getClass().getSimpleName())
+                    if uclass != "Stream" and uclass not in _utility_types:
+                        last_equip_idx = i
+
+                terminal_stream_units = []
+                for i, u in enumerate(all_units):
+                    if i > last_equip_idx and i > 0:  # skip first unit (feed)
+                        uclass = str(u.getClass().getSimpleName())
+                        if uclass == "Stream":
+                            terminal_stream_units.append(u)
+
+                if terminal_stream_units:
+                    # Explicit terminal streams — use them as products
+                    for s in terminal_stream_units:
                         try:
-                            product_flow += float(getattr(last, m)().getFlowRate("kg/hr"))
-                            break
+                            flow = float(s.getFlowRate("kg/hr"))
+                            if abs(flow) > 0.01:
+                                sname = str(s.getName()) if s.getName() else "product"
+                                product_flow += flow
+                                product_details.append(f"{sname}={flow:.0f}")
                         except Exception:
                             pass
-                if hasattr(last, "getLiquidOutStream"):
-                    try:
-                        product_flow += float(last.getLiquidOutStream().getFlowRate("kg/hr"))
-                    except Exception:
-                        pass
+                else:
+                    # Fallback: use the last non-utility unit's ALL outlets
+                    last = None
+                    for i in range(len(all_units) - 1, -1, -1):
+                        uclass = str(all_units[i].getClass().getSimpleName())
+                        if uclass not in _utility_types:
+                            last = all_units[i]
+                            break
 
-                # Add liquid drains from ALL intermediate separators
-                # (these leave the process boundary and are not consumed downstream)
-                for u in all_units[:-1]:  # exclude last unit, already counted
-                    java_class = str(u.getClass().getSimpleName())
-                    if "Separator" in java_class or "Scrubber" in java_class:
-                        if hasattr(u, "getLiquidOutStream"):
+                    if last is not None:
+                        last_class = str(last.getClass().getSimpleName())
+                        # Gas outlet
+                        for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+                            if hasattr(last, m):
+                                try:
+                                    s = getattr(last, m)()
+                                    flow = float(s.getFlowRate("kg/hr"))
+                                    if abs(flow) > 0.01:
+                                        sname = str(s.getName()) if s.getName() else "gas_out"
+                                        product_flow += flow
+                                        product_details.append(f"{sname}={flow:.0f}")
+                                    break
+                                except Exception:
+                                    pass
+                        # Oil outlet (three-phase separators)
+                        if hasattr(last, "getOilOutStream"):
                             try:
-                                liq_flow = float(u.getLiquidOutStream().getFlowRate("kg/hr"))
-                                if liq_flow > 0.01:  # non-trivial liquid drain
+                                oil_flow = float(last.getOilOutStream().getFlowRate("kg/hr"))
+                                if abs(oil_flow) > 0.01:
+                                    product_flow += oil_flow
+                                    product_details.append(f"oil={oil_flow:.0f}")
+                            except Exception:
+                                pass
+                        # Liquid outlet
+                        if hasattr(last, "getLiquidOutStream"):
+                            try:
+                                liq_flow = float(last.getLiquidOutStream().getFlowRate("kg/hr"))
+                                if abs(liq_flow) > 0.01:
                                     product_flow += liq_flow
+                                    product_details.append(f"liquid={liq_flow:.0f}")
+                            except Exception:
+                                pass
+                        # Water outlet (three-phase separators)
+                        if hasattr(last, "getWaterOutStream"):
+                            try:
+                                water_flow = float(last.getWaterOutStream().getFlowRate("kg/hr"))
+                                if abs(water_flow) > 0.01:
+                                    product_flow += water_flow
+                                    product_details.append(f"water={water_flow:.0f}")
                             except Exception:
                                 pass
 
             # Fallback: match by stream name keywords
             if feed_flow == 0.0:
                 for name, s in self._streams.items():
-                    flow = float(s.getFlowRate("kg/hr"))
+                    try:
+                        flow = float(s.getFlowRate("kg/hr"))
+                    except Exception:
+                        continue
                     lower = name.lower()
                     if any(kw in lower for kw in ("feed", "inlet", "well", "input")):
                         feed_flow += flow
@@ -637,10 +742,11 @@ class NeqSimProcessModel:
             if feed_flow > 0:
                 balance_pct = abs(feed_flow - product_flow) / feed_flow * 100
                 kpis["mass_balance_pct"] = KPI("mass_balance_pct", balance_pct, "%")
+                detail_str = ", ".join(product_details) if product_details else f"{product_flow:.0f}"
                 status = "OK" if balance_pct < 1.0 else "WARN" if balance_pct < 5.0 else "VIOLATION"
                 constraints.append(ConstraintStatus(
                     "mass_balance", status,
-                    f"Feed={feed_flow:.0f} kg/hr, Products={product_flow:.0f} kg/hr, imbalance={balance_pct:.2f}%"
+                    f"Feed={feed_flow:.0f} kg/hr, Products={product_flow:.0f} kg/hr ({detail_str}), imbalance={balance_pct:.2f}%"
                 ))
         except Exception:
             pass
@@ -950,18 +1056,38 @@ class NeqSimProcessModel:
                 ("power_kW", "getPower"),
                 ("duty_kW", "getDuty"),
                 ("isentropicEfficiency", "getIsentropicEfficiency"),
+                ("polytropicEfficiency", "getPolytropicEfficiency"),
                 ("outletPressure_bara", "getOutletPressure"),
             ]:
                 if hasattr(u, getter):
                     try:
                         val = getattr(u, getter)()
+                        if val is None:
+                            continue
+                        fval = float(val)
                         if prop in ("power_kW", "duty_kW"):
-                            val = float(val) / 1000.0
-                        else:
-                            val = float(val)
-                        props[prop] = val
+                            fval = fval / 1000.0
+                        # Skip zero power/duty for non-relevant equipment
+                        if fval == 0.0 and prop == "power_kW" and utype not in self._POWER_UNITS:
+                            continue
+                        if fval == 0.0 and prop == "duty_kW" and utype not in self._DUTY_UNITS:
+                            continue
+                        props[prop] = fval
                     except Exception:
                         pass
+
+            # Outlet temperature for heaters/coolers
+            if utype in self._HEAT_EXCHANGE_UNITS:
+                for m in ("getOutletStream", "getOutStream"):
+                    if hasattr(u, m):
+                        try:
+                            s = getattr(u, m)()
+                            if s is not None:
+                                props["outTemperature_C"] = float(s.getTemperature("C"))
+                                break
+                        except Exception:
+                            pass
+
             prop_str = ", ".join(f"{k}={v:.2f}" for k, v in props.items()) if props else ""
 
             # Inlet stream conditions
@@ -979,20 +1105,56 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
 
-            # Outlet stream conditions
-            outlet_str = ""
-            for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
-                if hasattr(u, m):
+            # Outlet stream conditions — show ALL outlets for separators
+            outlet_strs = []
+            is_separator = "Separator" in utype or "Scrubber" in utype
+
+            if is_separator:
+                # Show gas, oil, liquid, water outlets separately
+                for m, label in [
+                    ("getGasOutStream", "GAS"),
+                    ("getOilOutStream", "OIL"),
+                    ("getLiquidOutStream", "LIQ"),
+                    ("getWaterOutStream", "WATER"),
+                ]:
+                    if hasattr(u, m):
+                        try:
+                            s = getattr(u, m)()
+                            if s is not None:
+                                sname = str(s.getName()) if s.getName() else label
+                                T = float(s.getTemperature("C"))
+                                P = float(s.getPressure("bara"))
+                                F = float(s.getFlowRate("kg/hr"))
+                                outlet_strs.append(
+                                    f"OUT ({label}): {sname} (T={T:.1f}°C, P={P:.2f} bara, F={F:.1f} kg/hr)"
+                                )
+                        except Exception:
+                            pass
+            else:
+                for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+                    if hasattr(u, m):
+                        try:
+                            s = getattr(u, m)()
+                            if s is not None:
+                                sname = str(s.getName()) if s.getName() else "?"
+                                T = float(s.getTemperature("C"))
+                                P = float(s.getPressure("bara"))
+                                outlet_strs.append(f"OUT: {sname} (T={T:.1f}°C, P={P:.2f} bara)")
+                                break
+                        except Exception:
+                            pass
+
+            # Splitter: show split streams
+            if "Splitter" in utype and hasattr(u, "getSplitStream"):
+                for j in range(10):
                     try:
-                        s = getattr(u, m)()
+                        s = u.getSplitStream(j)
                         if s is not None:
-                            sname = str(s.getName()) if s.getName() else "?"
-                            T = float(s.getTemperature("C"))
-                            P = float(s.getPressure("bara"))
-                            outlet_str = f"OUT: {sname} (T={T:.1f}°C, P={P:.2f} bara)"
-                            break
+                            sname = str(s.getName()) if s.getName() else f"split_{j}"
+                            F = float(s.getFlowRate("kg/hr"))
+                            outlet_strs.append(f"OUT (SPLIT {j}): {sname} (F={F:.1f} kg/hr)")
                     except Exception:
-                        pass
+                        break
 
             line = f"  [{idx}] {name} ({utype})"
             if prop_str:
@@ -1000,7 +1162,7 @@ class NeqSimProcessModel:
             lines.append(line)
             if inlet_str:
                 lines.append(f"        {inlet_str}")
-            if outlet_str:
+            for outlet_str in outlet_strs:
                 lines.append(f"        {outlet_str}")
 
         lines.append("")
