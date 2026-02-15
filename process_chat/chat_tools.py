@@ -2427,4 +2427,5 @@ class ProcessChatSession:
         self._last_pvt = None
         self._last_safety = None
         self._last_flow_assurance = None
+        self._builder = None
 

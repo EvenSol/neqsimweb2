@@ -667,25 +667,25 @@ def _show_emissions(emissions_result):
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Total CO₂", f"{emissions_result.total_CO2_kg_hr:,.1f} kg/hr")
+        st.metric("Total CO₂", f"{emissions_result.total_co2_kg_hr:,.1f} kg/hr")
     with col2:
-        st.metric("Total CO₂e", f"{emissions_result.total_CO2e_kg_hr:,.1f} kg/hr")
+        st.metric("Total CO₂e", f"{emissions_result.total_co2e_kg_hr:,.1f} kg/hr")
     with col3:
-        if emissions_result.emission_intensity_kg_boe is not None:
-            st.metric("Emission Intensity", f"{emissions_result.emission_intensity_kg_boe:,.2f} kg CO₂e/boe")
+        if emissions_result.emission_intensity_kg_per_tonne is not None:
+            st.metric("Emission Intensity", f"{emissions_result.emission_intensity_kg_per_tonne:,.2f} kg CO₂e/tonne")
         else:
             st.metric("Emission Intensity", "N/A")
 
     if emissions_result.sources:
         st.markdown("**Emission Sources:**")
         src_data = []
-        for s in sorted(emissions_result.sources, key=lambda x: x.CO2_kg_hr, reverse=True):
+        for s in sorted(emissions_result.sources, key=lambda x: x.co2_kg_hr, reverse=True):
             src_data.append({
                 "Source": s.name,
-                "Category": s.category,
-                "CO₂ (kg/hr)": round(s.CO2_kg_hr, 2),
-                "CH₄ (kg/hr)": round(s.CH4_kg_hr, 4),
-                "CO₂e (kg/hr)": round(s.CO2e_kg_hr, 2),
+                "Category": s.source_type,
+                "CO₂ (kg/hr)": round(s.co2_kg_hr, 2),
+                "CH₄ (kg/hr)": round(s.ch4_kg_hr, 4),
+                "CO₂e (kg/hr)": round(s.co2e_kg_hr, 2),
             })
         st.dataframe(pd.DataFrame(src_data), use_container_width=True, hide_index=True)
 
@@ -907,13 +907,14 @@ def _show_safety(safety_result):
     with col1:
         st.metric("Total PSV Count", f"{safety_result.total_psv_count}")
     with col2:
-        st.metric("Total Relief Load", f"{safety_result.total_relief_load_kg_hr:,.0f} kg/hr")
+        st.metric("Max Relief Rate", f"{safety_result.max_relief_rate_kg_hr:,.0f} kg/hr")
 
-    if safety_result.controlling_scenario:
-        ctrl = safety_result.controlling_scenario
-        st.info(f"**Controlling Scenario:** {ctrl.scenario_type} on {ctrl.equipment_name} — "
-                f"Relief rate {ctrl.relief_rate_kg_hr:,.0f} kg/hr, "
-                f"Required orifice {ctrl.orifice_designation}")
+    # Show controlling (highest relief rate) scenario if available
+    if safety_result.scenarios:
+        ctrl = max(safety_result.scenarios, key=lambda s: s.required_relief_rate_kg_hr)
+        st.info(f"**Controlling Scenario:** {ctrl.scenario} on {ctrl.equipment_name} — "
+                f"Relief rate {ctrl.required_relief_rate_kg_hr:,.0f} kg/hr, "
+                f"Required orifice {ctrl.api_orifice_letter}")
 
     if safety_result.scenarios:
         st.markdown("**Relief Scenarios:**")
@@ -921,19 +922,14 @@ def _show_safety(safety_result):
         for s in safety_result.scenarios:
             scen_data.append({
                 "Equipment": s.equipment_name,
-                "Scenario": s.scenario_type,
+                "Scenario": s.scenario,
                 "Set Pressure (bara)": round(s.set_pressure_bara, 1),
-                "Relief Rate (kg/hr)": round(s.relief_rate_kg_hr, 0),
-                "Required Area (mm²)": round(s.required_area_mm2, 1),
-                "Orifice": s.orifice_designation,
-                "Phase": s.relieving_phase,
+                "Relief Rate (kg/hr)": round(s.required_relief_rate_kg_hr, 0),
+                "Required Area (mm²)": round(s.required_orifice_area_mm2, 1),
+                "Orifice": s.api_orifice_letter,
+                "Phase": s.fluid_phase,
             })
         st.dataframe(pd.DataFrame(scen_data), use_container_width=True, hide_index=True)
-
-    if safety_result.recommendations:
-        with st.expander("💡 Recommendations", expanded=False):
-            for rec in safety_result.recommendations:
-                st.markdown(f"- {rec}")
 
 
 def _show_flow_assurance(fa_result):
@@ -941,8 +937,8 @@ def _show_flow_assurance(fa_result):
     st.markdown("---")
     st.markdown("**🌊 Flow Assurance Assessment**")
 
-    overall_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴"}.get(fa_result.overall_risk_level, "⚪")
-    st.markdown(f"**Overall Risk Level:** {overall_icon} {fa_result.overall_risk_level}")
+    overall_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴"}.get(fa_result.overall_risk, "⚪")
+    st.markdown(f"**Overall Risk Level:** {overall_icon} {fa_result.overall_risk}")
 
     # Hydrate risks
     if fa_result.hydrate_risks:
@@ -951,13 +947,13 @@ def _show_flow_assurance(fa_result):
         for h in fa_result.hydrate_risks:
             risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴"}.get(h.risk_level, "⚪")
             hyd_data.append({
-                "Stream": h.stream_name,
+                "Stream": h.location,
                 "Risk": f"{risk_icon} {h.risk_level}",
-                "Hydrate T (°C)": round(h.hydrate_temperature_C, 1) if h.hydrate_temperature_C is not None else "N/A",
-                "Stream T (°C)": round(h.stream_temperature_C, 1) if h.stream_temperature_C is not None else "N/A",
-                "Margin (°C)": round(h.margin_C, 1) if h.margin_C is not None else "N/A",
-                "Inhibitor": h.recommended_inhibitor or "—",
-                "Dose (wt%)": round(h.inhibitor_dose_wt_pct, 1) if h.inhibitor_dose_wt_pct else "—",
+                "Hydrate T (°C)": round(h.hydrate_T_C, 1) if h.hydrate_T_C is not None else "N/A",
+                "Stream T (°C)": round(h.operating_T_C, 1) if h.operating_T_C is not None else "N/A",
+                "Subcooling (°C)": round(h.subcooling_C, 1) if h.subcooling_C is not None else "N/A",
+                "Inhibitor": h.inhibitor_type or "—",
+                "Inhibitor Rate (kg/hr)": round(h.inhibitor_rate_kg_hr, 1) if h.inhibitor_rate_kg_hr else "—",
             })
         st.dataframe(pd.DataFrame(hyd_data), use_container_width=True, hide_index=True)
 
@@ -968,11 +964,10 @@ def _show_flow_assurance(fa_result):
         for c in fa_result.corrosion_risks:
             risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴"}.get(c.risk_level, "⚪")
             cor_data.append({
-                "Stream": c.stream_name,
+                "Location": c.location,
                 "Risk": f"{risk_icon} {c.risk_level}",
-                "CO₂ Corr. Rate (mm/yr)": round(c.CO2_corrosion_rate_mm_yr, 2) if c.CO2_corrosion_rate_mm_yr else "—",
-                "H₂S Corr. Rate (mm/yr)": round(c.H2S_corrosion_rate_mm_yr, 2) if c.H2S_corrosion_rate_mm_yr else "—",
-                "Mitigation": c.recommended_mitigation or "—",
+                "Corr. Rate (mm/yr)": round(c.corrosion_rate_mm_yr, 2) if c.corrosion_rate_mm_yr else "—",
+                "Mechanism": c.mechanism or "—",
             })
         st.dataframe(pd.DataFrame(cor_data), use_container_width=True, hide_index=True)
 
@@ -985,8 +980,8 @@ def _show_flow_assurance(fa_result):
             wax_data.append({
                 "Stream": w.stream_name,
                 "Risk": f"{risk_icon} {w.risk_level}",
-                "WAT (°C)": round(w.wax_appearance_temperature_C, 1) if w.wax_appearance_temperature_C else "N/A",
-                "Stream T (°C)": round(w.stream_temperature_C, 1) if w.stream_temperature_C else "N/A",
+                "WAT (°C)": round(w.wax_appearance_T_C, 1) if w.wax_appearance_T_C else "N/A",
+                "Stream T (°C)": round(w.operating_T_C, 1) if w.operating_T_C else "N/A",
                 "Margin (°C)": round(w.margin_C, 1) if w.margin_C else "N/A",
             })
         st.dataframe(pd.DataFrame(wax_data), use_container_width=True, hide_index=True)

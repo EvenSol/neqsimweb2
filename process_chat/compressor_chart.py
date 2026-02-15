@@ -210,6 +210,16 @@ def _generate_single_chart(
     # required speed to reach the target outlet pressure.
     unit.setSolveSpeed(True)
     unit.setUsePolytropicCalc(True)
+
+    # Set compressor speed limits to match the chart curve range so that
+    # the solver does not wander outside the generated performance map.
+    try:
+        cc = unit.getCompressorChart()
+        unit.setMaximumSpeed(cc.getMaxSpeedCurve())
+        unit.setMinimumSpeed(cc.getMinSpeedCurve())
+    except Exception:
+        pass
+
     unit.run()
 
     # Extract speed curves using the generator (gives access to real curve data)
@@ -245,71 +255,62 @@ def _generate_single_chart(
 
 
 def _extract_speed_curves(unit: Any, generator: Any = None) -> List[SpeedCurve]:
-    """Extract speed curve data points from a compressor and its chart generator."""
-    curves = []
+    """Extract speed curve data points from a compressor chart.
+
+    Uses the chart's parallel-array API: ``getSpeeds()``, ``getFlows()``,
+    ``getHeads()``, ``getPolytropicEfficiencies()`` which return ``double[]``
+    and ``double[][]`` respectively.
+    """
+    curves: List[SpeedCurve] = []
 
     try:
         chart = unit.getCompressorChart()
         if chart is None:
             return curves
 
-        # Method 1: try to get curves from the chart's getCurves()/getRealCurves()
-        real_curves = None
+        # --- Primary method: getSpeeds / getFlows / getHeads / getPolytropicEfficiencies ---
         try:
-            real_curves = chart.getCurves()
+            speeds_arr = chart.getSpeeds()          # double[]
+            flows_2d = chart.getFlows()             # double[][]
+            heads_2d = chart.getHeads()             # double[][]
+            effs_2d = chart.getPolytropicEfficiencies()  # double[][]
+
+            if speeds_arr is not None and flows_2d is not None and heads_2d is not None:
+                n_curves = len(speeds_arr)
+                for i in range(n_curves):
+                    spd = float(speeds_arr[i])
+                    flow_list = [round(float(f), 1) for f in flows_2d[i]]
+                    head_list = [round(float(h), 2) for h in heads_2d[i]]
+                    eff_list = []
+                    if effs_2d is not None and i < len(effs_2d):
+                        eff_list = [
+                            round(float(e), 1) if float(e) > 1 else round(float(e) * 100, 1)
+                            for e in effs_2d[i]
+                        ]
+                    else:
+                        eff_list = [0.0] * len(flow_list)
+
+                    if flow_list and head_list:
+                        curves.append(SpeedCurve(
+                            speed_rpm=round(spd, 0),
+                            flow_m3_hr=flow_list,
+                            head_kJ_kg=head_list,
+                            efficiency_pct=eff_list,
+                        ))
         except Exception:
             pass
 
-        if real_curves is not None:
-            try:
-                for i, curve in enumerate(real_curves):
-                    try:
-                        spd = float(curve.speed) if hasattr(curve, 'speed') else float(curve.getSpeed())
-                        flow_arr = list(curve.flow) if hasattr(curve, 'flow') else list(curve.getFlow())
-                        head_arr = list(curve.head) if hasattr(curve, 'head') else list(curve.getHead())
-                        eff_arr = []
-                        try:
-                            eff_arr = list(curve.polytropicEfficiency) if hasattr(curve, 'polytropicEfficiency') else list(curve.getPolytropicEfficiency())
-                        except Exception:
-                            eff_arr = [0.0] * len(flow_arr)
-
-                        flow_list = [round(float(f), 1) for f in flow_arr]
-                        head_list = [round(float(h), 2) for h in head_arr]
-                        eff_list = [round(float(e), 1) if e > 1 else round(float(e) * 100, 1) for e in eff_arr]
-
-                        if flow_list and head_list:
-                            curves.append(SpeedCurve(
-                                speed_rpm=round(spd, 0),
-                                flow_m3_hr=flow_list,
-                                head_kJ_kg=head_list,
-                                efficiency_pct=eff_list,
-                            ))
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
-        # Method 2: try sampling at different speeds via chart methods
+        # --- Fallback: sample via interpolation at several speeds ---
         if not curves:
             try:
                 speeds = []
                 try:
-                    # Try to get speed range from chart
-                    speed_arr = chart.getSpeed()
-                    if speed_arr is not None:
-                        speeds = [float(s) for s in speed_arr]
+                    cur_speed = float(unit.getSpeed())
+                    if cur_speed > 0:
+                        for frac in [0.7, 0.8, 0.9, 1.0, 1.1]:
+                            speeds.append(cur_speed * frac)
                 except Exception:
                     pass
-
-                if not speeds:
-                    # Estimate from compressor's current speed
-                    try:
-                        cur_speed = float(unit.getSpeed())
-                        if cur_speed > 0:
-                            for frac in [0.7, 0.8, 0.9, 1.0, 1.1]:
-                                speeds.append(cur_speed * frac)
-                    except Exception:
-                        pass
 
                 for speed in speeds:
                     flows = []

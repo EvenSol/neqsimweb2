@@ -169,12 +169,9 @@ def calculate_emissions(
         power_kw = 0.0
         try:
             if hasattr(java_obj, "getPower"):
-                # NeqSim returns power in W sometimes, kW other times
+                # NeqSim getPower() always returns watts
                 p = float(java_obj.getPower())
-                if abs(p) > 1e6:
-                    power_kw = p / 1000.0   # likely in W
-                else:
-                    power_kw = p
+                power_kw = p / 1000.0
         except Exception:
             pass
 
@@ -182,9 +179,10 @@ def calculate_emissions(
         duty_kw = 0.0
         try:
             if hasattr(java_obj, "getEnergyInput"):
+                # NeqSim getEnergyInput() returns watts
                 d = float(java_obj.getEnergyInput())
                 if d > 0:
-                    duty_kw = d if abs(d) < 1e6 else d / 1000.0
+                    duty_kw = d / 1000.0
         except Exception:
             pass
 
