@@ -67,13 +67,19 @@ def _get_fluid_from_model(
     target = None
 
     if stream_name:
-        for s_name, s_info in streams.items():
-            if stream_name.lower() in s_name.lower():
-                target = s_info.get("java_ref")
+        for s_info in streams:
+            if stream_name.lower() in s_info.name.lower():
+                try:
+                    target = model.get_stream(s_info.name)
+                except KeyError:
+                    pass
                 break
 
     if target is None and streams:
-        target = list(streams.values())[0].get("java_ref")
+        try:
+            target = model.get_stream(streams[0].name)
+        except KeyError:
+            pass
 
     if target is None:
         return None
@@ -289,10 +295,10 @@ def _run_diff_lib(
                 try:
                     n_comps = fl.getNumberOfComponents()
                     for j in range(n_comps):
-                        gas_moles = float(fl.getPhase("gas").getComponent(j).getNumberOfmable())
+                        gas_moles = float(fl.getPhase("gas").getComponent(j).getNumberOfMolesInPhase())
                         if gas_moles > 0:
-                            current = float(fl.getComponent(j).getNumberOfmable())
-                            fl.getComponent(j).setNumberOfmable(max(current - gas_moles, 1e-20))
+                            current = float(fl.getComponent(j).getNumberOfmoles())
+                            fl.getComponent(j).setNumberOfmoles(max(current - gas_moles, 1e-20))
                 except Exception:
                     pass
 
@@ -368,8 +374,8 @@ def _run_separator_test(
             try:
                 n_comps = fl.getNumberOfComponents()
                 for j in range(n_comps):
-                    oil_moles = float(fl.getPhase("oil").getComponent(j).getNumberOfmable())
-                    fl.getComponent(j).setNumberOfmable(max(oil_moles, 1e-20))
+                    oil_moles = float(fl.getPhase("oil").getComponent(j).getNumberOfMolesInPhase())
+                    fl.getComponent(j).setNumberOfmoles(max(oil_moles, 1e-20))
             except Exception:
                 pass
 
@@ -412,13 +418,12 @@ def run_pvt_simulation(
 
     # Get stream conditions as defaults
     streams = model.list_streams()
-    for s_name, s_info in streams.items():
-        if not stream_name or stream_name.lower() in s_name.lower():
-            conds = s_info.get("conditions", {})
-            if temperature_C == 100.0 and "temperature_C" in conds:
-                temperature_C = conds["temperature_C"]
-            if p_start_bara == 400.0 and "pressure_bara" in conds:
-                p_start_bara = conds["pressure_bara"] * 1.5
+    for s_info in streams:
+        if not stream_name or stream_name.lower() in s_info.name.lower():
+            if temperature_C == 100.0 and s_info.temperature_C is not None:
+                temperature_C = s_info.temperature_C
+            if p_start_bara == 400.0 and s_info.pressure_bara is not None:
+                p_start_bara = s_info.pressure_bara * 1.5
             break
 
     exp_lower = experiment.lower().replace(" ", "_").replace("-", "_")

@@ -191,18 +191,19 @@ def run_safety_analysis(
                      "GasScrubber", "Tank"}
     _COMPRESSOR_TYPES = {"Compressor"}
 
-    for u_name, u_info in units.items():
-        java_type = u_info.get("type", "")
-        java_obj = u_info.get("java_ref")
-        if java_obj is None:
+    for u_info in units:
+        u_name = u_info.name
+        java_type = u_info.unit_type
+        try:
+            java_obj = model.get_unit(u_name)
+        except KeyError:
             continue
 
-        props = u_info.get("properties", {})
-        inlet_p = props.get("inletPressure_bara", 0)
-        outlet_p = props.get("outletPressure_bara", inlet_p)
-        operating_p = max(inlet_p, outlet_p) if inlet_p else 50.0
+        props = u_info.properties
+        outlet_p = props.get("outletPressure_bara", 0)
+        operating_p = outlet_p if outlet_p else 50.0
         set_pressure = operating_p * design_pressure_factor
-        temp_K = props.get("inletTemperature_K", 300.0) or 300.0
+        temp_K = 300.0
 
         # Get fluid properties
         molar_mass = 0.020

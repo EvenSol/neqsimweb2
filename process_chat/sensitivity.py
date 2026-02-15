@@ -65,18 +65,19 @@ class SensitivityResult:
 def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
     """Apply a single patch key to a model. Returns True on success."""
     try:
-        parts = key.split(".")
+        parts = key.split(".", 2)
         if len(parts) < 2:
             return False
 
         if parts[0] == "streams":
-            stream_name = parts[1]
+            stream_name = parts[1] if len(parts) >= 2 else ""
             param = parts[2] if len(parts) > 2 else ""
             streams = model.list_streams()
-            for s_name, s_info in streams.items():
-                if stream_name.lower() in s_name.lower():
-                    java_stream = s_info.get("java_ref")
-                    if java_stream is None:
+            for s_info in streams:
+                if stream_name.lower() in s_info.name.lower():
+                    try:
+                        java_stream = model.get_stream(s_info.name)
+                    except KeyError:
                         return False
                     if "pressure_bara" in param:
                         java_stream.setPressure(float(value), "bara")
@@ -90,16 +91,17 @@ def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
             return False
 
         elif parts[0] == "units":
-            unit_name = parts[1]
+            unit_name = parts[1] if len(parts) >= 2 else ""
             param = parts[2] if len(parts) > 2 else ""
             units = model.list_units()
-            for u_name, u_info in units.items():
-                if unit_name.lower() in u_name.lower():
-                    java_obj = u_info.get("java_ref")
-                    if java_obj is None:
+            for u_info in units:
+                if unit_name.lower() in u_info.name.lower():
+                    try:
+                        java_obj = model.get_unit(u_info.name)
+                    except KeyError:
                         return False
                     if "outletpressure_bara" in param or "outpressure_bara" in param:
-                        java_obj.setOutletPressure(float(value), "bara")
+                        java_obj.setOutletPressure(float(value))
                     elif "outtemperature_c" in param.lower():
                         java_obj.setOutTemperature(float(value), "C")
                     elif "isentropicefficiency" in param.lower():
@@ -118,7 +120,8 @@ def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
 
 def _extract_kpi_value(model: NeqSimProcessModel, kpi_name: str) -> Optional[float]:
     """Extract a single KPI value by name."""
-    kpis = model.extract_kpis()
+    run_result = model.run()
+    kpis = run_result.kpis
     # Exact match
     if kpi_name in kpis:
         return kpis[kpi_name].value
@@ -151,8 +154,8 @@ def _run_single_sweep(
 
     # Get base KPIs
     try:
-        model.run()
-        base_kpis = model.extract_kpis()
+        run_result = model.run()
+        base_kpis = run_result.kpis
         for kpi in response_kpis:
             for k, v in base_kpis.items():
                 if kpi.lower() in k.lower() and v.value is not None:
@@ -175,8 +178,8 @@ def _run_single_sweep(
                 ))
                 continue
 
-            clone.run()
-            kpis = clone.extract_kpis()
+            run_result = clone.run()
+            kpis = run_result.kpis
 
             output: Dict[str, float] = {}
             for kpi_name in response_kpis:
@@ -317,8 +320,8 @@ def _run_two_variable_sweep(
                 clone = model.clone()
                 _apply_patch_key(clone, variable_1, v1)
                 _apply_patch_key(clone, variable_2, v2)
-                clone.run()
-                kpis = clone.extract_kpis()
+                run_result = clone.run()
+                kpis = run_result.kpis
 
                 output: Dict[str, float] = {}
                 for kpi_name in response_kpis:

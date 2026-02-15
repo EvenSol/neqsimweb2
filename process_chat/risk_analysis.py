@@ -324,13 +324,19 @@ def _simulate_trip(model: NeqSimProcessModel,
     try:
         unit = clone.get_unit(unit_name)
         if unit is not None:
-            java_class = type(unit).__name__
+            try:
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                java_class = type(unit).__name__
 
             # Try setting the unit "off" if API supports it
             for method_name in ("setOff", "setIsActive"):
                 if hasattr(unit, method_name):
                     try:
-                        getattr(unit, method_name)(False if "Active" in method_name else None)
+                        if "Active" in method_name:
+                            getattr(unit, method_name)(False)
+                        else:
+                            getattr(unit, method_name)()
                         break
                     except Exception:
                         pass
@@ -389,7 +395,10 @@ def _simulate_degraded(model: NeqSimProcessModel,
     try:
         unit = clone.get_unit(unit_name)
         if unit is not None:
-            java_class = type(unit).__name__
+            try:
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                java_class = type(unit).__name__
 
             # Reduce inlet flow by the capacity factor
             for m in ("getInletStream", "getInStream", "getFeedStream"):

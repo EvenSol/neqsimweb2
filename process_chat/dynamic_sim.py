@@ -74,18 +74,20 @@ def _run_blowdown(
 
     if vessel_name:
         units = model.list_units()
-        for u_name, u_info in units.items():
-            if vessel_name.lower() in u_name.lower():
-                java_obj = u_info.get("java_ref")
-                if java_obj:
-                    try:
-                        if hasattr(java_obj, "getInternalDiameter"):
+        for u_info in units:
+            if vessel_name.lower() in u_info.name.lower():
+                try:
+                    java_obj = model.get_unit(u_info.name)
+                    if hasattr(java_obj, "getInternalDiameter"):
+                        try:
                             d = float(java_obj.getInternalDiameter())
                             L = d * 3  # L/D ≈ 3
                             volume_m3 = math.pi * (d/2)**2 * L
-                    except Exception:
-                        pass
-                props = u_info.get("properties", {})
+                        except Exception:
+                            pass
+                except KeyError:
+                    pass
+                props = u_info.properties
                 if p0 is None and "inletPressure_bara" in props:
                     p0 = props["inletPressure_bara"]
                 if "inletTemperature_K" in props:
@@ -96,8 +98,8 @@ def _run_blowdown(
         # Try to get from first stream
         streams = model.list_streams()
         if streams:
-            first = list(streams.values())[0]
-            p0 = first.get("conditions", {}).get("pressure_bara", 50.0)
+            first = streams[0]
+            p0 = first.pressure_bara or 50.0
 
     if p0 is None:
         p0 = 50.0
@@ -223,17 +225,17 @@ def _run_ramp(
     streams = model.list_streams()
     if not stream_name:
         if streams:
-            stream_name = list(streams.keys())[0]
+            stream_name = streams[0].name
         else:
             result.message = "No streams found."
             return result
 
     # Find current value
     current_flow = 0.0
-    for s_name, s_info in streams.items():
-        if stream_name.lower() in s_name.lower():
-            current_flow = s_info.get("conditions", {}).get("flow_kg_hr", 10000.0) or 10000.0
-            stream_name = s_name
+    for s_info in streams:
+        if stream_name.lower() in s_info.name.lower():
+            current_flow = s_info.flow_rate_kg_hr or 10000.0
+            stream_name = s_info.name
             break
 
     if start_value is None:
@@ -256,17 +258,19 @@ def _run_ramp(
             clone_proc = clone.get_process()
 
             # Set stream flow
-            for s_name, s_info in clone.list_streams().items():
-                if stream_name.lower() in s_name.lower():
-                    java_stream = s_info.get("java_ref")
-                    if java_stream:
+            for cs_info in clone.list_streams():
+                if stream_name.lower() in cs_info.name.lower():
+                    try:
+                        java_stream = clone.get_stream(cs_info.name)
                         java_stream.setFlowRate(float(val), "kg/hr")
+                    except KeyError:
+                        pass
                     break
 
-            clone.run()
+            run_result = clone.run()
 
             # Extract KPIs
-            kpis = clone.extract_kpis()
+            kpis = run_result.kpis
             point_values: Dict[str, float] = {"feed_flow_kg_hr": val}
 
             for kpi_name, kpi in kpis.items():
@@ -332,9 +336,9 @@ def run_dynamic_simulation(
         if scenario_type == "shutdown" and start_value is None and end_value is None:
             # Reverse ramp
             streams = model.list_streams()
-            for s_name, s_info in streams.items():
-                if not stream_name or stream_name.lower() in s_name.lower():
-                    flow = s_info.get("conditions", {}).get("flow_kg_hr", 10000.0)
+            for s_info in streams:
+                if not stream_name or stream_name.lower() in s_info.name.lower():
+                    flow = s_info.flow_rate_kg_hr or 10000.0
                     start_value = flow
                     end_value = flow * 0.05
                     break

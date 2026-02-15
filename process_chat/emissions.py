@@ -157,10 +157,12 @@ def calculate_emissions(
 
     # --- 1. Power-related fuel-gas emissions ---
     units = model.list_units()
-    for u_name, u_info in units.items():
-        java_type = u_info.get("type", "Unknown")
-        java_obj = u_info.get("java_ref")
-        if java_obj is None:
+    for u_info in units:
+        u_name = u_info.name
+        java_type = u_info.unit_type
+        try:
+            java_obj = model.get_unit(u_name)
+        except KeyError:
             continue
 
         # Compressor / pump power
@@ -216,9 +218,10 @@ def calculate_emissions(
     if flare_streams:
         streams = model.list_streams()
         for fl_name in flare_streams:
-            for s_name, s_info in streams.items():
+            for s_info in streams:
+                s_name = s_info.name
                 if fl_name.lower() in s_name.lower():
-                    flow_kg_hr = s_info.get("conditions", {}).get("flow_kg_hr", 0)
+                    flow_kg_hr = s_info.flow_rate_kg_hr or 0
                     if flow_kg_hr and flow_kg_hr > 0:
                         co2 = flow_kg_hr * _CO2_PER_KG_NATGAS * 0.98  # 98% combustion eff.
                         ch4 = flow_kg_hr * 0.02  # 2% uncombusted
@@ -236,8 +239,9 @@ def calculate_emissions(
 
     # --- 3. Fugitive emissions ---
     if include_fugitives:
-        for u_name, u_info in units.items():
-            java_type = u_info.get("type", "Unknown")
+        for u_info in units:
+            u_name = u_info.name
+            java_type = u_info.unit_type
             factor = _FUGITIVE_FACTORS.get(java_type, 0.0)
             if factor > 0:
                 ch4 = factor
@@ -260,16 +264,16 @@ def calculate_emissions(
     product_rate = 0.0
     if product_stream:
         streams = model.list_streams()
-        for s_name, s_info in streams.items():
-            if product_stream.lower() in s_name.lower():
-                product_rate = s_info.get("conditions", {}).get("flow_kg_hr", 0) or 0
+        for s_info in streams:
+            if product_stream.lower() in s_info.name.lower():
+                product_rate = s_info.flow_rate_kg_hr or 0
                 break
     if product_rate <= 0:
         # Try last stream
         streams = model.list_streams()
         if streams:
-            last = list(streams.values())[-1]
-            product_rate = last.get("conditions", {}).get("flow_kg_hr", 0) or 0
+            last = streams[-1]
+            product_rate = last.flow_rate_kg_hr or 0
 
     intensity = (total_co2e / product_rate * 1000) if product_rate > 0 else 0.0
 

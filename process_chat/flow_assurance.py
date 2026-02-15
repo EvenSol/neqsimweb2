@@ -242,19 +242,18 @@ def run_flow_assurance(
     streams = model.list_streams()
     recommendations: List[str] = []
 
-    for s_name, s_info in streams.items():
-        conds = s_info.get("conditions", {})
-        T_C = conds.get("temperature_C", 25.0) or 25.0
-        P_bara = conds.get("pressure_bara", 50.0) or 50.0
-        flow_kg_hr = conds.get("flow_kg_hr", 0) or 0
+    for s_info in streams:
+        s_name = s_info.name
+        T_C = s_info.temperature_C or 25.0
+        P_bara = s_info.pressure_bara or 50.0
+        flow_kg_hr = s_info.flow_rate_kg_hr or 0
 
-        java_stream = s_info.get("java_ref")
         fluid = None
-        if java_stream:
-            try:
-                fluid = java_stream.getFluid()
-            except Exception:
-                pass
+        try:
+            java_stream = model.get_stream(s_name)
+            fluid = java_stream.getFluid()
+        except Exception:
+            pass
 
         # --- Hydrate check ---
         if check_hydrates and fluid:
