@@ -68,15 +68,15 @@ with st.sidebar:
             st.success(f"✓ {uploaded_file.name}")
 
     # --- Start New Process button ---
-    if st.session_state.get("process_model") is None:
-        st.markdown("**— or —**")
-        if st.button("🔨 Start New Process", use_container_width=True,
-                     help="Build a process from scratch by describing it in chat"):
-            # Enter builder mode — clear any stale state
-            st.session_state.pop("chat_session", None)
-            st.session_state["chat_messages"] = []
-            st.session_state["_builder_mode"] = True
-            st.rerun()
+    if st.button("🔨 Start New Process", use_container_width=True,
+                 help="Build a process from scratch by describing it in chat"):
+        # Enter builder mode — clear any stale state
+        st.session_state.pop("process_model", None)
+        st.session_state.pop("_loaded_file_key", None)
+        st.session_state.pop("chat_session", None)
+        st.session_state["chat_messages"] = []
+        st.session_state["_builder_mode"] = True
+        st.rerun()
     
     st.divider()
 
