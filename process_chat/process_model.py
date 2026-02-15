@@ -502,6 +502,65 @@ class NeqSimProcessModel:
         """Return the underlying Java ProcessSystem object."""
         return self._proc
 
+    def get_diagram_dot(
+        self,
+        style: str = "HYSYS",
+        detail_level: str = "ENGINEERING",
+        show_stream_values: bool = True,
+        use_stream_tables: bool = False,
+        show_control_equipment: bool = True,
+        title: str = "",
+    ) -> str:
+        """Export the process flow diagram as a Graphviz DOT string.
+
+        Parameters
+        ----------
+        style : str
+            Diagram style: ``HYSYS`` (default), ``NEQSIM``, ``PROII``, or ``ASPEN_PLUS``.
+        detail_level : str
+            Detail level: ``CONCEPTUAL``, ``ENGINEERING`` (default), or ``DEBUG``.
+        show_stream_values : bool
+            Show temperature, pressure, and flow on streams.
+        use_stream_tables : bool
+            Use HTML table labels (True) or simple text (False).
+        show_control_equipment : bool
+            Show recycle/adjuster/calculator equipment.
+        title : str
+            Diagram title. Uses process name if empty.
+
+        Returns
+        -------
+        str
+            Graphviz DOT source string.
+        """
+        from neqsim import jneqsim
+
+        DiagramStyle = jneqsim.process.processmodel.diagram.DiagramStyle
+        DiagramDetailLevel = jneqsim.process.processmodel.diagram.DiagramDetailLevel
+
+        style_map = {
+            "HYSYS": DiagramStyle.HYSYS,
+            "NEQSIM": DiagramStyle.NEQSIM,
+            "PROII": DiagramStyle.PROII,
+            "ASPEN_PLUS": DiagramStyle.ASPEN_PLUS,
+        }
+        level_map = {
+            "CONCEPTUAL": DiagramDetailLevel.CONCEPTUAL,
+            "ENGINEERING": DiagramDetailLevel.ENGINEERING,
+            "DEBUG": DiagramDetailLevel.DEBUG,
+        }
+
+        exporter = self._proc.createDiagramExporter()
+        exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
+        exporter.setDetailLevel(level_map.get(detail_level.upper(), DiagramDetailLevel.ENGINEERING))
+        exporter.setShowStreamValues(show_stream_values)
+        exporter.setUseStreamTables(use_stream_tables)
+        exporter.setShowControlEquipment(show_control_equipment)
+        if title:
+            exporter.setTitle(title)
+
+        return str(exporter.toDOT())
+
     # Unit types that legitimately produce power or duty
     _POWER_UNITS = {"Compressor", "Pump", "ESPPump", "Expander", "GasTurbine"}
     _DUTY_UNITS = {"Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler",

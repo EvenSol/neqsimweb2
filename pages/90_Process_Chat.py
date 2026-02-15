@@ -129,6 +129,25 @@ with st.sidebar:
                 )
             st.divider()
 
+    # --- Diagram Settings ---
+    if st.session_state.get("process_model") is not None:
+        st.subheader("📐 Diagram Settings")
+        diagram_style = st.selectbox(
+            "Style",
+            ["HYSYS", "NEQSIM", "PROII", "ASPEN_PLUS"],
+            index=0,
+            key="diagram_style",
+            help="Visual style for the process flow diagram",
+        )
+        diagram_detail = st.selectbox(
+            "Detail Level",
+            ["ENGINEERING", "CONCEPTUAL", "DEBUG"],
+            index=0,
+            key="diagram_detail",
+            help="Amount of information shown on the diagram",
+        )
+        st.divider()
+
     # Example questions — adapt to mode
     st.subheader("💡 Example Questions")
     model = st.session_state.get("process_model")
@@ -221,6 +240,23 @@ if model is not None:
                 st.info("No streams found.")
 elif builder_mode:
     st.info("🔨 **Builder mode** — Describe the process you want to create in the chat below.")
+
+# ─────────────────────────────────────────────
+# Process Flow Diagram (PFD)
+# ─────────────────────────────────────────────
+if model is not None:
+    with st.expander("📐 Process Flow Diagram", expanded=True):
+        try:
+            pfd_style = st.session_state.get("diagram_style", "HYSYS")
+            pfd_detail = st.session_state.get("diagram_detail", "ENGINEERING")
+            dot_source = model.get_diagram_dot(
+                style=pfd_style,
+                detail_level=pfd_detail,
+                show_stream_values=(pfd_detail != "CONCEPTUAL"),
+            )
+            st.graphviz_chart(dot_source, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not render process flow diagram: {e}")
 
 
 # ─────────────────────────────────────────────
