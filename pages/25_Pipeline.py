@@ -610,8 +610,12 @@ with tab_dyn:
                     p.setNumberOfSections(int(dyn_nsec))
                     p.setRoughness(dyn_rough_um / 1e6)
 
+                    # Interpolate user elevation profile onto section centres
+                    sec_len_m = pipe_length / int(dyn_nsec)
+                    sec_centres = [(i + 0.5) * sec_len_m for i in range(int(dyn_nsec))]
+                    elev_interp = list(np.interp(sec_centres, distances, elevations))
                     try:
-                        p.setElevationProfile(distances, elevations)
+                        p.setElevationProfile(elev_interp)
                     except Exception:
                         total_elev = elevations[-1] - elevations[0]
                         p.setElevation(total_elev)
