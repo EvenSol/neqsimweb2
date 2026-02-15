@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import neqsim
 from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame, hydt, waterdewt
-from fluids import default_fluid, fluid_library_selector
+from fluids import default_fluid
 import plotly.graph_objects as go
 from theme import apply_theme
 
@@ -63,10 +63,7 @@ with st.expander("📋 Set Fluid Composition", expanded=True):
 
     st.caption("💡 Fluid composition will be normalized before simulation")
 
-with st.expander("📂 Fluid Library", expanded=False):
-    if fluid_library_selector('waterdew', 'waterdew_fluid_df'):
-        st.rerun()
-with st.expander("📊 Input Pressures", expanded=True):
+with st.expander(" Input Pressures", expanded=True):
     st.edited_dfTP = st.data_editor(
         st.session_state.waterdew_tp_data['Pressure (bara)'].dropna().reset_index(drop=True),
         num_rows='dynamic',  # Allows dynamic number of rows

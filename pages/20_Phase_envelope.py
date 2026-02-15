@@ -5,7 +5,7 @@ from neqsim.thermo import fluid_df, phaseenvelope, TPflash, dataFrame
 from neqsim import jneqsim
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-from fluids import detailedHC_data, fluid_library_selector
+from fluids import detailedHC_data
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 from theme import apply_theme
@@ -97,9 +97,6 @@ with st.expander("📋 Fluid Composition", expanded=True):
 
     st.caption("💡 Fluid composition will be normalized before simulation")
 
-with st.expander("📂 Fluid Library", expanded=False):
-    if fluid_library_selector('phaseenv', 'phaseenv_fluid_df'):
-        st.rerun()
 st.divider()
 
 # -----------------------------------------------------------------------------

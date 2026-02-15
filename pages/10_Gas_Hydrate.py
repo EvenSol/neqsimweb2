@@ -6,7 +6,6 @@ from neqsim.thermo.thermoTools import fluidcreator, fluid_df, hydt, dataFrame, T
 from neqsim.thermo import fluid
 from neqsim import jneqsim
 from fluids import default_fluid
-from fluids import fluid_library_selector
 import plotly.graph_objects as go
 from theme import apply_theme
 
@@ -112,10 +111,7 @@ if calc_mode == "Gas Composition Mode":
                  "The molar mass and density must be specified for plus fractions.")
         st.caption("💡 Gas composition will be normalized before simulation")
 
-    with st.expander("📂 Fluid Library", expanded=False):
-        if fluid_library_selector('hydrate_gas', 'hydrate_gas_df'):
-            st.rerun()
-        
+    with st.expander("ℹ️ Adding Components", expanded=False):
         st.info("""
         **Adding Pseudo-components / Plus Fractions:**
         - You can add any hydrocarbon fraction by typing a name like `C11`, `C15`, `C20`, or `C7+`

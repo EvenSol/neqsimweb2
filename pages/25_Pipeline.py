@@ -12,7 +12,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from theme import apply_theme
-from fluids import default_fluid, fluid_library_selector
+from fluids import default_fluid
 
 st.set_page_config(
     page_title="Pipeline Hydraulics",
@@ -56,9 +56,7 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    st.divider()
-    if fluid_library_selector('pipeline', 'pipe_fluid_df'):
-        st.rerun()
+
 
 # =============================================================================
 # Main — Pipeline Parameters

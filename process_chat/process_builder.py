@@ -635,35 +635,8 @@ class ProcessBuilder:
     # ╚═══════════════════════════════════════════════════════════════════════╝
 
     def _create_fluid(self, fluid_spec: dict):
-        """Create a NeqSim thermoSystem from a fluid specification.
-
-        Supports ``"from_library": "<name>"`` to load a composition from the
-        shared Fluid Library (saved via any page).
-        """
+        """Create a NeqSim thermoSystem from a fluid specification."""
         from neqsim import jneqsim
-
-        # --- library shortcut ------------------------------------------------
-        lib_name = fluid_spec.get("from_library")
-        if lib_name:
-            try:
-                from fluids import load_fluid
-                lib_df = load_fluid(lib_name)
-            except Exception:
-                lib_df = None
-            if lib_df is not None and not lib_df.empty:
-                from neqsim.thermo import fluid_df as _fluid_df
-                temp_C = fluid_spec.get("temperature_C", 25.0)
-                pres_bara = fluid_spec.get("pressure_bara", 50.0)
-                total_flow = fluid_spec.get("total_flow", 100.0)
-                flow_unit = fluid_spec.get("flow_unit", "kg/hr")
-                fluid = _fluid_df(lib_df, lastIsPlusFraction=False, add_all_components=False)
-                fluid.autoSelectModel()
-                fluid.setPressure(pres_bara, "bara")
-                fluid.setTemperature(temp_C + 273.15, "K")
-                fluid.setTotalFlowRate(float(total_flow), flow_unit)
-                return fluid
-            else:
-                self._log(f"⚠️ Library fluid '{lib_name}' not found — falling back to component list")
 
         # --- normal component-based creation ----------------------------------
         eos = fluid_spec.get("eos_model", "srk").lower()

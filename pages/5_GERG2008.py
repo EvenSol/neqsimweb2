@@ -3,7 +3,6 @@ import pandas as pd
 from neqsim.thermo import TPflash, dataFrame
 from neqsim import jneqsim
 from theme import apply_theme
-from fluids import fluid_library_selector
 
 st.set_page_config(page_title="GERG-2008", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
@@ -116,10 +115,6 @@ st.edited_df = st.data_editor(
 
 # Store edited df for later use (don't update main session state to avoid reruns)
 st.session_state.gerg_edited_df = st.edited_df
-
-with st.expander("📂 Fluid Library", expanded=False):
-    if fluid_library_selector('gerg', 'gerg_fluid_df'):
-        st.rerun()
 
 st.info("💡 Note: Only the 18 GERG-2008 components are available for selection. Composition will be normalized before simulation.")
 

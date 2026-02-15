@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from neqsim.thermo import fluid_df, TPflash
 from neqsim import jneqsim
-from fluids import default_fluid, fluid_library_selector
+from fluids import default_fluid
 from theme import apply_theme
 
 st.set_page_config(page_title="PVT Simulations", page_icon='images/neqsimlogocircleflat.png', layout="wide")
@@ -151,10 +151,6 @@ with st.expander("Edit Fluid Composition", expanded=False):
     )
     # Store edited df for later use (don't update main session state to avoid reruns)
     st.session_state.pvt_edited_df = edited_fluid_df
-
-with st.expander("📂 Fluid Library", expanded=False):
-    if fluid_library_selector('pvt', 'pvt_fluid_df'):
-        st.rerun()
 
 isplusfluid = st.checkbox('Last component is Plus Fraction (C10+)', value=True)
 
