@@ -3,20 +3,27 @@ import pandas as pd
 import time
 import neqsim
 from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame
+from neqsim import jneqsim
 from fluids import default_fluid
 from theme import apply_theme
 
-st.set_page_config(page_title="TP Flash", page_icon='images/neqsimlogocircleflat.png')
+st.set_page_config(page_title="Flash Calculations", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
 
-st.title('TP flash')
+st.title('Flash Calculations')
 """
 The NeqSim flash model will select the best thermodynamic model based on the fluid composition. For fluids containing polar components it will use the CPA-EoS.
 For non-polar fluids it will use the SRK/PR-EoS. The flash will calculate the phase equilibrium for given composition at the specified temperatures and pressures.
 
+Supports **TP flash** (temperature + pressure), **PH flash** (pressure + enthalpy), and **PS flash** (pressure + entropy).
+
 You can select components from a predifined component list. Alterative component names ([see available components](https://github.com/equinor/neqsim/blob/master/src/main/resources/data/COMP.csv)) can be used by manually editing the table.
 """
 st.divider()
+
+# Flash type selector
+flash_type = st.radio("Flash Type", ["TP Flash", "PH Flash", "PS Flash"], horizontal=True,
+                       help="TP: specify T & P. PH: specify P & enthalpy. PS: specify P & entropy.")
 
 with st.expander("📋 Set Fluid Composition", expanded=True):
     # Reset button to restore default composition
@@ -44,8 +51,20 @@ with st.expander("📋 Set Fluid Composition", expanded=True):
 
     if 'tpflash_tp_data' not in st.session_state:
         st.session_state['tpflash_tp_data'] = pd.DataFrame({
-            'Temperature (C)': [20.0, 25.0],  # Default example temperature
-            'Pressure (bara)': [1.0, 10.0]  # Default example pressure
+            'Temperature (C)': [20.0, 25.0],
+            'Pressure (bara)': [1.0, 10.0]
+        })
+
+    if 'phflash_data' not in st.session_state:
+        st.session_state['phflash_data'] = pd.DataFrame({
+            'Pressure (bara)': [50.0, 100.0],
+            'Enthalpy (J/mol)': [-5000.0, -3000.0],
+        })
+
+    if 'psflash_data' not in st.session_state:
+        st.session_state['psflash_data'] = pd.DataFrame({
+            'Pressure (bara)': [50.0, 100.0],
+            'Entropy (J/mol/K)': [-50.0, -40.0],
         })
 
     st.edited_df = st.data_editor(
@@ -68,55 +87,96 @@ with st.expander("📋 Set Fluid Composition", expanded=True):
     isplusfluid = st.checkbox('Plus Fluid')
     
     st.caption("💡 Fluid composition will be normalized before simulation")
-with st.expander("🌡️ Input Pressures and Temperatures", expanded=True):
-    st.edited_dfTP = st.data_editor(
-        st.session_state.tpflash_tp_data.dropna().reset_index(drop=True),
-        num_rows='dynamic',  # Allows dynamic number of rows
-        column_config={
-            'Temperature (C)': st.column_config.NumberColumn(
-                label="Temperature (C)",
-                min_value=-273.15,  # Minimum temperature in Celsius
-                max_value=1000,     # Maximum temperature in Celsius
-                format='%f',        # Decimal format
-                help='Enter the temperature in degrees Celsius.'  # Help text for guidance
-            ),
-            'Pressure (bara)': st.column_config.NumberColumn(
-                label="Pressure (bara)",
-                min_value=0.0,      # Minimum pressure
-                max_value=1000,     # Maximum pressure
-                format='%f',        # Decimal format
-                help='Enter the pressure in bar absolute.'  # Help text for guidance
-            ),
-        }
-    )
+with st.expander("🌡️ Input Conditions", expanded=True):
+    if flash_type == "TP Flash":
+        st.edited_dfTP = st.data_editor(
+            st.session_state.tpflash_tp_data.dropna().reset_index(drop=True),
+            num_rows='dynamic',
+            column_config={
+                'Temperature (C)': st.column_config.NumberColumn(
+                    label="Temperature (C)",
+                    min_value=-273.15, max_value=1000, format='%f',
+                    help='Enter the temperature in degrees Celsius.'
+                ),
+                'Pressure (bara)': st.column_config.NumberColumn(
+                    label="Pressure (bara)",
+                    min_value=0.0, max_value=1000, format='%f',
+                    help='Enter the pressure in bar absolute.'
+                ),
+            }
+        )
+    elif flash_type == "PH Flash":
+        st.markdown("**Tip:** To find enthalpy values, first run a TP flash and note the enthalpy from the results.")
+        st.edited_dfTP = st.data_editor(
+            st.session_state.phflash_data.dropna().reset_index(drop=True),
+            num_rows='dynamic',
+            column_config={
+                'Pressure (bara)': st.column_config.NumberColumn(
+                    label="Pressure (bara)",
+                    min_value=0.0, max_value=1000, format='%f',
+                    help='Enter the pressure in bar absolute.'
+                ),
+                'Enthalpy (J/mol)': st.column_config.NumberColumn(
+                    label="Enthalpy (J/mol)",
+                    format='%f',
+                    help='Enter the molar enthalpy in J/mol.'
+                ),
+            }
+        )
+    else:  # PS Flash
+        st.markdown("**Tip:** To find entropy values, first run a TP flash and note the entropy from the results.")
+        st.edited_dfTP = st.data_editor(
+            st.session_state.psflash_data.dropna().reset_index(drop=True),
+            num_rows='dynamic',
+            column_config={
+                'Pressure (bara)': st.column_config.NumberColumn(
+                    label="Pressure (bara)",
+                    min_value=0.0, max_value=1000, format='%f',
+                    help='Enter the pressure in bar absolute.'
+                ),
+                'Entropy (J/mol/K)': st.column_config.NumberColumn(
+                    label="Entropy (J/mol/K)",
+                    format='%f',
+                    help='Enter the molar entropy in J/(mol·K).'
+                ),
+            }
+        )
 
-if st.button('Run TP Flash Calculations'):
+if st.button(f'Run {flash_type} Calculations'):
     if st.edited_df['MolarComposition[-]'].sum() > 0:
-        # Check if the dataframe is empty
-        if st.session_state.tpflash_tp_data.empty:
-            st.error('No data to perform calculations. Please input temperature and pressure values.')
+        if st.edited_dfTP.dropna().empty:
+            st.error('No data to perform calculations. Please input condition values.')
         else:
-            with st.spinner('Running flash calculations...'):
+            with st.spinner(f'Running {flash_type.lower()} calculations...'):
                 try:
-                    # Initialize a list to store results
                     results_list = []
                     neqsim_fluid = fluid_df(st.edited_df, lastIsPlusFraction=isplusfluid, add_all_components=False).autoSelectModel()
-                    
-                    # Iterate over each row and perform calculations
+
                     for idx, row in st.edited_dfTP.dropna().iterrows():
-                        temp = row['Temperature (C)']
                         pressure = row['Pressure (bara)']
                         neqsim_fluid.setPressure(pressure, 'bara')
-                        neqsim_fluid.setTemperature(temp, 'C')
-                        TPflash(neqsim_fluid)
+
+                        if flash_type == "TP Flash":
+                            temp = row['Temperature (C)']
+                            neqsim_fluid.setTemperature(temp, 'C')
+                            TPflash(neqsim_fluid)
+                        elif flash_type == "PH Flash":
+                            enthalpy = row['Enthalpy (J/mol)']
+                            # Set an initial temperature guess before PH flash
+                            neqsim_fluid.setTemperature(20.0, 'C')
+                            thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(neqsim_fluid)
+                            thermoOps.PHflash(enthalpy)
+                        else:  # PS Flash
+                            entropy = row['Entropy (J/mol/K)']
+                            neqsim_fluid.setTemperature(20.0, 'C')
+                            thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(neqsim_fluid)
+                            thermoOps.PSflash(entropy)
+
                         results_list.append(dataFrame(neqsim_fluid))
-                    
-                    st.success('Flash calculations finished successfully!')
+
+                    st.success(f'{flash_type} calculations finished successfully!')
                     st.subheader("Results:")
-                    # Combine all results into a single dataframe
                     combined_results = pd.concat(results_list, ignore_index=True)
-                    
-                    # Display the combined results
                     results_df = st.data_editor(combined_results)
                     st.divider()
                     list1 = neqsim_fluid.getComponentNames()
@@ -125,7 +185,7 @@ if st.button('Run TP Flash Calculations'):
                     delimiter = ", "
                     result_string = delimiter.join(string_list)
                     try:
-                        input = "What scientific experimental equilibrium data are available for mixtures of " + result_string + " at temperature around " + str(temp) + " Celsius and pressure around " + str(pressure) + " bar."
+                        input = "What scientific experimental equilibrium data are available for mixtures of " + result_string + " at temperature around " + str(neqsim_fluid.getTemperature('C')) + " Celsius and pressure around " + str(pressure) + " bar."
                         openapitext = st.make_request(input)
                         st.write(openapitext)
                     except Exception:
