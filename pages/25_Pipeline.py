@@ -536,15 +536,14 @@ with tab_dyn:
         dyn_nsec = st.number_input("Number of Sections", value=50, min_value=10, max_value=500, key="dyn_nsec")
 
     with dc2:
-        st.markdown("**Inlet Conditions**")
-        dyn_inP = st.number_input("Inlet Pressure (bara)", value=80.0, min_value=1.0, step=5.0, key="dyn_inP")
+        st.markdown("**Conditions**")
+        dyn_outP = st.number_input("Outlet Pressure (bara)", value=50.0, min_value=1.0, step=5.0, key="dyn_outP")
         dyn_inT = st.number_input("Inlet Temperature (°C)", value=40.0, step=5.0, key="dyn_inT")
         dyn_base_flow = st.number_input("Base Flow Rate (kg/hr)", value=5000.0, min_value=1.0, step=100.0,
                                         key="dyn_base_flow")
 
     with dc3:
-        st.markdown("**Outlet & Environment**")
-        dyn_outP = st.number_input("Outlet Pressure (bara)", value=50.0, min_value=1.0, step=5.0, key="dyn_outP")
+        st.markdown("**Environment**")
         dyn_ambT = st.number_input("Ambient / Surface Temp (°C)", value=5.0, step=1.0, key="dyn_ambT")
         dyn_htc = st.number_input("Overall HTC (W/m²·K)", value=5.0, min_value=0.0, step=1.0,
                                   key="dyn_htc", help="0 = adiabatic")
@@ -589,52 +588,84 @@ with tab_dyn:
                 from neqsim.thermo import fluid_df, TPflash
                 from neqsim import jneqsim
 
-                # ---- create inlet stream ----
-                neqsim_fluid = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
-                Stream = jneqsim.process.equipment.stream.Stream
-                inlet = Stream("Inlet", neqsim_fluid)
-                inlet.setFlowRate(float(effective_flow_kghr), "kg/hr")
-                inlet.setTemperature(float(dyn_inT), "C")
-                inlet.setPressure(float(dyn_inP), "bara")
-                inlet.run()
-
-                # ---- create TwoFluidPipe ----
-                TwoFluidPipe = jneqsim.process.equipment.pipeline.TwoFluidPipe
-                pipe = TwoFluidPipe("Pipeline", inlet)
-
                 distances = [float(d) for d in profile_df["Distance (m)"].tolist()]
                 elevations = [float(e) for e in profile_df["Elevation (m)"].tolist()]
                 pipe_length = max(distances) - min(distances)
+                target_outP = float(dyn_outP)
 
-                pipe.setLength(pipe_length)
-                pipe.setDiameter(dyn_diam_mm / 1000.0)
-                pipe.setNumberOfSections(int(dyn_nsec))
-                pipe.setOutletPressure(float(dyn_outP), "bara")
-                pipe.setRoughness(dyn_rough_um / 1e6)
+                # Helper: build pipe with a given inlet pressure and run steady-state
+                def _build_and_run(inlet_P_bara):
+                    fl = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
+                    Stream = jneqsim.process.equipment.stream.Stream
+                    s = Stream("Inlet", fl)
+                    s.setFlowRate(float(effective_flow_kghr), "kg/hr")
+                    s.setTemperature(float(dyn_inT), "C")
+                    s.setPressure(inlet_P_bara, "bara")
+                    s.run()
 
-                # Elevation profile
-                try:
-                    pipe.setElevationProfile(distances, elevations)
-                except Exception:
-                    total_elev = elevations[-1] - elevations[0]
-                    pipe.setElevation(total_elev)
+                    TwoFluidPipe = jneqsim.process.equipment.pipeline.TwoFluidPipe
+                    p = TwoFluidPipe("Pipeline", s)
+                    p.setLength(pipe_length)
+                    p.setDiameter(dyn_diam_mm / 1000.0)
+                    p.setNumberOfSections(int(dyn_nsec))
+                    p.setRoughness(dyn_rough_um / 1e6)
 
-                # Heat transfer
-                if dyn_htc > 0:
-                    pipe.setHeatTransferCoefficient(float(dyn_htc))
-                    pipe.setSurfaceTemperature(float(dyn_ambT), "C")
+                    try:
+                        p.setElevationProfile(distances, elevations)
+                    except Exception:
+                        total_elev = elevations[-1] - elevations[0]
+                        p.setElevation(total_elev)
 
-                # Slug tracking
-                if dyn_slug:
-                    pipe.setEnableSlugTracking(True)
+                    if dyn_htc > 0:
+                        p.setHeatTransferCoefficient(float(dyn_htc))
+                        p.setSurfaceTemperature(float(dyn_ambT), "C")
+
+                    if dyn_slug:
+                        p.setEnableSlugTracking(True)
+
+                    p.run()
+                    return p, s
 
                 # ==========================================================
-                #  STEADY-STATE  (initialisation)
+                #  BISECTION: find inlet P so that outlet P ≈ target
                 # ==========================================================
-                with st.spinner("Running steady-state initialisation..."):
-                    pipe.run()
+                with st.spinner("Finding inlet pressure to match outlet pressure..."):
+                    # First pass — estimate pressure drop with a reasonable guess
+                    P_lo = target_outP + 0.1
+                    P_hi = target_outP + 500.0
+                    tol = 0.05  # bar
+                    max_iter = 30
 
-                st.success(f"Steady-state converged. "
+                    # Probe upper bound
+                    pipe_hi, _ = _build_and_run(P_hi)
+                    outP_hi = pipe_hi.getOutletPressure()
+                    if outP_hi < target_outP:
+                        P_hi = target_outP + 2000.0
+
+                    converged = False
+                    for _iter in range(max_iter):
+                        P_mid = (P_lo + P_hi) / 2.0
+                        pipe_try, inlet_try = _build_and_run(P_mid)
+                        outP_calc = pipe_try.getOutletPressure()
+                        if abs(outP_calc - target_outP) < tol:
+                            converged = True
+                            break
+                        if outP_calc > target_outP:
+                            P_hi = P_mid
+                        else:
+                            P_lo = P_mid
+
+                    pipe = pipe_try
+                    inlet = inlet_try
+                    solved_inlet_P = P_mid
+
+                    if not converged:
+                        st.warning(
+                            f"Inlet pressure solver did not fully converge. "
+                            f"Outlet P = {outP_calc:.2f} bara (target {target_outP:.2f} bara). "
+                            f"Using best estimate: inlet P = {solved_inlet_P:.2f} bara.")
+
+                st.success(f"Steady-state converged. Inlet P = {solved_inlet_P:.1f} bara, "
                            f"ΔP = {pipe.getInletPressure() - pipe.getOutletPressure():.2f} bar, "
                            f"Outlet T = {pipe.getOutletTemperature() - 273.15:.1f} °C")
 
@@ -663,7 +694,7 @@ with tab_dyn:
                 m5.metric("ΔP (bar)", f"{pres_ss[0] - pres_ss[-1]:.2f}")
                 m6.metric("Avg Holdup", f"{np.mean(hold_ss):.4f}")
                 try:
-                    m7.metric("Liq. Inventory (m³)", f"{pipe.getLiquidInventory():.3f}")
+                    m7.metric("Liq. Inventory (m³)", f"{pipe.getLiquidInventory('m3'):.3f}")
                 except Exception:
                     m7.metric("Liq. Inventory (m³)", "N/A")
                 mid_idx = len(reg_ss) // 2
@@ -732,7 +763,7 @@ with tab_dyn:
                 outT_hist = [temp_ss[-1]]
                 inv_hist = []
                 try:
-                    inv_hist.append(float(pipe.getLiquidInventory()))
+                    inv_hist.append(float(pipe.getLiquidInventory('m3')))
                 except Exception:
                     inv_hist.append(0.0)
 
@@ -746,7 +777,7 @@ with tab_dyn:
                     outP_hist.append(pres_t[-1])
                     outT_hist.append(temp_t[-1])
                     try:
-                        inv_hist.append(float(pipe.getLiquidInventory()))
+                        inv_hist.append(float(pipe.getLiquidInventory('m3')))
                     except Exception:
                         inv_hist.append(inv_hist[-1])
 
