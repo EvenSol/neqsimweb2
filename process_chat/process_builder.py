@@ -63,6 +63,15 @@ _EQUIP_INFO: Dict[str, tuple] = {
     "filter":                 ("filter.Filter",                       "getOutletStream"),
     "tank":                   ("tank.Tank",                           "getOutletStream"),
     "recycle":                ("util.Recycle",                        "getOutletStream"),
+    "adjuster":               ("util.Adjuster",                      "getOutletStream"),
+    "electrolyzer":           ("electrolyzer.Electrolyzer",          "getOutletStream"),
+    "well_flow":              ("pipeline.PipeBeggsAndBrills",        "getOutletStream"),
+    "adsorber":               ("absorber.SimpleAbsorber",            "getGasOutStream"),
+    "distillation_column":    ("distillation.DistillationColumn",    "getGasOutStream"),
+    "component_splitter":     ("splitter.ComponentSplitter",         "getOutletStream"),
+    "gas_turbine":            ("compressor.Compressor",              "getOutletStream"),
+    "membrane_separator":     ("separator.Separator",                "getGasOutStream"),
+    "esp_pump":               ("pump.Pump",                          "getOutletStream"),
 }
 
 
@@ -104,6 +113,11 @@ _PARAM_SETTERS = {
     "number_of_stages":        lambda v: f"setNumberOfStages({int(v)})",
     "numberofstages":          lambda v: f"setNumberOfStages({int(v)})",
     "ua_value":                lambda v: f"setUAvalue({float(v)})",
+    "tolerance":               lambda v: f"setTolerance({float(v)})",
+    "target_variable":         lambda v: f"setTargetVariable('{v}')",
+    "target_value":            lambda v: f"setTargetValue({float(v)})",
+    "power_kw":                lambda v: f"setPower({float(v) * 1000})",
+    "energy_input_kw":         lambda v: f"setEnergyInput({float(v) * 1000})",
 }
 
 
@@ -170,6 +184,21 @@ def _apply_param(unit, key: str, value):
     elif k == "ua_value":
         if hasattr(unit, "setUAvalue"):
             unit.setUAvalue(float(value))
+    elif k == "tolerance":
+        if hasattr(unit, "setTolerance"):
+            unit.setTolerance(float(value))
+    elif k in ("target_variable",):
+        if hasattr(unit, "setTargetVariable"):
+            unit.setTargetVariable(str(value))
+    elif k in ("target_value",):
+        if hasattr(unit, "setTargetValue"):
+            unit.setTargetValue(float(value))
+    elif k in ("power_kw",):
+        if hasattr(unit, "setPower"):
+            unit.setPower(float(value) * 1000)
+    elif k in ("energy_input_kw",):
+        if hasattr(unit, "setEnergyInput"):
+            unit.setEnergyInput(float(value) * 1000)
 
 
 # ---------------------------------------------------------------------------
@@ -651,10 +680,36 @@ class ProcessBuilder:
             "filter":                 lambda n, s: base.filter.Filter(n, s),
             "tank":                   lambda n, s: base.tank.Tank(n, s),
             "recycle":                lambda n, s: base.util.Recycle(n, s),
+            "adjuster":               lambda n, s: base.util.Adjuster(n, s),
+        }
+
+        # Try dynamic class resolution for newer equipment types
+        _DYNAMIC_TYPES = {
+            "electrolyzer":       "electrolyzer.Electrolyzer",
+            "well_flow":          "pipeline.PipeBeggsAndBrills",
+            "adsorber":           "absorber.SimpleAbsorber",
+            "distillation_column":"distillation.DistillationColumn",
+            "component_splitter": "splitter.ComponentSplitter",
+            "gas_turbine":        "compressor.Compressor",
+            "membrane_separator": "separator.Separator",
+            "esp_pump":           "pump.Pump",
         }
 
         ctor = constructors.get(eq_type)
         if ctor is None:
+            # Try dynamic resolution
+            dyn_path = _DYNAMIC_TYPES.get(eq_type)
+            if dyn_path:
+                try:
+                    parts = dyn_path.split(".")
+                    pkg = getattr(base, parts[0])
+                    cls = getattr(pkg, parts[1])
+                    unit = cls(name, inlet_stream)
+                    for k, v in params.items():
+                        _apply_param(unit, k, v)
+                    return unit
+                except Exception:
+                    pass
             raise ValueError(f"Unknown equipment type: '{eq_type}'")
 
         unit = ctor(name, inlet_stream)

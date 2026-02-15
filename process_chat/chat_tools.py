@@ -20,6 +20,12 @@ from .optimizer import optimize_production, format_optimization_result, Optimiza
 from .risk_analysis import run_risk_analysis, format_risk_result, RiskAnalysisResult
 from .compressor_chart import generate_compressor_chart, format_chart_result, CompressorChartResult
 from .auto_size import auto_size_all, format_autosize_result, AutoSizeResult
+from .emissions import calculate_emissions, format_emissions_result, EmissionsResult
+from .dynamic_sim import run_dynamic_simulation, format_dynamic_result, DynamicSimResult
+from .sensitivity import run_sensitivity_analysis, format_sensitivity_result, SensitivityResult
+from .pvt_simulation import run_pvt_simulation, format_pvt_result, PVTResult
+from .safety_systems import run_safety_analysis, format_safety_result, SafetyReport
+from .flow_assurance import run_flow_assurance, format_flow_assurance_result, FlowAssuranceResult
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +610,172 @@ Use this for questions like:
   - "Generate a sizing report"
   - "What is the utilization of each piece of equipment?"
 
+EMISSIONS ANALYSIS (for "CO2 emissions", "carbon footprint", "environmental impact", "fuel gas consumption"):
+When the user asks about emissions, carbon footprint, environmental impact, or fuel consumption, output an ```emissions ... ``` block:
+```emissions
+{{
+  "product_stream": "export gas",
+  "include_fugitives": true,
+  "flare_streams": [],
+  "power_source": "gas_turbine"
+}}
+```
+Parameters:
+  - product_stream: name of the product stream for intensity calculation (auto-detected if omitted)
+  - include_fugitives: include fugitive emissions estimates (default: true)
+  - flare_streams: list of stream names routed to flare (default: [])
+  - power_source: "gas_turbine" or "electric" (default: "gas_turbine")
+
+Use this for questions like:
+  - "What are the CO2 emissions?"
+  - "Calculate the carbon footprint"
+  - "What is the emission intensity?"
+  - "How much fuel gas is consumed?"
+  - "Show the environmental impact"
+
+DYNAMIC SIMULATION (for "blowdown", "startup", "shutdown", "transient", "time response"):
+When the user asks about transient behavior, blowdown, startup/shutdown sequences, output a ```dynamic ... ``` block:
+```dynamic
+{{
+  "scenario_type": "blowdown",
+  "vessel_name": "inlet separator",
+  "initial_pressure_bara": 50.0,
+  "final_pressure_bara": 1.013,
+  "orifice_diameter_mm": 50.0,
+  "duration_s": 600,
+  "n_steps": 50
+}}
+```
+For startup/ramp scenarios:
+```dynamic
+{{
+  "scenario_type": "startup",
+  "stream_name": "feed gas",
+  "start_value": 1000,
+  "end_value": 50000,
+  "duration_s": 3600,
+  "n_steps": 20
+}}
+```
+Parameters:
+  - scenario_type: "blowdown", "startup", "shutdown", or "ramp"
+  - vessel_name: for blowdown — name of vessel (auto-detected if omitted)
+  - stream_name: for ramp/startup — name of stream to ramp
+  - duration_s: simulation duration in seconds
+  - n_steps: number of time steps
+
+Use this for: "simulate blowdown", "startup sequence", "what happens during shutdown?", "transient response"
+
+SENSITIVITY ANALYSIS (for "sensitivity study", "parameter sweep", "tornado chart", "what-if matrix"):
+When the user asks for parameter sensitivity, sweep studies, or tornado charts, output a ```sensitivity ... ``` block:
+
+For single-variable sweep:
+```sensitivity
+{{
+  "analysis_type": "single_sweep",
+  "variable": "streams.feed gas.pressure_bara",
+  "min_value": 30.0,
+  "max_value": 80.0,
+  "n_points": 10,
+  "response_kpis": ["power", "temperature"]
+}}
+```
+
+For tornado analysis:
+```sensitivity
+{{
+  "analysis_type": "tornado",
+  "variables": [
+    {{"name": "streams.feed gas.pressure_bara", "low": 30, "high": 80}},
+    {{"name": "streams.feed gas.temperature_C", "low": 10, "high": 50}},
+    {{"name": "units.compressor.isentropicEfficiency", "low": 0.65, "high": 0.85}}
+  ],
+  "response_kpi": "compressor.power_kW"
+}}
+```
+
+For two-variable surface:
+```sensitivity
+{{
+  "analysis_type": "two_variable",
+  "variable": "streams.feed gas.pressure_bara",
+  "min_value": 30, "max_value": 80, "n_points": 5,
+  "variable_2": "streams.feed gas.temperature_C",
+  "min_2": 10, "max_2": 50, "n_2": 5,
+  "response_kpis": ["power"]
+}}
+```
+
+Use this for: "run sensitivity analysis", "how sensitive is power to pressure?", "tornado chart for compressor power",
+"sweep feed pressure from 30 to 80 bara", "parameter study"
+
+PVT SIMULATION (for "PVT study", "CME", "differential liberation", "saturation point", "bubble point"):
+When the user asks about PVT experiments, output a ```pvt ... ``` block:
+```pvt
+{{
+  "experiment": "CME",
+  "stream_name": "feed gas",
+  "temperature_C": 100.0,
+  "p_start_bara": 400.0,
+  "p_end_bara": 10.0,
+  "n_steps": 20
+}}
+```
+Available experiments: "CME" (Constant Mass Expansion), "DL" (Differential Liberation),
+"separator_test", "saturation_point"
+
+For separator test:
+```pvt
+{{
+  "experiment": "separator_test",
+  "stream_name": "feed gas",
+  "stages": [
+    {{"temperature_C": 40.0, "pressure_bara": 50.0}},
+    {{"temperature_C": 30.0, "pressure_bara": 10.0}},
+    {{"temperature_C": 15.0, "pressure_bara": 1.013}}
+  ]
+}}
+```
+
+Use this for: "run CME experiment", "what is the bubble point?", "differential liberation study",
+"separator test", "PVT analysis", "saturation pressure"
+
+SAFETY ANALYSIS (for "PSV sizing", "relief valve", "safety system", "API 520", "flare load"):
+When the user asks about pressure safety valves, relief systems, or safety sizing, output a ```safety ... ``` block:
+```safety
+{{
+  "design_pressure_factor": 1.1,
+  "include_fire": true,
+  "include_blocked_outlet": true
+}}
+```
+Parameters:
+  - design_pressure_factor: ratio of design pressure to operating pressure (default: 1.1)
+  - include_fire: include fire case relief scenarios (default: true)
+  - include_blocked_outlet: include blocked outlet scenarios (default: true)
+
+Use this for: "size the PSVs", "what is the flare load?", "relief valve analysis",
+"safety system design", "API 520 sizing"
+
+FLOW ASSURANCE (for "hydrate risk", "wax", "corrosion", "MEG dosing", "flow assurance"):
+When the user asks about hydrates, wax, corrosion, or flow assurance, output a ```flowassurance ... ``` block:
+```flowassurance
+{{
+  "check_hydrates": true,
+  "check_wax": true,
+  "check_corrosion": true,
+  "inhibitor_type": "MEG"
+}}
+```
+Parameters:
+  - check_hydrates: check for gas hydrate formation risk (default: true)
+  - check_wax: check for wax deposition risk (default: true)
+  - check_corrosion: check for CO₂/H₂S corrosion (default: true)
+  - inhibitor_type: "MEG" or "MeOH" for hydrate inhibitor (default: "MEG")
+
+Use this for: "check for hydrate risk", "flow assurance assessment", "is there wax risk?",
+"corrosion analysis", "MEG injection rate", "what is the hydrate temperature?"
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -817,6 +989,74 @@ When the user asks to auto-size, get sizing report, check utilization, or find b
 ```
 Use this for: "auto-size equipment", "sizing report", "equipment utilization",
 "what is the bottleneck?", "size all equipment".
+
+EMISSIONS ANALYSIS (after a process has been built):
+When the user asks about emissions, CO2, carbon footprint, output:
+```emissions
+{
+  "product_stream": "export gas",
+  "include_fugitives": true,
+  "power_source": "gas_turbine"
+}
+```
+Use this for: "CO2 emissions", "carbon footprint", "emission intensity", "fuel gas consumption".
+
+DYNAMIC SIMULATION (after a process has been built):
+When the user asks about blowdown, startup, shutdown, or transient behavior, output:
+```dynamic
+{
+  "scenario_type": "blowdown",
+  "duration_s": 600,
+  "n_steps": 50
+}
+```
+Use this for: "simulate blowdown", "startup sequence", "shutdown simulation", "transient".
+
+SENSITIVITY ANALYSIS (after a process has been built):
+When the user asks for sensitivity studies or parameter sweeps, output:
+```sensitivity
+{
+  "analysis_type": "single_sweep",
+  "variable": "streams.feed gas.pressure_bara",
+  "min_value": 30, "max_value": 80, "n_points": 10,
+  "response_kpis": ["power"]
+}
+```
+Use this for: "sensitivity analysis", "parameter sweep", "tornado chart".
+
+PVT SIMULATION (after a process has been built):
+When the user asks about PVT experiments, output:
+```pvt
+{
+  "experiment": "CME",
+  "stream_name": "feed gas",
+  "temperature_C": 100, "p_start_bara": 400, "p_end_bara": 10, "n_steps": 20
+}
+```
+Use this for: "CME experiment", "bubble point", "differential liberation", "PVT study".
+
+SAFETY ANALYSIS (after a process has been built):
+When the user asks about PSV sizing, relief valves, or safety systems, output:
+```safety
+{
+  "design_pressure_factor": 1.1,
+  "include_fire": true,
+  "include_blocked_outlet": true
+}
+```
+Use this for: "PSV sizing", "relief valve analysis", "flare load", "safety system design".
+
+FLOW ASSURANCE (after a process has been built):
+When the user asks about hydrates, wax, corrosion, or flow assurance, output:
+```flowassurance
+{
+  "check_hydrates": true,
+  "check_wax": true,
+  "check_corrosion": true,
+  "inhibitor_type": "MEG"
+}
+```
+Use this for: "hydrate risk", "wax risk", "corrosion analysis", "MEG dosing", "flow assurance".
 """
 
 
@@ -970,6 +1210,86 @@ def extract_autosize_spec(text: str) -> Optional[dict]:
     return None
 
 
+def extract_emissions_spec(text: str) -> Optional[dict]:
+    """Extract an emissions specification from LLM output."""
+    import re
+    pattern = r'```emissions\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_dynamic_spec(text: str) -> Optional[dict]:
+    """Extract a dynamic simulation specification from LLM output."""
+    import re
+    pattern = r'```dynamic\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if "scenario_type" in data:
+                return data
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_sensitivity_spec(text: str) -> Optional[dict]:
+    """Extract a sensitivity analysis specification from LLM output."""
+    import re
+    pattern = r'```sensitivity\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_pvt_spec(text: str) -> Optional[dict]:
+    """Extract a PVT simulation specification from LLM output."""
+    import re
+    pattern = r'```pvt\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_safety_spec(text: str) -> Optional[dict]:
+    """Extract a safety analysis specification from LLM output."""
+    import re
+    pattern = r'```safety\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_flow_assurance_spec(text: str) -> Optional[dict]:
+    """Extract a flow assurance specification from LLM output."""
+    import re
+    pattern = r'```flowassurance\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
@@ -1100,6 +1420,12 @@ class ProcessChatSession:
         self._last_risk_analysis = None
         self._last_chart = None
         self._last_autosize = None
+        self._last_emissions = None
+        self._last_dynamic = None
+        self._last_sensitivity = None
+        self._last_pvt = None
+        self._last_safety = None
+        self._last_flow_assurance = None
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
         self._last_save_bytes = None  # Last generated .neqsim bytes
@@ -1132,6 +1458,12 @@ class ProcessChatSession:
         self._last_risk_analysis = None
         self._last_chart = None
         self._last_autosize = None
+        self._last_emissions = None
+        self._last_dynamic = None
+        self._last_sensitivity = None
+        self._last_pvt = None
+        self._last_safety = None
+        self._last_flow_assurance = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -1186,6 +1518,36 @@ class ProcessChatSession:
         autosize_spec = extract_autosize_spec(assistant_text)
         if autosize_spec and self.model:
             return self._handle_autosize(assistant_text, autosize_spec, client, types)
+
+        # --- Check for emissions spec ---
+        emissions_spec = extract_emissions_spec(assistant_text)
+        if emissions_spec and self.model:
+            return self._handle_emissions(assistant_text, emissions_spec, client, types)
+
+        # --- Check for dynamic simulation spec ---
+        dynamic_spec = extract_dynamic_spec(assistant_text)
+        if dynamic_spec and self.model:
+            return self._handle_dynamic(assistant_text, dynamic_spec, client, types)
+
+        # --- Check for sensitivity analysis spec ---
+        sensitivity_spec = extract_sensitivity_spec(assistant_text)
+        if sensitivity_spec and self.model:
+            return self._handle_sensitivity(assistant_text, sensitivity_spec, client, types)
+
+        # --- Check for PVT simulation spec ---
+        pvt_spec = extract_pvt_spec(assistant_text)
+        if pvt_spec and self.model:
+            return self._handle_pvt(assistant_text, pvt_spec, client, types)
+
+        # --- Check for safety analysis spec ---
+        safety_spec = extract_safety_spec(assistant_text)
+        if safety_spec and self.model:
+            return self._handle_safety(assistant_text, safety_spec, client, types)
+
+        # --- Check for flow assurance spec ---
+        fa_spec = extract_flow_assurance_spec(assistant_text)
+        if fa_spec and self.model:
+            return self._handle_flow_assurance(assistant_text, fa_spec, client, types)
 
         # --- Pure Q&A ---
         self.history.append({"role": "assistant", "content": assistant_text})
@@ -1728,6 +2090,280 @@ class ProcessChatSession:
         """Get the last auto-size result (for UI display)."""
         return getattr(self, "_last_autosize", None)
 
+    # -- Emissions handling --------------------------------------------------
+
+    def _handle_emissions(self, assistant_text: str, emissions_spec: dict, client, types) -> str:
+        """Run emissions analysis and feed results back to LLM."""
+        try:
+            product_stream = emissions_spec.get("product_stream")
+            include_fugitives = bool(emissions_spec.get("include_fugitives", True))
+            flare_streams = emissions_spec.get("flare_streams", [])
+            power_source = emissions_spec.get("power_source", "gas_turbine")
+
+            result = calculate_emissions(
+                model=self.model,
+                product_stream=product_stream,
+                include_fugitives=include_fugitives,
+                flare_streams=flare_streams,
+                power_source=power_source,
+            )
+
+            self._last_emissions = result
+            results_text = format_emissions_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Emissions analysis completed. Results below. "
+                    f"Explain the emissions to the engineer. Highlight total CO₂, "
+                    f"CO₂e, emission intensity, and the largest emission sources. "
+                    f"Suggest opportunities for emissions reduction.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Emissions analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_emissions(self) -> Optional[EmissionsResult]:
+        """Get the last emissions result (for UI display)."""
+        return getattr(self, "_last_emissions", None)
+
+    # -- Dynamic simulation handling -----------------------------------------
+
+    def _handle_dynamic(self, assistant_text: str, dynamic_spec: dict, client, types) -> str:
+        """Run dynamic simulation and feed results back to LLM."""
+        try:
+            result = run_dynamic_simulation(
+                model=self.model,
+                scenario_type=dynamic_spec.get("scenario_type", "blowdown"),
+                vessel_name=dynamic_spec.get("vessel_name"),
+                stream_name=dynamic_spec.get("stream_name"),
+                initial_pressure_bara=dynamic_spec.get("initial_pressure_bara"),
+                final_pressure_bara=float(dynamic_spec.get("final_pressure_bara", 1.013)),
+                orifice_diameter_mm=float(dynamic_spec.get("orifice_diameter_mm", 50)),
+                duration_s=float(dynamic_spec.get("duration_s", 600)),
+                n_steps=int(dynamic_spec.get("n_steps", 50)),
+                start_value=dynamic_spec.get("start_value"),
+                end_value=dynamic_spec.get("end_value"),
+            )
+
+            self._last_dynamic = result
+            results_text = format_dynamic_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Dynamic simulation completed. Results below. "
+                    f"Explain the transient behavior to the engineer. "
+                    f"Highlight the initial and final states, key time points, "
+                    f"and any safety concerns (e.g., low temperatures during blowdown).]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Dynamic simulation failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_dynamic(self) -> Optional[DynamicSimResult]:
+        """Get the last dynamic simulation result (for UI display)."""
+        return getattr(self, "_last_dynamic", None)
+
+    # -- Sensitivity analysis handling ---------------------------------------
+
+    def _handle_sensitivity(self, assistant_text: str, sensitivity_spec: dict, client, types) -> str:
+        """Run sensitivity analysis and feed results back to LLM."""
+        try:
+            result = run_sensitivity_analysis(
+                model=self.model,
+                analysis_type=sensitivity_spec.get("analysis_type", "single_sweep"),
+                variable=sensitivity_spec.get("variable"),
+                min_value=sensitivity_spec.get("min_value"),
+                max_value=sensitivity_spec.get("max_value"),
+                n_points=int(sensitivity_spec.get("n_points", 10)),
+                response_kpis=sensitivity_spec.get("response_kpis"),
+                variables=sensitivity_spec.get("variables"),
+                response_kpi=sensitivity_spec.get("response_kpi"),
+                variable_2=sensitivity_spec.get("variable_2"),
+                min_2=sensitivity_spec.get("min_2"),
+                max_2=sensitivity_spec.get("max_2"),
+                n_2=sensitivity_spec.get("n_2"),
+            )
+
+            self._last_sensitivity = result
+            results_text = format_sensitivity_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Sensitivity analysis completed. Results below. "
+                    f"Explain the sensitivity to the engineer. "
+                    f"Highlight which variables have the most impact and the trends.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Sensitivity analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_sensitivity(self) -> Optional[SensitivityResult]:
+        """Get the last sensitivity analysis result (for UI display)."""
+        return getattr(self, "_last_sensitivity", None)
+
+    # -- PVT simulation handling ---------------------------------------------
+
+    def _handle_pvt(self, assistant_text: str, pvt_spec: dict, client, types) -> str:
+        """Run PVT simulation and feed results back to LLM."""
+        try:
+            result = run_pvt_simulation(
+                model=self.model,
+                experiment=pvt_spec.get("experiment", "CME"),
+                stream_name=pvt_spec.get("stream_name"),
+                temperature_C=float(pvt_spec.get("temperature_C", 100)),
+                p_start_bara=float(pvt_spec.get("p_start_bara", 400)),
+                p_end_bara=float(pvt_spec.get("p_end_bara", 10)),
+                n_steps=int(pvt_spec.get("n_steps", 20)),
+                stages=pvt_spec.get("stages"),
+            )
+
+            self._last_pvt = result
+            results_text = format_pvt_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: PVT simulation completed. Results below. "
+                    f"Explain the PVT data to the engineer. "
+                    f"Highlight the saturation point, key trends, and any notable observations.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: PVT simulation failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_pvt(self) -> Optional[PVTResult]:
+        """Get the last PVT simulation result (for UI display)."""
+        return getattr(self, "_last_pvt", None)
+
+    # -- Safety analysis handling --------------------------------------------
+
+    def _handle_safety(self, assistant_text: str, safety_spec: dict, client, types) -> str:
+        """Run safety analysis and feed results back to LLM."""
+        try:
+            result = run_safety_analysis(
+                model=self.model,
+                design_pressure_factor=float(safety_spec.get("design_pressure_factor", 1.1)),
+                include_fire=bool(safety_spec.get("include_fire", True)),
+                include_blocked_outlet=bool(safety_spec.get("include_blocked_outlet", True)),
+            )
+
+            self._last_safety = result
+            results_text = format_safety_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Safety analysis completed. Results below. "
+                    f"Explain the PSV sizing and relief scenarios to the engineer. "
+                    f"Highlight the controlling case, required orifice sizes, "
+                    f"and flare system design load.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Safety analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_safety(self) -> Optional[SafetyReport]:
+        """Get the last safety analysis result (for UI display)."""
+        return getattr(self, "_last_safety", None)
+
+    # -- Flow assurance handling ---------------------------------------------
+
+    def _handle_flow_assurance(self, assistant_text: str, fa_spec: dict, client, types) -> str:
+        """Run flow assurance assessment and feed results back to LLM."""
+        try:
+            result = run_flow_assurance(
+                model=self.model,
+                check_hydrates=bool(fa_spec.get("check_hydrates", True)),
+                check_wax=bool(fa_spec.get("check_wax", True)),
+                check_corrosion=bool(fa_spec.get("check_corrosion", True)),
+                inhibitor_type=fa_spec.get("inhibitor_type", "MEG"),
+            )
+
+            self._last_flow_assurance = result
+            results_text = format_flow_assurance_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Flow assurance assessment completed. Results below. "
+                    f"Explain the risks to the engineer. Highlight any HIGH risk items, "
+                    f"hydrate formation temperatures, corrosion rates, and recommended "
+                    f"mitigation measures.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Flow assurance assessment failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_flow_assurance(self) -> Optional[FlowAssuranceResult]:
+        """Get the last flow assurance result (for UI display)."""
+        return getattr(self, "_last_flow_assurance", None)
+
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
@@ -1779,4 +2415,10 @@ class ProcessChatSession:
         self._last_autosize = None
         self._last_script = None
         self._last_save_bytes = None
+        self._last_emissions = None
+        self._last_dynamic = None
+        self._last_sensitivity = None
+        self._last_pvt = None
+        self._last_safety = None
+        self._last_flow_assurance = None
 
