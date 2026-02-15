@@ -58,13 +58,13 @@ with st.expander("📋 Set Fluid Composition", expanded=True):
     if 'phflash_data' not in st.session_state:
         st.session_state['phflash_data'] = pd.DataFrame({
             'Pressure (bara)': [50.0, 100.0],
-            'Enthalpy (J/mol)': [-5000.0, -3000.0],
+            'Enthalpy (J/kg)': [-10000.0, -5000.0],
         })
 
     if 'psflash_data' not in st.session_state:
         st.session_state['psflash_data'] = pd.DataFrame({
             'Pressure (bara)': [50.0, 100.0],
-            'Entropy (J/mol/K)': [-50.0, -40.0],
+            'Entropy (J/kgK)': [-1500.0, -1000.0],
         })
 
     st.edited_df = st.data_editor(
@@ -120,10 +120,10 @@ with st.expander("🌡️ Input Conditions", expanded=True):
                     min_value=0.0, max_value=1000, format='%f',
                     help='Enter the pressure in bar absolute.'
                 ),
-                'Enthalpy (J/mol)': st.column_config.NumberColumn(
-                    label="Enthalpy (J/mol)",
+                'Enthalpy (J/kg)': st.column_config.NumberColumn(
+                    label="Enthalpy (J/kg)",
                     format='%f',
-                    help='Enter the molar enthalpy in J/mol.'
+                    help='Enter the specific enthalpy in J/kg.'
                 ),
             }
         )
@@ -138,10 +138,10 @@ with st.expander("🌡️ Input Conditions", expanded=True):
                     min_value=0.0, max_value=1000, format='%f',
                     help='Enter the pressure in bar absolute.'
                 ),
-                'Entropy (J/mol/K)': st.column_config.NumberColumn(
-                    label="Entropy (J/mol/K)",
+                'Entropy (J/kgK)': st.column_config.NumberColumn(
+                    label="Entropy (J/kgK)",
                     format='%f',
-                    help='Enter the molar entropy in J/(mol·K).'
+                    help='Enter the specific entropy in J/(kg·K).'
                 ),
             }
         )
@@ -165,13 +165,13 @@ if st.button(f'Run {flash_type} Calculations'):
                             neqsim_fluid.setTemperature(temp, 'C')
                             TPflash(neqsim_fluid)
                         elif flash_type == "PH Flash":
-                            enthalpy = row['Enthalpy (J/mol)']
+                            enthalpy = row['Enthalpy (J/kg)']
                             neqsim_fluid.setTemperature(20.0, 'C')
-                            PHflash(neqsim_fluid, enthalpy)
+                            PHflash(neqsim_fluid, enthalpy, 'J/kg')
                         else:  # PS Flash
-                            entropy = row['Entropy (J/mol/K)']
+                            entropy = row['Entropy (J/kgK)']
                             neqsim_fluid.setTemperature(20.0, 'C')
-                            PSflash(neqsim_fluid, entropy)
+                            PSflash(neqsim_fluid, entropy, 'J/kgK')
 
                         results_list.append(dataFrame(neqsim_fluid))
 
