@@ -436,7 +436,7 @@ def _try_java_optimizer(
                 # Use last stream's pressure
                 streams = model.list_streams()
                 if streams:
-                    outlet_pressure = streams[-1].pressure_bara or inlet_pressure
+                    outlet_pressure = streams[-1].pressure_bara if streams[-1].pressure_bara is not None else inlet_pressure
 
         result = engine.findMaximumThroughput(
             inlet_pressure, outlet_pressure, min_flow, max_flow

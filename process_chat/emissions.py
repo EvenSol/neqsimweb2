@@ -102,8 +102,8 @@ def _estimate_fuel_gas_co2(power_kw: float) -> Tuple[float, float]:
     if power_kw <= 0:
         return 0.0, 0.0
     # Gas turbine: LHV nat-gas ≈ 50 MJ/kg → 13.9 kWh/kg
-    # 35% efficiency → fuel consumption = power / (0.35 * 13.9 * 1000) * 3600
-    fuel_kg_hr = power_kw / (0.35 * 50_000 / 3.6)   # kW → kJ/s → kg/hr
+    # 35% efficiency → fuel consumption = power / (0.35 * 13.9) kg/hr
+    fuel_kg_hr = power_kw / (0.35 * 50.0 / 3.6)   # kW → kg/hr
     return fuel_kg_hr * _CO2_PER_KG_NATGAS, fuel_kg_hr
 
 
@@ -201,7 +201,7 @@ def calculate_emissions(
 
         if duty_kw > 0 and java_type in ("Heater",):
             # Fired heater — assume 90% efficiency
-            fuel_kg_hr = duty_kw / (0.90 * 50_000 / 3.6)
+            fuel_kg_hr = duty_kw / (0.90 * 50.0 / 3.6)
             co2 = fuel_kg_hr * _CO2_PER_KG_NATGAS
             sources.append(EmissionSource(
                 name=u_name,

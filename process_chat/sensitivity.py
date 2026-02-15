@@ -65,23 +65,31 @@ class SensitivityResult:
 def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
     """Apply a single patch key to a model. Returns True on success."""
     try:
-        parts = key.split(".", 2)
+        # Split into prefix, name, param — using rsplit on the last segment
+        # to handle dotted names like "separator.gasOutStream"
+        parts = key.split(".", 1)
         if len(parts) < 2:
             return False
+        prefix = parts[0]
+        remainder = parts[1]  # e.g. "separator.gasOutStream.pressure_bara"
+        # The param is always the last dot-segment
+        last_dot = remainder.rfind(".")
+        if last_dot < 0:
+            return False
+        obj_name = remainder[:last_dot]
+        param = remainder[last_dot + 1:]
 
-        if parts[0] == "streams":
-            stream_name = parts[1] if len(parts) >= 2 else ""
-            param = parts[2] if len(parts) > 2 else ""
+        if prefix == "streams":
             streams = model.list_streams()
             for s_info in streams:
-                if stream_name.lower() in s_info.name.lower():
+                if obj_name.lower() in s_info.name.lower():
                     try:
                         java_stream = model.get_stream(s_info.name)
                     except KeyError:
                         return False
                     if "pressure_bara" in param:
                         java_stream.setPressure(float(value), "bara")
-                    elif "temperature_C" in param:
+                    elif "temperature_C" in param or "temperature_c" in param:
                         java_stream.setTemperature(float(value), "C")
                     elif "flow_kg_hr" in param:
                         java_stream.setFlowRate(float(value), "kg/hr")
@@ -90,12 +98,10 @@ def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
                     return True
             return False
 
-        elif parts[0] == "units":
-            unit_name = parts[1] if len(parts) >= 2 else ""
-            param = parts[2] if len(parts) > 2 else ""
+        elif prefix == "units":
             units = model.list_units()
             for u_info in units:
-                if unit_name.lower() in u_info.name.lower():
+                if obj_name.lower() in u_info.name.lower():
                     try:
                         java_obj = model.get_unit(u_info.name)
                     except KeyError:
@@ -118,9 +124,13 @@ def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
         return False
 
 
-def _extract_kpi_value(model: NeqSimProcessModel, kpi_name: str) -> Optional[float]:
-    """Extract a single KPI value by name."""
-    run_result = model.run()
+def _extract_kpi_value(model: NeqSimProcessModel, kpi_name: str, run_result=None) -> Optional[float]:
+    """Extract a single KPI value by name.
+    
+    If *run_result* is provided, uses its KPIs directly (avoids re-running).
+    """
+    if run_result is None:
+        run_result = model.run()
     kpis = run_result.kpis
     # Exact match
     if kpi_name in kpis:
@@ -250,8 +260,8 @@ def _run_tornado(
         try:
             clone = model.clone()
             _apply_patch_key(clone, name, low)
-            clone.run()
-            v = _extract_kpi_value(clone, response_kpi)
+            rr = clone.run()
+            v = _extract_kpi_value(clone, response_kpi, run_result=rr)
             if v is not None:
                 kpi_low = v
         except Exception:
@@ -261,8 +271,8 @@ def _run_tornado(
         try:
             clone = model.clone()
             _apply_patch_key(clone, name, high)
-            clone.run()
-            v = _extract_kpi_value(clone, response_kpi)
+            rr = clone.run()
+            v = _extract_kpi_value(clone, response_kpi, run_result=rr)
             if v is not None:
                 kpi_high = v
         except Exception:

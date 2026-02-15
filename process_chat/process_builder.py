@@ -90,6 +90,16 @@ def _is_truthy(val) -> bool:
     return str(val).lower().strip() in ("true", "yes", "1")
 
 
+def _build_mixer(base, name, stream):
+    """Build a Mixer with fallback if 2-arg constructor is unavailable."""
+    try:
+        return base.mixer.Mixer(name, stream)
+    except Exception:
+        m = base.mixer.Mixer(name)
+        m.addStream(stream)
+        return m
+
+
 # ---------------------------------------------------------------------------
 # Parameter setter mapping (key → Java setter call string)
 # ---------------------------------------------------------------------------
@@ -112,8 +122,8 @@ _PARAM_SETTERS = {
     "speed":                   lambda v: f"setSpeed({float(v)})",
     "compression_ratio":       lambda v: f"setCompressionRatio({float(v)})",
     "compressionratio":        lambda v: f"setCompressionRatio({float(v)})",
-    "use_polytropic_calc":     lambda v: f"setUsePolytropicCalc({bool(v)})",
-    "usepolytropiccalc":       lambda v: f"setUsePolytropicCalc({bool(v)})",
+    "use_polytropic_calc":     lambda v: f"setUsePolytropicCalc({str(_is_truthy(v))})",
+    "usepolytropiccalc":       lambda v: f"setUsePolytropicCalc({str(_is_truthy(v))})",
     "cv":                      lambda v: f"setCv({float(v)})",
     "flow_coefficient":        lambda v: f"setCv({float(v)})",
     "percent_valve_opening":   lambda v: f"setPercentValveOpening({float(v)})",
@@ -148,15 +158,20 @@ def _apply_param(unit, key: str, value):
     k = key.lower().strip()
 
     if k in ("outlet_pressure_bara", "outletpressure_bara"):
-        unit.setOutletPressure(float(value), "bara")
+        if hasattr(unit, "setOutletPressure"):
+            unit.setOutletPressure(float(value), "bara")
     elif k in ("outlet_pressure_barg", "outletpressure_barg"):
-        unit.setOutletPressure(float(value), "barg")
+        if hasattr(unit, "setOutletPressure"):
+            unit.setOutletPressure(float(value), "barg")
     elif k in ("outlet_temperature_c", "outtemperature_c"):
-        unit.setOutTemperature(float(value), "C")
+        if hasattr(unit, "setOutTemperature"):
+            unit.setOutTemperature(float(value), "C")
     elif k in ("isentropic_efficiency", "isentropicefficiency"):
-        unit.setIsentropicEfficiency(float(value))
+        if hasattr(unit, "setIsentropicEfficiency"):
+            unit.setIsentropicEfficiency(float(value))
     elif k in ("polytropic_efficiency", "polytropicefficiency"):
-        unit.setPolytropicEfficiency(float(value))
+        if hasattr(unit, "setPolytropicEfficiency"):
+            unit.setPolytropicEfficiency(float(value))
     elif k in ("pressure_drop_bar", "pressure_drop"):
         if hasattr(unit, "setPressureDrop"):
             unit.setPressureDrop(float(value))
@@ -171,7 +186,7 @@ def _apply_param(unit, key: str, value):
             unit.setCompressionRatio(float(value))
     elif k in ("use_polytropic_calc", "usepolytropiccalc"):
         if hasattr(unit, "setUsePolytropicCalc"):
-            unit.setUsePolytropicCalc(bool(value))
+            unit.setUsePolytropicCalc(_is_truthy(value))
     elif k in ("cv", "flow_coefficient"):
         if hasattr(unit, "setCv"):
             unit.setCv(float(value))
@@ -257,6 +272,15 @@ def _get_outlet(unit, outlet_type: str = "gas"):
                     return s
             except Exception:
                 pass
+
+    # Splitter: getSplitStream requires an index
+    if hasattr(unit, "getSplitStream"):
+        try:
+            s = unit.getSplitStream(0)
+            if s is not None:
+                return s
+        except Exception:
+            pass
 
     # For Stream objects, the stream itself is the outlet
     return unit
@@ -692,7 +716,7 @@ class ProcessBuilder:
             "control_valve":          lambda n, s: base.valve.ControlValve(n, s),
             "expander":               lambda n, s: base.expander.Expander(n, s),
             "pump":                   lambda n, s: base.pump.Pump(n, s),
-            "mixer":                  lambda n, s: base.mixer.Mixer(n, s),
+            "mixer":                  lambda n, s: _build_mixer(base, n, s),
             "splitter":               lambda n, s: base.splitter.Splitter(n, s),
             "pipeline":               lambda n, s: base.pipeline.Pipeline(n, s),
             "adiabatic_pipe":         lambda n, s: base.pipeline.AdiabaticPipe(n, s),
@@ -732,8 +756,8 @@ class ProcessBuilder:
                     for k, v in params.items():
                         _apply_param(unit, k, v)
                     return unit
-                except Exception:
-                    pass
+                except Exception as e:
+                    raise ValueError(f"Failed to create '{eq_type}': {e}") from e
             raise ValueError(f"Unknown equipment type: '{eq_type}'")
 
         unit = ctor(name, inlet_stream)
@@ -811,6 +835,10 @@ class ProcessBuilder:
             return f"{var}.getLiquidOutStream()"
         if ot == "water":
             return f"{var}.getWaterOutStream()"
+
+        # Splitter needs index argument
+        if eq_type == "splitter":
+            return f"{var}.getSplitStream(0)"
 
         info = _EQUIP_INFO.get(eq_type)
         if info and info[1]:

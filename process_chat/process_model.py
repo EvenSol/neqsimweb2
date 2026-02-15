@@ -510,7 +510,10 @@ class NeqSimProcessModel:
                             if s is not None:
                                 sname = str(s.getName()) if s.getName() else None
                                 if sname:
-                                    java_id = id(s)
+                                    try:
+                                        java_id = int(s.hashCode())
+                                    except Exception:
+                                        java_id = id(s)
                                     if java_id in seen_java_ids:
                                         continue  # same Java object already indexed
                                     seen_java_ids.add(java_id)
@@ -522,10 +525,13 @@ class NeqSimProcessModel:
 
         # Also index units that are streams themselves (Stream objects added to process)
         for name, u in list(self._units.items()):
-            java_class = u.getClass().getSimpleName()
-            if "Stream" in java_class and name not in self._streams:
-                self._streams[name] = u
-                raw_name_count[name] = raw_name_count.get(name, 0) + 1
+            try:
+                java_class = str(u.getClass().getSimpleName())
+                if "Stream" in java_class and name not in self._streams:
+                    self._streams[name] = u
+                    raw_name_count[name] = raw_name_count.get(name, 0) + 1
+            except Exception:
+                pass
 
         # Add short (unqualified) aliases for globally unique stream names
         # so users / LLM can reference them with short names.
@@ -1644,7 +1650,7 @@ class NeqSimProcessModel:
             try:
                 fluid_tvp = fluid.clone()
                 fluid_tvp.init(0)
-                ops_tvp = jneqsim.thermodynamicoperations.ThermodynamicOperations(fluid_tvp)
+                ops_tvp = jneqsim.thermodynamicOperations.ThermodynamicOperations(fluid_tvp)
                 ops_tvp.bubblePointPressureFlash(False)
                 tvp = float(fluid_tvp.getPressure("bara"))
                 kpis[f"{prefix}.TVP_bara"] = KPI(f"{prefix}.TVP_bara", tvp, "bara")
@@ -1656,7 +1662,7 @@ class NeqSimProcessModel:
                 fluid_rvp = fluid.clone()
                 fluid_rvp.setTemperature(37.8, "C")
                 fluid_rvp.init(0)
-                ops_rvp = jneqsim.thermodynamicoperations.ThermodynamicOperations(fluid_rvp)
+                ops_rvp = jneqsim.thermodynamicOperations.ThermodynamicOperations(fluid_rvp)
                 ops_rvp.bubblePointPressureFlash(False)
                 rvp = float(fluid_rvp.getPressure("bara"))
                 kpis[f"{prefix}.RVP_bara"] = KPI(f"{prefix}.RVP_bara", rvp, "bara")

@@ -1288,7 +1288,7 @@ def extract_property_query(text: str) -> Optional[dict]:
     for match in matches:
         try:
             data = json.loads(_normalise_json(match))
-            if "properties" in data:
+            if "properties" in data and isinstance(data["properties"], list):
                 return data
         except json.JSONDecodeError:
             continue
@@ -1323,20 +1323,50 @@ def _strip_tool_blocks(text: str) -> str:
     return text.strip()
 
 
+def _is_build_spec(data: dict) -> bool:
+    """Return True if *data* looks like a process build specification.
+
+    Build specs are distinguished from scenario JSON by having either
+    ``fluid`` + ``process`` keys (full build), an ``action`` key
+    (show_script / save), or an ``add`` key (incremental addition).
+    """
+    if "action" in data:
+        return True
+    if "add" in data:
+        return True
+    if "fluid" in data and "process" in data:
+        return True
+    return False
+
+
 def extract_build_spec(text: str) -> Optional[dict]:
     """Extract a process build specification from LLM output.
 
-    Looks for ````build ... ```` blocks with JSON.
+    Looks for ````build ... ```` blocks first, then falls back to
+    ````json ... ```` blocks whose content looks like a build spec
+    (has ``fluid`` + ``process``, or ``action``, or ``add`` keys).
     Returns the parsed dict or ``None``.
     """
     import re
+
+    # Primary: explicit ```build blocks
     pattern = r'```build\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
-
     for match in matches:
         try:
             data = json.loads(_normalise_json(match))
             return data
+        except json.JSONDecodeError:
+            continue
+
+    # Fallback: ```json blocks that look like build specs
+    pattern_json = r'```json\s*\n(.*?)\n\s*```'
+    matches_json = re.findall(pattern_json, text, re.DOTALL)
+    for match in matches_json:
+        try:
+            data = json.loads(_normalise_json(match))
+            if _is_build_spec(data):
+                return data
         except json.JSONDecodeError:
             continue
 
@@ -1808,9 +1838,10 @@ class ProcessChatSession:
             return self._handle_flow_assurance(assistant_text, fa_spec, client, types)
 
         # --- Pure Q&A ---
-        self.history.append({"role": "assistant", "content": assistant_text})
+        cleaned = _strip_tool_blocks(assistant_text)
+        self.history.append({"role": "assistant", "content": cleaned})
         self._last_comparison = None
-        return assistant_text
+        return cleaned
 
     # -- Build handling -----------------------------------------------------
 
@@ -2251,7 +2282,9 @@ class ProcessChatSession:
                     sc.patch.add_units or sc.patch.add_streams or sc.patch.add_process
                 )
                 has_changes = bool(sc.patch.changes)
-                if not has_structural and not has_changes:
+                has_components = bool(getattr(sc.patch, 'add_components', None))
+                has_targets = bool(getattr(sc.patch, 'targets', None))
+                if not has_structural and not has_changes and not has_components and not has_targets:
                     continue
                 # Only persist if the scenario actually succeeded
                 case_ok = any(

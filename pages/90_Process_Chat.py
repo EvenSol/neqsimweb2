@@ -395,7 +395,7 @@ def _show_optimization(opt_result):
         st.metric(
             "Bottleneck",
             opt_result.bottleneck_equipment or "None",
-            delta=f"{opt_result.bottleneck_utilization*100:.0f}% util" if opt_result.bottleneck_utilization else None,
+            delta=f"{opt_result.bottleneck_utilization*100:.0f}% util" if opt_result.bottleneck_utilization is not None else None,
             delta_color="inverse",
         )
 

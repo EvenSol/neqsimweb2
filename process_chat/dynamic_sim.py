@@ -103,7 +103,7 @@ def _run_blowdown(
         streams = model.list_streams()
         if streams:
             first = streams[0]
-            p0 = first.pressure_bara or 50.0
+            p0 = first.pressure_bara if first.pressure_bara is not None else 50.0
 
     if p0 is None:
         p0 = 50.0
@@ -580,7 +580,7 @@ def _run_ramp(
     current_flow = 0.0
     for s_info in streams:
         if stream_name.lower() in s_info.name.lower():
-            current_flow = s_info.flow_rate_kg_hr or 10000.0
+            current_flow = s_info.flow_rate_kg_hr if s_info.flow_rate_kg_hr is not None else 10000.0
             stream_name = s_info.name
             break
 
