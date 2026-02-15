@@ -18,7 +18,12 @@ from .process_model import NeqSimProcessModel
 from .templates import template_help_text
 from .optimizer import optimize_production, format_optimization_result, OptimizationResult
 from .risk_analysis import run_risk_analysis, format_risk_result, RiskAnalysisResult
-from .compressor_chart import generate_compressor_chart, format_chart_result, CompressorChartResult
+from .compressor_chart import (
+    generate_compressor_chart,
+    format_chart_result,
+    CompressorChartResult,
+    refresh_operating_point,
+)
 from .auto_size import auto_size_all, format_autosize_result, AutoSizeResult
 from .emissions import calculate_emissions, format_emissions_result, EmissionsResult
 from .dynamic_sim import run_dynamic_simulation, format_dynamic_result, DynamicSimResult
@@ -561,7 +566,8 @@ When the user asks to generate or show a compressor performance chart/map/curve,
 {{
   "compressor": "1st stage compressor",
   "template": "CENTRIFUGAL_STANDARD",
-  "num_speeds": 5
+  "num_speeds": 5,
+  "show_only": false
 }}
 ```
 Parameters:
@@ -571,15 +577,20 @@ Parameters:
       Application: PIPELINE, EXPORT, INJECTION, GAS_LIFT, REFRIGERATION, BOOSTER
       Type: SINGLE_STAGE, MULTISTAGE_INLINE, INTEGRALLY_GEARED, OVERHUNG
   - num_speeds: number of speed curves to generate (default: 5)
+  - show_only: true = reuse existing chart (update operating point only), false = generate new chart.
+    IMPORTANT: If a chart has already been generated for this compressor (e.g. via auto-size or a previous
+    "generate chart" request), set "show_only": true to reuse it. Only set false when the user explicitly
+    asks to GENERATE or CREATE a NEW chart, or requests a different template.
 
 This generates a CompressorChart, applies it to the compressor, and re-runs the simulation.
 The chart enforces surge/stonewall/speed limits during all subsequent calculations.
 
 Use this for questions like:
-  - "Generate a compressor chart for the 1st stage compressor"
-  - "Show the compressor performance map"
-  - "Create a compressor curve using pipeline template"
-  - "Generate compressor charts for all compressors"
+  - "Generate a compressor chart for the 1st stage compressor" → show_only: false
+  - "Show the compressor performance map" → show_only: true (reuse existing)
+  - "Show me the chart for 23-KA-01" → show_only: true (reuse existing)
+  - "Create a compressor curve using pipeline template" → show_only: false (new template)
+  - "Generate compressor charts for all compressors" → show_only: false
 
 AUTO-SIZE (for "auto size equipment", "equipment sizing", "utilization report", "bottleneck analysis"):
 When the user asks to auto-size equipment, get a sizing report, check utilization, or find bottlenecks, output an ```autosize ... ``` block:
@@ -587,26 +598,35 @@ When the user asks to auto-size equipment, get a sizing report, check utilizatio
 {{
   "safety_factor": 1.2,
   "generate_charts": true,
-  "chart_template": "CENTRIFUGAL_STANDARD"
+  "chart_template": "CENTRIFUGAL_STANDARD",
+  "force_resize": false
 }}
 ```
 Parameters:
   - safety_factor: design safety factor (default: 1.2 = 20% margin)
   - generate_charts: whether to generate compressor charts (default: true)
   - chart_template: compressor chart template (default: "CENTRIFUGAL_STANDARD")
+  - force_resize: false = skip equipment already sized (default), true = re-size everything.
+    IMPORTANT: Equipment that has already been auto-sized or given explicit dimensions will NOT be
+    re-sized unless force_resize is true. Only set true when the user explicitly asks to RE-SIZE,
+    RE-CALCULATE sizing, or requests a different safety factor. For utilization queries, bottleneck
+    analysis, or sizing reports on already-sized equipment, keep force_resize false.
 
 The auto-sizing will:
   1. Apply autoSize() to all sizeable equipment (separators, valves, heaters, coolers, etc.)
+     — skipping equipment already sized unless force_resize is true
   2. Optionally generate compressor performance charts
   3. Extract sizing data (dimensions, capacities, design values)
   4. Calculate utilization ratios for all equipment
   5. Identify the process bottleneck
 
 Use this for questions like:
-  - "Auto-size all equipment"
-  - "What is the equipment sizing?"
-  - "Show equipment utilization"
-  - "What is the process bottleneck?"
+  - "Auto-size all equipment" → force_resize: false (first time) or true (if re-sizing)
+  - "What is the equipment sizing?" → force_resize: false
+  - "Show equipment utilization" → force_resize: false
+  - "What is the process bottleneck?" → force_resize: false
+  - "Re-size all equipment" → force_resize: true
+  - "Re-size with 30% safety factor" → force_resize: true
   - "Generate a sizing report"
   - "What is the utilization of each piece of equipment?"
 
@@ -965,18 +985,23 @@ Use this for: "show risk matrix", "equipment criticality", "system availability"
 "failure analysis", "Monte Carlo simulation", "which equipment is most critical?".
 
 COMPRESSOR CHART (after a process has been built):
-When the user asks to generate a compressor chart/map/performance curve, output:
+When the user asks to generate or show a compressor chart/map/performance curve, output:
 ```chart
 {
   "compressor": "1st stage compressor",
   "template": "CENTRIFUGAL_STANDARD",
-  "num_speeds": 5
+  "num_speeds": 5,
+  "show_only": false
 }
 ```
 Templates: CENTRIFUGAL_STANDARD, CENTRIFUGAL_HIGH_FLOW, CENTRIFUGAL_HIGH_HEAD,
 PIPELINE, EXPORT, INJECTION, GAS_LIFT, REFRIGERATION, BOOSTER,
 SINGLE_STAGE, MULTISTAGE_INLINE, INTEGRALLY_GEARED, OVERHUNG.
-Use this for: "generate compressor chart", "show compressor map", "compressor performance curve".
+  - show_only: true = reuse existing chart (update operating point only), false = generate new chart.
+    If a chart was already generated (e.g. via auto-size), set true to reuse it.
+    Only set false when the user explicitly asks to GENERATE/CREATE a NEW chart or a different template.
+Use this for: "generate compressor chart" (show_only: false), "show compressor map" (show_only: true),
+"compressor performance curve" (show_only: true if chart exists, false otherwise).
 
 AUTO-SIZE (after a process has been built):
 When the user asks to auto-size, get sizing report, check utilization, or find bottleneck, output:
@@ -984,11 +1009,14 @@ When the user asks to auto-size, get sizing report, check utilization, or find b
 {
   "safety_factor": 1.2,
   "generate_charts": true,
-  "chart_template": "CENTRIFUGAL_STANDARD"
+  "chart_template": "CENTRIFUGAL_STANDARD",
+  "force_resize": false
 }
 ```
+  - force_resize: false = skip already-sized equipment (default), true = re-size everything.
+    Only set true when user explicitly asks to RE-SIZE or wants a different safety factor.
 Use this for: "auto-size equipment", "sizing report", "equipment utilization",
-"what is the bottleneck?", "size all equipment".
+"what is the bottleneck?", "size all equipment", "re-size" (force_resize: true).
 
 EMISSIONS ANALYSIS (after a process has been built):
 When the user asks about emissions, CO2, carbon footprint, output:
@@ -1419,6 +1447,8 @@ class ProcessChatSession:
         self._last_optimization = None
         self._last_risk_analysis = None
         self._last_chart = None
+        self._chart_cache: Dict[str, "CompressorChartResult"] = {}  # persists across messages
+        self._sized_equipment: set = set()  # tracks equipment already auto-sized
         self._last_autosize = None
         self._last_emissions = None
         self._last_dynamic = None
@@ -1986,30 +2016,55 @@ class ProcessChatSession:
     # -- Compressor chart handling -------------------------------------------
 
     def _handle_chart(self, assistant_text: str, chart_spec: dict, client, types) -> str:
-        """Generate compressor chart(s) and feed results back to LLM."""
+        """Generate or show compressor chart(s) and feed results back to LLM.
+
+        When ``show_only`` is true in the chart spec, reuse a previously
+        generated chart (updating only the operating point) instead of
+        regenerating the full performance map.
+        """
         try:
             compressor_name = chart_spec.get("compressor")
             template = chart_spec.get("template", "CENTRIFUGAL_STANDARD")
             num_speeds = int(chart_spec.get("num_speeds", 5))
+            show_only = bool(chart_spec.get("show_only", False))
 
-            result = generate_compressor_chart(
-                model=self.model,
-                compressor_name=compressor_name,
-                template=template,
-                num_speeds=num_speeds,
-            )
+            # --- Try to reuse cached chart when show_only is requested ---
+            cache_key = (compressor_name or "__all__").lower()
+            if show_only and cache_key in self._chart_cache:
+                cached = self._chart_cache[cache_key]
+                # Refresh the operating point(s) from current model state
+                refreshed_charts = []
+                for cd in cached.charts:
+                    refreshed_charts.append(
+                        refresh_operating_point(self.model, cd)
+                    )
+                result = CompressorChartResult(
+                    charts=refreshed_charts,
+                    message=cached.message,
+                )
+            else:
+                # Full chart generation
+                result = generate_compressor_chart(
+                    model=self.model,
+                    compressor_name=compressor_name,
+                    template=template,
+                    num_speeds=num_speeds,
+                )
 
+                # Persist chart state so cloned models retain it
+                try:
+                    self.model.refresh_source_bytes()
+                except Exception:
+                    pass
+
+                # Update system prompt (chart may change compressor behaviour)
+                self._system_prompt = build_system_prompt(self.model)
+
+            # Store in both per-message result and persistent cache
             self._last_chart = result
+            self._chart_cache[cache_key] = result
+
             results_text = format_chart_result(result)
-
-            # Persist chart state so cloned models retain it
-            try:
-                self.model.refresh_source_bytes()
-            except Exception:
-                pass
-
-            # Update system prompt (chart may change compressor behaviour)
-            self._system_prompt = build_system_prompt(self.model)
 
             self.history.append({"role": "assistant", "content": assistant_text})
             self.history.append({
@@ -2050,16 +2105,65 @@ class ProcessChatSession:
             safety_factor = float(autosize_spec.get("safety_factor", 1.2))
             gen_charts = bool(autosize_spec.get("generate_charts", True))
             chart_template = autosize_spec.get("chart_template", "CENTRIFUGAL_STANDARD")
+            force_resize = bool(autosize_spec.get("force_resize", False))
+
+            # If force_resize, clear the tracking set so everything is re-sized
+            if force_resize:
+                self._sized_equipment.clear()
+                self._chart_cache.clear()
 
             result = auto_size_all(
                 model=self.model,
                 safety_factor=safety_factor,
                 generate_compressor_charts=gen_charts,
                 chart_template=chart_template,
+                skip_already_sized=self._sized_equipment if self._sized_equipment else None,
             )
 
             self._last_autosize = result
             results_text = format_autosize_result(result)
+
+            # Track which equipment was successfully sized
+            for s in result.equipment_sized:
+                if s.auto_sized:
+                    self._sized_equipment.add(s.name)
+
+            # Cache compressor charts generated during auto-sizing so that
+            # subsequent "show chart" requests can reuse them.
+            if gen_charts and self.model:
+                try:
+                    from .compressor_chart import _find_compressors, _extract_speed_curves, \
+                        _extract_surge_curve, _extract_stonewall_curve, _extract_operating_point, \
+                        CompressorChartData, SpeedCurve
+                    for cname, cunit in _find_compressors(self.model):
+                        try:
+                            if cunit.getCompressorChart() is None:
+                                continue
+                            speed_curves = _extract_speed_curves(cunit)
+                            surge_f, surge_h = _extract_surge_curve(cunit)
+                            sw_f, sw_h = _extract_stonewall_curve(cunit)
+                            op = _extract_operating_point(cunit)
+                            min_spd = min((sc.speed_rpm for sc in speed_curves), default=0.0)
+                            max_spd = max((sc.speed_rpm for sc in speed_curves), default=0.0)
+                            cd = CompressorChartData(
+                                compressor_name=cname,
+                                template_used=chart_template,
+                                speed_curves=speed_curves,
+                                surge_flow=surge_f, surge_head=surge_h,
+                                stonewall_flow=sw_f, stonewall_head=sw_h,
+                                operating_point=op,
+                                min_speed=min_spd, max_speed=max_spd,
+                                message=f"Chart from auto-size, template={chart_template}",
+                            )
+                            cache_key = cname.lower()
+                            self._chart_cache[cache_key] = CompressorChartResult(
+                                charts=[cd],
+                                message=f"Cached chart for {cname}",
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
             # Update system prompt (sizing changes model state)
             self._system_prompt = build_system_prompt(self.model)

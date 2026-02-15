@@ -524,6 +524,58 @@ def _extract_operating_point(unit: Any) -> Optional[OperatingPoint]:
 
 
 # ---------------------------------------------------------------------------
+# Refresh operating point on cached chart
+# ---------------------------------------------------------------------------
+
+def refresh_operating_point(
+    model: NeqSimProcessModel,
+    cached_chart: CompressorChartData,
+) -> CompressorChartData:
+    """
+    Return a copy of *cached_chart* with a fresh operating point
+    extracted from the current model state, without regenerating
+    speed curves, surge/stonewall lines, etc.
+    """
+    compressors = _find_compressors(model, cached_chart.compressor_name)
+    if not compressors:
+        return cached_chart
+
+    _name, unit = compressors[0]
+    op = _extract_operating_point(unit)
+
+    return CompressorChartData(
+        compressor_name=cached_chart.compressor_name,
+        template_used=cached_chart.template_used,
+        speed_curves=cached_chart.speed_curves,
+        surge_flow=cached_chart.surge_flow,
+        surge_head=cached_chart.surge_head,
+        stonewall_flow=cached_chart.stonewall_flow,
+        stonewall_head=cached_chart.stonewall_head,
+        operating_point=op if op else cached_chart.operating_point,
+        head_unit=cached_chart.head_unit,
+        flow_unit=cached_chart.flow_unit,
+        min_speed=cached_chart.min_speed,
+        max_speed=cached_chart.max_speed,
+        message=cached_chart.message,
+    )
+
+
+def has_chart_applied(
+    model: NeqSimProcessModel,
+    compressor_name: str,
+) -> bool:
+    """Return True if the named compressor already has a chart object attached."""
+    compressors = _find_compressors(model, compressor_name)
+    if not compressors:
+        return False
+    _name, unit = compressors[0]
+    try:
+        return unit.getCompressorChart() is not None
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Format for LLM
 # ---------------------------------------------------------------------------
 

@@ -95,6 +95,7 @@ def auto_size_all(
     generate_compressor_charts: bool = True,
     chart_template: str = "CENTRIFUGAL_STANDARD",
     chart_num_speeds: int = 5,
+    skip_already_sized: Optional[set] = None,
 ) -> AutoSizeResult:
     """
     Auto-size all equipment in the process and extract utilization.
@@ -111,6 +112,9 @@ def auto_size_all(
         Compressor chart template to use. Default 'CENTRIFUGAL_STANDARD'.
     chart_num_speeds : int
         Number of speed curves for generated charts.
+    skip_already_sized : set, optional
+        Set of equipment names that have already been sized. These will be
+        skipped (only utilization is extracted). Pass ``None`` to size everything.
 
     Returns
     -------
@@ -136,6 +140,17 @@ def auto_size_all(
 
         # Check if equipment supports autoSize
         if java_class not in _AUTOSIZEABLE_TYPES:
+            continue
+
+        # Skip equipment that has already been sized (unless force_resize)
+        if skip_already_sized and name in skip_already_sized:
+            # Still extract current sizing data without re-sizing
+            sizing_data = _extract_sizing_data(unit, java_class)
+            equipment_sized.append(SizingInfo(
+                name=name, equipment_type=java_class,
+                auto_sized=True, sizing_data=sizing_data,
+                message="Already sized (skipped)",
+            ))
             continue
 
         sizing = _auto_size_single(
