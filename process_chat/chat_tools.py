@@ -1342,14 +1342,17 @@ def _is_build_spec(data: dict) -> bool:
 def extract_build_spec(text: str) -> Optional[dict]:
     """Extract a process build specification from LLM output.
 
-    Looks for ````build ... ```` blocks first, then falls back to
-    ````json ... ```` blocks whose content looks like a build spec
-    (has ``fluid`` + ``process``, or ``action``, or ``add`` keys).
+    Checks in order:
+    1. Explicit ````build ... ```` blocks (always treated as build spec).
+    2. ````json ... ```` blocks whose content looks like a build spec.
+    3. Unmarked ```` ``` ... ``` ```` blocks whose content is a build spec.
+    4. Raw JSON objects in the text (e.g. user pasted JSON directly).
+
     Returns the parsed dict or ``None``.
     """
     import re
 
-    # Primary: explicit ```build blocks
+    # 1. Explicit ```build blocks
     pattern = r'```build\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
@@ -1359,7 +1362,7 @@ def extract_build_spec(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             continue
 
-    # Fallback: ```json blocks that look like build specs
+    # 2. ```json blocks that look like build specs
     pattern_json = r'```json\s*\n(.*?)\n\s*```'
     matches_json = re.findall(pattern_json, text, re.DOTALL)
     for match in matches_json:
@@ -1369,6 +1372,29 @@ def extract_build_spec(text: str) -> Optional[dict]:
                 return data
         except json.JSONDecodeError:
             continue
+
+    # 3. Unmarked ``` blocks (no language tag) that look like build specs
+    pattern_plain = r'```\n(.*?)\n```'
+    matches_plain = re.findall(pattern_plain, text, re.DOTALL)
+    for match in matches_plain:
+        try:
+            data = json.loads(_normalise_json(match))
+            if isinstance(data, dict) and _is_build_spec(data):
+                return data
+        except json.JSONDecodeError:
+            continue
+
+    # 4. Raw JSON in text (user may paste JSON directly without code fences)
+    normalised = _normalise_json(text)
+    brace_start = normalised.find('{')
+    if brace_start >= 0:
+        try:
+            decoder = json.JSONDecoder()
+            data, _ = decoder.raw_decode(normalised, brace_start)
+            if isinstance(data, dict) and _is_build_spec(data):
+                return data
+        except (json.JSONDecodeError, ValueError):
+            pass
 
     return None
 
@@ -1774,6 +1800,10 @@ class ProcessChatSession:
 
         # --- Check for build spec ---
         build_spec = extract_build_spec(assistant_text)
+        if not build_spec:
+            # LLM didn't emit a build block — check if the user pasted
+            # a JSON build spec directly in their message.
+            build_spec = extract_build_spec(user_message)
         if build_spec:
             return self._handle_build(assistant_text, build_spec, client, types)
 
