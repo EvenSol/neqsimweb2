@@ -823,6 +823,13 @@ When you receive simulation results, ALWAYS:
     system_prompt = system_prompt.replace("__MODEL_SUMMARY__", model_summary)
     system_prompt = system_prompt.replace("__TAG_REF__", tag_ref)
     system_prompt = system_prompt.replace("__EQUIP_TEMPLATES__", equip_templates)
+
+    # The prompt was originally written with {{/}} escaping for Python
+    # .format().  Since we now use .replace() for substitution, the
+    # double-braces are passed literally to the LLM which then mimics
+    # them in its output — breaking json.loads().  Normalise to single.
+    system_prompt = system_prompt.replace("{{", "{").replace("}}", "}")
+
     return system_prompt
 
 
@@ -1147,6 +1154,15 @@ Use this for: "hydrate risk", "wax risk", "corrosion analysis", "MEG dosing", "f
 # Chat message processing
 # ---------------------------------------------------------------------------
 
+def _normalise_json(text: str) -> str:
+    """Normalise doubled braces ``{{ }}`` → ``{ }`` so ``json.loads`` succeeds.
+
+    LLMs sometimes mimic the Python format-string escaping they see in
+    the system prompt and emit ``{{ ... }}`` instead of ``{ ... }``.
+    """
+    return text.replace("{{", "{").replace("}}", "}")
+
+
 def extract_scenario_json(text: str) -> Optional[dict]:
     """
     Extract a JSON scenario specification from LLM output text.
@@ -1158,7 +1174,7 @@ def extract_scenario_json(text: str) -> Optional[dict]:
     
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             if "scenarios" in data:
                 return data
         except json.JSONDecodeError:
@@ -1166,7 +1182,7 @@ def extract_scenario_json(text: str) -> Optional[dict]:
     
     # Also try the entire text as JSON
     try:
-        data = json.loads(text)
+        data = json.loads(_normalise_json(text))
         if "scenarios" in data:
             return data
     except json.JSONDecodeError:
@@ -1186,7 +1202,7 @@ def extract_optimize_spec(text: str) -> Optional[dict]:
     
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             if "objective" in data:
                 return data
         except json.JSONDecodeError:
@@ -1206,7 +1222,7 @@ def extract_risk_spec(text: str) -> Optional[dict]:
     
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             if "analysis" in data:
                 return data
         except json.JSONDecodeError:
@@ -1226,7 +1242,7 @@ def extract_property_query(text: str) -> Optional[dict]:
     
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             if "properties" in data:
                 return data
         except json.JSONDecodeError:
@@ -1274,7 +1290,7 @@ def extract_build_spec(text: str) -> Optional[dict]:
 
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             return data
         except json.JSONDecodeError:
             continue
@@ -1293,7 +1309,7 @@ def extract_chart_spec(text: str) -> Optional[dict]:
 
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             return data
         except json.JSONDecodeError:
             continue
@@ -1312,7 +1328,7 @@ def extract_autosize_spec(text: str) -> Optional[dict]:
 
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             return data
         except json.JSONDecodeError:
             continue
@@ -1327,7 +1343,7 @@ def extract_emissions_spec(text: str) -> Optional[dict]:
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
-            return json.loads(match)
+            return json.loads(_normalise_json(match))
         except json.JSONDecodeError:
             continue
     return None
@@ -1340,7 +1356,7 @@ def extract_dynamic_spec(text: str) -> Optional[dict]:
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
-            data = json.loads(match)
+            data = json.loads(_normalise_json(match))
             if "scenario_type" in data:
                 return data
         except json.JSONDecodeError:
@@ -1355,7 +1371,7 @@ def extract_sensitivity_spec(text: str) -> Optional[dict]:
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
-            return json.loads(match)
+            return json.loads(_normalise_json(match))
         except json.JSONDecodeError:
             continue
     return None
@@ -1368,7 +1384,7 @@ def extract_pvt_spec(text: str) -> Optional[dict]:
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
-            return json.loads(match)
+            return json.loads(_normalise_json(match))
         except json.JSONDecodeError:
             continue
     return None
@@ -1381,7 +1397,7 @@ def extract_safety_spec(text: str) -> Optional[dict]:
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
-            return json.loads(match)
+            return json.loads(_normalise_json(match))
         except json.JSONDecodeError:
             continue
     return None
@@ -1394,7 +1410,7 @@ def extract_flow_assurance_spec(text: str) -> Optional[dict]:
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
-            return json.loads(match)
+            return json.loads(_normalise_json(match))
         except json.JSONDecodeError:
             continue
     return None
