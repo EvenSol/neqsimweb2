@@ -2566,6 +2566,8 @@ class ProcessChatSession:
         self._last_optimization = None
         self._last_risk_analysis = None
         self._last_chart = None
+        self._chart_cache.clear()
+        self._sized_equipment.clear()
         self._last_autosize = None
         self._last_script = None
         self._last_save_bytes = None
