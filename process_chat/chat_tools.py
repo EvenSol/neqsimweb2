@@ -989,9 +989,10 @@ class ProcessChatSession:
                 if failed:
                     raise RuntimeError(f"Add unit errors: {failed}")
 
-                # Re-run
+                # Re-run, re-index, refresh source bytes
                 NeqSimProcessModel._run_until_converged(self.model.get_process())
                 self.model._index_model_objects()
+                self.model.refresh_source_bytes()
 
                 # Update system prompt
                 self._system_prompt = build_system_prompt(self.model)
@@ -1026,7 +1027,12 @@ class ProcessChatSession:
     # -- Scenario handling --------------------------------------------------
 
     def _handle_scenario(self, assistant_text: str, scenario_data: dict, client, types) -> str:
-        """Execute scenario JSON and feed results back to LLM."""
+        """Execute scenario JSON and feed results back to LLM.
+
+        If the scenario contains structural additions (add_units, add_streams,
+        add_process), those changes are also applied to the base model so they
+        persist for subsequent interactions.
+        """
         try:
             scenarios = scenarios_from_json(scenario_data)
 
@@ -1035,10 +1041,64 @@ class ProcessChatSession:
 
             results_text = format_comparison_for_llm(comparison)
 
+            # --- Persist structural additions to the base model ---
+            structural_applied = False
+            for sc in scenarios:
+                has_structural = (
+                    sc.patch.add_units or sc.patch.add_streams or sc.patch.add_process
+                )
+                if not has_structural:
+                    continue
+                # Only persist if the scenario actually succeeded
+                case_ok = any(
+                    c.success and c.scenario.name == sc.name
+                    for c in comparison.cases
+                )
+                if not case_ok:
+                    continue
+                try:
+                    from .scenario_engine import (
+                        apply_add_units, apply_add_streams, apply_add_process,
+                        apply_patch_to_model,
+                    )
+                    if sc.patch.add_units:
+                        apply_add_units(self.model, sc.patch.add_units)
+                    if sc.patch.add_process:
+                        apply_add_process(self.model, sc.patch.add_process)
+                    if sc.patch.add_streams:
+                        apply_add_streams(self.model, sc.patch.add_streams)
+                    if sc.patch.changes:
+                        apply_patch_to_model(self.model, sc.patch)
+                    # Re-run, re-index, and refresh source bytes so clones
+                    # see the updated topology
+                    NeqSimProcessModel._run_until_converged(
+                        self.model.get_process()
+                    )
+                    self.model._index_model_objects()
+                    self.model.refresh_source_bytes()
+                    self._system_prompt = build_system_prompt(self.model)
+                    structural_applied = True
+                except Exception:
+                    pass  # comparison still valid even if persistence fails
+
             self.history.append({"role": "assistant", "content": assistant_text})
+
+            persist_note = ""
+            if structural_applied:
+                persist_note = (
+                    "\n\n[SYSTEM NOTE: The structural additions (new equipment/streams) "
+                    "have been applied to the base model. Future questions will see "
+                    "the updated topology.]\n\nUpdated model summary:\n"
+                    + self.model.get_model_summary()
+                )
+
             self.history.append({
                 "role": "user",
-                "content": f"[SYSTEM: Simulation completed. Results below. Explain these results to the engineer concisely.]\n\n{results_text}"
+                "content": (
+                    f"[SYSTEM: Simulation completed. Results below. "
+                    f"Explain these results to the engineer concisely.]\n\n"
+                    f"{results_text}{persist_note}"
+                )
             })
 
             final_text = self._llm_followup(client, types)

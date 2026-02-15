@@ -389,6 +389,23 @@ class NeqSimProcessModel:
 
     # ----- Cloning -----
 
+    def refresh_source_bytes(self):
+        """Re-serialize the current process state so future clones see any
+        structural modifications (added units, streams, etc.)."""
+        import neqsim
+
+        with tempfile.NamedTemporaryFile(suffix=".neqsim", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            neqsim.save_neqsim(self._proc, tmp_path)
+            with open(tmp_path, "rb") as f:
+                self._source_bytes = f.read()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     def clone(self) -> "NeqSimProcessModel":
         """
         Create an independent copy by re-deserializing from the original bytes.
