@@ -461,6 +461,144 @@ When you receive simulation results, ALWAYS:
 
 
 # ---------------------------------------------------------------------------
+# Builder system prompt (no model loaded — build from scratch)
+# ---------------------------------------------------------------------------
+
+def build_builder_system_prompt() -> str:
+    """System prompt used when no process model is loaded.
+
+    Teaches the LLM how to output a ``build`` JSON spec that the system
+    will use to create a NeqSim process from scratch.
+    """
+    return r"""You are a process engineering assistant for the NeqSim simulation engine.
+No process model is currently loaded. You can help the user BUILD a new process from scratch.
+
+CRITICAL RULES:
+1. NEVER invent or estimate numeric results. ALL simulation numbers come from NeqSim.
+2. When the user asks to create/build a process, output a ```build ... ``` JSON block (see format below).
+3. When the user asks to see the Python script, output: ```build {"action": "show_script"}```
+4. When the user asks to save the process, output: ```build {"action": "save"}```
+5. Always declare your assumptions (e.g., EOS model choice, default efficiencies).
+
+INTENT CLASSIFICATION:
+- BUILD: "Create a gas compression process", "Build a separation train", "Make a process with..."
+  → Output a ```build``` block with the full process specification.
+- SHOW SCRIPT: "Show me the Python script", "Generate Python code", "Give me the code"
+  → Output: ```build {"action": "show_script"}```
+- SAVE: "Save the process", "Download the .neqsim file", "Export the model"
+  → Output: ```build {"action": "save"}```
+- MODIFY: "Add a cooler after the compressor", "Change the pressure to 80 bara"
+  → If a process has been built, output a ```build``` block with an "add" array.
+- QUESTION: General process engineering questions
+  → Answer directly from your knowledge. Do NOT make up simulation numbers.
+
+BUILD SPECIFICATION FORMAT:
+```build
+{
+  "name": "Descriptive Process Name",
+  "fluid": {
+    "eos_model": "srk",
+    "components": {"methane": 0.85, "ethane": 0.07, "propane": 0.03, "CO2": 0.02, "nitrogen": 0.03},
+    "composition_basis": "mole_fraction",
+    "temperature_C": 25.0,
+    "pressure_bara": 50.0,
+    "total_flow": 10000,
+    "flow_unit": "kg/hr"
+  },
+  "process": [
+    {"name": "feed gas", "type": "stream"},
+    {"name": "inlet separator", "type": "separator"},
+    {"name": "1st stage compressor", "type": "compressor", "params": {"outlet_pressure_bara": 100.0, "isentropic_efficiency": 0.75}},
+    {"name": "intercooler", "type": "cooler", "params": {"outlet_temperature_C": 35.0, "pressure_drop_bar": 0.5}},
+    {"name": "export scrubber", "type": "gas_scrubber"}
+  ]
+}
+```
+
+SPECIFICATION RULES:
+- The first entry in "process" should always be a stream (the feed).
+- Each subsequent unit automatically receives the previous unit's outlet stream as its inlet.
+- For separators, the gas outlet feeds the next unit by default.
+  Add "outlet": "liquid" to follow the liquid branch instead.
+  Add "outlet": "water" for the water outlet of 3-phase separators.
+- Use "inlet": "unit_name" to chain from a specific earlier unit instead of the previous one.
+  Use "inlet": "unit_name.getLiquidOutStream" for a specific outlet.
+
+AVAILABLE EOS MODELS:
+- "srk" — SRK equation of state (default, good for gas processing)
+- "pr" or "pr78" — Peng-Robinson (alternative cubic EOS)
+- "cpa" or "cpa-srk" — CPA-SRK (required for polar: water, MEG, methanol)
+- "cpa-pr" — CPA-Peng-Robinson
+- "umr-pru" — UMR-PRU (accurate phase envelopes)
+- "gerg2008" — GERG-2008 (fiscal metering, custody transfer)
+- "pcsaft" — PC-SAFT
+- "ideal" — Ideal gas (testing only)
+Choose CPA if the fluid contains water, MEG, TEG, or methanol at significant amounts.
+Choose SRK or PR for standard hydrocarbon processing.
+
+AVAILABLE EQUIPMENT TYPES:
+- stream — Feed or intermediate stream
+- separator, two_phase_separator, three_phase_separator, gas_scrubber — Phase separation
+- compressor — Gas compression
+- cooler, heater, air_cooler, water_cooler — Temperature control
+- heat_exchanger — Heat recovery
+- valve, control_valve — Pressure reduction (JT effect)
+- expander — Turbo-expander (power recovery)
+- pump — Liquid pressurization
+- mixer — Combine streams
+- splitter — Split stream (use split_factor param)
+- pipeline, adiabatic_pipe — Pipeline pressure drop
+- simple_absorber, simple_teg_absorber — Gas dehydration/sweetening
+- gibbs_reactor — Chemical equilibrium reactor
+- recycle — Recycle stream (convergence loop)
+
+PARAMETER REFERENCE:
+  compressor: outlet_pressure_bara, isentropic_efficiency (0-1, default 0.75),
+              polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
+  cooler/heater: outlet_temperature_C, pressure_drop_bar, duty_kW
+  valve: outlet_pressure_bara, cv, percent_valve_opening
+  expander: outlet_pressure_bara, isentropic_efficiency
+  pump: outlet_pressure_bara, efficiency, head
+  splitter: split_factor (0-1)
+  pipeline: length, diameter, roughness
+  separator: (no required params — sizing is automatic)
+
+COMPONENT NAMES (NeqSim database — use exactly these):
+  Alkanes: methane, ethane, propane, i-butane, n-butane, i-pentane, n-pentane,
+           n-hexane, n-heptane, n-octane, n-nonane, nC10, nC11
+  Aromatics: benzene, toluene
+  Gases: nitrogen, CO2, H2S, oxygen, hydrogen, helium
+  Water/glycols: water, MEG, TEG, DEG
+  Alcohols: methanol, ethanol
+  Plus fractions: C7, C8, C9
+
+INCREMENTAL ADDITIONS (after a process has been built):
+To add equipment to an existing built process:
+```build
+{
+  "add": [
+    {"name": "new cooler", "type": "cooler", "insert_after": "compressor 1",
+     "params": {"outlet_temperature_C": 40.0}}
+  ]
+}
+```
+
+DESIGN GUIDELINES (use these defaults unless the user specifies otherwise):
+- Compressor isentropic efficiency: 0.75 (centrifugal), 0.80 (reciprocating)
+- Compressor max pressure ratio per stage: ~3-4 for centrifugal
+- Compressor max discharge temperature: 150°C (add intercooling if exceeded)
+- Cooler outlet temperature: 35°C (tropical), 25°C (cold climate)
+- Pressure drop across coolers/heaters: 0.2-0.5 bar
+- Separator: no params needed — NeqSim auto-sizes
+- For multi-stage compression: Add intercoolers between stages
+- For gas processing: inlet separator → compression → cooling → export scrubber
+
+When the user describes a process, design it with appropriate engineering defaults and explain your choices.
+After the process is built, explain the key results (power, duty, temperatures, pressures).
+"""
+
+
+# ---------------------------------------------------------------------------
 # Chat message processing
 # ---------------------------------------------------------------------------
 
@@ -509,6 +647,26 @@ def extract_property_query(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             continue
     
+    return None
+
+
+def extract_build_spec(text: str) -> Optional[dict]:
+    """Extract a process build specification from LLM output.
+
+    Looks for ````build ... ```` blocks with JSON.
+    Returns the parsed dict or ``None``.
+    """
+    import re
+    pattern = r'```build\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    for match in matches:
+        try:
+            data = json.loads(match)
+            return data
+        except json.JSONDecodeError:
+            continue
+
     return None
 
 
@@ -621,21 +779,44 @@ class ProcessChatSession:
     
     Uses Gemini to interpret engineer questions and orchestrate
     simulation runs via the scenario engine.
+
+    Supports two modes:
+      - **Model mode**: A process model is loaded (uploaded or built).
+      - **Builder mode**: No model loaded; the LLM can build one from scratch.
     """
 
-    def __init__(self, model: NeqSimProcessModel, api_key: str, ai_model: str = "gemini-2.0-flash"):
+    def __init__(
+        self,
+        model: Optional[NeqSimProcessModel] = None,
+        api_key: str = "",
+        ai_model: str = "gemini-2.0-flash",
+    ):
         self.model = model
         self.api_key = api_key
         self.ai_model = ai_model
         self.history: List[Dict[str, str]] = []
-        self._system_prompt = build_system_prompt(model)
+        self._last_comparison = None
+        self._builder = None       # ProcessBuilder instance (when building)
+        self._last_script = None   # Last generated Python script
+        self._last_save_bytes = None  # Last generated .neqsim bytes
+
+        # Build appropriate system prompt
+        if model is not None:
+            self._system_prompt = build_system_prompt(model)
+        else:
+            self._system_prompt = build_builder_system_prompt()
+
+    # -- Main chat entry point ----------------------------------------------
 
     def chat(self, user_message: str) -> str:
         """
         Process a user message and return the assistant response.
         
-        If the LLM produces a scenario JSON, it's automatically executed
-        and the results are fed back to the LLM for explanation.
+        Handles:
+          - Build specs (```build```) → build process from scratch
+          - Scenario JSON (```json```) → run what-if scenarios
+          - Property queries (```query```) → extract simulation data
+          - Plain Q&A → direct LLM response
         """
         from google import genai
         from google.genai import types
@@ -645,7 +826,7 @@ class ProcessChatSession:
         # Build conversation
         self.history.append({"role": "user", "content": user_message})
 
-        # First LLM call: classify intent and possibly produce scenario JSON
+        # First LLM call: classify intent
         contents = self._build_contents()
         
         response = client.models.generate_content(
@@ -653,133 +834,289 @@ class ProcessChatSession:
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=self._system_prompt,
-                temperature=0.3,  # Low temperature for reliable structured output
+                temperature=0.3,
             ),
         )
 
         assistant_text = response.text
 
-        # Check if the LLM produced a scenario to run
+        # --- Check for build spec ---
+        build_spec = extract_build_spec(assistant_text)
+        if build_spec:
+            return self._handle_build(assistant_text, build_spec, client, types)
+
+        # --- Check for scenario JSON ---
         scenario_data = extract_scenario_json(assistant_text)
+        if scenario_data and self.model:
+            return self._handle_scenario(assistant_text, scenario_data, client, types)
+
+        # --- Check for property query ---
         property_query = extract_property_query(assistant_text)
-        
-        if scenario_data:
-            # Execute the scenarios
-            try:
-                scenarios = scenarios_from_json(scenario_data)
-                
-                from .scenario_engine import run_scenarios
-                comparison = run_scenarios(self.model, scenarios)
-                
-                results_text = format_comparison_for_llm(comparison)
-                
-                # Feed results back to LLM for explanation
+        if property_query and self.model:
+            return self._handle_property_query(assistant_text, property_query, client, types)
+
+        # --- Pure Q&A ---
+        self.history.append({"role": "assistant", "content": assistant_text})
+        self._last_comparison = None
+        return assistant_text
+
+    # -- Build handling -----------------------------------------------------
+
+    def _handle_build(self, assistant_text: str, build_spec: dict, client, types) -> str:
+        """Process a build specification from the LLM."""
+        from .process_builder import ProcessBuilder
+
+        action = build_spec.get("action")
+
+        # --- Action: show_script ---
+        if action == "show_script":
+            if self._builder and self._builder.spec:
+                script = self._builder.to_python_script()
+                self._last_script = script
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
-                    "content": f"[SYSTEM: Simulation completed. Results below. Explain these results to the engineer concisely.]\n\n{results_text}"
+                    "content": f"[SYSTEM: Python script generated. Show it to the engineer.]\n\n```python\n{script}\n```"
                 })
-                
-                contents = self._build_contents()
-                response2 = client.models.generate_content(
-                    model=self.ai_model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self._system_prompt,
-                        temperature=0.3,
-                    ),
-                )
-                
-                final_text = response2.text
-                self.history.append({"role": "assistant", "content": final_text})
-                
-                # Store comparison for UI access
-                self._last_comparison = comparison
-                return final_text
+                return self._llm_followup(client, types)
+            else:
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: No process has been built yet. Ask the user to build a process first.]"
+                })
+                return self._llm_followup(client, types)
+
+        # --- Action: save ---
+        if action == "save":
+            if self._builder and self._builder.model:
+                raw = self._builder.save_neqsim_bytes()
+                self._last_save_bytes = raw
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: The .neqsim file has been prepared. A download button is now available in the sidebar. Tell the engineer they can download it.]"
+                })
+                return self._llm_followup(client, types)
+            elif self.model:
+                # Model was uploaded — save current state
+                import neqsim, tempfile, os
+                proc = self.model.get_process()
+                with tempfile.NamedTemporaryFile(suffix=".neqsim", delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
+                    neqsim.save_neqsim(proc, tmp_path)
+                    with open(tmp_path, "rb") as f:
+                        self._last_save_bytes = f.read()
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: The .neqsim file has been prepared from the current model. A download button is now available. Tell the engineer.]"
+                })
+                return self._llm_followup(client, types)
+            else:
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: No process to save. Ask the user to build or upload one first.]"
+                })
+                return self._llm_followup(client, types)
+
+        # --- Build a new process ---
+        if "fluid" in build_spec and "process" in build_spec:
+            try:
+                builder = ProcessBuilder()
+                model = builder.build_from_spec(build_spec)
+
+                self._builder = builder
+                self.model = model
+                # Rebuild system prompt now that we have a model
+                self._system_prompt = build_system_prompt(model)
+
+                # Prepare summary for LLM
+                summary = model.get_model_summary()
+                build_log = "\n".join(builder.build_log)
+
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM: Process built successfully! Build log:\n{build_log}\n\n"
+                        f"Model summary:\n{summary}\n\n"
+                        "Explain the built process and key results to the engineer. "
+                        "Mention the equipment, key temperatures/pressures, power consumption, and duties. "
+                        "Tell them they can now ask what-if questions, request the Python script, or save the .neqsim file.]"
+                    )
+                })
+                return self._llm_followup(client, types)
 
             except Exception as e:
-                error_msg = f"Simulation failed: {str(e)}\n{traceback.format_exc()}"
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
-                    "content": f"[SYSTEM: Simulation failed with error: {str(e)}. Please inform the engineer and suggest corrections.]"
+                    "content": (
+                        f"[SYSTEM: Process build FAILED: {str(e)}\n"
+                        f"{traceback.format_exc()}\n"
+                        "Inform the engineer and suggest corrections.]"
+                    )
                 })
-                
-                contents = self._build_contents()
-                response2 = client.models.generate_content(
-                    model=self.ai_model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self._system_prompt,
-                        temperature=0.3,
-                    ),
-                )
-                
-                final_text = response2.text
-                self.history.append({"role": "assistant", "content": final_text})
-                return final_text
-        elif property_query:
-            # Property query — run model ONCE and extract matching properties
+                return self._llm_followup(client, types)
+
+        # --- Incremental additions ---
+        if "add" in build_spec and self.model:
             try:
-                queries = property_query.get("properties", [])
-                all_results = []
-                # Run the model once and reuse the result for all queries
-                cached_result = self.model.run()
-                for q in queries:
-                    result_text = self.model.query_properties(q, _cached_result=cached_result)
-                    all_results.append(result_text)
-                
-                properties_text = "\n\n".join(all_results)
-                
-                # Feed results back to LLM for explanation
+                from .scenario_engine import apply_add_units
+                from .patch_schema import AddUnitOp
+
+                add_list = build_spec["add"]
+                add_ops = [
+                    AddUnitOp(
+                        name=a["name"],
+                        equipment_type=a["type"],
+                        insert_after=a["insert_after"],
+                        params=a.get("params", {}),
+                    )
+                    for a in add_list
+                ]
+
+                log = apply_add_units(self.model, add_ops)
+                failed = [e for e in log if e.get("status") == "FAILED"]
+                if failed:
+                    raise RuntimeError(f"Add unit errors: {failed}")
+
+                # Re-run
+                NeqSimProcessModel._run_until_converged(self.model.get_process())
+                self.model._index_model_objects()
+
+                # Update system prompt
+                self._system_prompt = build_system_prompt(self.model)
+
+                summary = self.model.get_model_summary()
+                log_str = "\n".join(str(e) for e in log)
+
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
-                    "content": f"[SYSTEM: Property query completed. Results below. Present these results clearly to the engineer.]\n\n{properties_text}"
+                    "content": (
+                        f"[SYSTEM: Equipment added successfully. Log:\n{log_str}\n\n"
+                        f"Updated model summary:\n{summary}\n\n"
+                        "Explain the changes and updated results to the engineer.]"
+                    )
                 })
-                
-                contents = self._build_contents()
-                response2 = client.models.generate_content(
-                    model=self.ai_model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self._system_prompt,
-                        temperature=0.3,
-                    ),
-                )
-                
-                final_text = response2.text
-                self.history.append({"role": "assistant", "content": final_text})
-                self._last_comparison = None
-                return final_text
-                
+                return self._llm_followup(client, types)
+
             except Exception as e:
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
-                    "content": f"[SYSTEM: Property query failed: {str(e)}. Inform the engineer.]"
+                    "content": f"[SYSTEM: Add equipment failed: {str(e)}. Inform the engineer.]"
                 })
-                contents = self._build_contents()
-                response2 = client.models.generate_content(
-                    model=self.ai_model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self._system_prompt,
-                        temperature=0.3,
-                    ),
-                )
-                final_text = response2.text
-                self.history.append({"role": "assistant", "content": final_text})
-                return final_text
-        else:
-            # Pure Q&A response (no scenario needed)
+                return self._llm_followup(client, types)
+
+        # Unknown build spec — just pass through
+        self.history.append({"role": "assistant", "content": assistant_text})
+        self._last_comparison = None
+        return assistant_text
+
+    # -- Scenario handling --------------------------------------------------
+
+    def _handle_scenario(self, assistant_text: str, scenario_data: dict, client, types) -> str:
+        """Execute scenario JSON and feed results back to LLM."""
+        try:
+            scenarios = scenarios_from_json(scenario_data)
+
+            from .scenario_engine import run_scenarios
+            comparison = run_scenarios(self.model, scenarios)
+
+            results_text = format_comparison_for_llm(comparison)
+
             self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Simulation completed. Results below. Explain these results to the engineer concisely.]\n\n{results_text}"
+            })
+
+            final_text = self._llm_followup(client, types)
+            self._last_comparison = comparison
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Simulation failed with error: {str(e)}. Please inform the engineer and suggest corrections.]"
+            })
+            return self._llm_followup(client, types)
+
+    # -- Property query handling --------------------------------------------
+
+    def _handle_property_query(self, assistant_text: str, property_query: dict, client, types) -> str:
+        """Run model and extract matching properties."""
+        try:
+            queries = property_query.get("properties", [])
+            all_results = []
+            cached_result = self.model.run()
+            for q in queries:
+                result_text = self.model.query_properties(q, _cached_result=cached_result)
+                all_results.append(result_text)
+
+            properties_text = "\n\n".join(all_results)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Property query completed. Results below. Present these results clearly to the engineer.]\n\n{properties_text}"
+            })
+
+            final_text = self._llm_followup(client, types)
             self._last_comparison = None
-            return assistant_text
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Property query failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    # -- Helpers ------------------------------------------------------------
+
+    def _llm_followup(self, client, types) -> str:
+        """Make a follow-up LLM call and record the response."""
+        contents = self._build_contents()
+        response = client.models.generate_content(
+            model=self.ai_model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=self._system_prompt,
+                temperature=0.3,
+            ),
+        )
+        final_text = response.text
+        self.history.append({"role": "assistant", "content": final_text})
+        return final_text
 
     def get_last_comparison(self):
         """Get the last scenario comparison result (for UI display)."""
         return getattr(self, "_last_comparison", None)
+
+    def get_last_script(self) -> Optional[str]:
+        """Get the last generated Python script."""
+        return self._last_script
+
+    def get_last_save_bytes(self) -> Optional[bytes]:
+        """Get the last generated .neqsim file bytes."""
+        return self._last_save_bytes
+
+    def get_builder(self):
+        """Get the ProcessBuilder instance if process was built from scratch."""
+        return self._builder
 
     def _build_contents(self) -> list:
         """Build Gemini API contents from chat history."""
@@ -793,3 +1130,6 @@ class ProcessChatSession:
         """Clear chat history."""
         self.history.clear()
         self._last_comparison = None
+        self._last_script = None
+        self._last_save_bytes = None
+

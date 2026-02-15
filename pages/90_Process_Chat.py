@@ -25,7 +25,7 @@ theme_toggle()
 
 st.title("💬 Process Chat")
 st.markdown("""
-Chat with your NeqSim process model. Upload a `.neqsim` process file to get started.
+Chat with your NeqSim process model. Upload a `.neqsim` process file **or build a new process from scratch**.
 Ask questions, run what-if scenarios, and explore planning options.
 """)
 
@@ -66,6 +66,17 @@ with st.sidebar:
                     st.session_state.pop("process_model", None)
         else:
             st.success(f"✓ {uploaded_file.name}")
+
+    # --- Start New Process button ---
+    if st.session_state.get("process_model") is None:
+        st.markdown("**— or —**")
+        if st.button("🔨 Start New Process", use_container_width=True,
+                     help="Build a process from scratch by describing it in chat"):
+            # Enter builder mode — clear any stale state
+            st.session_state.pop("chat_session", None)
+            st.session_state["chat_messages"] = []
+            st.session_state["_builder_mode"] = True
+            st.rerun()
     
     st.divider()
 
@@ -83,90 +94,133 @@ with st.sidebar:
 
     st.divider()
 
-    # Example questions
+    # --- Download buttons (Python script + .neqsim file) ---
+    chat_session = st.session_state.get("chat_session")
+    if chat_session:
+        last_script = chat_session.get_last_script()
+        last_save = chat_session.get_last_save_bytes()
+        if last_script or last_save:
+            st.subheader("📥 Downloads")
+            if last_script:
+                proc_name = ""
+                builder = chat_session.get_builder()
+                if builder:
+                    proc_name = builder.process_name
+                script_fname = (proc_name.replace(" ", "_").lower() or "process") + ".py"
+                st.download_button(
+                    "📜 Python Script",
+                    data=last_script,
+                    file_name=script_fname,
+                    mime="text/x-python",
+                    use_container_width=True,
+                )
+            if last_save:
+                save_fname = ""
+                builder = chat_session.get_builder()
+                if builder:
+                    save_fname = builder.process_name.replace(" ", "_").lower()
+                save_fname = (save_fname or "process") + ".neqsim"
+                st.download_button(
+                    "💾 .neqsim File",
+                    data=last_save,
+                    file_name=save_fname,
+                    mime="application/octet-stream",
+                    use_container_width=True,
+                )
+            st.divider()
+
+    # Example questions — adapt to mode
     st.subheader("💡 Example Questions")
-    example_questions = [
-        "What equipment is in this process?",
-        "What are the current stream conditions?",
-        "What is the total compressor power?",
-        "What if we increase the export pressure by 10 bara?",
-        "What if we reduce the cooler outlet temperature to 30°C?",
-        "What happens if we increase feed flow by 10%?",
-    ]
+    model = st.session_state.get("process_model")
+    if model is not None:
+        example_questions = [
+            "What equipment is in this process?",
+            "What are the current stream conditions?",
+            "What is the total compressor power?",
+            "What if we increase the export pressure by 10 bara?",
+            "What if we reduce the cooler outlet temperature to 30°C?",
+            "What happens if we increase feed flow by 10%?",
+            "Show me the Python script",
+            "Save the process",
+        ]
+    else:
+        example_questions = [
+            "Build a simple gas compression process",
+            "Create a 3-stage compression train with intercooling for natural gas from 30 to 200 bara",
+            "Build a gas dehydration process with TEG absorber",
+            "Create a separation process with inlet separator, compressor, and export cooler",
+            "Build a gas processing plant with separation and compression",
+        ]
     for q in example_questions:
         if st.button(q, key=f"ex_{hash(q)}", use_container_width=True):
             st.session_state["_pending_question"] = q
 
 
 # ─────────────────────────────────────────────
-# Check if model is loaded
+# Check model state and show overview
 # ─────────────────────────────────────────────
 model = st.session_state.get("process_model")
-if model is None:
-    st.info("👆 Upload a `.neqsim` process model file in the sidebar to begin.")
+builder_mode = st.session_state.get("_builder_mode", False)
+
+if model is None and not builder_mode:
+    st.info("👆 Upload a `.neqsim` process model file in the sidebar, or click **Start New Process** to build one from scratch.")
     st.markdown("""
-    ### How to create a `.neqsim` file
+    ### Getting Started
     
-    You can save any NeqSim process to a `.neqsim` file:
+    **Option 1: Upload an existing model**
+    Upload a `.neqsim` file to analyze, query, and run what-if scenarios.
+
+    **Option 2: Build from scratch**
+    Click **🔨 Start New Process** in the sidebar, then describe the process you want to build:
+    - *"Build a gas compression process with methane and ethane at 50 bara"*
+    - *"Create a 3-stage compression train with intercooling"*
+    - *"Build a separation and dehydration process"*
     
-    **Python:**
-    ```python
-    import neqsim
-    from neqsim.process import stream, separator, runProcess, getProcess
-    
-    # ... build your process ...
-    runProcess()
-    process = getProcess()
-    neqsim.save_neqsim(process, "my_process.neqsim")
-    ```
-    
-    **Java:**
-    ```java
-    process.saveToNeqsim("my_process.neqsim");
-    ```
-    
-    **Or using ProcessSystem directly:**
-    ```python
-    process_system.saveToNeqsim("my_process.neqsim")
-    ```
+    The AI will design the process, run the simulation, and you can then:
+    - Ask what-if questions
+    - Download the Python script
+    - Save as a `.neqsim` file
     """)
     st.stop()
 
 
 # ─────────────────────────────────────────────
-# Model Introspection Panel (collapsible)
+# Model Introspection Panel (only when model loaded)
 # ─────────────────────────────────────────────
-with st.expander("📊 Process Model Overview", expanded=False):
-    col1, col2 = st.columns(2)
+if model is not None:
+    with st.expander("📊 Process Model Overview", expanded=False):
+        col1, col2 = st.columns(2)
 
-    with col1:
-        st.markdown("#### Unit Operations")
-        units = model.list_units()
-        if units:
-            unit_data = []
-            for u in units:
-                row = {"Name": u.name, "Type": u.unit_type}
-                row.update(u.properties)
-                unit_data.append(row)
-            st.dataframe(pd.DataFrame(unit_data), use_container_width=True, hide_index=True)
-        else:
-            st.info("No unit operations found.")
+        with col1:
+            st.markdown("#### Unit Operations")
+            units = model.list_units()
+            if units:
+                unit_data = []
+                for u in units:
+                    row = {"Name": u.name, "Type": u.unit_type}
+                    row.update(u.properties)
+                    unit_data.append(row)
+                st.dataframe(pd.DataFrame(unit_data), use_container_width=True, hide_index=True)
+            else:
+                st.info("No unit operations found.")
 
-    with col2:
-        st.markdown("#### Streams")
-        streams = model.list_streams()
-        if streams:
-            stream_data = []
-            for s in streams:
-                stream_data.append({
-                    "Name": s.name,
-                    "T (°C)": f"{s.temperature_C:.1f}" if s.temperature_C is not None else "—",
-                    "P (bara)": f"{s.pressure_bara:.2f}" if s.pressure_bara is not None else "—",
-                    "Flow (kg/hr)": f"{s.flow_rate_kg_hr:.1f}" if s.flow_rate_kg_hr is not None else "—",
-                })
-            st.dataframe(pd.DataFrame(stream_data), use_container_width=True, hide_index=True)
-        else:
-            st.info("No streams found.")
+        with col2:
+            st.markdown("#### Streams")
+            streams = model.list_streams()
+            if streams:
+                stream_data = []
+                for s in streams:
+                    stream_data.append({
+                        "Name": s.name,
+                        "T (°C)": f"{s.temperature_C:.1f}" if s.temperature_C is not None else "—",
+                        "P (bara)": f"{s.pressure_bara:.2f}" if s.pressure_bara is not None else "—",
+                        "Flow (kg/hr)": f"{s.flow_rate_kg_hr:.1f}" if s.flow_rate_kg_hr is not None else "—",
+                    })
+                st.dataframe(pd.DataFrame(stream_data), use_container_width=True, hide_index=True)
+            else:
+                st.info("No streams found.")
+elif builder_mode:
+    st.info("🔨 **Builder mode** — Describe the process you want to create in the chat below.")
 
 
 # ─────────────────────────────────────────────
@@ -278,7 +332,7 @@ if user_input:
                 # Create session if needed (or if model changed)
                 if "chat_session" not in st.session_state:
                     st.session_state["chat_session"] = ProcessChatSession(
-                        model=model,
+                        model=model,     # None in builder mode
                         api_key=api_key_val,
                         ai_model="gemini-2.0-flash",
                     )
@@ -286,6 +340,12 @@ if user_input:
                 session = st.session_state["chat_session"]
                 response = session.chat(user_input)
                 comparison = session.get_last_comparison()
+
+                # --- Sync model if builder created one ---
+                if session.model is not None and st.session_state.get("process_model") is None:
+                    st.session_state["process_model"] = session.model
+                    st.session_state["_builder_mode"] = False
+                    st.session_state["process_model_name"] = "Built Process"
 
                 st.markdown(response)
 
@@ -318,9 +378,10 @@ with col1:
         st.session_state.pop("chat_session", None)
         st.rerun()
 with col2:
-    if st.button("🔄 Reload Model"):
+    if st.button("🔄 Reset All"):
         st.session_state.pop("process_model", None)
         st.session_state.pop("_loaded_file_key", None)
+        st.session_state.pop("_builder_mode", None)
         st.session_state.pop("chat_session", None)
         st.session_state["chat_messages"] = []
         st.rerun()
