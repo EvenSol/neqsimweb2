@@ -673,6 +673,16 @@ with tab_dyn:
                            f"ΔP = {pipe.getInletPressure() - pipe.getOutletPressure():.2f} bar, "
                            f"Outlet T = {pipe.getOutletTemperature() - 273.15:.1f} °C")
 
+                # Check for multiphase at inlet
+                inlet_n_phases = inlet.getFluid().getNumberOfPhases()
+                if inlet_n_phases < 2 and dyn_slug:
+                    st.warning(
+                        "⚠️ The fluid at inlet conditions is **single-phase** (no liquid). "
+                        "Slug tracking requires multiphase (gas + liquid) flow. "
+                        "Add heavier hydrocarbons (C5+) or water to your fluid composition "
+                        "to produce a two-phase mixture."
+                    )
+
                 # Helper — read current profiles from pipe
                 def _read_profiles(p):
                     pos = [x / 1000 for x in list(p.getPositionProfile())]
