@@ -240,6 +240,16 @@ def _auto_size_single(
                 unit.getCompressorChart().setHeadUnit('kJ/kg')
                 unit.setSolveSpeed(True)
                 unit.setUsePolytropicCalc(True)
+
+                # Set speed limits to match the chart curve range so the
+                # solver stays within the generated performance map.
+                try:
+                    cc = unit.getCompressorChart()
+                    unit.setMaximumSpeed(cc.getMaxSpeedCurve())
+                    unit.setMinimumSpeed(cc.getMinSpeedCurve())
+                except Exception:
+                    pass
+
                 unit.run()
                 sizing_data["chart_generated"] = True
                 sizing_data["chart_template"] = chart_template

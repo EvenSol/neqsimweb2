@@ -2615,6 +2615,12 @@ class ProcessChatSession:
                 except Exception:
                     pass
 
+            # Persist auto-sized state so cloned models retain it
+            try:
+                self.model.refresh_source_bytes()
+            except Exception:
+                pass
+
             # Update system prompt (sizing changes model state)
             self._system_prompt = build_system_prompt(self.model)
 
