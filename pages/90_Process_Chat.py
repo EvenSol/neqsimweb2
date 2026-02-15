@@ -182,8 +182,34 @@ def _show_comparison(comparison):
     
     summary_df = results_summary_table(comparison)
     if not summary_df.empty:
-        display_df = summary_df.copy()
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        # Filter to important KPIs: changed values, power/duty, mass balance
+        important_suffixes = ('.power_kW', '.duty_kW')
+        
+        def is_display_worthy(row):
+            kpi = row.get('KPI', '')
+            # Always show summary & equipment KPIs
+            if kpi.startswith(('total_', 'mass_balance')):
+                return True
+            if kpi.endswith(important_suffixes):
+                return True
+            # Show rows where values changed between columns
+            base_val = row.get('BASE')
+            for col in summary_df.columns:
+                if col not in ('KPI', 'Unit', 'BASE'):
+                    case_val = row.get(col)
+                    if base_val is not None and case_val is not None:
+                        try:
+                            if abs(float(base_val) - float(case_val)) > 0.01:
+                                return True
+                        except (ValueError, TypeError):
+                            pass
+            return False
+        
+        display_df = summary_df[summary_df.apply(is_display_worthy, axis=1)].copy()
+        if not display_df.empty:
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No significant KPI changes detected.")
     
     # Constraints
     if comparison.constraint_summary:

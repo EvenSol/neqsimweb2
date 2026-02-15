@@ -237,9 +237,114 @@ class NeqSimProcessModel:
         if loaded is None:
             raise RuntimeError(f"Failed to load process from: {filepath}")
 
-        # Run to initialize internal state
-        loaded.run()
+        # Run to initialize internal state.
+        # Complex processes with recycles/mixers that reference downstream
+        # streams may need multiple runs to converge after deserialization.
+        cls._run_until_converged(loaded)
         return cls(loaded, source_bytes=file_bytes)
+
+    @staticmethod
+    def _run_until_converged(proc, max_runs: int = 5, timeout_ms: int = 180000):
+        """
+        Run the process repeatedly until convergence or *max_runs*.
+
+        After XStream deserialization, recycle loops and implicit back-
+        connections (mixers referencing downstream streams) may not converge
+        in a single pass.  Strategy:
+
+        1. Before the first run, reset all Recycle units so stale convergence
+           flags from serialisation do not short-circuit the iteration logic.
+        2. Run the process (threaded or synchronous).
+        3. If total |power| + |duty| across energy-consuming units is still
+           effectively zero, reset Recycles again and retry.
+        4. On the 3rd attempt, try ``runSequential()`` as a fallback —
+           it runs each unit block in strict order which sometimes helps
+           complex topologies converge.
+        """
+        _POWER_UNITS = {"Compressor", "Pump", "ESPPump", "Expander", "GasTurbine"}
+        _DUTY_UNITS  = {"Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"}
+
+        def _reset_recycles(units):
+            """Reset convergence state on every Recycle unit."""
+            for u in units:
+                try:
+                    if str(u.getClass().getSimpleName()) == "Recycle":
+                        if hasattr(u, "resetIterations"):
+                            u.resetIterations()
+                        if hasattr(u, "resetAccelerationState"):
+                            u.resetAccelerationState()
+                        if hasattr(u, "setTolerance"):
+                            u.setTolerance(1.0e-4)
+                except Exception:
+                    pass
+
+        def _check_energy(units):
+            """Return (has_energy_unit, total_energy_W)."""
+            total = 0.0
+            has = False
+            for u in units:
+                uclass = str(u.getClass().getSimpleName())
+                if uclass in _POWER_UNITS:
+                    has = True
+                    try:
+                        total += abs(float(u.getPower()))
+                    except Exception:
+                        pass
+                elif uclass in _DUTY_UNITS:
+                    has = True
+                    try:
+                        total += abs(float(u.getDuty()))
+                    except Exception:
+                        pass
+            return has, total
+
+        try:
+            units = list(proc.getUnitOperations())
+        except Exception:
+            units = []
+
+        # Simple process — one run is enough
+        if len(units) <= 2:
+            try:
+                if timeout_ms > 0:
+                    thread = proc.runAsThread()
+                    thread.join(timeout_ms)
+                    if thread.isAlive():
+                        thread.interrupt()
+                        thread.join()
+                else:
+                    proc.run()
+            except Exception:
+                pass
+            return
+
+        # Reset recycles before the very first run
+        _reset_recycles(units)
+
+        for attempt in range(max_runs):
+            try:
+                if attempt >= 3 and hasattr(proc, "runSequential"):
+                    # Fallback: strict sequential execution
+                    proc.runSequential()
+                elif timeout_ms > 0:
+                    thread = proc.runAsThread()
+                    thread.join(timeout_ms)
+                    if thread.isAlive():
+                        thread.interrupt()
+                        thread.join()
+                        break  # timed out — stop retrying
+                else:
+                    proc.run()
+            except Exception:
+                pass
+
+            has_energy, total_energy = _check_energy(units)
+
+            if not has_energy or total_energy > 1.0:
+                break  # converged (non-zero energy or no energy units)
+
+            # Still zero — reset recycles and try again
+            _reset_recycles(units)
 
     @classmethod
     def from_bytes(cls, file_bytes: bytes, filename: str = "process.neqsim") -> "NeqSimProcessModel":
@@ -522,14 +627,17 @@ class NeqSimProcessModel:
     # ----- Value access for scenarios -----
 
     def get_unit(self, name: str):
-        """Get a unit operation by name."""
+        """Get a unit operation by name. Raises KeyError if not found."""
         if name in self._units:
             return self._units[name]
         # Also try via process.getUnit()
         try:
-            return self._proc.getUnit(name)
+            u = self._proc.getUnit(name)
+            if u is not None:
+                return u
         except Exception:
-            raise KeyError(f"Unit not found: {name}")
+            pass
+        raise KeyError(f"Unit not found: {name}")
 
     def get_stream(self, name: str):
         """Get a stream by name (supports both qualified and unqualified names)."""
@@ -547,20 +655,15 @@ class NeqSimProcessModel:
         """
         Run the process and extract KPIs and constraints.
         
+        Uses multiple-pass convergence for processes with recycles.
+        
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
-        proc = self._proc
+        self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
 
-        if timeout_ms > 0:
-            thread = proc.runAsThread()
-            thread.join(timeout_ms)
-            if thread.isAlive():
-                thread.interrupt()
-                thread.join()
-                raise TimeoutError(f"Process simulation timed out after {timeout_ms}ms")
-        else:
-            proc.run()
+        # Re-index model objects after running so references are fresh
+        self._index_model_objects()
 
         return self._extract_results()
 
@@ -609,6 +712,55 @@ class NeqSimProcessModel:
         # Extract all properties from JSON report into flat KPIs
         if json_report:
             self._flatten_json_report(json_report, kpis)
+
+        # Extract detailed unit operation properties (utilization, sizing, performance)
+        self._extract_unit_properties(kpis)
+
+        # Extract mechanical design data (wall thickness, weights, dimensions, cost)
+        self._extract_mechanical_design(kpis)
+
+        # Add convergence warning if all power/duty are zero
+        if total_power_kW == 0.0 and total_duty_kW == 0.0:
+            has_energy_unit = False
+            energy_unit_names = []
+            for name, u in self._units.items():
+                try:
+                    uclass = str(u.getClass().getSimpleName())
+                    if uclass in self._POWER_UNITS | self._DUTY_UNITS:
+                        has_energy_unit = True
+                        energy_unit_names.append(f"{name} ({uclass})")
+                except Exception:
+                    pass
+            if has_energy_unit:
+                # Gather recycle error details if available
+                recycle_info = []
+                for name, u in self._units.items():
+                    try:
+                        if str(u.getClass().getSimpleName()) == "Recycle":
+                            parts = [f"{name}"]
+                            for prop, getter in [
+                                ("errT", "getErrorTemperature"),
+                                ("errF", "getErrorFlow"),
+                                ("iter", "getIterations"),
+                            ]:
+                                if hasattr(u, getter):
+                                    try:
+                                        val = float(getattr(u, getter)())
+                                        parts.append(f"{prop}={val:.4g}")
+                                    except Exception:
+                                        pass
+                            recycle_info.append(" ".join(parts))
+                    except Exception:
+                        pass
+                msg = (
+                    "All power/duty values are zero — the process may not have converged. "
+                    "This can happen with complex recycle loops after deserialization."
+                )
+                if energy_unit_names:
+                    msg += f" Energy units: {', '.join(energy_unit_names[:5])}."
+                if recycle_info:
+                    msg += f" Recycle state: {'; '.join(recycle_info)}."
+                constraints.append(ConstraintStatus("convergence", "WARN", msg))
 
         # Extract calculated fluid properties from streams (viscosity, Z, JT, TVP, RVP, etc.)
         self._extract_stream_fluid_properties(kpis)
@@ -668,10 +820,13 @@ class NeqSimProcessModel:
                     for s in terminal_stream_units:
                         try:
                             flow = float(s.getFlowRate("kg/hr"))
+                            sname = str(s.getName()) if s.getName() else "product"
                             if abs(flow) > 0.01:
-                                sname = str(s.getName()) if s.getName() else "product"
                                 product_flow += flow
                                 product_details.append(f"{sname}={flow:.0f}")
+                            else:
+                                # Report 0-flow terminal streams for diagnostics
+                                product_details.append(f"{sname}=0 (no flow)")
                         except Exception:
                             pass
                 else:
@@ -760,6 +915,462 @@ class NeqSimProcessModel:
                 "stream_names": list(self._streams.keys()),
             }
         )
+
+    def _extract_unit_properties(self, kpis: Dict[str, KPI]):
+        """
+        Extract detailed equipment-level properties from each unit operation.
+
+        Covers compressor performance, separator capacity, cooler/heater sizing,
+        pump/valve characteristics, and general utilization metrics.
+        """
+        for name, u in self._units.items():
+            try:
+                java_class = str(u.getClass().getSimpleName())
+            except Exception:
+                continue
+
+            prefix = f"{name}"
+
+            # ---------- Compressor ----------
+            if java_class in ("Compressor",):
+                for prop, getter, unit in [
+                    ("polytropicHead_kJkg", "getPolytropicHead", "kJ/kg"),
+                    ("polytropicHeadMeter", "getPolytropicHeadMeter", "m"),
+                    ("polytropicExponent", "getPolytropicExponent", "[-]"),
+                    ("compressionRatio", "getCompressionRatio", "[-]"),
+                    ("actualCompressionRatio", "getActualCompressionRatio", "[-]"),
+                    ("inletTemperature_K", "getInletTemperature", "K"),
+                    ("outletTemperature_K", "getOutletTemperature", "K"),
+                    ("inletPressure_bara", "getInletPressure", "bara"),
+                    ("speed_rpm", "getSpeed", "rpm"),
+                    ("maxSpeed_rpm", "getMaximumSpeed", "rpm"),
+                    ("minSpeed_rpm", "getMinimumSpeed", "rpm"),
+                    ("distanceToSurge", "getDistanceToSurge", "[-]"),
+                    ("surgeFlowRate", "getSurgeFlowRate", "m3/hr"),
+                    ("maxUtilization", "getMaxUtilization", "[-]"),
+                    ("maxUtilizationPercent", "getMaxUtilizationPercent", "%"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+                # Entropy production & exergy
+                try:
+                    kpis[f"{prefix}.entropyProduction_JK"] = KPI(
+                        f"{prefix}.entropyProduction_JK",
+                        float(u.getEntropyProduction("J/K")), "J/K"
+                    )
+                except Exception:
+                    pass
+                try:
+                    kpis[f"{prefix}.exergyChange_J"] = KPI(
+                        f"{prefix}.exergyChange_J",
+                        float(u.getExergyChange("J", 288.15)), "J"
+                    )
+                except Exception:
+                    pass
+
+            # ---------- Separator / Scrubber ----------
+            elif "Separator" in java_class or "Scrubber" in java_class:
+                for prop, getter, unit in [
+                    ("gasLoadFactor", "getGasLoadFactor", "m/s"),
+                    ("designGasLoadFactor", "getDesignGasLoadFactor", "m/s"),
+                    ("gasSuperficialVelocity", "getGasSuperficialVelocity", "m/s"),
+                    ("maxAllowableGasVelocity", "getMaxAllowableGasVelocity", "m/s"),
+                    ("liquidLevel", "getLiquidLevel", "m"),
+                    ("designLiquidLevel", "getDesignLiquidLevelFraction", "[-]"),
+                    ("gasCarryunderFraction", "getGasCarryunderFraction", "[-]"),
+                    ("liquidCarryoverFraction", "getLiquidCarryoverFraction", "[-]"),
+                    ("internalDiameter_m", "getInternalDiameter", "m"),
+                    ("separatorLength_m", "getSeparatorLength", "m"),
+                    ("efficiency", "getEfficiency", "[-]"),
+                    ("maxUtilization", "getMaxUtilization", "[-]"),
+                    ("maxUtilizationPercent", "getMaxUtilizationPercent", "%"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+            # ---------- Cooler / Heater / HeatExchanger ----------
+            elif java_class in ("Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"):
+                for prop, getter, unit in [
+                    ("pressureDrop_bar", "getPressureDrop", "bar"),
+                    ("inletTemperature_K", "getInletTemperature", "K"),
+                    ("outletTemperature_K", "getOutletTemperature", "K"),
+                    ("inletPressure_bara", "getInletPressure", "bara"),
+                    ("outletPressure_bara", "getOutletPressure", "bara"),
+                    ("maxDesignDuty_W", "getMaxDesignDuty", "W"),
+                    ("energyInput_W", "getEnergyInput", "W"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+                # UA value for HeatExchanger
+                if java_class == "HeatExchanger" and hasattr(u, "getUAvalue"):
+                    try:
+                        kpis[f"{prefix}.UAvalue"] = KPI(
+                            f"{prefix}.UAvalue", float(u.getUAvalue()), "W/K"
+                        )
+                    except Exception:
+                        pass
+
+            # ---------- Pump / ESPPump ----------
+            elif java_class in ("Pump", "ESPPump"):
+                for prop, getter, unit in [
+                    ("inletPressure_bara", "getInletPressure", "bara"),
+                    ("outletPressure_bara", "getOutletPressure", "bara"),
+                    ("efficiency", "getIsentropicEfficiency", "[-]"),
+                    ("head_m", "getHead", "m"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+            # ---------- Valve ----------
+            elif "Valve" in java_class:
+                for prop, getter, unit in [
+                    ("outletPressure_bara", "getOutletPressure", "bara"),
+                    ("pressureDrop_bar", "getPressureDrop", "bar"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+                # Cv
+                if hasattr(u, "getCv"):
+                    try:
+                        kpis[f"{prefix}.Cv"] = KPI(
+                            f"{prefix}.Cv", float(u.getCv()), "[-]"
+                        )
+                    except Exception:
+                        pass
+
+            # ---------- Splitter ----------
+            elif "Splitter" in java_class:
+                if hasattr(u, "getSplitStream"):
+                    for j in range(10):
+                        try:
+                            s = u.getSplitStream(j)
+                            if s is not None:
+                                flow = float(s.getFlowRate("kg/hr"))
+                                kpis[f"{prefix}.splitStream{j}_flow_kg_hr"] = KPI(
+                                    f"{prefix}.splitStream{j}_flow_kg_hr", flow, "kg/hr"
+                                )
+                        except Exception:
+                            break
+
+            # ---------- Recycle ----------
+            elif java_class == "Recycle":
+                for prop, getter, unit in [
+                    ("errorTemperature", "getErrorTemperature", "K"),
+                    ("errorPressure", "getErrorPressure", "bara"),
+                    ("errorFlow", "getErrorFlow", "[-]"),
+                    ("errorComposition", "getErrorComposition", "[-]"),
+                    ("iterations", "getIterations", "[-]"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+            # ---------- Sizing report (all equipment) ----------
+            if hasattr(u, "getSizingReportJson"):
+                try:
+                    sizing_json = str(u.getSizingReportJson())
+                    sizing = json.loads(sizing_json)
+                    if isinstance(sizing, dict):
+                        for sk, sv in sizing.items():
+                            if isinstance(sv, (int, float)) and sk != "equipmentName":
+                                kpis[f"{prefix}.sizing.{sk}"] = KPI(
+                                    f"{prefix}.sizing.{sk}", float(sv), ""
+                                )
+                except Exception:
+                    pass
+
+    def _extract_mechanical_design(self, kpis: Dict[str, KPI]):
+        """
+        Extract mechanical design data from each unit operation.
+
+        Calls initMechanicalDesign() and calcDesign() on each unit, then
+        extracts wall thickness, weights (vessel, internals, piping, nozzles,
+        structural, E&I, total), module dimensions (L x W x H), design
+        pressures/temperatures, construction material, and cost estimate.
+
+        Also runs SystemMechanicalDesign on the entire process to get:
+        - Total weight, plot space (footprint), total volume
+        - Weight breakdown by equipment type and discipline
+        - Equipment count by type
+        - Total power, cooling/heating duty summaries
+        """
+        from neqsim import jneqsim
+        import math
+
+        # --- Per-unit mechanical design ---
+        for name, u in self._units.items():
+            if not hasattr(u, 'getMechanicalDesign'):
+                continue
+
+            prefix = name
+            try:
+                # Initialize and calculate design
+                if hasattr(u, 'initMechanicalDesign'):
+                    try:
+                        u.initMechanicalDesign()
+                    except Exception:
+                        pass
+
+                md = u.getMechanicalDesign()
+                if md is None:
+                    continue
+
+                try:
+                    md.calcDesign()
+                except Exception:
+                    pass
+
+                # Wall thickness
+                for prop, getter, unit in [
+                    ("mechDesign.wallThickness_mm", "getWallThickness", "mm"),
+                    ("mechDesign.innerDiameter_m", "getInnerDiameter", "m"),
+                    ("mechDesign.outerDiameter_m", "getOuterDiameter", "m"),
+                    ("mechDesign.tantanLength_m", "getTantanLength", "m"),
+                ]:
+                    if hasattr(md, getter):
+                        try:
+                            val = float(getattr(md, getter)())
+                            if math.isnan(val) or val == 0.0:
+                                continue
+                            # Convert wall thickness from m to mm
+                            if "wallThickness" in prop:
+                                val = val * 1000.0
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+                # Weights
+                for prop, getter, unit in [
+                    ("mechDesign.weightTotal_kg", "getWeightTotal", "kg"),
+                    ("mechDesign.weightVesselShell_kg", "getWeigthVesselShell", "kg"),
+                    ("mechDesign.weightInternals_kg", "getWeigthInternals", "kg"),
+                    ("mechDesign.weightPiping_kg", "getWeightPiping", "kg"),
+                    ("mechDesign.weightNozzles_kg", "getWeightNozzle", "kg"),
+                    ("mechDesign.weightStructuralSteel_kg", "getWeightStructualSteel", "kg"),
+                    ("mechDesign.weightElectroInstrument_kg", "getWeightElectroInstrument", "kg"),
+                    ("mechDesign.weightVessel_kg", "getWeightVessel", "kg"),
+                ]:
+                    if hasattr(md, getter):
+                        try:
+                            val = float(getattr(md, getter)())
+                            if math.isnan(val) or val == 0.0:
+                                continue
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+                # Module dimensions (space/footprint)
+                for prop, getter, unit in [
+                    ("mechDesign.moduleLength_m", "getModuleLength", "m"),
+                    ("mechDesign.moduleWidth_m", "getModuleWidth", "m"),
+                    ("mechDesign.moduleHeight_m", "getModuleHeight", "m"),
+                    ("mechDesign.totalVolume_m3", "getVolumeTotal", "m3"),
+                ]:
+                    if hasattr(md, getter):
+                        try:
+                            val = float(getattr(md, getter)())
+                            if math.isnan(val) or val == 0.0:
+                                continue
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+                # Design pressures and temperatures
+                for prop, getter, unit in [
+                    ("mechDesign.maxDesignPressure_bara", "getMaxDesignPressure", "bara"),
+                    ("mechDesign.minDesignPressure_bara", "getMinDesignPressure", "bara"),
+                    ("mechDesign.maxDesignTemperature_C", "getMaxDesignTemperatureLimit", "C"),
+                    ("mechDesign.minDesignTemperature_C", "getMinDesignTemperatureLimit", "C"),
+                    ("mechDesign.maxOperatingPressure_bara", "getMaxOperationPressure", "bara"),
+                    ("mechDesign.maxOperatingTemperature_C", "getMaxOperationTemperature", "C"),
+                ]:
+                    if hasattr(md, getter):
+                        try:
+                            val = float(getattr(md, getter)())
+                            if math.isnan(val) or val == 0.0:
+                                continue
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+                # Material properties
+                for prop, getter, unit in [
+                    ("mechDesign.maxAllowableStress_Pa", "getMaxAllowableStress", "Pa"),
+                    ("mechDesign.tensileStrength_Pa", "getTensileStrength", "Pa"),
+                    ("mechDesign.jointEfficiency", "getJointEfficiency", "[-]"),
+                    ("mechDesign.corrosionAllowance_m", "getCorrosionAllowance", "m"),
+                ]:
+                    if hasattr(md, getter):
+                        try:
+                            val = float(getattr(md, getter)())
+                            if math.isnan(val) or val == 0.0:
+                                continue
+                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
+                        except Exception:
+                            pass
+
+                # Construction material (string value stored as special KPI)
+                if hasattr(md, 'getConstrutionMaterial'):
+                    try:
+                        mat = str(md.getConstrutionMaterial())
+                        if mat and mat != 'null' and mat != 'None':
+                            # Store as a "string KPI" with value 0 and unit = material name
+                            kpis[f"{prefix}.mechDesign.material"] = KPI(
+                                f"{prefix}.mechDesign.material", 0.0, mat
+                            )
+                    except Exception:
+                        pass
+
+                # Cost estimation per unit
+                if hasattr(md, 'getCostEstimate'):
+                    try:
+                        ce = md.getCostEstimate()
+                        if ce is not None:
+                            cost = float(ce.getTotalCost())
+                            if cost > 0:
+                                kpis[f"{prefix}.cost.totalCost_USD"] = KPI(
+                                    f"{prefix}.cost.totalCost_USD", cost, "USD"
+                                )
+                    except Exception:
+                        pass
+
+                # JSON-based mechanical design report (comprehensive)
+                if hasattr(md, 'toJson'):
+                    try:
+                        md_json = str(md.toJson())
+                        md_data = json.loads(md_json)
+                        if isinstance(md_data, dict):
+                            for mk, mv in md_data.items():
+                                if isinstance(mv, (int, float)) and not math.isnan(mv) and mv != 0.0:
+                                    # Skip fields already extracted above
+                                    if mk not in ('totalWeight', 'wallThickness',
+                                                   'innerDiameter', 'outerDiameter',
+                                                   'tantanLength', 'totalVolume'):
+                                        kpis[f"{prefix}.mechDesign.json.{mk}"] = KPI(
+                                            f"{prefix}.mechDesign.json.{mk}", float(mv), ""
+                                        )
+                                elif isinstance(mv, str) and mv and mv != 'null':
+                                    # Store design standard, equipment type etc.
+                                    if mk in ('designStandard', 'equipmentType',
+                                              'equipmentClass', 'casingType'):
+                                        kpis[f"{prefix}.mechDesign.json.{mk}"] = KPI(
+                                            f"{prefix}.mechDesign.json.{mk}", 0.0, mv
+                                        )
+                    except Exception:
+                        pass
+
+            except Exception:
+                pass
+
+        # --- System-level mechanical design (totals, footprint, weight breakdown) ---
+        try:
+            SMD = jneqsim.process.mechanicaldesign.SystemMechanicalDesign
+            smd = SMD(self._proc)
+            smd.runDesignCalculation()
+
+            # System totals
+            for prop, getter, unit in [
+                ("system.totalWeight_kg", "getTotalWeight", "kg"),
+                ("system.totalVolume_m3", "getTotalVolume", "m3"),
+                ("system.plotSpace_m2", "getTotalPlotSpace", "m2"),
+                ("system.footprintLength_m", "getTotalFootprintLength", "m"),
+                ("system.footprintWidth_m", "getTotalFootprintWidth", "m"),
+                ("system.maxEquipmentHeight_m", "getMaxEquipmentHeight", "m"),
+                ("system.totalPowerRequired_kW", "getTotalPowerRequired", "kW"),
+                ("system.totalCoolingDuty_kW", "getTotalCoolingDuty", "kW"),
+                ("system.totalHeatingDuty_kW", "getTotalHeatingDuty", "kW"),
+                ("system.netPowerRequirement_kW", "getNetPowerRequirement", "kW"),
+            ]:
+                if hasattr(smd, getter):
+                    try:
+                        val = float(getattr(smd, getter)())
+                        if math.isnan(val):
+                            continue
+                        # Convert W to kW for power/duty values
+                        if "Power" in getter or "Duty" in getter or "Power" in prop:
+                            val = val / 1000.0
+                        kpis[prop] = KPI(prop, val, unit)
+                    except Exception:
+                        pass
+
+            # Number of modules
+            try:
+                n_modules = int(smd.getTotalNumberOfModules())
+                kpis["system.numberOfModules"] = KPI("system.numberOfModules", float(n_modules), "[-]")
+            except Exception:
+                pass
+
+            # Weight breakdown by equipment type
+            try:
+                wbt = smd.getWeightByEquipmentType()
+                if wbt is not None:
+                    for k in wbt.keySet():
+                        w = float(wbt.get(k))
+                        if w > 0:
+                            kpis[f"system.weightByType.{k}_kg"] = KPI(
+                                f"system.weightByType.{k}_kg", w, "kg"
+                            )
+            except Exception:
+                pass
+
+            # Weight breakdown by discipline
+            try:
+                wbd = smd.getWeightByDiscipline()
+                if wbd is not None:
+                    for k in wbd.keySet():
+                        w = float(wbd.get(k))
+                        if w > 0:
+                            kpis[f"system.weightByDiscipline.{k}_kg"] = KPI(
+                                f"system.weightByDiscipline.{k}_kg", w, "kg"
+                            )
+            except Exception:
+                pass
+
+            # Equipment count by type
+            try:
+                ec = smd.getEquipmentCountByType()
+                if ec is not None:
+                    for k in ec.keySet():
+                        cnt = int(ec.get(k))
+                        kpis[f"system.equipmentCount.{k}"] = KPI(
+                            f"system.equipmentCount.{k}", float(cnt), "[-]"
+                        )
+            except Exception:
+                pass
+
+            # Total cost across all equipment
+            total_cost = 0.0
+            for kpi_key, kpi_val in kpis.items():
+                if kpi_key.endswith(".cost.totalCost_USD"):
+                    total_cost += kpi_val.value
+            if total_cost > 0:
+                kpis["system.totalCost_USD"] = KPI("system.totalCost_USD", total_cost, "USD")
+
+        except Exception:
+            pass
 
     def _flatten_json_report(self, json_report: dict, kpis: Dict[str, KPI]):
         """
@@ -969,7 +1580,7 @@ class NeqSimProcessModel:
             except Exception:
                 return None
 
-    def query_properties(self, query: str) -> str:
+    def query_properties(self, query: str, _cached_result: Optional[ModelRunResult] = None) -> str:
         """
         Run the model and return properties matching a natural-language query.
         
@@ -978,9 +1589,13 @@ class NeqSimProcessModel:
         
         The query is matched against all KPI keys (case-insensitive substring match).
         Returns a formatted text with matching properties.
+        
+        Args:
+            query: Natural-language search terms (e.g. "feed gas TVP").
+            _cached_result: If provided, reuse this run result instead of re-running.
         """
-        # Run the model to get current state
-        result = self.run()
+        # Run the model to get current state (or reuse cached result)
+        result = _cached_result if _cached_result is not None else self.run()
         
         # Normalize query for matching
         query_lower = query.lower().strip()

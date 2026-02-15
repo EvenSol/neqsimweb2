@@ -60,7 +60,18 @@ INTENT CLASSIFICATION:
   → The topology lists every unit IN PROCESS ORDER with its inlet and outlet stream conditions (temperature, pressure).
   → Use this data to answer questions about specific unit temperatures, pressures, flows, duties, etc.
 
-- PROPERTY QUERY: Questions about detailed fluid/stream properties ("What is the TVP?", "What is the density?", "What is the viscosity?", "Show me the RVP of the feed gas", "What is the gas composition?")
+- PROPERTY QUERY: Questions about detailed fluid/stream properties OR equipment utilization/sizing
+  OR mechanical design (wall thickness, weights, dimensions, materials, design standards) 
+  OR cost estimation (equipment cost, total process cost, CAPEX)
+  OR space/footprint (plot area, module dimensions, equipment height)
+  ("What is the TVP?", "What is the density?", "What is the viscosity?", "Show me the RVP of the feed gas",
+   "What is the gas composition?", "What is the compressor utilization?", "What is the separator gas load factor?",
+   "What is the compressor polytropic head?", "What is the sizing of the separator?",
+   "What is the wall thickness of the separator?", "What is the total weight of the process?",
+   "How much does the compressor cost?", "What is the footprint/plot space?",
+   "Show mechanical design for all equipment", "What are the equipment weights?",
+   "What is the total cost?", "What is the design pressure of the separator?",
+   "What material is the separator made of?", "What design standard is used?")
   → These properties require running the simulation. Output a ```query ... ``` block (NOT ```json):
   ```query
   {{"properties": ["feed gas TVP", "feed gas RVP", "feed gas density"]}}
@@ -68,6 +79,8 @@ INTENT CLASSIFICATION:
   The system will run the simulation and return ALL matching properties. Then explain the results.
   Search terms are matched case-insensitively against property keys. Use terms like:
     - Stream name + property: "feed gas TVP", "feed gas density", "feed gas viscosity"
+    - Equipment property: "compressor polytropicHead", "compressor compressionRatio", "separator gasLoadFactor"
+    - Sizing: "compressor sizing", "separator sizing"
     - Report properties: "report feed gas composition", "report compressor power"
     - Phase-specific: "feed gas gas_phase_fraction", "feed gas oil_density"
   
@@ -80,7 +93,64 @@ INTENT CLASSIFICATION:
     Phase: number_of_phases, gas_phase_fraction, oil_phase_fraction, aqueous_phase_fraction
     Phase density: gas_density_kg_m3, oil_density_kg_m3
     Phase viscosity: gas_viscosity_Pa_s, oil_viscosity_Pa_s
+
+  Available equipment properties (prefix with "unit_name."):
+    Compressor: polytropicHead_kJkg, polytropicHeadMeter, polytropicExponent, compressionRatio,
+                actualCompressionRatio, inletTemperature_K, outletTemperature_K, inletPressure_bara,
+                speed_rpm, maxSpeed_rpm, minSpeed_rpm, distanceToSurge, surgeFlowRate,
+                maxUtilization, maxUtilizationPercent, entropyProduction_JK, exergyChange_J
+    Separator: gasLoadFactor, designGasLoadFactor, gasSuperficialVelocity, maxAllowableGasVelocity,
+               liquidLevel, designLiquidLevel, gasCarryunderFraction, liquidCarryoverFraction,
+               internalDiameter_m, separatorLength_m, efficiency, maxUtilization, maxUtilizationPercent
+    Cooler/Heater: pressureDrop_bar, inletTemperature_K, outletTemperature_K, inletPressure_bara,
+                   outletPressure_bara, maxDesignDuty_W, energyInput_W
+    HeatExchanger: UAvalue (W/K)
+    Pump: inletPressure_bara, outletPressure_bara, efficiency, head_m
+    Valve: outletPressure_bara, pressureDrop_bar, Cv
+    Splitter: splitStream0_flow_kg_hr, splitStream1_flow_kg_hr, ...
+    Recycle: errorTemperature, errorPressure, errorFlow, errorComposition, iterations
+    All units: sizing.* (from detailed sizing report JSON)
     
+    Mechanical design (prefix with "unit_name.mechDesign."):
+      wallThickness_mm, innerDiameter_m, outerDiameter_m, tantanLength_m
+      weightTotal_kg, weightVesselShell_kg, weightInternals_kg, weightPiping_kg,
+      weightNozzles_kg, weightStructuralSteel_kg, weightElectroInstrument_kg, weightVessel_kg
+      moduleLength_m, moduleWidth_m, moduleHeight_m, totalVolume_m3
+      maxDesignPressure_bara, minDesignPressure_bara, maxDesignTemperature_C, minDesignTemperature_C
+      maxOperatingPressure_bara, maxOperatingTemperature_C
+      maxAllowableStress_Pa, tensileStrength_Pa, jointEfficiency, corrosionAllowance_m
+      material (construction material name)
+      json.designStandard, json.equipmentType, json.equipmentClass, json.casingType
+      json.* (additional fields from full mechanical design JSON)
+    
+    Cost estimation (prefix with "unit_name.cost."):
+      totalCost_USD — equipment purchase cost in USD
+    
+    System-level / process totals (prefix with "system."):
+      totalWeight_kg — total weight of all equipment
+      totalVolume_m3 — total equipment volume
+      plotSpace_m2 — total plot/footprint area (length x width)
+      footprintLength_m — total footprint length
+      footprintWidth_m — total footprint width
+      maxEquipmentHeight_m — tallest equipment height
+      totalPowerRequired_kW, totalCoolingDuty_kW, totalHeatingDuty_kW, netPowerRequirement_kW
+      numberOfModules — number of equipment modules
+      weightByType.<type>_kg — weight breakdown (Separator, Compressor, Heat Exchanger, etc.)
+      weightByDiscipline.<discipline>_kg — weight by discipline
+      equipmentCount.<type> — equipment count by type
+      totalCost_USD — total estimated equipment cost
+    
+    Query examples for mechanical design, cost, and space:
+      "separator mechDesign" → wall thickness, weights, dimensions for all separators
+      "compressor weight" → compressor weights
+      "system totalWeight" → process total weight
+      "system plotSpace" → footprint area
+      "system cost" → total equipment cost
+      "inlet separator cost" → cost for specific equipment
+      "compressor mechDesign wallThickness" → compressor wall thickness
+      "system weightByType" → weight breakdown by equipment type
+      "mechDesign designStandard" → design standards applied
+
     From JSON report (prefix with "report.unit_name."): 
       Compressor: power, polytropicHead, polytropicEfficiency, suctionTemperature, dischargeTemperature, etc.
       Separator: gasLoadFactor, feed/gas stream properties and compositions
@@ -446,6 +516,9 @@ def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
     to explain results to the engineer.
+    
+    Filters to only significant KPI changes (|delta| > 0.01 or delta_pct > 0.1%)
+    to keep the text concise and avoid wasting LLM tokens.
     """
     from .scenario_engine import results_summary_table
     
@@ -457,17 +530,49 @@ def format_comparison_for_llm(comparison) -> str:
                        if d.get('delta') is not None and abs(d['delta']) > 0.01]
         if sig_changes:
             lines.append("=== KEY CHANGES (base → scenario) ===")
-            for d in sorted(sig_changes, key=lambda x: abs(x.get('delta_pct', 0) or 0), reverse=True):
+            # Sort by magnitude of change and limit to top 50 most significant
+            sig_changes.sort(key=lambda x: abs(x.get('delta_pct', 0) or 0), reverse=True)
+            shown = sig_changes[:50]
+            for d in shown:
                 pct_str = f" ({d['delta_pct']:+.1f}%)" if d.get('delta_pct') is not None else ""
                 lines.append(f"  {d['kpi']}: {d['base']:.2f} → {d['case']:.2f} [{d['unit']}] "
                              f"(delta={d['delta']:+.2f}{pct_str})")
+            if len(sig_changes) > 50:
+                lines.append(f"  ... and {len(sig_changes) - 50} more changes")
             lines.append("")
     
-    # Summary table
+    # Summary table — only include KPIs that changed or are key process indicators
     summary_df = results_summary_table(comparison)
     if not summary_df.empty:
-        lines.append("=== FULL SIMULATION RESULTS ===")
-        lines.append(summary_df.to_string(index=False))
+        # Filter to important KPIs: those with changes, total_power/duty, mass_balance, 
+        # equipment power/duty, and a few key stream properties
+        important_prefixes = ('total_', 'mass_balance')
+        important_suffixes = ('.power_kW', '.duty_kW')
+        
+        def is_important_kpi(row):
+            kpi = row.get('KPI', '')
+            # Always include summary KPIs
+            if kpi.startswith(important_prefixes):
+                return True
+            if kpi.endswith(important_suffixes):
+                return True
+            # Include KPIs that changed between base and any case column
+            base_val = row.get('BASE')
+            for col in summary_df.columns:
+                if col not in ('KPI', 'Unit', 'BASE'):
+                    case_val = row.get(col)
+                    if base_val is not None and case_val is not None:
+                        try:
+                            if abs(float(base_val) - float(case_val)) > 0.01:
+                                return True
+                        except (ValueError, TypeError):
+                            pass
+            return False
+        
+        filtered_df = summary_df[summary_df.apply(is_important_kpi, axis=1)]
+        if not filtered_df.empty:
+            lines.append("=== SIMULATION RESULTS (changed KPIs) ===")
+            lines.append(filtered_df.to_string(index=False))
     
     # Constraint check
     if comparison.constraint_summary:
@@ -614,12 +719,14 @@ class ProcessChatSession:
                 self.history.append({"role": "assistant", "content": final_text})
                 return final_text
         elif property_query:
-            # Property query — run model and extract matching properties
+            # Property query — run model ONCE and extract matching properties
             try:
                 queries = property_query.get("properties", [])
                 all_results = []
+                # Run the model once and reuse the result for all queries
+                cached_result = self.model.run()
                 for q in queries:
-                    result_text = self.model.query_properties(q)
+                    result_text = self.model.query_properties(q, _cached_result=cached_result)
                     all_results.append(result_text)
                 
                 properties_text = "\n\n".join(all_results)
