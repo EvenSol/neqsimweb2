@@ -76,6 +76,36 @@ with st.sidebar:
         st.session_state["chat_messages"] = []
         st.session_state["_builder_mode"] = True
         st.rerun()
+
+    # --- Load Test Process button ---
+    _TEST_PROCESS_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "test_process.neqsim",
+    )
+    if os.path.exists(_TEST_PROCESS_PATH):
+        if st.button("📂 Load Test Process", use_container_width=True,
+                     help="Load a sample gas processing model for testing"):
+            with st.spinner("Loading test process model..."):
+                try:
+                    from process_chat.process_model import NeqSimProcessModel
+
+                    with open(_TEST_PROCESS_PATH, "rb") as f:
+                        file_bytes = f.read()
+                    model = NeqSimProcessModel.from_bytes(file_bytes, "test_process.neqsim")
+                    st.session_state["process_model"] = model
+                    st.session_state["process_model_bytes"] = file_bytes
+                    st.session_state["process_model_name"] = "test_process.neqsim"
+                    st.session_state["_loaded_file_key"] = "test_process_builtin"
+                    st.session_state.pop("_builder_mode", None)
+                    st.session_state.pop("chat_session", None)
+                    st.session_state["chat_messages"] = []
+                    st.success("✓ Test process loaded")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load test process: {str(e)}")
+        st.caption(
+            "[View process description on Colab](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/process/comparesimulations.ipynb)"
+        )
     
     st.divider()
 
@@ -195,14 +225,18 @@ model = st.session_state.get("process_model")
 builder_mode = st.session_state.get("_builder_mode", False)
 
 if model is None and not builder_mode:
-    st.info("👆 Upload a `.neqsim` process model file in the sidebar, or click **Start New Process** to build one from scratch.")
+    st.info("👆 Upload a `.neqsim` process model file in the sidebar, click **Load Test Process** to try a sample, or click **Start New Process** to build one from scratch.")
     st.markdown("""
     ### Getting Started
     
     **Option 1: Upload an existing model**
     Upload a `.neqsim` file to analyze, query, and run what-if scenarios.
+    
+    **Option 2: Load the test process**
+    Click **📂 Load Test Process** in the sidebar to load a pre-built gas processing model.
+    The process is described in this [Colab notebook](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/process/comparesimulations.ipynb).
 
-    **Option 2: Build from scratch**
+    **Option 3: Build from scratch**
     Click **🔨 Start New Process** in the sidebar, then describe the process you want to build:
     - *"Build a gas compression process with methane and ethane at 50 bara"*
     - *"Create a 3-stage compression train with intercooling"*
@@ -969,6 +1003,7 @@ def _show_sensitivity(sensitivity_result):
 def _show_pvt(pvt_result):
     """Display PVT simulation results inline."""
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
     st.markdown("---")
     exp_name = getattr(pvt_result, "experiment_type", "") or "PVT"
@@ -985,9 +1020,12 @@ def _show_pvt(pvt_result):
 
     if pvt_result.data_points:
         pts = pvt_result.data_points
-        fig = go.Figure()
 
-        if exp_name in ("CME", "DifferentialLiberation"):
+        # --- Experiment-specific plots ---
+        exp_upper = exp_name.upper().replace(" ", "")
+
+        if exp_upper in ("CME", "DIFFERENTIALLIBERATION"):
+            fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=[p.pressure_bara for p in pts],
                 y=[p.values.get("relative_volume", 0) for p in pts],
@@ -999,39 +1037,99 @@ def _show_pvt(pvt_result):
                 xaxis_title="Pressure (bara)",
                 yaxis_title="Relative Volume",
             )
+            st.plotly_chart(fig, use_container_width=True)
+
+        elif exp_upper == "CVD":
+            # Two-axis plot: liquid dropout + cumulative gas produced
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            fig.add_trace(go.Scatter(
+                x=[p.pressure_bara for p in pts],
+                y=[p.values.get("liquid_dropout_pct", 0) for p in pts],
+                name="Liquid Dropout (%)",
+                mode="lines+markers",
+            ), secondary_y=False)
+            fig.add_trace(go.Scatter(
+                x=[p.pressure_bara for p in pts],
+                y=[p.values.get("cumulative_gas_produced_mol_pct", 0) for p in pts],
+                name="Cum. Gas Produced (mol%)",
+                mode="lines+markers",
+                line=dict(dash="dash"),
+            ), secondary_y=True)
+            fig.update_layout(title="Constant Volume Depletion")
+            fig.update_xaxes(title_text="Pressure (bara)")
+            fig.update_yaxes(title_text="Liquid Dropout (%)", secondary_y=False)
+            fig.update_yaxes(title_text="Cum. Gas Produced (mol%)", secondary_y=True)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Second chart: gas Z-factor
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=[p.pressure_bara for p in pts],
+                y=[p.values.get("gas_Z_factor", 0) for p in pts],
+                name="Gas Z-factor",
+                mode="lines+markers",
+            ))
+            fig2.update_layout(
+                title="Gas Z-factor",
+                xaxis_title="Pressure (bara)",
+                yaxis_title="Z",
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+        elif exp_upper == "SEPARATORTEST":
+            fig = go.Figure()
+            stages = [p.values.get("stage", i + 1) for i, p in enumerate(pts)]
+            fig.add_trace(go.Bar(
+                x=[f"Stage {int(s)}" for s in stages],
+                y=[p.values.get("GOR_Sm3_Sm3", 0) for p in pts],
+                name="GOR (Sm³/Sm³)",
+            ))
+            fig.update_layout(
+                title="Separator Test — GOR per Stage",
+                xaxis_title="Stage",
+                yaxis_title="GOR (Sm³/Sm³)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
         else:
-            gor_data = [(i, p.values.get("gas_oil_ratio")) for i, p in enumerate(pts)]
-            gor_data = [(i, v) for i, v in gor_data if v is not None]
-            if gor_data:
-                fig.add_trace(go.Scatter(
-                    x=[i for i, _ in gor_data],
-                    y=[v for _, v in gor_data],
-                    name="GOR",
-                    mode="lines+markers",
-                ))
-            fig.update_layout(title=exp_name, xaxis_title="Step", yaxis_title="GOR")
+            # Generic fallback: plot the first numeric value column found
+            fig = go.Figure()
+            col_names = getattr(pvt_result, "column_names", [])
+            plotted = False
+            for cname in col_names:
+                yvals = [p.values.get(cname) for p in pts]
+                if any(v is not None and v != 0 for v in yvals):
+                    fig.add_trace(go.Scatter(
+                        x=[p.pressure_bara for p in pts],
+                        y=[v or 0 for v in yvals],
+                        name=cname.replace("_", " "),
+                        mode="lines+markers",
+                    ))
+                    plotted = True
+            if plotted:
+                fig.update_layout(
+                    title=exp_name,
+                    xaxis_title="Pressure (bara)",
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Data table
+        # --- Generic data table using column_names or all available keys ---
+        col_names = getattr(pvt_result, "column_names", None)
+        col_units = getattr(pvt_result, "column_units", {}) or {}
         pvt_data = []
         for p in pts:
             row = {"Pressure (bara)": round(p.pressure_bara, 2)}
-            rv = p.values.get("relative_volume")
-            if rv is not None:
-                row["Rel. Volume"] = round(rv, 4)
-            lvf = p.values.get("liquid_volume_fraction")
-            if lvf is not None:
-                row["Liquid Vol. Frac."] = round(lvf, 4)
-            gz = p.values.get("gas_Z")
-            if gz is not None:
-                row["Gas Z"] = round(gz, 4)
-            gor = p.values.get("gas_oil_ratio")
-            if gor is not None:
-                row["GOR"] = round(gor, 2)
-            bo = p.values.get("Bo")
-            if bo is not None:
-                row["Bo"] = round(bo, 4)
+            if p.temperature_C is not None:
+                row["Temperature (°C)"] = round(p.temperature_C, 2)
+            keys = col_names if col_names else sorted(p.values.keys())
+            for k in keys:
+                v = p.values.get(k)
+                if v is not None:
+                    unit = col_units.get(k, "")
+                    label = k.replace("_", " ")
+                    if unit:
+                        label = f"{label} ({unit})"
+                    row[label] = round(v, 4) if isinstance(v, float) else v
             pvt_data.append(row)
         st.dataframe(pd.DataFrame(pvt_data), use_container_width=True, hide_index=True)
 
