@@ -442,6 +442,34 @@ Use "unit_param" when the user asks things like:
   - "Find the valve outlet pressure that gives 50 kg/hr liquid in the separator"
 The unit_param field can be any of the supported patch keys for units (see above).
 
+IMPORTANT: Do NOT use "changes" to modify stream composition. "streams.<name>.components" is NOT a valid
+patch key. To add or replace components in a stream, ALWAYS use "add_components" inside "patch":
+{{
+  "patch": {{
+    "add_components": [
+      {{
+        "stream_name": "feed gas",
+        "components": {{"water": 500.0}},
+        "flow_unit": "kg/hr"
+      }}
+    ]
+  }}
+}}
+This adds new components (or increases the flow of existing ones) by absolute flow rate.
+You CANNOT set mole fractions directly — only absolute flow rates (e.g., kg/hr, mol/sec).
+To set 50 mol% water in a feed that is 1000 kg/hr methane, calculate the equivalent water mass flow.
+
+SCRIPT AND SAVE COMMANDS:
+When the user asks to see the Python script, output a ```build``` block:
+```build
+{{"action": "show_script"}}
+```
+When the user asks to save/download the process, output:
+```build
+{{"action": "save"}}
+```
+Do NOT write Python scripts yourself — ALWAYS use the show_script action so the system generates the correct script.
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -595,6 +623,11 @@ DESIGN GUIDELINES (use these defaults unless the user specifies otherwise):
 
 When the user describes a process, design it with appropriate engineering defaults and explain your choices.
 After the process is built, explain the key results (power, duty, temperatures, pressures).
+
+IMPORTANT: Do NOT write Python scripts yourself. ALWAYS use ```build {"action": "show_script"}``` so
+the system generates the correct script with proper NeqSim Java API imports.
+Do NOT use "from neqsim.process import ..." or "from neqsim.thermo.system import ..." — these are WRONG.
+The correct imports are handled automatically by the show_script action.
 """
 
 
@@ -876,7 +909,22 @@ class ProcessChatSession:
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
-                    "content": f"[SYSTEM: Python script generated. Show it to the engineer.]\n\n```python\n{script}\n```"
+                    "content": f"[SYSTEM: Python script generated. Show it to the engineer. "
+                               f"Display the entire script in a Python code block.]\n\n```python\n{script}\n```"
+                })
+                return self._llm_followup(client, types)
+            elif self.model:
+                # Model exists but no builder (uploaded model) — provide model summary
+                summary = self.model.get_model_summary()
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        "[SYSTEM: This model was uploaded (not built from scratch), so an auto-generated "
+                        "Python script is not available. Provide the model summary instead and suggest "
+                        "the user can build a new process from scratch to get a Python script.]\n\n"
+                        f"Model summary:\n{summary}"
+                    )
                 })
                 return self._llm_followup(client, types)
             else:
@@ -1078,6 +1126,23 @@ class ProcessChatSession:
                     self.model.refresh_source_bytes()
                     self._system_prompt = build_system_prompt(self.model)
                     structural_applied = True
+
+                    # Keep builder spec in sync so to_python_script() is accurate
+                    if self._builder and self._builder.spec:
+                        proc_steps = self._builder.spec.setdefault("process", [])
+                        for au in (sc.patch.add_units or []):
+                            proc_steps.append({
+                                "name": au.name,
+                                "type": au.equipment_type,
+                                "params": dict(au.params) if au.params else {},
+                            })
+                        for ap in (sc.patch.add_process or []):
+                            for u in (ap.units or []):
+                                proc_steps.append({
+                                    "name": u.get("name", "unit"),
+                                    "type": u.get("equipment_type", "unknown"),
+                                    "params": u.get("params", {}),
+                                })
                 except Exception:
                     pass  # comparison still valid even if persistence fails
 
