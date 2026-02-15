@@ -221,6 +221,16 @@ if model is None and not builder_mode:
     - **Safety sizing** (PSV sizing per API 520/521)
     - Download the Python script
     - Save as a `.neqsim` file
+    
+    ### 💾 Saving & Loading Process Models
+    
+    You can save your process to a `.neqsim` file for later use:
+    
+    1. **In chat**: Type *"Save the process"* — a download button will appear in the sidebar.
+    2. **From Python**: Use `neqsim.save_neqsim(process, "my_process.neqsim")` to save, and `neqsim.load_neqsim("my_process.neqsim")` to reload.
+    3. **Reload**: Upload the saved `.neqsim` file via the sidebar file uploader to continue working with it.
+    
+    The `.neqsim` file contains the full process topology, fluid compositions, and equipment settings — everything needed to reproduce the simulation.
     """)
     st.stop()
 

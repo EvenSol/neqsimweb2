@@ -262,7 +262,8 @@ class NeqSimProcessModel:
            complex topologies converge.
         """
         _POWER_UNITS = {"Compressor", "Pump", "ESPPump", "Expander", "GasTurbine"}
-        _DUTY_UNITS  = {"Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"}
+        _DUTY_UNITS  = {"Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler",
+                        "MultiStreamHeatExchanger"}
 
         def _reset_recycles(units):
             """Reset convergence state on every Recycle unit."""
@@ -760,29 +761,38 @@ class NeqSimProcessModel:
         total_duty_kW = 0.0
 
         for name, u in self._units.items():
+            try:
+                uclass = str(u.getClass().getSimpleName())
+            except Exception:
+                uclass = ""
+
             if hasattr(u, "getPower"):
                 try:
                     power_kW = float(u.getPower()) / 1000.0
-                    kpis[f"{name}.power_kW"] = KPI(f"{name}.power_kW", power_kW, "kW")
-                    total_power_kW += power_kW
+                    # Skip zero power for units that don't produce it
+                    if power_kW == 0.0 and uclass not in self._POWER_UNITS:
+                        pass
+                    else:
+                        kpis[f"{name}.power_kW"] = KPI(f"{name}.power_kW", power_kW, "kW")
+                        total_power_kW += power_kW
                 except Exception:
                     pass
             if hasattr(u, "getDuty"):
                 try:
                     duty_kW = float(u.getDuty()) / 1000.0
                     # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
-                    if duty_kW == 0.0 and hasattr(u, "getEnergyInput"):
-                        try:
-                            uclass = str(u.getClass().getSimpleName())
-                        except Exception:
-                            uclass = ""
-                        if uclass in self._DUTY_UNITS:
+                    if duty_kW == 0.0 and uclass in self._DUTY_UNITS:
+                        if hasattr(u, "getEnergyInput"):
                             try:
                                 duty_kW = float(u.getEnergyInput()) / 1000.0
                             except Exception:
                                 pass
-                    kpis[f"{name}.duty_kW"] = KPI(f"{name}.duty_kW", duty_kW, "kW")
-                    total_duty_kW += abs(duty_kW)
+                    # Skip zero duty for units that don't produce it
+                    if duty_kW == 0.0 and uclass not in self._DUTY_UNITS:
+                        pass
+                    else:
+                        kpis[f"{name}.duty_kW"] = KPI(f"{name}.duty_kW", duty_kW, "kW")
+                        total_duty_kW += abs(duty_kW)
                 except Exception:
                     pass
 
