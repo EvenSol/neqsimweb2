@@ -43,7 +43,7 @@ class PVTResult:
     column_names: List[str] = field(default_factory=list)
     column_units: Dict[str, str] = field(default_factory=dict)
     saturation_pressure_bara: float = 0.0
-    saturation_temperature_C: float = 0.0
+    saturation_temperature_C: Optional[float] = None
     saturation_type: str = ""  # "bubble" or "dew"
     fluid_description: str = ""
     method: str = "flash_stepping"
@@ -197,6 +197,7 @@ def _run_cme(
                     dp.values["relative_volume"] /= v_sat
             result.saturation_pressure_bara = result.data_points[sat_idx].pressure_bara
 
+        result.saturation_temperature_C = temperature_C
         result.message = f"CME at {temperature_C}°C, {p_start_bara}→{p_end_bara} bara, {n_steps} steps"
 
     except Exception as e:
@@ -276,6 +277,7 @@ def _run_diff_lib(
                     pressure_bara=p, temperature_C=temperature_C,
                 ))
 
+        result.saturation_temperature_C = temperature_C
         result.message = f"Differential Liberation at {temperature_C}°C, {n_steps} steps"
 
     except Exception as e:
@@ -406,6 +408,7 @@ def _run_cvd(
 
         # Set saturation point
         result.saturation_pressure_bara = p_start_bara
+        result.saturation_temperature_C = temperature_C
         result.message = (
             f"CVD at {temperature_C}°C, {p_start_bara}→{p_end_bara} bara, {n_steps} steps"
         )
