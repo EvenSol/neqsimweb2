@@ -167,6 +167,8 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                 reynolds_numbers = []
                 phase_counts = []
                 liquid_holdups = []
+                gas_velocities = []
+                liq_velocities = []
 
                 current_P = inlet_pressure_bara
                 current_T = inlet_temp_C
@@ -200,24 +202,41 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                     else:
                         ff = 0.02
 
-                    # Flow regime detection
+                    # Flow regime detection and per-phase velocities
                     seg_n_phases = seg_fluid.getNumberOfPhases()
                     lambda_l = 0.0  # liquid volume fraction (no-slip holdup)
+                    vsg = 0.0  # superficial gas velocity
+                    vsl = 0.0  # superficial liquid velocity
                     if seg_n_phases > 1:
                         # Multi-phase: determine flow pattern (Beggs-Brill)
                         try:
                             gas_vol = 0.0
                             liq_vol = 0.0
+                            gas_mass = 0.0
+                            liq_mass = 0.0
                             for pi in range(seg_n_phases):
                                 phase = seg_fluid.getPhase(pi)
                                 pvol = phase.getVolume("m3")
+                                prho = phase.getDensity("kg/m3")
                                 ptype = str(phase.getPhaseTypeName()).lower()
                                 if "gas" in ptype:
                                     gas_vol += pvol
+                                    gas_mass += pvol * prho
                                 else:
                                     liq_vol += pvol
+                                    liq_mass += pvol * prho
                             total_vol = gas_vol + liq_vol
+                            total_mass = gas_mass + liq_mass
                             lambda_l = liq_vol / total_vol if total_vol > 0 else 0.5
+
+                            # Superficial velocities (phase volumetric flow / pipe area)
+                            if total_mass > 0 and area > 0:
+                                gas_mass_frac = gas_mass / total_mass
+                                liq_mass_frac = liq_mass / total_mass
+                                gas_rho_phase = gas_mass / gas_vol if gas_vol > 0 else seg_rho
+                                liq_rho_phase = liq_mass / liq_vol if liq_vol > 0 else seg_rho
+                                vsg = (mass_flow_kgs * gas_mass_frac / gas_rho_phase) / area if gas_rho_phase > 0 else 0
+                                vsl = (mass_flow_kgs * liq_mass_frac / liq_rho_phase) / area if liq_rho_phase > 0 else 0
 
                             # Beggs-Brill flow pattern map
                             Vm = vel
@@ -247,7 +266,14 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                         except Exception:
                             regime = "Multiphase"
                     else:
-                        # Single-phase regime
+                        # Single-phase: entire flow is one phase
+                        ptype = str(seg_fluid.getPhase(0).getPhaseTypeName()).lower()
+                        if "gas" in ptype:
+                            vsg = vel
+                            vsl = 0.0
+                        else:
+                            vsg = 0.0
+                            vsl = vel
                         if Re > 2300:
                             regime = "Turbulent"
                         elif Re > 0:
@@ -293,6 +319,8 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                     reynolds_numbers.append(Re)
                     phase_counts.append(seg_n_phases)
                     liquid_holdups.append(round(lambda_l, 4))
+                    gas_velocities.append(round(vsg, 3))
+                    liq_velocities.append(round(vsl, 3))
 
                 # =============================================================
                 # Results Display
@@ -399,6 +427,8 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                     "Pressure (bara)": [round(p, 2) for p in pressures[1:]],
                     "Temperature (°C)": [round(t, 2) for t in temperatures[1:]],
                     "Velocity (m/s)": [round(v, 3) for v in velocities],
+                    "Vsg (m/s)": gas_velocities,
+                    "Vsl (m/s)": liq_velocities,
                     "Density (kg/m³)": [round(d, 2) for d in densities],
                     "Reynolds": [f"{r:,.0f}" for r in reynolds_numbers],
                     "Phases": phase_counts,
@@ -407,13 +437,34 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                 })
                 st.dataframe(seg_table, use_container_width=True, hide_index=True)
 
-                # Erosional velocity check
-                rho_outlet = densities[-1] if densities else rho
-                v_erosional = 122.0 / np.sqrt(rho_outlet) if rho_outlet > 0 else 50
-                if avg_vel > v_erosional:
-                    st.warning(f"⚠️ Average velocity ({avg_vel:.1f} m/s) exceeds erosional velocity ({v_erosional:.1f} m/s)!")
+                # Erosional velocity check — evaluate at every segment
+                erosion_exceeded = []
+                min_margin = float('inf')
+                min_margin_idx = 0
+                for i in range(len(velocities)):
+                    seg_rho_i = densities[i]
+                    v_eros_i = 122.0 / np.sqrt(seg_rho_i) if seg_rho_i > 0 else 50
+                    margin_i = 1 - velocities[i] / v_eros_i if v_eros_i > 0 else 1
+                    if margin_i < min_margin:
+                        min_margin = margin_i
+                        min_margin_idx = i
+                    if velocities[i] > v_eros_i:
+                        erosion_exceeded.append((mid_positions[i], velocities[i], v_eros_i))
+
+                if erosion_exceeded:
+                    worst = max(erosion_exceeded, key=lambda x: x[1])
+                    st.warning(
+                        f"⚠️ Erosional velocity exceeded in {len(erosion_exceeded)} of {len(velocities)} segments! "
+                        f"Worst at {worst[0]:.1f} km: {worst[1]:.1f} m/s vs limit {worst[2]:.1f} m/s."
+                    )
                 else:
-                    st.info(f"Erosional velocity limit: {v_erosional:.1f} m/s — OK (margin: {(1 - avg_vel / v_erosional) * 100:.0f}%)")
+                    v_at = velocities[min_margin_idx]
+                    v_lim = 122.0 / np.sqrt(densities[min_margin_idx])
+                    st.info(
+                        f"Erosional velocity OK along entire pipeline. "
+                        f"Tightest margin: {min_margin * 100:.0f}% at {mid_positions[min_margin_idx]:.1f} km "
+                        f"(vel {v_at:.1f} m/s, limit {v_lim:.1f} m/s)."
+                    )
 
             except Exception as e:
                 st.error(f"Calculation failed: {str(e)}")
