@@ -170,7 +170,7 @@ if st.button("🛢️ Generate Black Oil Tables", type="primary"):
                 neqsim_fluid.setTemperature(reservoir_temp_C, "C")
                 TPflash(neqsim_fluid)
 
-                thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(neqsim_fluid)
+                thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(neqsim_fluid)
 
                 # Try to compute saturation pressure (bubble point)
                 try:

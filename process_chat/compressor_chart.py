@@ -175,7 +175,7 @@ def _find_compressors(
         except Exception:
             continue
         if java_class == "Compressor":
-            if name is None or uname.lower() == name.lower():
+            if name is None or name.lower() in uname.lower():
                 results.append((uname, unit))
     return results
 

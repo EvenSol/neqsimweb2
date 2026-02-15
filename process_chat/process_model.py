@@ -1663,7 +1663,7 @@ class NeqSimProcessModel:
             try:
                 fluid_tvp = fluid.clone()
                 fluid_tvp.init(0)
-                ops_tvp = jneqsim.thermodynamicOperations.ThermodynamicOperations(fluid_tvp)
+                ops_tvp = jneqsim.thermodynamicoperations.ThermodynamicOperations(fluid_tvp)
                 ops_tvp.bubblePointPressureFlash(False)
                 tvp = float(fluid_tvp.getPressure("bara"))
                 kpis[f"{prefix}.TVP_bara"] = KPI(f"{prefix}.TVP_bara", tvp, "bara")
@@ -1675,7 +1675,7 @@ class NeqSimProcessModel:
                 fluid_rvp = fluid.clone()
                 fluid_rvp.setTemperature(37.8, "C")
                 fluid_rvp.init(0)
-                ops_rvp = jneqsim.thermodynamicOperations.ThermodynamicOperations(fluid_rvp)
+                ops_rvp = jneqsim.thermodynamicoperations.ThermodynamicOperations(fluid_rvp)
                 ops_rvp.bubblePointPressureFlash(False)
                 rvp = float(fluid_rvp.getPressure("bara"))
                 kpis[f"{prefix}.RVP_bara"] = KPI(f"{prefix}.RVP_bara", rvp, "bara")

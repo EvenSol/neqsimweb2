@@ -106,7 +106,7 @@ def _apply_patch_key(model: NeqSimProcessModel, key: str, value: float) -> bool:
                         java_obj = model.get_unit(u_info.name)
                     except KeyError:
                         return False
-                    if "outletpressure_bara" in param or "outpressure_bara" in param:
+                    if "outletpressure" in param.lower() or "outpressure" in param.lower():
                         java_obj.setOutletPressure(float(value))
                     elif "outtemperature_c" in param.lower():
                         java_obj.setOutTemperature(float(value), "C")

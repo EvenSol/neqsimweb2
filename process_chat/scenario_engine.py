@@ -1535,7 +1535,7 @@ def _set_unit_value(unit, prop: str, value: Any):
     if prop_lower in ("cv", "valve_cv") and hasattr(unit, "setCv"):
         unit.setCv(float(value))
         return
-    if prop_lower in ("cgv", "valve_cgv") or ("opening" in prop_lower and "percent" in prop_lower):
+    if prop_lower in ("cgv", "valve_cgv") or "opening" in prop_lower:
         if hasattr(unit, "setPercentValveOpening"):
             unit.setPercentValveOpening(float(value))
             return
@@ -1554,7 +1554,7 @@ def _set_unit_value(unit, prop: str, value: Any):
             return
 
     # ---- Separator specific ----
-    if "internalmaterial" in prop_lower or "internal_material" in prop_lower:
+    if "internaldiameter" in prop_lower or "internal_diameter" in prop_lower:
         if hasattr(unit, "setInternalDiameter"):
             unit.setInternalDiameter(float(value))
             return

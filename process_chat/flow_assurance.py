@@ -94,7 +94,7 @@ def _predict_hydrate_temperature(fluid, pressure_bara: float) -> float:
             fl.addComponent("water", 0.01)
 
         fl.setHydrateCheck(True)
-        thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(fl)
+        thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(fl)
         thermoOps.hydrateFormationTemperature()
         return float(fl.getTemperature()) - 273.15
     except Exception:
@@ -158,7 +158,7 @@ def _estimate_wax_temperature(fluid) -> float:
         fl.setTemperature(273.15 + 80)  # Start high
         fl.setPressure(50.0)
 
-        thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(fl)
+        thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(fl)
         try:
             thermoOps.calcWAT()
             return float(fl.getTemperature()) - 273.15

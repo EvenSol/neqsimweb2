@@ -102,7 +102,7 @@ def _calc_saturation_point(fluid, temperature_C: float) -> Tuple[float, str]:
         fluid_clone = fluid.clone()
         fluid_clone.setTemperature(float(temperature_C) + 273.15)
 
-        thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(fluid_clone)
+        thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(fluid_clone)
 
         # Try bubble point first
         try:

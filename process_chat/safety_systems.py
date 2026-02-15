@@ -222,7 +222,7 @@ def run_safety_analysis(
                         pass
             # Fallback: inlet stream
             if operating_p <= 0:
-                for m in ("getInletStream", "getInStream", "getFeedStream"):
+                for m in ("getInletStream", "getInStream", "getFeed"):
                     if hasattr(java_obj, m):
                         try:
                             s = getattr(java_obj, m)()
@@ -245,7 +245,7 @@ def run_safety_analysis(
         fluid = None
 
         try:
-            for m_name in ("getInletStream", "getInStream", "getFeedStream"):
+            for m_name in ("getInletStream", "getInStream", "getFeed"):
                 if hasattr(java_obj, m_name):
                     stream = getattr(java_obj, m_name)()
                     if stream:
@@ -410,7 +410,8 @@ def format_safety_result(report: SafetyReport) -> str:
     """Format safety analysis for LLM follow-up."""
     lines = ["=== SAFETY SYSTEM ANALYSIS (API 520/521) ==="]
     lines.append(report.message)
-    lines.append(f"Total PSV scenarios: {report.total_psv_count}")
+    lines.append(f"Total equipment with PSVs: {report.total_psv_count}")
+    lines.append(f"Total relief scenarios: {len(report.scenarios)}")
     lines.append(f"Equipment requiring PSVs: {', '.join(report.equipment_with_psv)}")
     lines.append(f"Maximum relief rate: {report.max_relief_rate_kg_hr:.0f} kg/hr")
     lines.append(f"Flare system design load: {report.flare_load_kg_hr:.0f} kg/hr")

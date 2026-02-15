@@ -1,13 +1,10 @@
 import streamlit as st
 import pandas as pd
-import time
-import neqsim
-from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame
-from neqsim import jneqsim
+from neqsim.thermo.thermoTools import fluid_df, TPflash, dataFrame
 from fluids import default_fluid
 from theme import apply_theme
 
-st.set_page_config(page_title="Flash Calculations", page_icon='images/neqsimlogocircleflat.png')
+st.set_page_config(page_title="TP Flash", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
 
 st.title('TP Flash')
