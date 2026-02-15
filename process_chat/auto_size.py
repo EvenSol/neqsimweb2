@@ -220,7 +220,11 @@ def _auto_size_single(
                 )
                 generator = CompressorChartGenerator(unit)
                 chart = generator.generateFromTemplate(chart_template, chart_num_speeds)
+                unit.setCompressorChartType('interpolate and extrapolate')
                 unit.setCompressorChart(chart)
+                unit.getCompressorChart().setHeadUnit('kJ/kg')
+                unit.setSolveSpeed(True)
+                unit.setUsePolytropicCalc(True)
                 unit.run()
                 sizing_data["chart_generated"] = True
                 sizing_data["chart_template"] = chart_template

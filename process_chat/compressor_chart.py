@@ -199,10 +199,17 @@ def _generate_single_chart(
 
     # Generate chart using NeqSim's CompressorChartGenerator
     generator = CompressorChartGenerator(unit)
-    chart = generator.generateCompressorChart("normal curves")
+    chart = generator.generateFromTemplate(template, num_speeds)
 
-    # Apply chart to compressor and re-run
+    # Apply chart to compressor with interpolation mode
+    unit.setCompressorChartType('interpolate and extrapolate')
     unit.setCompressorChart(chart)
+    unit.getCompressorChart().setHeadUnit('kJ/kg')
+
+    # Enable chart-based speed solving: the chart will determine the
+    # required speed to reach the target outlet pressure.
+    unit.setSolveSpeed(True)
+    unit.setUsePolytropicCalc(True)
     unit.run()
 
     # Extract speed curves using the generator (gives access to real curve data)

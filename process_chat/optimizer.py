@@ -382,7 +382,11 @@ def prepare_model_for_optimization(
                     from neqsim import jneqsim
                     gen = jneqsim.process.equipment.compressor.CompressorChartGenerator(unit)
                     chart = gen.generateFromTemplate(chart_template, chart_num_speeds)
+                    unit.setCompressorChartType('interpolate and extrapolate')
                     unit.setCompressorChart(chart)
+                    unit.getCompressorChart().setHeadUnit('kJ/kg')
+                    unit.setSolveSpeed(True)
+                    unit.setUsePolytropicCalc(True)
                     summary["charts_generated"].append(name)
             except Exception:
                 pass

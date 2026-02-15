@@ -610,6 +610,13 @@ class NeqSimProcessModel:
                         fval = float(val)
                         if prop in ("power_kW", "duty_kW"):
                             fval = fval / 1000.0  # W -> kW
+                        # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
+                        if fval == 0.0 and prop == "duty_kW" and java_class in self._DUTY_UNITS:
+                            if hasattr(u, "getEnergyInput"):
+                                try:
+                                    fval = float(u.getEnergyInput()) / 1000.0
+                                except Exception:
+                                    pass
                         # Skip zero power/duty for units that don't produce them
                         if fval == 0.0 and prop == "power_kW" and java_class not in self._POWER_UNITS:
                             continue
@@ -763,6 +770,17 @@ class NeqSimProcessModel:
             if hasattr(u, "getDuty"):
                 try:
                     duty_kW = float(u.getDuty()) / 1000.0
+                    # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
+                    if duty_kW == 0.0 and hasattr(u, "getEnergyInput"):
+                        try:
+                            uclass = str(u.getClass().getSimpleName())
+                        except Exception:
+                            uclass = ""
+                        if uclass in self._DUTY_UNITS:
+                            try:
+                                duty_kW = float(u.getEnergyInput()) / 1000.0
+                            except Exception:
+                                pass
                     kpis[f"{name}.duty_kW"] = KPI(f"{name}.duty_kW", duty_kW, "kW")
                     total_duty_kW += abs(duty_kW)
                 except Exception:
@@ -1758,6 +1776,13 @@ class NeqSimProcessModel:
                         fval = float(val)
                         if prop in ("power_kW", "duty_kW"):
                             fval = fval / 1000.0
+                        # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
+                        if fval == 0.0 and prop == "duty_kW" and utype in self._DUTY_UNITS:
+                            if hasattr(u, "getEnergyInput"):
+                                try:
+                                    fval = float(u.getEnergyInput()) / 1000.0
+                                except Exception:
+                                    pass
                         # Skip zero power/duty for non-relevant equipment
                         if fval == 0.0 and prop == "power_kW" and utype not in self._POWER_UNITS:
                             continue

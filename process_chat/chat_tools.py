@@ -2002,6 +2002,12 @@ class ProcessChatSession:
             self._last_chart = result
             results_text = format_chart_result(result)
 
+            # Persist chart state so cloned models retain it
+            try:
+                self.model.refresh_source_bytes()
+            except Exception:
+                pass
+
             # Update system prompt (chart may change compressor behaviour)
             self._system_prompt = build_system_prompt(self.model)
 

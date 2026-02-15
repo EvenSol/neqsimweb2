@@ -76,6 +76,21 @@ _EQUIP_INFO: Dict[str, tuple] = {
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_truthy(val) -> bool:
+    """Return True for truthy values (handles string 'true'/'yes'/'1' too)."""
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val).lower().strip() in ("true", "yes", "1")
+
+
+# ---------------------------------------------------------------------------
 # Parameter setter mapping (key → Java setter call string)
 # ---------------------------------------------------------------------------
 
@@ -118,6 +133,9 @@ _PARAM_SETTERS = {
     "target_value":            lambda v: f"setTargetValue({float(v)})",
     "power_kw":                lambda v: f"setPower({float(v) * 1000})",
     "energy_input_kw":         lambda v: f"setEnergyInput({float(v) * 1000})",
+    "use_compressor_chart":    lambda v: "# compressor chart enabled via use_compressor_chart",
+    "chart_template":          lambda v: f"# chart_template={v}",
+    "chart_num_speeds":        lambda v: f"# chart_num_speeds={int(v)}",
 }
 
 
@@ -199,6 +217,12 @@ def _apply_param(unit, key: str, value):
     elif k in ("energy_input_kw",):
         if hasattr(unit, "setEnergyInput"):
             unit.setEnergyInput(float(value) * 1000)
+    elif k == "use_compressor_chart":
+        # Handled after unit creation in _create_unit
+        pass
+    elif k in ("chart_template", "chart_num_speeds"):
+        # Handled after unit creation in _create_unit
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +741,27 @@ class ProcessBuilder:
         # Apply parameters
         for k, v in params.items():
             _apply_param(unit, k, v)
+
+        # If use_compressor_chart is requested, generate and apply a chart
+        if eq_type == "compressor" and _is_truthy(params.get("use_compressor_chart")):
+            try:
+                CompressorChartGenerator = (
+                    jneqsim.process.equipment.compressor.CompressorChartGenerator
+                )
+                chart_template = str(params.get("chart_template", "CENTRIFUGAL_STANDARD"))
+                chart_num_speeds = int(params.get("chart_num_speeds", 5))
+
+                unit.run()  # need a run before chart generation
+                generator = CompressorChartGenerator(unit)
+                chart = generator.generateFromTemplate(chart_template, chart_num_speeds)
+                unit.setCompressorChartType('interpolate and extrapolate')
+                unit.setCompressorChart(chart)
+                unit.getCompressorChart().setHeadUnit('kJ/kg')
+                unit.setSolveSpeed(True)
+                unit.setUsePolytropicCalc(True)
+                unit.run()
+            except Exception:
+                pass  # fall back to outlet-pressure mode
 
         return unit
 
