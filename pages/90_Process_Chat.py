@@ -582,7 +582,8 @@ def _show_compressor_chart(chart_result):
             hovermode="closest",
             showlegend=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        import uuid as _uuid
+        st.plotly_chart(fig, use_container_width=True, key=f"comp_chart_{chart_data.compressor_name}_{_uuid.uuid4().hex[:8]}")
 
         # Operating point details
         if op:

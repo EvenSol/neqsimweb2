@@ -606,11 +606,11 @@ Parameters:
   - safety_factor: design safety factor (default: 1.2 = 20% margin)
   - generate_charts: whether to generate compressor charts (default: true)
   - chart_template: compressor chart template (default: "CENTRIFUGAL_STANDARD")
-  - force_resize: false = skip equipment already sized (default), true = re-size everything.
-    IMPORTANT: Equipment that has already been auto-sized or given explicit dimensions will NOT be
-    re-sized unless force_resize is true. Only set true when the user explicitly asks to RE-SIZE,
-    RE-CALCULATE sizing, or requests a different safety factor. For utilization queries, bottleneck
-    analysis, or sizing reports on already-sized equipment, keep force_resize false.
+  - force_resize: ALWAYS false unless the user explicitly says "re-size", "redo sizing", or
+    "recalculate sizing". Phrases like "auto size", "auto size all", "size equipment", or
+    "generate sizing" do NOT mean re-size — they mean use existing sizing if available.
+    Only set true when the user literally uses words like RE-size, REDO, or wants a DIFFERENT
+    safety factor than before.
 
 The auto-sizing will:
   1. Apply autoSize() to all sizeable equipment (separators, valves, heaters, coolers, etc.)
@@ -621,12 +621,14 @@ The auto-sizing will:
   5. Identify the process bottleneck
 
 Use this for questions like:
-  - "Auto-size all equipment" → force_resize: false (first time) or true (if re-sizing)
+  - "Auto-size all equipment" → force_resize: false
+  - "Auto size all" → force_resize: false
+  - "Size equipment" → force_resize: false
   - "What is the equipment sizing?" → force_resize: false
   - "Show equipment utilization" → force_resize: false
   - "What is the process bottleneck?" → force_resize: false
-  - "Re-size all equipment" → force_resize: true
-  - "Re-size with 30% safety factor" → force_resize: true
+  - "RE-size all equipment" → force_resize: true (only when "re-size" or "redo sizing" is used)
+  - "Redo sizing with 30% safety factor" → force_resize: true
   - "Generate a sizing report"
   - "What is the utilization of each piece of equipment?"
 
