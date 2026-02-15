@@ -165,38 +165,16 @@ def _run_cme(
                 TPflash(fl)
                 fl.initProperties()
 
+                gas = _get_gas_phase(fl)
+                liq = _get_liquid_phase(fl)
+
                 vals: Dict[str, float] = {}
-                try:
-                    vals["gas_Z_factor"] = float(fl.getPhase("gas").getZ())
-                except Exception:
-                    vals["gas_Z_factor"] = 0.0
-
-                try:
-                    vals["oil_density_kg_m3"] = float(fl.getPhase("oil").getDensity("kg/m3"))
-                except Exception:
-                    vals["oil_density_kg_m3"] = 0.0
-
-                try:
-                    vals["gas_density_kg_m3"] = float(fl.getPhase("gas").getDensity("kg/m3"))
-                except Exception:
-                    vals["gas_density_kg_m3"] = 0.0
-
-                try:
-                    vals["gas_fraction"] = float(fl.getPhase("gas").getBeta())
-                except Exception:
-                    vals["gas_fraction"] = 0.0
-
-                try:
-                    vals["oil_viscosity_cP"] = float(fl.getPhase("oil").getViscosity("cP"))
-                except Exception:
-                    vals["oil_viscosity_cP"] = 0.0
-
-                # Relative volume (V/V_sat)
-                try:
-                    total_vol = float(fl.getVolume("m3"))
-                    vals["relative_volume"] = total_vol
-                except Exception:
-                    vals["relative_volume"] = 0.0
+                vals["gas_Z_factor"] = _safe_float(lambda: gas.getZ()) if gas else 0.0
+                vals["oil_density_kg_m3"] = _safe_float(lambda: liq.getDensity("kg/m3")) if liq else 0.0
+                vals["gas_density_kg_m3"] = _safe_float(lambda: gas.getDensity("kg/m3")) if gas else 0.0
+                vals["gas_fraction"] = _safe_float(lambda: gas.getBeta()) if gas else 0.0
+                vals["oil_viscosity_cP"] = _safe_float(lambda: liq.getViscosity("cP")) if liq else 0.0
+                vals["relative_volume"] = _safe_float(lambda: fl.getVolume("m3"))
 
                 result.data_points.append(PVTDataPoint(
                     pressure_bara=p, temperature_C=temperature_C, values=vals,
@@ -207,7 +185,6 @@ def _run_cme(
                 ))
 
         # Normalize relative volume to saturation point
-        # Find saturation point (where gas fraction first appears)
         sat_idx = None
         for i, dp in enumerate(result.data_points):
             if dp.values.get("gas_fraction", 0) > 0.001 and i > 0:
@@ -261,46 +238,38 @@ def _run_diff_lib(
                 TPflash(fl)
                 fl.initProperties()
 
+                gas = _get_gas_phase(fl)
+                liq = _get_liquid_phase(fl)
+
                 vals: Dict[str, float] = {}
-                try:
-                    vals["gas_Z_factor"] = float(fl.getPhase("gas").getZ())
-                except Exception:
-                    vals["gas_Z_factor"] = 0.0
+                vals["gas_Z_factor"] = _safe_float(lambda: gas.getZ()) if gas else 0.0
+                vals["oil_density_kg_m3"] = _safe_float(lambda: liq.getDensity("kg/m3")) if liq else 0.0
+                vals["gas_gravity"] = (
+                    _safe_float(lambda: gas.getMolarMass()) / 0.02896 if gas else 0.0
+                )
 
-                try:
-                    vals["oil_density_kg_m3"] = float(fl.getPhase("oil").getDensity("kg/m3"))
-                except Exception:
-                    vals["oil_density_kg_m3"] = 0.0
-
-                try:
-                    vals["gas_gravity"] = float(fl.getPhase("gas").getMolarMass()) / 0.02896
-                except Exception:
-                    vals["gas_gravity"] = 0.0
-
-                # GOR and FVF approximations
-                try:
-                    gas_vol = float(fl.getPhase("gas").getVolume("m3"))
-                    oil_vol = float(fl.getPhase("oil").getVolume("m3"))
-                    vals["solution_GOR_Sm3_Sm3"] = gas_vol / max(oil_vol, 1e-10)
-                    vals["oil_FVF_rm3_Sm3"] = oil_vol
-                except Exception:
-                    vals["solution_GOR_Sm3_Sm3"] = 0.0
-                    vals["oil_FVF_rm3_Sm3"] = 0.0
+                gas_vol = _safe_float(lambda: gas.getVolume("m3")) if gas else 0.0
+                oil_vol = _safe_float(lambda: liq.getVolume("m3")) if liq else 0.0
+                vals["solution_GOR_Sm3_Sm3"] = gas_vol / max(oil_vol, 1e-10) if oil_vol > 0 else 0.0
+                vals["oil_FVF_rm3_Sm3"] = oil_vol
 
                 result.data_points.append(PVTDataPoint(
                     pressure_bara=p, temperature_C=temperature_C, values=vals,
                 ))
 
                 # Remove liberated gas (simulate differential liberation)
-                try:
-                    n_comps = fl.getNumberOfComponents()
-                    for j in range(n_comps):
-                        gas_moles = float(fl.getPhase("gas").getComponent(j).getNumberOfMolesInPhase())
-                        if gas_moles > 0:
-                            current = float(fl.getComponent(j).getNumberOfmoles())
-                            fl.getComponent(j).setNumberOfmoles(max(current - gas_moles, 1e-20))
-                except Exception:
-                    pass
+                if gas is not None:
+                    try:
+                        n_comps = fl.getNumberOfComponents()
+                        for j in range(n_comps):
+                            gas_moles = _safe_float(
+                                lambda _j=j: gas.getComponent(_j).getNumberOfMolesInPhase()
+                            )
+                            if gas_moles > 0:
+                                current = float(fl.getComponent(j).getNumberOfmoles())
+                                fl.getComponent(j).setNumberOfmoles(max(current - gas_moles, 1e-20))
+                    except Exception:
+                        pass
 
             except Exception:
                 result.data_points.append(PVTDataPoint(
@@ -313,6 +282,190 @@ def _run_diff_lib(
         result.message = f"Differential Liberation failed: {str(e)}"
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Constant Volume Depletion (CVD)
+# ---------------------------------------------------------------------------
+
+def _run_cvd(
+    fluid,
+    temperature_C: float,
+    p_start_bara: float,
+    p_end_bara: float,
+    n_steps: int,
+) -> PVTResult:
+    """
+    Constant Volume Depletion (CVD).
+
+    Simulates a depletion experiment where gas is removed at each step to
+    keep the total volume constant at the saturation-point cell volume.
+    Reports cumulative liquid dropout (retrograde condensate volume %),
+    gas Z-factor, gas gravity, gas produced (cumulative mol%), and
+    liquid density.
+    """
+    result = PVTResult(experiment_type="CVD")
+
+    try:
+        from neqsim.thermo import TPflash
+
+        columns = [
+            "liquid_dropout_pct", "gas_Z_factor", "gas_gravity",
+            "cumulative_gas_produced_mol_pct", "liquid_density_kg_m3",
+        ]
+        result.column_names = columns
+        result.column_units = {
+            "liquid_dropout_pct": "%",
+            "gas_Z_factor": "-",
+            "gas_gravity": "-",
+            "cumulative_gas_produced_mol_pct": "mol%",
+            "liquid_density_kg_m3": "kg/m³",
+        }
+
+        # Step 1: Flash at start pressure to find saturation cell volume
+        fl = fluid.clone()
+        fl.setTemperature(float(temperature_C) + 273.15)
+        fl.setPressure(float(p_start_bara))
+        TPflash(fl)
+        fl.initProperties()
+
+        cell_volume = _safe_float(lambda: fl.getVolume("m3"))
+        if cell_volume <= 0:
+            result.message = "CVD failed: could not compute cell volume at saturation."
+            return result
+
+        initial_moles = _safe_float(lambda: fl.getTotalNumberOfMoles())
+        if initial_moles <= 0:
+            initial_moles = 1.0
+
+        pressures = [p_start_bara - (p_start_bara - p_end_bara) * i / max(n_steps - 1, 1)
+                     for i in range(n_steps)]
+
+        cumulative_gas_removed_moles = 0.0
+
+        for p in pressures:
+            try:
+                fl.setPressure(float(p))
+                TPflash(fl)
+                fl.initProperties()
+
+                gas = _get_gas_phase(fl)
+                liq = _get_liquid_phase(fl)
+
+                vals: Dict[str, float] = {}
+                vals["gas_Z_factor"] = _safe_float(lambda: gas.getZ()) if gas else 0.0
+                vals["gas_gravity"] = (
+                    _safe_float(lambda: gas.getMolarMass()) / 0.02896 if gas else 0.0
+                )
+                vals["liquid_density_kg_m3"] = (
+                    _safe_float(lambda: liq.getDensity("kg/m3")) if liq else 0.0
+                )
+
+                # Liquid dropout: volume of liquid / cell volume × 100
+                liq_vol = _safe_float(lambda: liq.getVolume("m3")) if liq else 0.0
+                vals["liquid_dropout_pct"] = (liq_vol / cell_volume * 100.0) if cell_volume > 0 else 0.0
+
+                # Remove gas to restore cell volume
+                # Gas to remove = (current_total_volume - cell_volume) worth of gas
+                current_vol = _safe_float(lambda: fl.getVolume("m3"))
+                excess_vol = current_vol - cell_volume
+
+                if gas is not None and excess_vol > 0:
+                    gas_vol = _safe_float(lambda: gas.getVolume("m3"))
+                    if gas_vol > 0:
+                        frac_to_remove = min(excess_vol / gas_vol, 0.999)
+                        try:
+                            n_comps = fl.getNumberOfComponents()
+                            removed_moles = 0.0
+                            for j in range(n_comps):
+                                gas_moles = _safe_float(
+                                    lambda _j=j: gas.getComponent(_j).getNumberOfMolesInPhase()
+                                )
+                                to_remove = gas_moles * frac_to_remove
+                                if to_remove > 0:
+                                    current = float(fl.getComponent(j).getNumberOfmoles())
+                                    fl.getComponent(j).setNumberOfmoles(
+                                        max(current - to_remove, 1e-20)
+                                    )
+                                    removed_moles += to_remove
+                            cumulative_gas_removed_moles += removed_moles
+                        except Exception:
+                            pass
+
+                vals["cumulative_gas_produced_mol_pct"] = (
+                    cumulative_gas_removed_moles / initial_moles * 100.0
+                )
+
+                result.data_points.append(PVTDataPoint(
+                    pressure_bara=p, temperature_C=temperature_C, values=vals,
+                ))
+            except Exception:
+                result.data_points.append(PVTDataPoint(
+                    pressure_bara=p, temperature_C=temperature_C,
+                ))
+
+        # Set saturation point
+        result.saturation_pressure_bara = p_start_bara
+        result.message = (
+            f"CVD at {temperature_C}°C, {p_start_bara}→{p_end_bara} bara, {n_steps} steps"
+        )
+
+    except Exception as e:
+        result.message = f"CVD failed: {str(e)}"
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase-access helpers
+# ---------------------------------------------------------------------------
+
+def _get_gas_phase(fl):
+    """Return the gas phase object, trying multiple NeqSim naming conventions."""
+    for name in ("gas", 0):
+        try:
+            ph = fl.getPhase(name)
+            ptype = str(ph.getPhaseTypeName()).lower()
+            if "gas" in ptype or "vapour" in ptype or "vapor" in ptype:
+                return ph
+        except Exception:
+            pass
+    # Last resort: phase index 0 often is gas after TP flash
+    try:
+        return fl.getPhase(0)
+    except Exception:
+        return None
+
+
+def _get_liquid_phase(fl):
+    """Return the oil/liquid phase, trying multiple NeqSim naming conventions."""
+    for name in ("oil", "liquid", 1):
+        try:
+            ph = fl.getPhase(name)
+            ptype = str(ph.getPhaseTypeName()).lower()
+            if "oil" in ptype or "liquid" in ptype:
+                return ph
+        except Exception:
+            pass
+    # Fallback: try phase index 1
+    try:
+        n_phases = int(fl.getNumberOfPhases())
+        if n_phases >= 2:
+            return fl.getPhase(1)
+    except Exception:
+        pass
+    return None
+
+
+def _safe_float(fn, default: float = 0.0) -> float:
+    """Call *fn* and return float, or *default* on any error / NaN."""
+    try:
+        v = float(fn())
+        if math.isnan(v) or math.isinf(v):
+            return default
+        return v
+    except Exception:
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -344,40 +497,41 @@ def _run_separator_test(
             TPflash(fl)
             fl.initProperties()
 
+            gas = _get_gas_phase(fl)
+            liq = _get_liquid_phase(fl)
+
             vals: Dict[str, float] = {"stage": float(i + 1)}
-            try:
-                vals["gas_Z_factor"] = float(fl.getPhase("gas").getZ())
-            except Exception:
-                vals["gas_Z_factor"] = 0.0
-            try:
-                vals["oil_density_kg_m3"] = float(fl.getPhase("oil").getDensity("kg/m3"))
-            except Exception:
-                vals["oil_density_kg_m3"] = 0.0
-            try:
-                vals["gas_gravity"] = float(fl.getPhase("gas").getMolarMass()) / 0.02896
-            except Exception:
-                vals["gas_gravity"] = 0.0
-            try:
-                gas_vol = float(fl.getPhase("gas").getVolume("m3"))
-                oil_vol = float(fl.getPhase("oil").getVolume("m3"))
-                vals["GOR_Sm3_Sm3"] = gas_vol / max(oil_vol, 1e-10)
-                vals["oil_FVF"] = oil_vol
-            except Exception:
-                vals["GOR_Sm3_Sm3"] = 0.0
-                vals["oil_FVF"] = 0.0
+
+            vals["gas_Z_factor"] = _safe_float(lambda: gas.getZ()) if gas else 0.0
+
+            vals["oil_density_kg_m3"] = (
+                _safe_float(lambda: liq.getDensity("kg/m3")) if liq else 0.0
+            )
+
+            vals["gas_gravity"] = (
+                _safe_float(lambda: gas.getMolarMass()) / 0.02896 if gas else 0.0
+            )
+
+            gas_vol = _safe_float(lambda: gas.getVolume("m3")) if gas else 0.0
+            oil_vol = _safe_float(lambda: liq.getVolume("m3")) if liq else 0.0
+            vals["GOR_Sm3_Sm3"] = gas_vol / max(oil_vol, 1e-10) if oil_vol > 0 else 0.0
+            vals["oil_FVF"] = oil_vol
 
             result.data_points.append(PVTDataPoint(
                 pressure_bara=P, temperature_C=T, values=vals,
             ))
 
             # Feed liquid to next stage
-            try:
-                n_comps = fl.getNumberOfComponents()
-                for j in range(n_comps):
-                    oil_moles = float(fl.getPhase("oil").getComponent(j).getNumberOfMolesInPhase())
-                    fl.getComponent(j).setNumberOfmoles(max(oil_moles, 1e-20))
-            except Exception:
-                pass
+            if liq is not None:
+                try:
+                    n_comps = fl.getNumberOfComponents()
+                    for j in range(n_comps):
+                        liq_moles = _safe_float(
+                            lambda _j=j: liq.getComponent(_j).getNumberOfMolesInPhase()
+                        )
+                        fl.getComponent(j).setNumberOfmoles(max(liq_moles, 1e-20))
+                except Exception:
+                    pass
 
         result.message = f"Separator test: {len(stages)} stages"
 
@@ -430,6 +584,9 @@ def run_pvt_simulation(
 
     if exp_lower in ("cme", "constant_mass_expansion"):
         return _run_cme(fluid, temperature_C, p_start_bara, p_end_bara, n_steps)
+
+    elif exp_lower in ("cvd", "constant_volume_depletion"):
+        return _run_cvd(fluid, temperature_C, p_start_bara, p_end_bara, n_steps)
 
     elif exp_lower in ("dl", "differential_liberation"):
         return _run_diff_lib(fluid, temperature_C, p_start_bara, p_end_bara, n_steps)

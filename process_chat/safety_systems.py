@@ -188,8 +188,10 @@ def run_safety_analysis(
     max_relief = 0.0
 
     _VESSEL_TYPES = {"Separator", "TwoPhaseSeparator", "ThreePhaseSeparator",
-                     "GasScrubber", "Tank"}
+                     "GasScrubber", "GasScrubberSimple", "Tank"}
     _COMPRESSOR_TYPES = {"Compressor"}
+    _VALVE_TYPES = {"ThrottlingValve", "ControlValve"}
+    _HX_TYPES = {"HeatExchanger", "Cooler", "Heater"}
 
     for u_info in units:
         u_name = u_info.name
@@ -200,50 +202,118 @@ def run_safety_analysis(
             continue
 
         props = u_info.properties
-        outlet_p = props.get("outletPressure_bara", 0)
-        operating_p = outlet_p if outlet_p else 50.0
-        set_pressure = operating_p * design_pressure_factor
-        temp_K = 300.0
 
-        # Get fluid properties
+        # --- Determine operating pressure ---
+        operating_p = 0.0
+        # Try outlet pressure from properties
+        outlet_p = props.get("outletPressure_bara", 0)
+        if outlet_p and outlet_p > 0:
+            operating_p = outlet_p
+        else:
+            # Read from outlet stream
+            for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+                if hasattr(java_obj, m):
+                    try:
+                        s = getattr(java_obj, m)()
+                        operating_p = float(s.getPressure("bara"))
+                        break
+                    except Exception:
+                        pass
+            # Fallback: inlet stream
+            if operating_p <= 0:
+                for m in ("getInletStream", "getInStream", "getFeedStream"):
+                    if hasattr(java_obj, m):
+                        try:
+                            s = getattr(java_obj, m)()
+                            operating_p = float(s.getPressure("bara"))
+                            break
+                        except Exception:
+                            pass
+        if operating_p <= 0:
+            operating_p = 50.0  # last-resort default
+
+        set_pressure = operating_p * design_pressure_factor
+
+        # --- Get fluid properties from the unit's inlet stream ---
+        temp_K = 300.0
         molar_mass = 0.020
         z_factor = 0.9
         density = 50.0
         latent_heat = 200.0
+        k_ratio = 1.3
+        fluid = None
 
         try:
-            if hasattr(java_obj, "getInletStream"):
-                stream = java_obj.getInletStream()
-                if stream:
-                    fluid = stream.getFluid()
-                    if fluid:
-                        molar_mass = float(fluid.getMolarMass())
-                        try:
-                            z_factor = float(fluid.getPhase("gas").getZ())
-                        except Exception:
-                            pass
-                        try:
-                            density = float(fluid.getDensity("kg/m3"))
-                        except Exception:
-                            pass
+            for m_name in ("getInletStream", "getInStream", "getFeedStream"):
+                if hasattr(java_obj, m_name):
+                    stream = getattr(java_obj, m_name)()
+                    if stream:
+                        fluid = stream.getFluid()
+                        if fluid:
+                            try:
+                                temp_K = float(fluid.getTemperature("K"))
+                            except Exception:
+                                pass
+                            try:
+                                molar_mass = float(fluid.getMolarMass())
+                            except Exception:
+                                pass
+                            try:
+                                z_factor = float(fluid.getPhase("gas").getZ())
+                            except Exception:
+                                try:
+                                    z_factor = float(fluid.getPhase(0).getZ())
+                                except Exception:
+                                    pass
+                            try:
+                                density = float(fluid.getDensity("kg/m3"))
+                            except Exception:
+                                pass
+                            try:
+                                k_ratio = float(fluid.getGamma())
+                            except Exception:
+                                pass
+                            # Estimate latent heat from enthalpy difference
+                            try:
+                                n_phases = int(fluid.getNumberOfPhases())
+                                if n_phases >= 2:
+                                    h_gas = float(fluid.getPhase("gas").getEnthalpy("kJ/kg"))
+                                    h_liq = float(fluid.getPhase("oil").getEnthalpy("kJ/kg"))
+                                    calc_lh = abs(h_gas - h_liq)
+                                    if calc_lh > 10:
+                                        latent_heat = calc_lh
+                            except Exception:
+                                pass
+                        break
         except Exception:
             pass
 
-        # --- Fire case ---
-        if include_fire and java_type in _VESSEL_TYPES:
+        # --- Fire case (vessels, heat exchangers) ---
+        if include_fire and java_type in (_VESSEL_TYPES | _HX_TYPES):
             # Estimate wetted area from dimensions
             wetted_area = 20.0  # default m²
             try:
-                if hasattr(java_obj, "getInternalDiameter"):
+                md = java_obj.getMechanicalDesign() if hasattr(java_obj, "getMechanicalDesign") else None
+                if md is not None:
+                    try:
+                        d = float(md.getInnerDiameter())
+                        L = float(md.getTantanLength()) if hasattr(md, "getTantanLength") else d * 3
+                        if d > 0 and L > 0:
+                            wetted_area = math.pi * d * L * 0.5  # 50% wetted
+                    except Exception:
+                        pass
+                elif hasattr(java_obj, "getInternalDiameter"):
                     d = float(java_obj.getInternalDiameter())
-                    L = d * 3
-                    wetted_area = math.pi * d * L * 0.5  # 50% wetted
+                    if d > 0:
+                        L = d * 3
+                        wetted_area = math.pi * d * L * 0.5
             except Exception:
                 pass
 
             relief_rate = _fire_relief_rate(wetted_area, latent_heat)
             orifice = _gas_psv_area(relief_rate, set_pressure, temp_K,
-                                     molar_mass, z_factor=z_factor)
+                                     molar_mass, k_ratio=k_ratio,
+                                     z_factor=z_factor)
             letter, std_area = _select_api_orifice(orifice)
 
             scenarios.append(ReliefScenario(
@@ -260,19 +330,21 @@ def run_safety_analysis(
             ))
             max_relief = max(max_relief, relief_rate)
 
-        # --- Blocked outlet ---
+        # --- Blocked outlet (compressors, pumps) ---
         if include_blocked_outlet and java_type in _COMPRESSOR_TYPES:
-            # Compressor blocked discharge: full flow at shut-in pressure
             flow_kg_hr = props.get("flow_kg_hr", 0)
             if not flow_kg_hr:
                 try:
-                    if hasattr(java_obj, "getInletStream"):
-                        flow_kg_hr = float(java_obj.getInletStream().getFlowRate("kg/hr"))
+                    for m_name in ("getInletStream", "getInStream"):
+                        if hasattr(java_obj, m_name):
+                            flow_kg_hr = float(getattr(java_obj, m_name)().getFlowRate("kg/hr"))
+                            break
                 except Exception:
                     flow_kg_hr = 10000.0
 
             orifice = _gas_psv_area(flow_kg_hr, set_pressure, temp_K,
-                                     molar_mass, z_factor=z_factor)
+                                     molar_mass, k_ratio=k_ratio,
+                                     z_factor=z_factor)
             letter, std_area = _select_api_orifice(orifice)
 
             scenarios.append(ReliefScenario(
@@ -289,15 +361,42 @@ def run_safety_analysis(
             ))
             max_relief = max(max_relief, flow_kg_hr)
 
+        # --- Thermal expansion (liquid-full heat exchangers / coolers) ---
+        if include_fire and java_type in _HX_TYPES:
+            # If liquid-side could be blocked while heating continues
+            duty_kW = abs(props.get("duty_kW", 0))
+            if duty_kW > 0 and latent_heat > 0:
+                # Thermal expansion relief: approximate from duty
+                thermal_relief = duty_kW * 3600.0 / latent_heat  # kg/hr (conservative)
+                if thermal_relief > 0:
+                    orifice = _liquid_psv_area(thermal_relief, set_pressure,
+                                                density_kg_m3=density)
+                    letter, std_area = _select_api_orifice(orifice)
+                    scenarios.append(ReliefScenario(
+                        equipment_name=u_name,
+                        scenario="THERMAL_EXPANSION",
+                        set_pressure_bara=set_pressure,
+                        relieving_pressure_bara=set_pressure * 1.10,
+                        required_relief_rate_kg_hr=thermal_relief,
+                        required_orifice_area_mm2=orifice,
+                        api_orifice_letter=letter,
+                        api_orifice_area_mm2=std_area,
+                        fluid_phase="liquid",
+                        detail=f"Duty={duty_kW:.0f} kW, liquid blocked in",
+                    ))
+
     # Summary
-    equipment_with_psv = list(set(s.equipment_name for s in scenarios))
+    equipment_with_psv = sorted(set(s.equipment_name for s in scenarios))
     report.scenarios = scenarios
     report.equipment_with_psv = equipment_with_psv
-    report.total_psv_count = len(scenarios)
+    report.total_psv_count = len(equipment_with_psv)
     report.max_relief_rate_kg_hr = max_relief
-    report.flare_load_kg_hr = max_relief  # Controlling case
+    report.flare_load_kg_hr = max_relief
     report.method = "API_520_521"
-    report.message = f"Safety analysis: {len(scenarios)} relief scenarios for {len(equipment_with_psv)} equipment"
+    report.message = (
+        f"Safety analysis: {len(scenarios)} relief scenarios "
+        f"for {len(equipment_with_psv)} equipment items"
+    )
 
     return report
 

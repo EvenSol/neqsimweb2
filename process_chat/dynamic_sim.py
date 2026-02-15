@@ -254,8 +254,7 @@ def _set_property_on_unit(unit, prop_lower: str, value: float) -> bool:
     return False
 
 
-def _extract_snapshot(proc, units_map: Dict[str, Any],
-                      tracked_names: List[str]) -> Dict[str, float]:
+def _extract_snapshot(proc, units_map: Dict[str, Any]) -> Dict[str, float]:
     """Extract current KPI values from a solved process."""
     values: Dict[str, float] = {}
     for name, u in units_map.items():
@@ -473,7 +472,6 @@ def _run_transient(
     except ImportError:
         java_id = None  # fallback: let NeqSim generate its own
 
-    tracked_names: List[str] = []
     time_data: List[TimeSeriesPoint] = []
     variable_names: List[str] = []
 
@@ -483,7 +481,7 @@ def _run_transient(
 
             if step == 0:
                 # Record initial state (before first transient step)
-                snapshot = _extract_snapshot(proc, units_map, tracked_names)
+                snapshot = _extract_snapshot(proc, units_map)
             else:
                 # Run one transient step
                 try:
@@ -494,7 +492,7 @@ def _run_transient(
                 except Exception as exc:
                     logger.warning("runTransient step %d failed: %s", step, exc)
                     break
-                snapshot = _extract_snapshot(proc, units_map, tracked_names)
+                snapshot = _extract_snapshot(proc, units_map)
 
             if not variable_names and snapshot:
                 variable_names = list(snapshot.keys())

@@ -525,6 +525,8 @@ def _show_compressor_chart(chart_result):
     st.markdown("---")
     st.markdown("**📈 Compressor Performance Chart**")
 
+    import uuid as _uuid
+
     for chart_data in chart_result.charts:
         st.markdown(f"**{chart_data.compressor_name}** — Template: {chart_data.template_used}")
 
@@ -581,7 +583,6 @@ def _show_compressor_chart(chart_result):
             hovermode="closest",
             showlegend=True,
         )
-        import uuid as _uuid
         st.plotly_chart(fig, use_container_width=True, key=f"comp_chart_{chart_data.compressor_name}_{_uuid.uuid4().hex[:8]}")
 
         # Operating point details
@@ -978,8 +979,8 @@ def _show_pvt(pvt_result):
         if pvt_result.saturation_pressure_bara:
             st.metric("Saturation Pressure", f"{pvt_result.saturation_pressure_bara:.2f} bara")
     with col2:
-        temp_c = getattr(pvt_result, "saturation_temperature_C", 0.0)
-        if temp_c:
+        temp_c = getattr(pvt_result, "saturation_temperature_C", None)
+        if temp_c is not None and pvt_result.saturation_pressure_bara:
             st.metric("Temperature", f"{temp_c:.1f} °C")
 
     if pvt_result.data_points:

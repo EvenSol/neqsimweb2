@@ -1245,10 +1245,12 @@ class NeqSimProcessModel:
         """
         Extract mechanical design data from each unit operation.
 
-        Calls initMechanicalDesign() and calcDesign() on each unit, then
-        extracts wall thickness, weights (vessel, internals, piping, nozzles,
-        structural, E&I, total), module dimensions (L x W x H), design
-        pressures/temperatures, construction material, and cost estimate.
+        Reads existing mechanical design data that was set during explicit
+        ``autoSize()`` calls.  Does **not** call ``initMechanicalDesign()``
+        or ``calcDesign()`` — those would recalculate dimensions from
+        current operating conditions and silently overwrite the frozen
+        auto-sized design (e.g. changing a valve opening would change
+        its inner diameter and weight).
 
         Also runs SystemMechanicalDesign on the entire process to get:
         - Total weight, plot space (footprint), total volume
@@ -1266,21 +1268,11 @@ class NeqSimProcessModel:
 
             prefix = name
             try:
-                # Initialize and calculate design
-                if hasattr(u, 'initMechanicalDesign'):
-                    try:
-                        u.initMechanicalDesign()
-                    except Exception:
-                        pass
-
+                # Read existing mechanical design — do NOT re-initialise or
+                # recalculate so that auto-sized values are preserved.
                 md = u.getMechanicalDesign()
                 if md is None:
                     continue
-
-                try:
-                    md.calcDesign()
-                except Exception:
-                    pass
 
                 # Wall thickness
                 for prop, getter, unit in [
@@ -1425,10 +1417,14 @@ class NeqSimProcessModel:
                 pass
 
         # --- System-level mechanical design (totals, footprint, weight breakdown) ---
+        # NOTE: we intentionally skip ``runDesignCalculation()`` because it
+        # calls ``initMechanicalDesign()`` + ``calcDesign()`` on every unit —
+        # exactly the recalculation we want to avoid after auto-sizing.
+        # The totals below will use whatever per-unit design data is already
+        # present (i.e. from an earlier autoSize call).
         try:
             SMD = jneqsim.process.mechanicaldesign.SystemMechanicalDesign
             smd = SMD(self._proc)
-            smd.runDesignCalculation()
 
             # System totals
             for prop, getter, unit in [

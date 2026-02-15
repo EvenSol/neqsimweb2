@@ -784,8 +784,8 @@ When the user asks about PVT experiments, output a ```pvt ... ``` block:
   "n_steps": 20
 }}
 ```
-Available experiments: "CME" (Constant Mass Expansion), "DL" (Differential Liberation),
-"separator_test", "saturation_point"
+Available experiments: "CME" (Constant Mass Expansion), "CVD" (Constant Volume Depletion),
+"DL" (Differential Liberation), "separator_test", "saturation_point"
 
 For separator test:
 ```pvt
@@ -800,7 +800,8 @@ For separator test:
 }}
 ```
 
-Use this for: "run CME experiment", "what is the bubble point?", "differential liberation study",
+Use this for: "run CME experiment", "CVD experiment", "constant volume depletion",
+"what is the bubble point?", "differential liberation study",
 "separator test", "PVT analysis", "saturation pressure"
 
 SAFETY ANALYSIS (for "PSV sizing", "relief valve", "safety system", "API 520", "flare load"):
@@ -1166,7 +1167,8 @@ When the user asks about PVT experiments, output:
   "temperature_C": 100, "p_start_bara": 400, "p_end_bara": 10, "n_steps": 20
 }
 ```
-Use this for: "CME experiment", "bubble point", "differential liberation", "PVT study".
+Use this for: "CME experiment", "CVD experiment", "constant volume depletion",
+"bubble point", "differential liberation", "PVT study".
 
 SAFETY ANALYSIS (after a process has been built):
 When the user asks about PSV sizing, relief valves, or safety systems, output:
@@ -1301,8 +1303,8 @@ def extract_property_query(text: str) -> Optional[dict]:
 # All tool block types that the LLM might accidentally emit in a followup
 _TOOL_BLOCK_TYPES = (
     "json", "chart", "autosize", "optimize", "risk", "emissions",
-    "dynamic", "sensitivity", "pvt", "safety", "flow_assurance",
-    "query", "build",
+    "dynamic", "sensitivity", "pvt", "safety", "flowassurance",
+    "flow_assurance", "query", "build",
 )
 
 def _strip_tool_blocks(text: str) -> str:
@@ -2767,20 +2769,24 @@ class ProcessChatSession:
     def _handle_dynamic(self, assistant_text: str, dynamic_spec: dict, client, types) -> str:
         """Run dynamic simulation and feed results back to LLM."""
         try:
+            _init_p = dynamic_spec.get("initial_pressure_bara")
+            _start_v = dynamic_spec.get("start_value")
+            _end_v = dynamic_spec.get("end_value")
+            _dt_v = dynamic_spec.get("dt")
             result = run_dynamic_simulation(
                 model=self.model,
                 scenario_type=dynamic_spec.get("scenario_type", "blowdown"),
                 vessel_name=dynamic_spec.get("vessel_name"),
                 stream_name=dynamic_spec.get("stream_name"),
-                initial_pressure_bara=dynamic_spec.get("initial_pressure_bara"),
+                initial_pressure_bara=float(_init_p) if _init_p is not None else None,
                 final_pressure_bara=float(dynamic_spec.get("final_pressure_bara", 1.013)),
                 orifice_diameter_mm=float(dynamic_spec.get("orifice_diameter_mm", 50)),
                 duration_s=float(dynamic_spec.get("duration_s", 600)),
                 n_steps=int(dynamic_spec.get("n_steps", 50)),
-                start_value=dynamic_spec.get("start_value"),
-                end_value=dynamic_spec.get("end_value"),
+                start_value=float(_start_v) if _start_v is not None else None,
+                end_value=float(_end_v) if _end_v is not None else None,
                 changes=dynamic_spec.get("changes"),
-                dt=dynamic_spec.get("dt"),
+                dt=float(_dt_v) if _dt_v is not None else None,
             )
 
             self._last_dynamic = result

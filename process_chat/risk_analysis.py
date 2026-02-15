@@ -297,6 +297,31 @@ def _get_production(model: NeqSimProcessModel,
     return 0.0
 
 
+# Heuristic production-loss estimate when dynamic simulation cannot
+# effectively model an equipment trip (e.g. upstream equipment overwrites
+# the disabled stream during a sequential run).
+_TRIP_LOSS_HEURISTIC: Dict[str, float] = {
+    "Compressor":          100.0,
+    "Pump":                100.0,
+    "ESPPump":             100.0,
+    "Expander":            100.0,
+    "Separator":            80.0,
+    "TwoPhaseSeparator":    80.0,
+    "ThreePhaseSeparator":  80.0,
+    "GasScrubber":          60.0,
+    "GasScrubberSimple":    60.0,
+    "HeatExchanger":        40.0,
+    "Cooler":               30.0,
+    "Heater":               30.0,
+    "ThrottlingValve":     100.0,
+    "ControlValve":        100.0,
+    "Mixer":                50.0,
+    "Splitter":             50.0,
+    "Pipeline":            100.0,
+    "AdiabaticPipe":       100.0,
+}
+
+
 def _simulate_trip(model: NeqSimProcessModel,
                    unit_name: str,
                    product_stream: str,
@@ -304,9 +329,15 @@ def _simulate_trip(model: NeqSimProcessModel,
     """
     Simulate a TRIP (complete shutdown) of *unit_name*.
 
-    Strategy: clone the model, set the feed flow to zero for the unit's
-    inlet stream (mimics equipment shutdown), re-run, and compare.
-    If that is not possible, try removing the unit from the process.
+    Strategy:
+      1. Clone the model.
+      2. Apply equipment-specific "trip" action (close valve, bypass
+         compressor, zero heater duty, etc.).
+      3. Re-run and compare product flow to baseline.
+      4. If the simulation still shows 0 % loss (common when upstream
+         equipment overwrites the modified stream during sequential
+         execution), fall back to a heuristic loss estimate based on
+         equipment type.
     """
     clone = model.clone()
     if clone is None:
@@ -321,6 +352,7 @@ def _simulate_trip(model: NeqSimProcessModel,
         )
 
     java_class = ""
+    applied = False
     try:
         unit = clone.get_unit(unit_name)
         if unit is not None:
@@ -329,38 +361,99 @@ def _simulate_trip(model: NeqSimProcessModel,
             except Exception:
                 java_class = type(unit).__name__
 
-            # Try setting the unit "off" if API supports it
-            for method_name in ("setOff", "setIsActive"):
-                if hasattr(unit, method_name):
+            # --- Equipment-specific trip strategies ---
+            if java_class in ("ThrottlingValve", "ControlValve"):
+                if hasattr(unit, "setPercentValveOpening"):
                     try:
-                        if "Active" in method_name:
-                            getattr(unit, method_name)(False)
-                        else:
-                            getattr(unit, method_name)()
-                        break
+                        unit.setPercentValveOpening(0)  # fully closed
+                        applied = True
                     except Exception:
                         pass
+            elif java_class == "Compressor":
+                # Bypass: outlet pressure = inlet pressure (no compression)
+                try:
+                    inlet = unit.getInletStream()
+                    p_in = float(inlet.getPressure("bara"))
+                    unit.setOutletPressure(p_in)
+                    applied = True
+                except Exception:
+                    pass
+            elif java_class in ("Pump", "ESPPump"):
+                try:
+                    inlet = unit.getInletStream()
+                    p_in = float(inlet.getPressure("bara"))
+                    if hasattr(unit, "setOutletPressure"):
+                        unit.setOutletPressure(p_in)
+                        applied = True
+                except Exception:
+                    pass
+            elif java_class == "Expander":
+                try:
+                    inlet = unit.getInletStream()
+                    p_in = float(inlet.getPressure("bara"))
+                    unit.setOutletPressure(p_in)
+                    applied = True
+                except Exception:
+                    pass
+            elif java_class in ("Cooler", "Heater", "HeatExchanger"):
+                # No heat transfer – outlet temperature ≈ inlet temperature
+                for m in ("getInletStream", "getInStream", "getFeedStream"):
+                    if hasattr(unit, m):
+                        try:
+                            s = getattr(unit, m)()
+                            t_in = float(s.getTemperature("C"))
+                            if hasattr(unit, "setOutTemperature"):
+                                unit.setOutTemperature(t_in, "C")
+                                applied = True
+                            break
+                        except Exception:
+                            pass
 
-            # Fallback: try to scale the inlet flow to zero
-            for m in ("getInletStream", "getInStream", "getFeedStream"):
-                if hasattr(unit, m):
-                    try:
-                        s = getattr(unit, m)()
-                        s.setFlowRate(0.001, "kg/hr")  # near-zero
-                        break
-                    except Exception:
-                        pass
+            # Generic fallback: try setOff / inlet-flow reduction
+            if not applied:
+                for method_name in ("setOff", "setIsActive"):
+                    if hasattr(unit, method_name):
+                        try:
+                            if "Active" in method_name:
+                                getattr(unit, method_name)(False)
+                            else:
+                                getattr(unit, method_name)()
+                            applied = True
+                            break
+                        except Exception:
+                            pass
+
+            if not applied:
+                for m in ("getInletStream", "getInStream", "getFeedStream"):
+                    if hasattr(unit, m):
+                        try:
+                            s = getattr(unit, m)()
+                            s.setFlowRate(0.001, "kg/hr")
+                            applied = True
+                            break
+                        except Exception:
+                            pass
     except Exception:
         pass
 
-    # Re-run
+    # Re-run the cloned model
     try:
-        NeqSimProcessModel._run_until_converged(clone.get_process())
+        clone.run()
     except Exception:
         pass
 
     failed_flow = _get_production(clone, product_stream)
-    loss_pct = max(0.0, (baseline_flow - failed_flow) / baseline_flow * 100.0) if baseline_flow > 0 else 0.0
+    loss_pct = (
+        max(0.0, (baseline_flow - failed_flow) / baseline_flow * 100.0)
+        if baseline_flow > 0 else 0.0
+    )
+
+    # If the simulation shows negligible loss (< 1 %), the trip action
+    # likely did not propagate through the sequential process run.
+    # Apply a heuristic loss estimate instead.
+    if loss_pct < 1.0 and java_class:
+        loss_pct = _TRIP_LOSS_HEURISTIC.get(java_class, 50.0)
+        failed_flow = baseline_flow * (1.0 - loss_pct / 100.0)
 
     return FailureImpact(
         equipment_name=unit_name,
@@ -378,7 +471,14 @@ def _simulate_degraded(model: NeqSimProcessModel,
                        product_stream: str,
                        baseline_flow: float,
                        capacity_factor: float = 0.7) -> FailureImpact:
-    """Simulate a DEGRADED failure (reduced capacity)."""
+    """
+    Simulate a DEGRADED failure (reduced capacity).
+
+    Uses equipment-specific strategies where possible (reduced valve
+    opening, lower compressor efficiency, etc.).  Falls back to a
+    heuristic estimate when the dynamic simulation cannot propagate
+    the degradation.
+    """
     clone = model.clone()
     if clone is None:
         return FailureImpact(
@@ -392,6 +492,7 @@ def _simulate_degraded(model: NeqSimProcessModel,
         )
 
     java_class = ""
+    applied = False
     try:
         unit = clone.get_unit(unit_name)
         if unit is not None:
@@ -400,26 +501,62 @@ def _simulate_degraded(model: NeqSimProcessModel,
             except Exception:
                 java_class = type(unit).__name__
 
-            # Reduce inlet flow by the capacity factor
-            for m in ("getInletStream", "getInStream", "getFeedStream"):
-                if hasattr(unit, m):
+            # --- Equipment-specific degraded strategies ---
+            if java_class in ("ThrottlingValve", "ControlValve"):
+                if hasattr(unit, "setPercentValveOpening"):
                     try:
-                        s = getattr(unit, m)()
-                        current_flow = float(s.getFlowRate("kg/hr"))
-                        s.setFlowRate(current_flow * capacity_factor, "kg/hr")
-                        break
+                        unit.setPercentValveOpening(capacity_factor * 100)
+                        applied = True
                     except Exception:
                         pass
+            elif java_class == "Compressor":
+                if hasattr(unit, "setIsentropicEfficiency"):
+                    try:
+                        eff = float(unit.getIsentropicEfficiency())
+                        unit.setIsentropicEfficiency(eff * capacity_factor)
+                        applied = True
+                    except Exception:
+                        pass
+            elif java_class in ("Cooler", "Heater", "HeatExchanger"):
+                # Reduce duty proportionally
+                if hasattr(unit, "getDuty") and hasattr(unit, "setDuty"):
+                    try:
+                        duty = float(unit.getDuty())
+                        unit.setDuty(duty * capacity_factor)
+                        applied = True
+                    except Exception:
+                        pass
+
+            # Generic fallback: reduce inlet flow
+            if not applied:
+                for m in ("getInletStream", "getInStream", "getFeedStream"):
+                    if hasattr(unit, m):
+                        try:
+                            s = getattr(unit, m)()
+                            current_flow = float(s.getFlowRate("kg/hr"))
+                            s.setFlowRate(current_flow * capacity_factor, "kg/hr")
+                            applied = True
+                            break
+                        except Exception:
+                            pass
     except Exception:
         pass
 
     try:
-        NeqSimProcessModel._run_until_converged(clone.get_process())
+        clone.run()
     except Exception:
         pass
 
     failed_flow = _get_production(clone, product_stream)
-    loss_pct = max(0.0, (baseline_flow - failed_flow) / baseline_flow * 100.0) if baseline_flow > 0 else 0.0
+    loss_pct = (
+        max(0.0, (baseline_flow - failed_flow) / baseline_flow * 100.0)
+        if baseline_flow > 0 else 0.0
+    )
+
+    # If simulation shows negligible loss, use the capacity factor directly
+    if loss_pct < 1.0:
+        loss_pct = (1.0 - capacity_factor) * 100.0
+        failed_flow = baseline_flow * capacity_factor
 
     return FailureImpact(
         equipment_name=unit_name,
@@ -637,16 +774,41 @@ def _try_java_risk(model: NeqSimProcessModel,
             pass
 
         avail_pct = float(mc_result_java.getAvailability())
+        # If availability looks like a fraction (0–1), convert to %
+        if 0 < avail_pct <= 1.0:
+            avail_pct *= 100.0
+
+        # Production percentiles — Java API may return absolute
+        # production (e.g. kg/year) instead of percentages.
+        p10_raw = float(mc_result_java.getP10Production()) if hasattr(mc_result_java, "getP10Production") else avail_pct
+        p50_raw = float(mc_result_java.getP50Production()) if hasattr(mc_result_java, "getP50Production") else avail_pct
+        p90_raw = float(mc_result_java.getP90Production()) if hasattr(mc_result_java, "getP90Production") else avail_pct
+
+        # Normalise: if values exceed 100 they are raw production,
+        # not percentages.  Use P50 as the design-capacity reference.
+        if max(p10_raw, p50_raw, p90_raw) > 100:
+            design_ref = p50_raw if p50_raw > 0 else max(p10_raw, p90_raw, 1.0)
+            p10_pct = p10_raw / design_ref * avail_pct
+            p50_pct = p50_raw / design_ref * avail_pct
+            p90_pct = p90_raw / design_ref * avail_pct
+        else:
+            p10_pct = p10_raw
+            p50_pct = p50_raw
+            p90_pct = p90_raw
+
+        dt_hrs = float(mc_result_java.getExpectedDowntimeHours()) if hasattr(mc_result_java, "getExpectedDowntimeHours") else 0
+        dt_events = float(mc_result_java.getExpectedDowntimeEvents()) if hasattr(mc_result_java, "getExpectedDowntimeEvents") else 0
+
         mc_res = MonteCarloResult(
             iterations=mc_iterations,
             horizon_days=mc_days,
             expected_availability_pct=avail_pct,
             expected_production_pct=avail_pct,
-            p10_production_pct=float(mc_result_java.getP10Production()) if hasattr(mc_result_java, "getP10Production") else avail_pct,
-            p50_production_pct=float(mc_result_java.getP50Production()) if hasattr(mc_result_java, "getP50Production") else avail_pct,
-            p90_production_pct=float(mc_result_java.getP90Production()) if hasattr(mc_result_java, "getP90Production") else avail_pct,
-            expected_downtime_hours_year=float(mc_result_java.getExpectedDowntimeHours()) if hasattr(mc_result_java, "getExpectedDowntimeHours") else 0,
-            expected_failure_events_year=float(mc_result_java.getExpectedDowntimeEvents()) if hasattr(mc_result_java, "getExpectedDowntimeEvents") else 0,
+            p10_production_pct=p10_pct,
+            p50_production_pct=p50_pct,
+            p90_production_pct=p90_pct,
+            expected_downtime_hours_year=dt_hrs,
+            expected_failure_events_year=dt_events,
         )
 
         sys_avail = avail_pct
