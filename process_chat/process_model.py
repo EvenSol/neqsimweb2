@@ -150,18 +150,17 @@ class NeqSimProcessModel:
     def _deserialize_xml_string(xml_string: str):
         """Deserialize a NeqSim object from an XML string using XStream.
 
-        Registers a plain ``ReflectionConverter`` at priority **-5**, which
-        sits between the built-in type converters (priority 0 – String,
-        Collection, Map …) and ``SerializableConverter`` (priority -10).
+        Tries two strategies:
 
-        Because ``ReflectionConverter.canConvert()`` returns ``True`` for
-        every class, it intercepts all types that don't already have a
-        higher-priority converter — in particular the *neqsim.* equipment
-        classes that ``SerializableConverter`` would otherwise try (and fail)
-        to deserialize via ``readObject()/writeObject()``.
+        1. **Custom ReflectionConverter at priority -5** — intercepts neqsim
+           classes before ``SerializableConverter`` (-10) which would fail on
+           ``readObject()/writeObject()``.  Works for most files.
 
-        This is intentionally a *direct* Java object rather than a JPype
-        proxy so that it works reliably across JPype / JVM versions.
+        2. **Plain XStream (no custom converter)** — falls back here when
+           strategy 1 fails, typically due to XStream *Invalid reference*
+           errors.  The custom ``ReflectionConverter`` can break XStream's
+           internal ID/IDREF back-reference resolution; the default converter
+           stack handles references correctly.
         """
         import jpype
 
@@ -173,18 +172,23 @@ class NeqSimProcessModel:
             "com.thoughtworks.xstream.converters.reflection.ReflectionConverter"
         )
 
+        # --- Strategy 1: custom ReflectionConverter at priority -5 ---
+        try:
+            xstream = XStream()
+            xstream.addPermission(AnyTypePermission.ANY)
+            xstream.ignoreUnknownElements()
+            rc = ReflectionConverter(
+                xstream.getMapper(), xstream.getReflectionProvider()
+            )
+            xstream.registerConverter(rc, -5)
+            return xstream.fromXML(xml_string)
+        except Exception:
+            pass
+
+        # --- Strategy 2: plain XStream (handles ID/IDREF references) ---
         xstream = XStream()
         xstream.addPermission(AnyTypePermission.ANY)
-        xstream.ignoreUnknownElements()          # tolerate field changes
-
-        # A plain ReflectionConverter at priority -5:
-        #   • beats SerializableConverter (-10)  → no readObject/writeObject
-        #   • loses to built-in converters (0+)  → String/Collection/Map safe
-        rc = ReflectionConverter(
-            xstream.getMapper(), xstream.getReflectionProvider()
-        )
-        xstream.registerConverter(rc, -5)
-
+        xstream.ignoreUnknownElements()
         return xstream.fromXML(xml_string)
 
     @classmethod
@@ -220,10 +224,8 @@ class NeqSimProcessModel:
                         if xml_name:
                             xml_content = zf.read(xml_name).decode("utf-8")
                             loaded = cls._deserialize_xml_string(xml_content)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to extract/deserialize XML from ZIP: {e}"
-                    ) from e
+                except Exception:
+                    loaded = None  # let subsequent fallbacks try
 
         if loaded is None:
             # Plain XML file or unknown extension – read as text
