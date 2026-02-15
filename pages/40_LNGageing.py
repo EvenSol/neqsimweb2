@@ -77,6 +77,11 @@ with st.expander("📋 Initial LNG Composition", expanded=True):
     st.session_state.lng_edited_df = st.edited_df
 
     st.caption("💡 Fluid composition will be normalized before simulation")
+
+with st.expander("📂 Fluid Library", expanded=False):
+    from fluids import fluid_library_selector
+    if fluid_library_selector('lng', 'lng_fluid_df'):
+        st.rerun()
 # Add a visual divider
 st.divider()
 

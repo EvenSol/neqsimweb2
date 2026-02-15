@@ -12,7 +12,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from theme import apply_theme
-from fluids import default_fluid
+from fluids import default_fluid, fluid_library_selector
 
 st.set_page_config(
     page_title="Black Oil PVT Tables",
@@ -140,6 +140,10 @@ with st.expander("📋 Fluid Composition", expanded=True):
     )
 
     isplusfluid = st.checkbox("Last component is plus fraction", value=True)
+
+with st.expander("📂 Fluid Library", expanded=False):
+    if fluid_library_selector('blackoil', 'blackoil_fluid_df'):
+        st.rerun()
 
 st.divider()
 

@@ -4,7 +4,7 @@ import time
 import neqsim
 from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame
 from neqsim import jneqsim
-from fluids import default_fluid
+from fluids import default_fluid, fluid_library_selector
 from theme import apply_theme
 
 st.set_page_config(page_title="Flash Calculations", page_icon='images/neqsimlogocircleflat.png')
@@ -87,6 +87,10 @@ with st.expander("📋 Set Fluid Composition", expanded=True):
     isplusfluid = st.checkbox('Plus Fluid')
     
     st.caption("💡 Fluid composition will be normalized before simulation")
+
+with st.expander("📂 Fluid Library", expanded=False):
+    if fluid_library_selector('tpflash', 'tpflash_fluid_df'):
+        st.rerun()
 with st.expander("🌡️ Input Conditions", expanded=True):
     if flash_type == "TP Flash":
         st.edited_dfTP = st.data_editor(

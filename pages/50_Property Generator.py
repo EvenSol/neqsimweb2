@@ -9,6 +9,7 @@ from theme import apply_theme
 import neqsim
 from neqsim.thermo.thermoTools import fluid_df, TPflash
 from fluids import default_fluid
+from fluids import fluid_library_selector
 
 # ----------------------------------------------------------------------------------
 # HELPER FUNCTION: Compute Property
@@ -261,6 +262,10 @@ def main():
     isplusfluid = st.checkbox('Plus Fluid')
 
     st.text("Fluid composition will be normalized before simulation")
+
+    with st.expander("📂 Fluid Library", expanded=False):
+        if fluid_library_selector('propgen', 'activefluid_df'):
+            st.rerun()
     st.divider()
     
     # ----------------------------------------------------------------------------------
