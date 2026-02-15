@@ -202,17 +202,20 @@ class NeqSimProcessModel:
             file_bytes = f.read()
 
         loaded = None
+        is_zip = zipfile.is_zipfile(filepath)
         ext = os.path.splitext(filepath)[1].lower()
+        errors_seen: list = []  # collect errors for diagnostics
 
         if ext in (".neqsim", ".zip") or ext not in (".xml",):
             # Try the library's Java-based ZIP reader first
             try:
                 loaded = neqsim.open_neqsim(filepath)
-            except Exception:
+            except Exception as e:
+                errors_seen.append(f"open_neqsim: {e}")
                 loaded = None
 
             # Fallback: extract XML from ZIP in Python (avoids Java stream issues)
-            if loaded is None and zipfile.is_zipfile(filepath):
+            if loaded is None and is_zip:
                 try:
                     with zipfile.ZipFile(filepath, "r") as zf:
                         # Look for process.xml or any .xml inside
@@ -224,20 +227,25 @@ class NeqSimProcessModel:
                         if xml_name:
                             xml_content = zf.read(xml_name).decode("utf-8")
                             loaded = cls._deserialize_xml_string(xml_content)
-                except Exception:
-                    loaded = None  # let subsequent fallbacks try
+                        else:
+                            errors_seen.append("ZIP contains no .xml file")
+                except Exception as e:
+                    errors_seen.append(f"ZIP XML deserialization: {e}")
+                    loaded = None
 
-        if loaded is None:
-            # Plain XML file or unknown extension – read as text
+        # Plain XML fallback — only makes sense for non-ZIP files
+        if loaded is None and not is_zip:
             try:
                 loaded = neqsim.open_xml(filepath)
-            except (UnicodeDecodeError, Exception) as e:
-                raise RuntimeError(
-                    f"Failed to load process from: {filepath}  ({e})"
-                ) from e
+            except Exception as e:
+                errors_seen.append(f"open_xml: {e}")
 
         if loaded is None:
-            raise RuntimeError(f"Failed to load process from: {filepath}")
+            detail = "\n".join(errors_seen) if errors_seen else "All loaders returned None"
+            raise RuntimeError(
+                f"Failed to load process model.\n\n"
+                f"Tried {len(errors_seen)} loading method(s):\n{detail}"
+            )
 
         # Run to initialize internal state.
         # Complex processes with recycles/mixers that reference downstream
