@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import neqsim
-from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, dataFrame
+from neqsim.thermo.thermoTools import fluidcreator, fluid_df, TPflash, PHflash, PSflash, dataFrame
 from neqsim import jneqsim
 from fluids import default_fluid, fluid_library_selector
 from theme import apply_theme
@@ -166,15 +166,12 @@ if st.button(f'Run {flash_type} Calculations'):
                             TPflash(neqsim_fluid)
                         elif flash_type == "PH Flash":
                             enthalpy = row['Enthalpy (J/mol)']
-                            # Set an initial temperature guess before PH flash
                             neqsim_fluid.setTemperature(20.0, 'C')
-                            thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(neqsim_fluid)
-                            thermoOps.PHflash(enthalpy)
+                            PHflash(neqsim_fluid, enthalpy)
                         else:  # PS Flash
                             entropy = row['Entropy (J/mol/K)']
                             neqsim_fluid.setTemperature(20.0, 'C')
-                            thermoOps = jneqsim.thermodynamicOperations.ThermodynamicOperations(neqsim_fluid)
-                            thermoOps.PSflash(entropy)
+                            PSflash(neqsim_fluid, entropy)
 
                         results_list.append(dataFrame(neqsim_fluid))
 
