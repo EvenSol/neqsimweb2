@@ -259,22 +259,28 @@ def _run_tornado(
         # Low case
         try:
             clone = model.clone()
-            _apply_patch_key(clone, name, low)
-            rr = clone.run()
-            v = _extract_kpi_value(clone, response_kpi, run_result=rr)
-            if v is not None:
-                kpi_low = v
+            ok = _apply_patch_key(clone, name, low)
+            if not ok:
+                kpi_low = None
+            else:
+                rr = clone.run()
+                v = _extract_kpi_value(clone, response_kpi, run_result=rr)
+                if v is not None:
+                    kpi_low = v
         except Exception:
             pass
 
         # High case
         try:
             clone = model.clone()
-            _apply_patch_key(clone, name, high)
-            rr = clone.run()
-            v = _extract_kpi_value(clone, response_kpi, run_result=rr)
-            if v is not None:
-                kpi_high = v
+            ok = _apply_patch_key(clone, name, high)
+            if not ok:
+                kpi_high = None
+            else:
+                rr = clone.run()
+                v = _extract_kpi_value(clone, response_kpi, run_result=rr)
+                if v is not None:
+                    kpi_high = v
         except Exception:
             pass
 

@@ -128,9 +128,10 @@ def _gas_psv_area(
     if C * kd * P1 * kb * kc <= 0:
         return 0.0
 
-    # A in mm²
+    # A in mm² (API 520 SI coefficient system: W in kg/hr, P in kPa(a),
+    # T in K, M in kg/kmol → A directly in mm²)
     A = W * math.sqrt(temperature_K * z_factor) / (C * kd * P1 * kb * kc * math.sqrt(molar_mass_kg_mol * 1000))
-    return A * 1e6  # convert to mm² (from m² approx)
+    return A  # already in mm² per API 520 SI units
 
 
 def _liquid_psv_area(

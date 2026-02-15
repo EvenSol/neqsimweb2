@@ -89,13 +89,20 @@ def _run_blowdown(
                             volume_m3 = math.pi * (d/2)**2 * L
                         except Exception:
                             pass
+                    # Read T and P from the vessel's inlet stream
+                    for m_name in ("getInletStream", "getInStream", "getFeed"):
+                        if hasattr(java_obj, m_name):
+                            try:
+                                inlet = getattr(java_obj, m_name)()
+                                if inlet is not None:
+                                    if p0 is None:
+                                        p0 = float(inlet.getPressure("bara"))
+                                    T0 = float(inlet.getTemperature("K"))
+                                    break
+                            except Exception:
+                                pass
                 except KeyError:
                     pass
-                props = u_info.properties
-                if p0 is None and "inletPressure_bara" in props:
-                    p0 = props["inletPressure_bara"]
-                if "inletTemperature_K" in props:
-                    T0 = props["inletTemperature_K"]
                 break
 
     if p0 is None:
@@ -181,11 +188,15 @@ def _run_blowdown(
             m = 0
             break
 
-        # Isentropic temperature drop
+        # Isentropic expansion: update T and P from density ratio
         rho_new = m / volume_m3 if volume_m3 > 0 else rho0
-        P_new = rho_new * R * T / M_gas
-        if P_new > 0 and P > 0:
-            T = T * (P_new / P) ** ((gamma - 1) / gamma)
+        rho_old = (m + dm) / volume_m3 if volume_m3 > 0 else rho0
+        if rho_old > 0 and rho_new > 0:
+            ratio = rho_new / rho_old
+            P_new = P * ratio ** gamma
+            T = T * ratio ** (gamma - 1)
+        else:
+            P_new = rho_new * R * T / M_gas
         P = max(P_new, P_back)
 
     result.time_series = time_data
@@ -608,7 +619,12 @@ def _run_ramp(
                 if stream_name.lower() in cs_info.name.lower():
                     try:
                         java_stream = clone.get_stream(cs_info.name)
-                        java_stream.setFlowRate(float(val), "kg/hr")
+                        if ramp_variable in ("pressure", "pressure_bara"):
+                            java_stream.setPressure(float(val), "bara")
+                        elif ramp_variable in ("temperature", "temperature_C"):
+                            java_stream.setTemperature(float(val), "C")
+                        else:
+                            java_stream.setFlowRate(float(val), "kg/hr")
                     except KeyError:
                         pass
                     break

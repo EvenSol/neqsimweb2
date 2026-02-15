@@ -552,8 +552,8 @@ def run_pvt_simulation(
     model: NeqSimProcessModel,
     experiment: str = "CME",
     stream_name: Optional[str] = None,
-    temperature_C: float = 100.0,
-    p_start_bara: float = 400.0,
+    temperature_C: Optional[float] = None,
+    p_start_bara: Optional[float] = None,
     p_end_bara: float = 10.0,
     n_steps: int = 20,
     stages: Optional[List[Dict[str, float]]] = None,
@@ -577,11 +577,17 @@ def run_pvt_simulation(
     streams = model.list_streams()
     for s_info in streams:
         if not stream_name or stream_name.lower() in s_info.name.lower():
-            if temperature_C == 100.0 and s_info.temperature_C is not None:
+            if temperature_C is None and s_info.temperature_C is not None:
                 temperature_C = s_info.temperature_C
-            if p_start_bara == 400.0 and s_info.pressure_bara is not None:
+            if p_start_bara is None and s_info.pressure_bara is not None:
                 p_start_bara = s_info.pressure_bara * 1.5
             break
+
+    # Apply defaults if still None after stream lookup
+    if temperature_C is None:
+        temperature_C = 100.0
+    if p_start_bara is None:
+        p_start_bara = 400.0
 
     exp_lower = experiment.lower().replace(" ", "_").replace("-", "_")
 

@@ -147,11 +147,9 @@ def calculate_emissions(
         result.message = "No process system available."
         return result
 
-    # Ensure latest state
-    try:
-        model.run()
-    except Exception:
-        pass
+    # Model should already be in a solved state from the last successful run.
+    # Do NOT call model.run() here — it would lock in any partial
+    # modifications as the new baseline.  If we need fresh data, clone first.
 
     sources: List[EmissionSource] = []
 

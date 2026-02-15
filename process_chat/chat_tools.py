@@ -1886,13 +1886,17 @@ class ProcessChatSession:
             if self._builder and self._builder.spec:
                 script = self._builder.to_python_script()
                 self._last_script = script
-                self.history.append({"role": "assistant", "content": assistant_text})
-                self.history.append({
-                    "role": "user",
-                    "content": f"[SYSTEM: Python script generated. Show it to the engineer. "
-                               f"Display the entire script in a Python code block.]\n\n```python\n{script}\n```"
-                })
-                return self._llm_followup(client, types)
+                # Return the script directly — do NOT rely on _llm_followup
+                # because the LLM tends to summarize instead of reproducing
+                # the full code verbatim.
+                script_response = (
+                    "Here is the Python script for your process:\n\n"
+                    f"```python\n{script}\n```\n\n"
+                    "You can copy this script and run it in any Python environment "
+                    "with the NeqSim library installed."
+                )
+                self.history.append({"role": "assistant", "content": script_response})
+                return script_response
             elif self.model:
                 # Model exists but no builder (uploaded model) — provide model summary
                 summary = self.model.get_model_summary()
@@ -2047,6 +2051,16 @@ class ProcessChatSession:
                 summary = self.model.get_model_summary()
                 log_str = "\n".join(str(e) for e in log)
 
+                # Keep builder spec in sync so to_python_script() is accurate
+                if self._builder and self._builder.spec:
+                    proc_steps = self._builder.spec.setdefault("process", [])
+                    for a in add_list:
+                        proc_steps.append({
+                            "name": a["name"],
+                            "type": a["type"],
+                            "params": a.get("params", {}),
+                        })
+
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
@@ -2067,9 +2081,10 @@ class ProcessChatSession:
                 return self._llm_followup(client, types)
 
         # Unknown build spec — just pass through
-        self.history.append({"role": "assistant", "content": assistant_text})
+        cleaned = _strip_tool_blocks(assistant_text)
+        self.history.append({"role": "assistant", "content": cleaned})
         self._last_comparison = None
-        return assistant_text
+        return cleaned
 
     # -- Incremental update (avoids full rebuild) ---------------------------
 
@@ -2163,11 +2178,18 @@ class ProcessChatSession:
 
                 new_names = [s["name"] for s in build_spec.get("process", [])]
                 # Determine which are appended vs prepended
-                start_idx = 0
-                for i in range(len(new_names) - len(old_names) + 1):
+                start_idx = None
+                search_range = max(len(new_names) - len(old_names) + 1, 0)
+                for i in range(search_range):
                     if new_names[i:i + len(old_names)] == old_names:
                         start_idx = i
                         break
+                if start_idx is None:
+                    # Old steps not found as contiguous subsequence —
+                    # fall back to full rebuild.
+                    if self._builder is not None:
+                        self._builder._spec = None
+                    return self._handle_build(assistant_text, build_spec, client, types)
 
                 prepended = build_spec["process"][:start_idx]
                 appended = build_spec["process"][start_idx + len(old_names):]
@@ -2283,7 +2305,8 @@ class ProcessChatSession:
 
         except Exception as e:
             # Incremental update failed — fall back to full rebuild
-            self._builder._spec = None  # force full rebuild path
+            if self._builder is not None:
+                self._builder._spec = None  # force full rebuild path
             return self._handle_build(assistant_text, build_spec, client, types)
 
     # -- Scenario handling --------------------------------------------------
@@ -2326,7 +2349,7 @@ class ProcessChatSession:
                 try:
                     from .scenario_engine import (
                         apply_add_units, apply_add_streams, apply_add_process,
-                        apply_patch_to_model,
+                        apply_patch_to_model, apply_add_components,
                     )
                     if sc.patch.add_units:
                         apply_add_units(self.model, sc.patch.add_units)
@@ -2334,6 +2357,8 @@ class ProcessChatSession:
                         apply_add_process(self.model, sc.patch.add_process)
                     if sc.patch.add_streams:
                         apply_add_streams(self.model, sc.patch.add_streams)
+                    if getattr(sc.patch, 'add_components', None):
+                        apply_add_components(self.model, sc.patch.add_components)
                     if sc.patch.changes:
                         apply_patch_to_model(self.model, sc.patch)
                     # Re-run, re-index, and refresh source bytes so clones

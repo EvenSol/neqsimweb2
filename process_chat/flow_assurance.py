@@ -200,7 +200,7 @@ def _estimate_co2_corrosion(
     log(CR) = 5.8 − 1710/(T+273) + 0.67 × log(pCO₂)
     Returns corrosion rate in mm/yr.
     """
-    if co2_partial_pressure_bara <= 0 or temperature_C < 0:
+    if co2_partial_pressure_bara <= 0:
         return 0.0
 
     T_K = temperature_C + 273.15

@@ -985,44 +985,50 @@ class NeqSimProcessModel:
 
                     if last is not None:
                         last_class = str(last.getClass().getSimpleName())
+                        seen_outlet_ids: set = set()
+
+                        def _add_outlet_flow(stream_obj, label: str) -> float:
+                            """Add stream flow if not already counted (dedup by hashCode)."""
+                            nonlocal product_flow
+                            try:
+                                sid = int(stream_obj.hashCode())
+                            except Exception:
+                                sid = id(stream_obj)
+                            if sid in seen_outlet_ids:
+                                return 0.0
+                            seen_outlet_ids.add(sid)
+                            flow = float(stream_obj.getFlowRate("kg/hr"))
+                            if abs(flow) > 0.01:
+                                sname = str(stream_obj.getName()) if stream_obj.getName() else label
+                                product_flow += flow
+                                product_details.append(f"{sname}={flow:.0f}")
+                            return flow
+
                         # Gas outlet
                         for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
                             if hasattr(last, m):
                                 try:
                                     s = getattr(last, m)()
-                                    flow = float(s.getFlowRate("kg/hr"))
-                                    if abs(flow) > 0.01:
-                                        sname = str(s.getName()) if s.getName() else "gas_out"
-                                        product_flow += flow
-                                        product_details.append(f"{sname}={flow:.0f}")
+                                    _add_outlet_flow(s, "gas_out")
                                     break
                                 except Exception:
                                     pass
                         # Oil outlet (three-phase separators)
                         if hasattr(last, "getOilOutStream"):
                             try:
-                                oil_flow = float(last.getOilOutStream().getFlowRate("kg/hr"))
-                                if abs(oil_flow) > 0.01:
-                                    product_flow += oil_flow
-                                    product_details.append(f"oil={oil_flow:.0f}")
+                                _add_outlet_flow(last.getOilOutStream(), "oil")
                             except Exception:
                                 pass
                         # Liquid outlet
                         if hasattr(last, "getLiquidOutStream"):
                             try:
-                                liq_flow = float(last.getLiquidOutStream().getFlowRate("kg/hr"))
-                                if abs(liq_flow) > 0.01:
-                                    product_flow += liq_flow
-                                    product_details.append(f"liquid={liq_flow:.0f}")
+                                _add_outlet_flow(last.getLiquidOutStream(), "liquid")
                             except Exception:
                                 pass
                         # Water outlet (three-phase separators)
                         if hasattr(last, "getWaterOutStream"):
                             try:
-                                water_flow = float(last.getWaterOutStream().getFlowRate("kg/hr"))
-                                if abs(water_flow) > 0.01:
-                                    product_flow += water_flow
-                                    product_details.append(f"water={water_flow:.0f}")
+                                _add_outlet_flow(last.getWaterOutStream(), "water")
                             except Exception:
                                 pass
 
