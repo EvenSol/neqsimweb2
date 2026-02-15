@@ -667,6 +667,30 @@ Use this for questions like:
 
 DYNAMIC SIMULATION (for "blowdown", "startup", "shutdown", "transient", "time response"):
 When the user asks about transient behavior, blowdown, startup/shutdown sequences, output a ```dynamic ... ``` block:
+
+For TRUE TRANSIENT simulations (valve closures, step changes, upset conditions) — uses NeqSim's native runTransient() with dynamic mode on separators and valves:
+```dynamic
+{{
+  "scenario_type": "transient",
+  "changes": [
+    {{"unit": "VLV-100", "property": "percentValveOpening", "value": 10}},
+    {{"unit": "VLV-102", "property": "percentValveOpening", "value": 10}}
+  ],
+  "duration_s": 50,
+  "n_steps": 10,
+  "dt": 5.0
+}}
+```
+The "changes" array specifies what to change before stepping. Supported properties:
+  - percentValveOpening (0-100%)
+  - cv (valve Cv)
+  - outletPressure (bara)
+  - flow (kg/hr, for streams)
+  - speed (RPM, for compressors)
+  - temperature (°C)
+  - pressure (bara)
+
+For blowdown:
 ```dynamic
 {{
   "scenario_type": "blowdown",
@@ -690,13 +714,20 @@ For startup/ramp scenarios:
 }}
 ```
 Parameters:
-  - scenario_type: "blowdown", "startup", "shutdown", or "ramp"
+  - scenario_type: "transient", "blowdown", "startup", "shutdown", or "ramp"
+  - changes: (transient only) array of unit/property/value changes to apply
+  - dt: (transient only) time step in seconds
   - vessel_name: for blowdown — name of vessel (auto-detected if omitted)
   - stream_name: for ramp/startup — name of stream to ramp
   - duration_s: simulation duration in seconds
   - n_steps: number of time steps
 
-Use this for: "simulate blowdown", "startup sequence", "what happens during shutdown?", "transient response"
+IMPORTANT: For "transient" scenario_type, separators, tanks, and valves are automatically set to dynamic mode
+(setCalculateSteadyState(false)) so they track holdup, levels, and Cv-based flow. Equipment sizes are NOT
+recalculated — only the process response (flows, pressures, levels) changes over time.
+
+Use this for: "simulate blowdown", "startup sequence", "what happens during shutdown?", "transient response",
+"close valves to 10%", "run N transient steps", "step change", "upset scenario"
 
 SENSITIVITY ANALYSIS (for "sensitivity study", "parameter sweep", "tornado chart", "what-if matrix"):
 When the user asks for parameter sensitivity, sweep studies, or tornado charts, output a ```sensitivity ... ``` block:
@@ -1093,6 +1124,17 @@ Use this for: "CO2 emissions", "carbon footprint", "emission intensity", "fuel g
 
 DYNAMIC SIMULATION (after a process has been built):
 When the user asks about blowdown, startup, shutdown, or transient behavior, output:
+For true transient (valve closures, step changes, upset conditions):
+```dynamic
+{
+  "scenario_type": "transient",
+  "changes": [{"unit": "VLV-100", "property": "percentValveOpening", "value": 10}],
+  "duration_s": 50,
+  "n_steps": 10,
+  "dt": 5.0
+}
+```
+For blowdown:
 ```dynamic
 {
   "scenario_type": "blowdown",
@@ -1100,7 +1142,8 @@ When the user asks about blowdown, startup, shutdown, or transient behavior, out
   "n_steps": 50
 }
 ```
-Use this for: "simulate blowdown", "startup sequence", "shutdown simulation", "transient".
+Use this for: "simulate blowdown", "startup sequence", "shutdown simulation", "transient",
+"close valves", "run transient steps", "step change".
 
 SENSITIVITY ANALYSIS (after a process has been built):
 When the user asks for sensitivity studies or parameter sweeps, output:
@@ -2736,6 +2779,8 @@ class ProcessChatSession:
                 n_steps=int(dynamic_spec.get("n_steps", 50)),
                 start_value=dynamic_spec.get("start_value"),
                 end_value=dynamic_spec.get("end_value"),
+                changes=dynamic_spec.get("changes"),
+                dt=dynamic_spec.get("dt"),
             )
 
             self._last_dynamic = result

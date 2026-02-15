@@ -9,11 +9,15 @@ Returns a ``DynamicSimResult`` with time-series data for plotting.
 """
 from __future__ import annotations
 
+import logging
 import math
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from .process_model import NeqSimProcessModel
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +200,350 @@ def _run_blowdown(
 
 
 # ---------------------------------------------------------------------------
+# True transient simulation using NeqSim's runTransient()
+# ---------------------------------------------------------------------------
+
+# Equipment classes that support transient holdup tracking
+_DYNAMIC_CLASSES = frozenset({
+    "Separator", "ThreePhaseSeparator", "TwoPhaseSeparator",
+    "GasScrubber", "GasScrubberSimple", "Tank",
+})
+
+# Equipment classes that are valves (Cv-based flow in transient)
+_VALVE_CLASSES = frozenset({
+    "ThrottlingValve", "ControlValve", "ESDValve", "PSDValve",
+    "PressureControlValve", "LevelControlValve", "CheckValve",
+    "BlowdownValve", "HIPPSValve",
+})
+
+# Equipment classes that support dynamic compressor features
+_COMPRESSOR_CLASSES = frozenset({"Compressor"})
+
+
+def _set_property_on_unit(unit, prop_lower: str, value: float) -> bool:
+    """Apply a single property change to a Java unit.  Returns True on success."""
+    # Valve opening
+    if "opening" in prop_lower and hasattr(unit, "setPercentValveOpening"):
+        unit.setPercentValveOpening(float(value))
+        return True
+    # Cv
+    if prop_lower in ("cv", "valve_cv") and hasattr(unit, "setCv"):
+        unit.setCv(float(value))
+        return True
+    # Outlet pressure
+    if "outletpressure" in prop_lower or "outlet_pressure" in prop_lower:
+        if hasattr(unit, "setOutletPressure"):
+            unit.setOutletPressure(float(value), "bara")
+            return True
+    # Flow rate (on streams)
+    if "flow" in prop_lower and hasattr(unit, "setFlowRate"):
+        unit.setFlowRate(float(value), "kg/hr")
+        return True
+    # Speed (compressor)
+    if "speed" in prop_lower and hasattr(unit, "setSpeed"):
+        unit.setSpeed(float(value))
+        return True
+    # Temperature
+    if "temperature" in prop_lower and hasattr(unit, "setTemperature"):
+        unit.setTemperature(float(value), "C")
+        return True
+    # Pressure (generic)
+    if "pressure" in prop_lower and hasattr(unit, "setPressure"):
+        unit.setPressure(float(value), "bara")
+        return True
+    return False
+
+
+def _extract_snapshot(proc, units_map: Dict[str, Any],
+                      tracked_names: List[str]) -> Dict[str, float]:
+    """Extract current KPI values from a solved process."""
+    values: Dict[str, float] = {}
+    for name, u in units_map.items():
+        java_class = ""
+        try:
+            java_class = str(u.getClass().getSimpleName())
+        except Exception:
+            pass
+        prefix = name.replace(" ", "_")
+
+        # Separator level, pressure, temperature, flows
+        if java_class in _DYNAMIC_CLASSES:
+            if hasattr(u, "getLiquidLevel"):
+                try:
+                    values[f"{prefix}.liquid_level_m"] = float(u.getLiquidLevel())
+                except Exception:
+                    pass
+            if hasattr(u, "getPressure"):
+                try:
+                    values[f"{prefix}.pressure_bara"] = float(u.getPressure())
+                except Exception:
+                    pass
+            if hasattr(u, "getTemperature"):
+                try:
+                    values[f"{prefix}.temperature_C"] = float(u.getTemperature("C"))
+                except Exception:
+                    pass
+            if hasattr(u, "getLiquidVolumeFraction"):
+                try:
+                    values[f"{prefix}.liquid_vol_frac"] = float(u.getLiquidVolumeFraction())
+                except Exception:
+                    pass
+            # Gas outlet flow
+            for m in ("getGasOutStream",):
+                if hasattr(u, m):
+                    try:
+                        s = getattr(u, m)()
+                        if s is not None:
+                            values[f"{prefix}.gas_out_flow_kg_hr"] = float(s.getFlowRate("kg/hr"))
+                    except Exception:
+                        pass
+            # Liquid outlet flow
+            for m in ("getLiquidOutStream",):
+                if hasattr(u, m):
+                    try:
+                        s = getattr(u, m)()
+                        if s is not None:
+                            values[f"{prefix}.liq_out_flow_kg_hr"] = float(s.getFlowRate("kg/hr"))
+                    except Exception:
+                        pass
+
+        # Valve opening & flow
+        if java_class in _VALVE_CLASSES:
+            if hasattr(u, "getPercentValveOpening"):
+                try:
+                    values[f"{prefix}.valve_opening_pct"] = float(u.getPercentValveOpening())
+                except Exception:
+                    pass
+            for m in ("getOutletStream", "getOutStream"):
+                if hasattr(u, m):
+                    try:
+                        s = getattr(u, m)()
+                        if s is not None:
+                            values[f"{prefix}.flow_kg_hr"] = float(s.getFlowRate("kg/hr"))
+                            break
+                    except Exception:
+                        pass
+
+        # Compressor
+        if java_class in _COMPRESSOR_CLASSES:
+            if hasattr(u, "getPower"):
+                try:
+                    values[f"{prefix}.power_kW"] = float(u.getPower()) / 1000.0
+                except Exception:
+                    pass
+            if hasattr(u, "getSpeed"):
+                try:
+                    values[f"{prefix}.speed_rpm"] = float(u.getSpeed())
+                except Exception:
+                    pass
+
+        # Generic outlet flow for any unit with an outlet stream
+        if java_class not in _DYNAMIC_CLASSES and java_class not in _VALVE_CLASSES:
+            for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
+                if hasattr(u, m):
+                    try:
+                        s = getattr(u, m)()
+                        if s is not None:
+                            flow = float(s.getFlowRate("kg/hr"))
+                            if flow > 0:
+                                values[f"{prefix}.flow_kg_hr"] = flow
+                            p = float(s.getPressure("bara"))
+                            values[f"{prefix}.pressure_bara"] = p
+                            values[f"{prefix}.temperature_C"] = float(s.getTemperature("C"))
+                            break
+                    except Exception:
+                        pass
+
+    return values
+
+
+def _run_transient(
+    model: NeqSimProcessModel,
+    changes: Optional[List[Dict[str, Any]]] = None,
+    duration_s: float = 60.0,
+    n_steps: int = 10,
+    dt: Optional[float] = None,
+) -> DynamicSimResult:
+    """
+    Run a true transient simulation using NeqSim's ``process.runTransient()``.
+
+    Workflow (per the Dynamic Simulation Guide):
+    1. Clone the model so the original is not mutated.
+    2. Run steady-state to initialise.
+    3. Set ``setCalculateSteadyState(false)`` on separators, tanks, and valves.
+    4. Apply the requested changes (e.g. valve openings).
+    5. Step ``process.runTransient(dt, id)`` for *n_steps*.
+    6. Record KPIs at every step.
+    7. Reset equipment back to steady-state mode (try-finally).
+
+    Parameters
+    ----------
+    model : NeqSimProcessModel
+        The process model (will be cloned internally).
+    changes : list of dict, optional
+        Each dict has ``{"unit": "<name>", "property": "<prop>", "value": <num>}``.
+        Example: ``[{"unit": "VLV-100", "property": "percentValveOpening", "value": 10}]``
+    duration_s : float
+        Total simulation time in seconds.
+    n_steps : int
+        Number of transient time steps.
+    dt : float, optional
+        Time step size. If *None*, computed as ``duration_s / n_steps``.
+    """
+    result = DynamicSimResult(scenario_type="transient")
+    changes = changes or []
+
+    # --- Clone so we don't mutate the live model ---
+    try:
+        clone = model.clone()
+    except Exception as exc:
+        result.message = f"Cannot clone model for transient run: {exc}"
+        return result
+
+    proc = clone.get_process()
+    if proc is None:
+        result.message = "No process available."
+        return result
+
+    # --- 1. Initialise with steady-state ---
+    try:
+        clone.run()
+    except Exception as exc:
+        logger.warning("Steady-state init before transient failed: %s", exc)
+
+    # --- Discover units ---
+    try:
+        java_units = list(proc.getUnitOperations())
+    except Exception:
+        java_units = []
+
+    units_map: Dict[str, Any] = {}
+    dynamic_equipment: list = []  # units that we switch to transient mode
+    for u in java_units:
+        try:
+            name = str(u.getName())
+        except Exception:
+            continue
+        units_map[name] = u
+        java_class = ""
+        try:
+            java_class = str(u.getClass().getSimpleName())
+        except Exception:
+            pass
+
+        # Switch separators / tanks / valves to dynamic mode
+        if java_class in _DYNAMIC_CLASSES or java_class in _VALVE_CLASSES:
+            if hasattr(u, "setCalculateSteadyState"):
+                try:
+                    u.setCalculateSteadyState(False)
+                    dynamic_equipment.append(u)
+                except Exception:
+                    pass
+
+    # --- 2. Apply changes (e.g. close valves to 10%) ---
+    change_descriptions: List[str] = []
+    for ch in changes:
+        unit_name = ch.get("unit", "")
+        prop = ch.get("property", "percentValveOpening")
+        value = ch.get("value", 0)
+        # Fuzzy-match unit name
+        matched = None
+        for uname, uobj in units_map.items():
+            if unit_name.lower() in uname.lower() or uname.lower() in unit_name.lower():
+                matched = (uname, uobj)
+                break
+        if matched:
+            ok = _set_property_on_unit(matched[1], prop.lower(), value)
+            if ok:
+                change_descriptions.append(f"{matched[0]}.{prop} = {value}")
+            else:
+                change_descriptions.append(f"{matched[0]}.{prop} = {value} (unsupported)")
+        else:
+            change_descriptions.append(f"{unit_name} not found")
+
+    # --- 3. Step through transient ---
+    if dt is None:
+        dt = duration_s / max(n_steps, 1)
+
+    calc_id = uuid.uuid4()
+    # Convert Python UUID to Java UUID
+    try:
+        from java.util import UUID as JavaUUID  # type: ignore[import]
+        java_id = JavaUUID.fromString(str(calc_id))
+    except ImportError:
+        java_id = None  # fallback: let NeqSim generate its own
+
+    tracked_names: List[str] = []
+    time_data: List[TimeSeriesPoint] = []
+    variable_names: List[str] = []
+
+    try:
+        for step in range(n_steps + 1):
+            t = step * dt
+
+            if step == 0:
+                # Record initial state (before first transient step)
+                snapshot = _extract_snapshot(proc, units_map, tracked_names)
+            else:
+                # Run one transient step
+                try:
+                    if java_id is not None:
+                        proc.runTransient(dt, java_id)
+                    else:
+                        proc.runTransient(dt)
+                except Exception as exc:
+                    logger.warning("runTransient step %d failed: %s", step, exc)
+                    break
+                snapshot = _extract_snapshot(proc, units_map, tracked_names)
+
+            if not variable_names and snapshot:
+                variable_names = list(snapshot.keys())
+
+            time_data.append(TimeSeriesPoint(time_s=t, values=snapshot))
+
+    finally:
+        # --- Reset to steady-state ---
+        for u in dynamic_equipment:
+            try:
+                u.setCalculateSteadyState(True)
+            except Exception:
+                pass
+
+    # --- Build result ---
+    result.time_series = time_data
+    result.variable_names = variable_names
+    result.duration_s = duration_s
+    result.time_steps = len(time_data)
+    result.method = "neqsim_runTransient"
+    if time_data:
+        result.final_state = time_data[-1].values.copy()
+
+    # Build variable_units from names
+    for vn in variable_names:
+        if "bara" in vn:
+            result.variable_units[vn] = "bara"
+        elif "_C" in vn:
+            result.variable_units[vn] = "°C"
+        elif "kg_hr" in vn:
+            result.variable_units[vn] = "kg/hr"
+        elif "level" in vn:
+            result.variable_units[vn] = "m"
+        elif "pct" in vn or "opening" in vn:
+            result.variable_units[vn] = "%"
+        elif "kW" in vn:
+            result.variable_units[vn] = "kW"
+        elif "rpm" in vn:
+            result.variable_units[vn] = "RPM"
+
+    changes_str = "; ".join(change_descriptions) if change_descriptions else "none"
+    result.message = (
+        f"Transient simulation: {n_steps} steps × {dt:.1f}s = {duration_s:.0f}s total. "
+        f"Changes applied: {changes_str}"
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Ramp / startup / shutdown simulation
 # ---------------------------------------------------------------------------
 
@@ -314,6 +662,8 @@ def run_dynamic_simulation(
     n_steps: int = 50,
     start_value: Optional[float] = None,
     end_value: Optional[float] = None,
+    changes: Optional[List[Dict[str, Any]]] = None,
+    dt: Optional[float] = None,
 ) -> DynamicSimResult:
     """
     Run a dynamic simulation scenario.
@@ -322,8 +672,22 @@ def run_dynamic_simulation(
     ----------
     model : NeqSimProcessModel
     scenario_type : str
-        'blowdown', 'startup', 'shutdown', or 'ramp'
+        'blowdown', 'startup', 'shutdown', 'ramp', or 'transient'
+    changes : list of dict, optional
+        For 'transient' — list of ``{"unit": ..., "property": ..., "value": ...}``
+    dt : float, optional
+        For 'transient' — explicit time step size (seconds).
     """
+    # ---- True transient via NeqSim runTransient() ----
+    if scenario_type == "transient":
+        return _run_transient(
+            model,
+            changes=changes,
+            duration_s=duration_s,
+            n_steps=n_steps,
+            dt=dt,
+        )
+
     if scenario_type in ("blowdown",):
         return _run_blowdown(
             model, vessel_name=vessel_name,

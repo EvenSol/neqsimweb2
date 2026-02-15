@@ -694,66 +694,163 @@ def _show_emissions(emissions_result):
 
 
 def _show_dynamic(dynamic_result):
-    """Display dynamic simulation results inline with time-series chart."""
+    """Display dynamic simulation results inline with time-series charts."""
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
     st.markdown("---")
     st.markdown(f"**⏱️ Dynamic Simulation — {dynamic_result.scenario_type}**")
 
+    # --- Top-level metrics ---
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Duration", f"{dynamic_result.duration_s:.0f} s")
     with col2:
         st.metric("Time Steps", f"{len(dynamic_result.time_series)}")
     with col3:
-        # Compute min temperature from time-series values
-        min_temp = None
-        for p in dynamic_result.time_series:
-            t = p.values.get("temperature_C")
-            if t is not None:
-                min_temp = t if min_temp is None else min(min_temp, t)
-        if min_temp is not None:
-            st.metric("Min Temperature", f"{min_temp:.1f} °C")
+        st.metric("Method", getattr(dynamic_result, "method", "—"))
 
-    if dynamic_result.time_series:
-        ts = dynamic_result.time_series
+    ts = dynamic_result.time_series
+    var_names = getattr(dynamic_result, "variable_names", []) or []
+    var_units = getattr(dynamic_result, "variable_units", {}) or {}
+    available_vars = [v for v in var_names if v not in ("time_frac",)]
+
+    if not ts or not available_vars:
+        if getattr(dynamic_result, "message", ""):
+            st.info(dynamic_result.message)
+        return
+
+    # --- Initial → Final summary ---
+    first_vals = ts[0].values if ts else {}
+    last_vals = ts[-1].values if ts else {}
+    changed_vars = []
+    for v in available_vars:
+        v0 = first_vals.get(v)
+        vf = last_vals.get(v)
+        if v0 is not None and vf is not None:
+            try:
+                if abs(float(v0) - float(vf)) > 1e-6:
+                    changed_vars.append(v)
+            except (ValueError, TypeError):
+                pass
+
+    if changed_vars:
+        with st.expander("📊 Initial → Final State", expanded=True):
+            delta_rows = []
+            for v in changed_vars:
+                v0 = first_vals.get(v, 0)
+                vf = last_vals.get(v, 0)
+                unit = var_units.get(v, "")
+                # Friendly label: "V-100.liquid_level_m" → "V-100 liquid level"
+                label = v.replace("_", " ").replace(".", " — ")
+                try:
+                    pct = ((float(vf) - float(v0)) / abs(float(v0))) * 100.0 if float(v0) != 0 else 0.0
+                except (ValueError, TypeError, ZeroDivisionError):
+                    pct = 0.0
+                delta_rows.append({
+                    "Variable": label,
+                    "Initial": round(float(v0), 4),
+                    "Final": round(float(vf), 4),
+                    "Change %": round(pct, 1),
+                    "Unit": unit,
+                })
+            st.dataframe(pd.DataFrame(delta_rows), use_container_width=True, hide_index=True)
+
+    # --- Variable selector ---
+    # Group variables by equipment/category for better UX
+    # "V-100.liquid_level_m" → category "V-100"
+    categories: dict = {}
+    for v in available_vars:
+        parts = v.split(".", 1)
+        cat = parts[0] if len(parts) > 1 else "General"
+        categories.setdefault(cat, []).append(v)
+
+    # Smart defaults: pick variables that actually changed, up to 6
+    default_selection = changed_vars[:6] if changed_vars else available_vars[:4]
+
+    selected_vars = st.multiselect(
+        "Select variables to plot",
+        options=available_vars,
+        default=default_selection,
+        key=f"dynamic_var_select_{id(dynamic_result)}",
+        help="Choose which variables to trace over time",
+    )
+
+    if not selected_vars:
+        selected_vars = available_vars[:2]
+
+    # --- Chart: one subplot per unit group for selected vars ---
+    # Group selected vars by their unit (for axis scaling)
+    unit_groups: dict = {}  # unit_str -> [var_name, ...]
+    for v in selected_vars:
+        u = var_units.get(v, "")
+        unit_groups.setdefault(u, []).append(v)
+
+    n_axes = min(len(unit_groups), 3)  # max 3 y-axes
+    if n_axes <= 1:
+        # Simple single-axis chart
         fig = go.Figure()
-
-        # Determine which variables to plot from the result metadata
-        var_names = getattr(dynamic_result, "variable_names", []) or []
-        var_units = getattr(dynamic_result, "variable_units", {}) or {}
-        # Skip the time-fraction variable and pick up to two numeric series
-        plot_vars = [v for v in var_names if v not in ("time_frac",)]
-
-        if not plot_vars:
-            # Fallback to well-known keys
-            plot_vars = ["pressure_bara", "temperature_C"]
-
-        # Plot first variable on left y-axis, second on right y-axis
-        for idx, vname in enumerate(plot_vars[:2]):
-            unit = var_units.get(vname, "")
-            label = f"{vname} ({unit})" if unit else vname
-            yaxis_key = "y1" if idx == 0 else "y2"
+        for v in selected_vars:
+            unit = var_units.get(v, "")
+            label = v.replace("_", " ")
+            if unit:
+                label += f" ({unit})"
             fig.add_trace(go.Scatter(
                 x=[p.time_s for p in ts],
-                y=[p.values.get(vname, 0) for p in ts],
+                y=[p.values.get(v, 0) for p in ts],
                 name=label,
-                yaxis=yaxis_key,
+                mode="lines+markers" if len(ts) <= 30 else "lines",
             ))
-
-        layout_kwargs = dict(
+        fig.update_layout(
             title=f"{dynamic_result.scenario_type.capitalize()} Simulation",
             xaxis_title="Time (s)",
             hovermode="x unified",
+            height=500,
         )
-        if len(plot_vars) >= 1:
-            u0 = var_units.get(plot_vars[0], plot_vars[0])
-            layout_kwargs["yaxis"] = dict(title=u0, side="left")
-        if len(plot_vars) >= 2:
-            u1 = var_units.get(plot_vars[1], plot_vars[1])
-            layout_kwargs["yaxis2"] = dict(title=u1, side="right", overlaying="y")
-        fig.update_layout(**layout_kwargs)
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Multi-axis: subplots stacked vertically, one per unit group
+        group_keys = list(unit_groups.keys())[:3]
+        fig = make_subplots(
+            rows=len(group_keys), cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.08,
+            subplot_titles=[grp or "[-]" for grp in group_keys],
+        )
+        for row_idx, grp in enumerate(group_keys, 1):
+            for v in unit_groups[grp]:
+                label = v.replace("_", " ")
+                fig.add_trace(
+                    go.Scatter(
+                        x=[p.time_s for p in ts],
+                        y=[p.values.get(v, 0) for p in ts],
+                        name=label,
+                        mode="lines+markers" if len(ts) <= 30 else "lines",
+                    ),
+                    row=row_idx, col=1,
+                )
+            fig.update_yaxes(title_text=grp or "[-]", row=row_idx, col=1)
+        fig.update_xaxes(title_text="Time (s)", row=len(group_keys), col=1)
+        fig.update_layout(
+            title=f"{dynamic_result.scenario_type.capitalize()} Simulation",
+            hovermode="x unified",
+            height=300 * len(group_keys),
+            showlegend=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Data table ---
+    with st.expander("📋 Time-Series Data", expanded=False):
+        table_rows = []
+        for p in ts:
+            row = {"Time (s)": p.time_s}
+            for v in selected_vars:
+                label = v.replace("_", " ")
+                unit = var_units.get(v, "")
+                col_name = f"{label} ({unit})" if unit else label
+                row[col_name] = round(p.values.get(v, 0), 4)
+            table_rows.append(row)
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
     if getattr(dynamic_result, "message", ""):
         st.info(dynamic_result.message)
