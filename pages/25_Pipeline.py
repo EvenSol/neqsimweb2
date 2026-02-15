@@ -111,6 +111,15 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
 
                 # Determine number of phases
                 n_phases = neqsim_fluid.getNumberOfPhases()
+                if n_phases > 1:
+                    phase_names = []
+                    for pi in range(n_phases):
+                        try:
+                            phase_names.append(str(neqsim_fluid.getPhase(pi).getPhaseTypeName()))
+                        except Exception:
+                            phase_names.append(f"Phase {pi}")
+                    st.info(f"Multiphase flow detected at inlet: {n_phases} phases ({', '.join(phase_names)}). "
+                            "Two-phase flow regime is determined using the Beggs-Brill flow pattern map.")
 
                 # Inner diameter in meters
                 id_m = inner_diameter_mm / 1000.0
@@ -156,6 +165,8 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                 viscosities = []
                 flow_regimes = []
                 reynolds_numbers = []
+                phase_counts = []
+                liquid_holdups = []
 
                 current_P = inlet_pressure_bara
                 current_T = inlet_temp_C
@@ -184,13 +195,65 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                     rel_rough = roughness_m / id_m
                     if Re > 2300:
                         ff = (-1.8 * np.log10((rel_rough / 3.7) ** 1.11 + 6.9 / Re)) ** (-2)
-                        regime = "Turbulent"
                     elif Re > 0:
                         ff = 64 / Re
-                        regime = "Laminar"
                     else:
                         ff = 0.02
-                        regime = "Unknown"
+
+                    # Flow regime detection
+                    seg_n_phases = seg_fluid.getNumberOfPhases()
+                    lambda_l = 0.0  # liquid volume fraction (no-slip holdup)
+                    if seg_n_phases > 1:
+                        # Multi-phase: determine flow pattern (Beggs-Brill)
+                        try:
+                            gas_vol = 0.0
+                            liq_vol = 0.0
+                            for pi in range(seg_n_phases):
+                                phase = seg_fluid.getPhase(pi)
+                                pvol = phase.getVolume("m3")
+                                ptype = str(phase.getPhaseTypeName()).lower()
+                                if "gas" in ptype:
+                                    gas_vol += pvol
+                                else:
+                                    liq_vol += pvol
+                            total_vol = gas_vol + liq_vol
+                            lambda_l = liq_vol / total_vol if total_vol > 0 else 0.5
+
+                            # Beggs-Brill flow pattern map
+                            Vm = vel
+                            NFr = Vm ** 2 / (9.81 * id_m) if id_m > 0 else 0
+
+                            if 0.001 < lambda_l < 0.999:
+                                L1 = 316.0 * lambda_l ** 0.302
+                                L2 = 0.0009252 * lambda_l ** (-2.4684)
+                                L3 = 0.10 * lambda_l ** (-1.4516)
+                                L4 = 0.5 * lambda_l ** (-6.738)
+
+                                if (lambda_l < 0.01 and NFr < L1) or (lambda_l >= 0.01 and NFr < L2):
+                                    regime = "Segregated"
+                                elif lambda_l >= 0.01 and L2 <= NFr <= L3:
+                                    regime = "Transition"
+                                elif (0.01 <= lambda_l < 0.4 and L3 < NFr <= L1) or \
+                                        (lambda_l >= 0.4 and L3 < NFr <= L4):
+                                    regime = "Intermittent"
+                                elif (lambda_l < 0.4 and NFr >= L1) or \
+                                        (lambda_l >= 0.4 and NFr > L4):
+                                    regime = "Distributed"
+                                else:
+                                    regime = "Intermittent"
+                            else:
+                                # Nearly single phase by volume
+                                regime = "Turbulent" if Re > 2300 else "Laminar"
+                        except Exception:
+                            regime = "Multiphase"
+                    else:
+                        # Single-phase regime
+                        if Re > 2300:
+                            regime = "Turbulent"
+                        elif Re > 0:
+                            regime = "Laminar"
+                        else:
+                            regime = "Unknown"
 
                     # Frictional pressure drop (Pa)
                     dP_friction = ff * (seg_length / id_m) * 0.5 * seg_rho * vel ** 2
@@ -228,6 +291,8 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                     viscosities.append(seg_mu)
                     flow_regimes.append(regime)
                     reynolds_numbers.append(Re)
+                    phase_counts.append(seg_n_phases)
+                    liquid_holdups.append(round(lambda_l, 4))
 
                 # =============================================================
                 # Results Display
@@ -336,6 +401,8 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
                     "Velocity (m/s)": [round(v, 3) for v in velocities],
                     "Density (kg/m³)": [round(d, 2) for d in densities],
                     "Reynolds": [f"{r:,.0f}" for r in reynolds_numbers],
+                    "Phases": phase_counts,
+                    "Liq. Holdup": liquid_holdups,
                     "Flow Regime": flow_regimes,
                 })
                 st.dataframe(seg_table, use_container_width=True, hide_index=True)
