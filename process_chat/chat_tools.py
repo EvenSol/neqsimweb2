@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Optional
 from .patch_schema import InputPatch, Scenario, scenarios_from_json
 from .process_model import NeqSimProcessModel
 from .templates import template_help_text
+from .optimizer import optimize_production, format_optimization_result, OptimizationResult
+from .risk_analysis import run_risk_analysis, format_risk_result, RiskAnalysisResult
+from .compressor_chart import generate_compressor_chart, format_chart_result, CompressorChartResult
+from .auto_size import auto_size_all, format_autosize_result, AutoSizeResult
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +474,136 @@ When the user asks to save/download the process, output:
 ```
 Do NOT write Python scripts yourself — ALWAYS use the show_script action so the system generates the correct script.
 
+PROCESS OPTIMIZATION (for "find maximum production", "maximize throughput", "what is the max flow?"):
+When the user asks to optimize, find maximum production, or maximize throughput, output an ```optimize ... ``` block:
+```optimize
+{{
+  "objective": "maximize_throughput",
+  "feed_stream": "feed gas",
+  "min_flow_kg_hr": 1000,
+  "max_flow_kg_hr": 500000,
+  "utilization_limit": 1.0,
+  "tolerance_pct": 1.0,
+  "max_iterations": 25
+}}
+```
+Parameters:
+  - objective: "maximize_throughput" (find max feed flow before equipment limits are hit)
+  - feed_stream: name of the feed stream to scale (auto-detected if omitted)
+  - min_flow_kg_hr: lower bound for flow search (default: 10% of current flow)
+  - max_flow_kg_hr: upper bound for flow search (default: 500% of current flow)
+  - utilization_limit: max equipment utilization ratio, 0-1 (default: 1.0 = 100%)
+  - tolerance_pct: convergence tolerance as % of range (default: 1.0)
+  - max_iterations: max search iterations (default: 25)
+
+The optimizer will:
+  1. Scale the feed flow rate using golden-section search
+  2. At each step, run the full process simulation
+  3. Check equipment utilization (compressor surge/power, separator capacity, etc.)
+  4. Find the maximum flow where all equipment stays within limits
+  5. Report the optimal flow, bottleneck equipment, and utilization breakdown
+
+Use this for questions like:
+  - "Find maximum production for this process"
+  - "What is the maximum throughput?"
+  - "How much can we increase the feed flow?"
+  - "Optimize the flow rate"
+  - "What is the bottleneck equipment?"
+  - "Find max flow before equipment limits are exceeded"
+
+RISK ANALYSIS (for "risk matrix", "equipment criticality", "availability analysis", "what if equipment fails?"):
+When the user asks about risk, reliability, availability, failure analysis, or equipment criticality, output a ```risk ... ``` block:
+```risk
+{{
+  "analysis": "full",
+  "product_stream": "export gas",
+  "feed_stream": "feed gas",
+  "mc_iterations": 1000,
+  "mc_days": 365,
+  "include_degraded": true
+}}
+```
+Parameters:
+  - analysis: "full" (complete risk analysis with criticality + risk matrix + Monte Carlo)
+  - product_stream: name of the product/export stream (auto-detected if omitted)
+  - feed_stream: name of the feed stream (auto-detected if omitted)
+  - mc_iterations: number of Monte Carlo iterations (default: 1000)
+  - mc_days: simulation horizon in days (default: 365)
+  - include_degraded: whether to include degraded failure modes (default: true)
+
+The risk analysis will:
+  1. Assign OREDA-based reliability data (MTTF, MTTR) to each equipment
+  2. Simulate equipment trips (shutdown each unit one-by-one, measure production loss)
+  3. Simulate degraded operation (reduced capacity, measure impact)
+  4. Build a 5×5 risk matrix (probability from failure rate, consequence from production loss)
+  5. Run Monte Carlo availability simulation (stochastic failures over 1 year)
+  6. Rank equipment by criticality index
+
+Use this for questions like:
+  - "Show the risk matrix for this process"
+  - "What is the equipment criticality ranking?"
+  - "How reliable is this process?"
+  - "What is the system availability?"
+  - "What happens if the compressor fails?"
+  - "Run a failure analysis"
+  - "What are the most critical equipment items?"
+  - "Run Monte Carlo availability simulation"
+
+COMPRESSOR CHART (for "generate compressor map", "show compressor performance curve", "compressor chart"):
+When the user asks to generate or show a compressor performance chart/map/curve, output a ```chart ... ``` block:
+```chart
+{{
+  "compressor": "1st stage compressor",
+  "template": "CENTRIFUGAL_STANDARD",
+  "num_speeds": 5
+}}
+```
+Parameters:
+  - compressor: name of the compressor (or "all" for all compressors). Auto-detected if omitted.
+  - template: chart template (default: "CENTRIFUGAL_STANDARD"). Options:
+      Basic: CENTRIFUGAL_STANDARD, CENTRIFUGAL_HIGH_FLOW, CENTRIFUGAL_HIGH_HEAD
+      Application: PIPELINE, EXPORT, INJECTION, GAS_LIFT, REFRIGERATION, BOOSTER
+      Type: SINGLE_STAGE, MULTISTAGE_INLINE, INTEGRALLY_GEARED, OVERHUNG
+  - num_speeds: number of speed curves to generate (default: 5)
+
+This generates a CompressorChart, applies it to the compressor, and re-runs the simulation.
+The chart enforces surge/stonewall/speed limits during all subsequent calculations.
+
+Use this for questions like:
+  - "Generate a compressor chart for the 1st stage compressor"
+  - "Show the compressor performance map"
+  - "Create a compressor curve using pipeline template"
+  - "Generate compressor charts for all compressors"
+
+AUTO-SIZE (for "auto size equipment", "equipment sizing", "utilization report", "bottleneck analysis"):
+When the user asks to auto-size equipment, get a sizing report, check utilization, or find bottlenecks, output an ```autosize ... ``` block:
+```autosize
+{{
+  "safety_factor": 1.2,
+  "generate_charts": true,
+  "chart_template": "CENTRIFUGAL_STANDARD"
+}}
+```
+Parameters:
+  - safety_factor: design safety factor (default: 1.2 = 20% margin)
+  - generate_charts: whether to generate compressor charts (default: true)
+  - chart_template: compressor chart template (default: "CENTRIFUGAL_STANDARD")
+
+The auto-sizing will:
+  1. Apply autoSize() to all sizeable equipment (separators, valves, heaters, coolers, etc.)
+  2. Optionally generate compressor performance charts
+  3. Extract sizing data (dimensions, capacities, design values)
+  4. Calculate utilization ratios for all equipment
+  5. Identify the process bottleneck
+
+Use this for questions like:
+  - "Auto-size all equipment"
+  - "What is the equipment sizing?"
+  - "Show equipment utilization"
+  - "What is the process bottleneck?"
+  - "Generate a sizing report"
+  - "What is the utilization of each piece of equipment?"
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -628,6 +762,61 @@ IMPORTANT: Do NOT write Python scripts yourself. ALWAYS use ```build {"action": 
 the system generates the correct script with proper NeqSim Java API imports.
 Do NOT use "from neqsim.process import ..." or "from neqsim.thermo.system import ..." — these are WRONG.
 The correct imports are handled automatically by the show_script action.
+
+PROCESS OPTIMIZATION (after a process has been built):
+When the user asks to optimize, find maximum production, or maximize throughput, output:
+```optimize
+{
+  "objective": "maximize_throughput",
+  "feed_stream": "feed gas",
+  "min_flow_kg_hr": 1000,
+  "max_flow_kg_hr": 500000,
+  "utilization_limit": 1.0,
+  "tolerance_pct": 1.0,
+  "max_iterations": 25
+}
+```
+Use this for: "find max production", "maximize throughput", "what is the bottleneck?",
+"how much can we increase flow?", "optimize the process".
+
+RISK ANALYSIS (after a process has been built):
+When the user asks about risk, reliability, availability, or equipment criticality, output:
+```risk
+{
+  "analysis": "full",
+  "mc_iterations": 1000,
+  "mc_days": 365,
+  "include_degraded": true
+}
+```
+Use this for: "show risk matrix", "equipment criticality", "system availability",
+"failure analysis", "Monte Carlo simulation", "which equipment is most critical?".
+
+COMPRESSOR CHART (after a process has been built):
+When the user asks to generate a compressor chart/map/performance curve, output:
+```chart
+{
+  "compressor": "1st stage compressor",
+  "template": "CENTRIFUGAL_STANDARD",
+  "num_speeds": 5
+}
+```
+Templates: CENTRIFUGAL_STANDARD, CENTRIFUGAL_HIGH_FLOW, CENTRIFUGAL_HIGH_HEAD,
+PIPELINE, EXPORT, INJECTION, GAS_LIFT, REFRIGERATION, BOOSTER,
+SINGLE_STAGE, MULTISTAGE_INLINE, INTEGRALLY_GEARED, OVERHUNG.
+Use this for: "generate compressor chart", "show compressor map", "compressor performance curve".
+
+AUTO-SIZE (after a process has been built):
+When the user asks to auto-size, get sizing report, check utilization, or find bottleneck, output:
+```autosize
+{
+  "safety_factor": 1.2,
+  "generate_charts": true,
+  "chart_template": "CENTRIFUGAL_STANDARD"
+}
+```
+Use this for: "auto-size equipment", "sizing report", "equipment utilization",
+"what is the bottleneck?", "size all equipment".
 """
 
 
@@ -663,6 +852,46 @@ def extract_scenario_json(text: str) -> Optional[dict]:
     return None
 
 
+def extract_optimize_spec(text: str) -> Optional[dict]:
+    """
+    Extract an optimization specification from LLM output text.
+    Looks for ```optimize ... ``` blocks with JSON.
+    """
+    import re
+    pattern = r'```optimize\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if "objective" in data:
+                return data
+        except json.JSONDecodeError:
+            continue
+    
+    return None
+
+
+def extract_risk_spec(text: str) -> Optional[dict]:
+    """
+    Extract a risk analysis specification from LLM output text.
+    Looks for ```risk ... ``` blocks with JSON.
+    """
+    import re
+    pattern = r'```risk\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if "analysis" in data:
+                return data
+        except json.JSONDecodeError:
+            continue
+    
+    return None
+
+
 def extract_property_query(text: str) -> Optional[dict]:
     """
     Extract a property query specification from LLM output text.
@@ -691,6 +920,44 @@ def extract_build_spec(text: str) -> Optional[dict]:
     """
     import re
     pattern = r'```build\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    for match in matches:
+        try:
+            data = json.loads(match)
+            return data
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+def extract_chart_spec(text: str) -> Optional[dict]:
+    """Extract a compressor chart specification from LLM output.
+
+    Looks for ````chart ... ```` blocks with JSON.
+    """
+    import re
+    pattern = r'```chart\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    for match in matches:
+        try:
+            data = json.loads(match)
+            return data
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+def extract_autosize_spec(text: str) -> Optional[dict]:
+    """Extract an auto-size specification from LLM output.
+
+    Looks for ````autosize ... ```` blocks with JSON.
+    """
+    import re
+    pattern = r'```autosize\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
 
     for match in matches:
@@ -829,6 +1096,10 @@ class ProcessChatSession:
         self.ai_model = ai_model
         self.history: List[Dict[str, str]] = []
         self._last_comparison = None
+        self._last_optimization = None
+        self._last_risk_analysis = None
+        self._last_chart = None
+        self._last_autosize = None
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
         self._last_save_bytes = None  # Last generated .neqsim bytes
@@ -849,10 +1120,18 @@ class ProcessChatSession:
           - Build specs (```build```) → build process from scratch
           - Scenario JSON (```json```) → run what-if scenarios
           - Property queries (```query```) → extract simulation data
+          - Optimize specs (```optimize```) → find max production
           - Plain Q&A → direct LLM response
         """
         from google import genai
         from google.genai import types
+
+        # Clear per-message results so stale data doesn't leak across messages
+        self._last_comparison = None
+        self._last_optimization = None
+        self._last_risk_analysis = None
+        self._last_chart = None
+        self._last_autosize = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -887,6 +1166,26 @@ class ProcessChatSession:
         property_query = extract_property_query(assistant_text)
         if property_query and self.model:
             return self._handle_property_query(assistant_text, property_query, client, types)
+
+        # --- Check for optimization spec ---
+        optimize_spec = extract_optimize_spec(assistant_text)
+        if optimize_spec and self.model:
+            return self._handle_optimization(assistant_text, optimize_spec, client, types)
+
+        # --- Check for risk analysis spec ---
+        risk_spec = extract_risk_spec(assistant_text)
+        if risk_spec and self.model:
+            return self._handle_risk_analysis(assistant_text, risk_spec, client, types)
+
+        # --- Check for compressor chart spec ---
+        chart_spec = extract_chart_spec(assistant_text)
+        if chart_spec and self.model:
+            return self._handle_chart(assistant_text, chart_spec, client, types)
+
+        # --- Check for auto-size spec ---
+        autosize_spec = extract_autosize_spec(assistant_text)
+        if autosize_spec and self.model:
+            return self._handle_autosize(assistant_text, autosize_spec, client, types)
 
         # --- Pure Q&A ---
         self.history.append({"role": "assistant", "content": assistant_text})
@@ -1210,6 +1509,225 @@ class ProcessChatSession:
             })
             return self._llm_followup(client, types)
 
+    # -- Optimization handling -----------------------------------------------
+
+    def _handle_optimization(self, assistant_text: str, optimize_spec: dict, client, types) -> str:
+        """Run process optimization and feed results back to LLM."""
+        try:
+            feed_stream = optimize_spec.get("feed_stream")
+            min_flow = optimize_spec.get("min_flow_kg_hr")
+            max_flow = optimize_spec.get("max_flow_kg_hr")
+            util_limit = float(optimize_spec.get("utilization_limit", 1.0))
+            tolerance = float(optimize_spec.get("tolerance_pct", 1.0))
+            max_iter = int(optimize_spec.get("max_iterations", 25))
+
+            result = optimize_production(
+                model=self.model,
+                feed_stream_name=feed_stream,
+                min_flow_kg_hr=min_flow,
+                max_flow_kg_hr=max_flow,
+                utilization_limit=util_limit,
+                tolerance_pct=tolerance,
+                max_iterations=max_iter,
+            )
+
+            self._last_optimization = result
+            results_text = format_optimization_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Process optimization completed. Results below. "
+                    f"Explain these results to the engineer clearly. "
+                    f"Highlight the optimal flow rate, bottleneck equipment, "
+                    f"and how much production can be increased. "
+                    f"If utilization data is available, mention the utilization "
+                    f"breakdown for each equipment.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            self._last_comparison = None
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Optimization failed with error: {str(e)}. "
+                    f"Inform the engineer and suggest possible reasons.]"
+                )
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_optimization(self) -> Optional[OptimizationResult]:
+        """Get the last optimization result (for UI display)."""
+        return getattr(self, "_last_optimization", None)
+
+    # -- Risk analysis handling ----------------------------------------------
+
+    def _handle_risk_analysis(self, assistant_text: str, risk_spec: dict, client, types) -> str:
+        """Run risk analysis and feed results back to LLM."""
+        try:
+            product_stream = risk_spec.get("product_stream")
+            feed_stream = risk_spec.get("feed_stream")
+            mc_iterations = int(risk_spec.get("mc_iterations", 1_000))
+            mc_days = int(risk_spec.get("mc_days", 365))
+            include_degraded = bool(risk_spec.get("include_degraded", True))
+
+            result = run_risk_analysis(
+                model=self.model,
+                product_stream=product_stream,
+                feed_stream=feed_stream,
+                mc_iterations=mc_iterations,
+                mc_days=mc_days,
+                include_degraded=include_degraded,
+            )
+
+            self._last_risk_analysis = result
+            results_text = format_risk_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Risk analysis completed. Results below. "
+                    f"Explain these results to the engineer clearly. "
+                    f"Highlight the most critical equipment, the risk levels, "
+                    f"system availability, and Monte Carlo production estimates. "
+                    f"Present the risk matrix and equipment criticality ranking. "
+                    f"Mention any HIGH or EXTREME risk items that need attention.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            self._last_comparison = None
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Risk analysis failed with error: {str(e)}. "
+                    f"Inform the engineer and suggest possible reasons.]"
+                )
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_risk_analysis(self) -> Optional[RiskAnalysisResult]:
+        """Get the last risk analysis result (for UI display)."""
+        return getattr(self, "_last_risk_analysis", None)
+
+    # -- Compressor chart handling -------------------------------------------
+
+    def _handle_chart(self, assistant_text: str, chart_spec: dict, client, types) -> str:
+        """Generate compressor chart(s) and feed results back to LLM."""
+        try:
+            compressor_name = chart_spec.get("compressor")
+            template = chart_spec.get("template", "CENTRIFUGAL_STANDARD")
+            num_speeds = int(chart_spec.get("num_speeds", 5))
+
+            result = generate_compressor_chart(
+                model=self.model,
+                compressor_name=compressor_name,
+                template=template,
+                num_speeds=num_speeds,
+            )
+
+            self._last_chart = result
+            results_text = format_chart_result(result)
+
+            # Update system prompt (chart may change compressor behaviour)
+            self._system_prompt = build_system_prompt(self.model)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Compressor chart generation completed. Results below. "
+                    f"Explain the chart data to the engineer. Mention the speed curves, "
+                    f"surge and stonewall limits, and the current operating point. "
+                    f"Note any operating point concerns (near surge or stonewall).]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            self._last_comparison = None
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Compressor chart generation failed: {str(e)}. "
+                    f"Inform the engineer and suggest possible reasons.]"
+                )
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_chart(self) -> Optional[CompressorChartResult]:
+        """Get the last compressor chart result (for UI display)."""
+        return getattr(self, "_last_chart", None)
+
+    # -- Auto-size handling --------------------------------------------------
+
+    def _handle_autosize(self, assistant_text: str, autosize_spec: dict, client, types) -> str:
+        """Auto-size all equipment and feed results back to LLM."""
+        try:
+            safety_factor = float(autosize_spec.get("safety_factor", 1.2))
+            gen_charts = bool(autosize_spec.get("generate_charts", True))
+            chart_template = autosize_spec.get("chart_template", "CENTRIFUGAL_STANDARD")
+
+            result = auto_size_all(
+                model=self.model,
+                safety_factor=safety_factor,
+                generate_compressor_charts=gen_charts,
+                chart_template=chart_template,
+            )
+
+            self._last_autosize = result
+            results_text = format_autosize_result(result)
+
+            # Update system prompt (sizing changes model state)
+            self._system_prompt = build_system_prompt(self.model)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Auto-sizing completed. Results below. "
+                    f"Explain the sizing results and utilization to the engineer. "
+                    f"Highlight the bottleneck equipment, utilization percentages, "
+                    f"and any equipment near capacity limits. "
+                    f"Mention the sizing data (dimensions, capacities) for key equipment.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            self._last_comparison = None
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Auto-sizing failed: {str(e)}. "
+                    f"Inform the engineer and suggest possible reasons.]"
+                )
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_autosize(self) -> Optional[AutoSizeResult]:
+        """Get the last auto-size result (for UI display)."""
+        return getattr(self, "_last_autosize", None)
+
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
@@ -1252,9 +1770,13 @@ class ProcessChatSession:
         return contents
 
     def reset(self):
-        """Clear chat history."""
+        """Clear chat history and all cached results."""
         self.history.clear()
         self._last_comparison = None
+        self._last_optimization = None
+        self._last_risk_analysis = None
+        self._last_chart = None
+        self._last_autosize = None
         self._last_script = None
         self._last_save_bytes = None
 

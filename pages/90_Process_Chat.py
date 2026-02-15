@@ -89,8 +89,8 @@ with st.sidebar:
     except Exception:
         pass
     if not api_key_from_secrets and not st.session_state.get('gemini_api_key', ''):
-        st.sidebar.text_input("Gemini API Key", type="password", key="gemini_api_key",
-                              help="Get a free key from https://aistudio.google.com/")
+        st.text_input("Gemini API Key", type="password", key="gemini_api_key",
+                      help="Get a free key from https://aistudio.google.com/")
 
     st.divider()
 
@@ -159,6 +159,11 @@ with st.sidebar:
             "What if we increase the export pressure by 10 bara?",
             "What if we reduce the cooler outlet temperature to 30°C?",
             "What happens if we increase feed flow by 10%?",
+            "Find maximum production for this process",
+            "What is the bottleneck equipment?",
+            "Show the risk matrix for this process",
+            "What is the equipment criticality ranking?",
+            "Run a Monte Carlo availability simulation",
             "Show me the Python script",
             "Save the process",
         ]
@@ -201,6 +206,8 @@ if model is None and not builder_mode:
     
     The AI will design the process, run the simulation, and you can then:
     - Ask what-if questions
+    - **Find maximum production** (optimize feed flow)
+    - **Run risk analysis** (equipment criticality, risk matrix, availability)
     - Download the Python script
     - Save as a `.neqsim` file
     """)
@@ -269,7 +276,7 @@ if model is not None:
 
 def _show_comparison(comparison):
     """Display scenario comparison results inline."""
-    from process_chat.scenario_engine import results_summary_table, comparison_to_dataframe
+    from process_chat.scenario_engine import results_summary_table
 
     st.markdown("---")
     st.markdown("**📊 Scenario Comparison**")
@@ -313,6 +320,325 @@ def _show_comparison(comparison):
             st.markdown(f"{icon} **{c['constraint']}** ({c['status']}): {c['detail']}")
 
 
+def _show_optimization(opt_result):
+    """Display optimization results inline with visual utilization bars."""
+    st.markdown("---")
+    st.markdown("**🎯 Process Optimization Result**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(
+            "Original Flow",
+            f"{opt_result.original_flow_kg_hr:,.0f} kg/hr",
+        )
+    with col2:
+        st.metric(
+            "Optimal Flow",
+            f"{opt_result.optimal_flow_kg_hr:,.0f} kg/hr",
+            delta=f"{opt_result.max_increase_pct:+.1f}%",
+        )
+    with col3:
+        st.metric(
+            "Bottleneck",
+            opt_result.bottleneck_equipment or "None",
+            delta=f"{opt_result.bottleneck_utilization*100:.0f}% util" if opt_result.bottleneck_utilization else None,
+            delta_color="inverse",
+        )
+
+    # Utilization breakdown
+    if opt_result.utilization_breakdown:
+        st.markdown("**Equipment Utilization at Optimum:**")
+        util_data = []
+        for u in sorted(opt_result.utilization_breakdown, key=lambda x: x.utilization, reverse=True):
+            util_data.append({
+                "Equipment": u.name,
+                "Type": u.equipment_type,
+                "Utilization %": round(u.utilization * 100, 1),
+                "Constraint": u.constraint_name,
+                "Detail": u.detail,
+            })
+        st.dataframe(pd.DataFrame(util_data), use_container_width=True, hide_index=True)
+
+    # Search iteration chart
+    if opt_result.iterations and len(opt_result.iterations) > 1:
+        with st.expander("📈 Optimization Search History", expanded=False):
+            iter_data = []
+            for it in opt_result.iterations:
+                iter_data.append({
+                    "Iteration": it.iteration,
+                    "Flow (kg/hr)": round(it.flow_rate_kg_hr, 0),
+                    "Max Utilization %": round(it.max_utilization * 100, 1),
+                    "Feasible": "✓" if it.feasible else "✗",
+                    "Bottleneck": it.bottleneck,
+                })
+            st.dataframe(pd.DataFrame(iter_data), use_container_width=True, hide_index=True)
+
+    st.markdown(f"**Algorithm:** {opt_result.search_algorithm}")
+    if not opt_result.converged:
+        st.warning(f"Optimization did not fully converge: {opt_result.message}")
+
+
+def _show_risk_analysis(risk_result):
+    """Display risk analysis results inline with risk matrix, criticality, and Monte Carlo."""
+    st.markdown("---")
+    st.markdown("**⚠️ Risk Analysis Result**")
+
+    # Top metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(
+            "System Availability",
+            f"{risk_result.system_availability_pct:.2f}%",
+        )
+    with col2:
+        st.metric(
+            "Most Critical Equipment",
+            risk_result.most_critical_equipment or "None",
+        )
+    with col3:
+        mc = risk_result.monte_carlo
+        if mc:
+            st.metric(
+                "Expected Production",
+                f"{mc.expected_production_pct:.1f}%",
+                delta=f"P90: {mc.p90_production_pct:.1f}%",
+                delta_color="off",
+            )
+
+    # Risk matrix table
+    if risk_result.risk_matrix:
+        st.markdown("**Risk Matrix:**")
+        risk_data = []
+        for ri in sorted(risk_result.risk_matrix, key=lambda x: x.risk_score, reverse=True):
+            level_icon = {
+                "LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠",
+                "VERY_HIGH": "🔴", "EXTREME": "⛔",
+            }.get(ri.risk_level.value, "⚪")
+            risk_data.append({
+                "Equipment": ri.equipment_name,
+                "Probability": ri.probability.value,
+                "Consequence": ri.consequence.value,
+                "Score": ri.risk_score,
+                "Risk Level": f"{level_icon} {ri.risk_level.value}",
+                "Failure Rate (/yr)": round(ri.failure_rate_per_year, 2),
+                "Production Loss %": round(ri.production_loss_pct, 1),
+            })
+        st.dataframe(pd.DataFrame(risk_data), use_container_width=True, hide_index=True)
+
+    # Equipment criticality
+    trip_impacts = [fi for fi in risk_result.failure_impacts if fi.failure_type == "TRIP"]
+    if trip_impacts:
+        with st.expander("🔍 Equipment Criticality (Trip Impact)", expanded=False):
+            crit_data = []
+            for fi in sorted(trip_impacts, key=lambda x: x.criticality_index, reverse=True):
+                crit_data.append({
+                    "Equipment": fi.equipment_name,
+                    "Type": fi.equipment_type,
+                    "Production Loss %": round(fi.production_loss_pct, 1),
+                    "Criticality Index": round(fi.criticality_index, 2),
+                    "Failed Flow (kg/hr)": round(fi.failed_production_kg_hr, 0),
+                })
+            st.dataframe(pd.DataFrame(crit_data), use_container_width=True, hide_index=True)
+
+    # Degraded impacts
+    deg_impacts = [fi for fi in risk_result.failure_impacts if fi.failure_type == "DEGRADED"]
+    if deg_impacts:
+        with st.expander("📉 Degraded Operation Impact", expanded=False):
+            deg_data = []
+            for fi in sorted(deg_impacts, key=lambda x: x.production_loss_pct, reverse=True):
+                deg_data.append({
+                    "Equipment": fi.equipment_name,
+                    "Type": fi.equipment_type,
+                    "Production Loss %": round(fi.production_loss_pct, 1),
+                    "Failed Flow (kg/hr)": round(fi.failed_production_kg_hr, 0),
+                })
+            st.dataframe(pd.DataFrame(deg_data), use_container_width=True, hide_index=True)
+
+    # Equipment reliability
+    if risk_result.equipment_reliability:
+        with st.expander("📊 Equipment Reliability (OREDA)", expanded=False):
+            rel_data = []
+            for r in risk_result.equipment_reliability:
+                rel_data.append({
+                    "Equipment": r.name,
+                    "Type": r.equipment_type,
+                    "MTTF (hours)": round(r.mttf_hours, 0),
+                    "MTTR (hours)": round(r.mttr_hours, 0),
+                    "Failure Rate (/yr)": round(r.failure_rate_per_year, 2),
+                    "Availability %": round(r.availability * 100, 2),
+                })
+            st.dataframe(pd.DataFrame(rel_data), use_container_width=True, hide_index=True)
+
+    # Monte Carlo details
+    mc = risk_result.monte_carlo
+    if mc:
+        with st.expander("🎲 Monte Carlo Simulation Details", expanded=False):
+            mc_col1, mc_col2 = st.columns(2)
+            with mc_col1:
+                st.markdown("**Simulation Parameters**")
+                st.write(f"- Iterations: {mc.iterations:,d}")
+                st.write(f"- Horizon: {mc.horizon_days} days")
+                st.write(f"- Expected Availability: {mc.expected_availability_pct:.1f}%")
+            with mc_col2:
+                st.markdown("**Production Statistics**")
+                st.write(f"- P10: {mc.p10_production_pct:.1f}%")
+                st.write(f"- P50: {mc.p50_production_pct:.1f}%")
+                st.write(f"- P90: {mc.p90_production_pct:.1f}%")
+                st.write(f"- Expected Downtime: {mc.expected_downtime_hours_year:.0f} hrs/year")
+                st.write(f"- Expected Events: {mc.expected_failure_events_year:.1f} /year")
+
+            if mc.equipment_downtime_contribution:
+                st.markdown("**Downtime Contribution:**")
+                dt_data = []
+                for name, pct in sorted(mc.equipment_downtime_contribution.items(),
+                                        key=lambda x: x[1], reverse=True):
+                    if pct > 0.1:
+                        dt_data.append({"Equipment": name, "Contribution %": round(pct, 1)})
+                if dt_data:
+                    st.dataframe(pd.DataFrame(dt_data), use_container_width=True, hide_index=True)
+
+
+def _show_compressor_chart(chart_result):
+    """Display compressor chart results inline with Plotly performance map."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown("**📈 Compressor Performance Chart**")
+
+    for chart_data in chart_result.charts:
+        st.markdown(f"**{chart_data.compressor_name}** — Template: {chart_data.template_used}")
+
+        fig = go.Figure()
+
+        # Speed curves
+        for sc in chart_data.speed_curves:
+            if sc.flow_m3_hr and sc.head_kJ_kg:
+                fig.add_trace(go.Scatter(
+                    x=sc.flow_m3_hr,
+                    y=sc.head_kJ_kg,
+                    mode="lines",
+                    name=f"{sc.speed_rpm:.0f} RPM",
+                    line=dict(width=2),
+                ))
+
+        # Surge curve
+        if chart_data.surge_flow and chart_data.surge_head:
+            fig.add_trace(go.Scatter(
+                x=chart_data.surge_flow,
+                y=chart_data.surge_head,
+                mode="lines",
+                name="Surge Line",
+                line=dict(color="red", width=3, dash="dash"),
+            ))
+
+        # Stonewall curve
+        if chart_data.stonewall_flow and chart_data.stonewall_head:
+            fig.add_trace(go.Scatter(
+                x=chart_data.stonewall_flow,
+                y=chart_data.stonewall_head,
+                mode="lines",
+                name="Stonewall",
+                line=dict(color="orange", width=3, dash="dot"),
+            ))
+
+        # Operating point
+        op = chart_data.operating_point
+        if op and op.flow_m3_hr > 0 and op.head_kJ_kg > 0:
+            fig.add_trace(go.Scatter(
+                x=[op.flow_m3_hr],
+                y=[op.head_kJ_kg],
+                mode="markers+text",
+                name="Operating Point",
+                marker=dict(size=12, color="green", symbol="star"),
+                text=[f"OP: {op.flow_m3_hr:.0f}, {op.head_kJ_kg:.0f}"],
+                textposition="top right",
+            ))
+
+        fig.update_layout(
+            title=f"Compressor Map — {chart_data.compressor_name}",
+            xaxis_title="Actual Volume Flow (m³/hr)",
+            yaxis_title="Polytropic Head (kJ/kg)",
+            hovermode="closest",
+            showlegend=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Operating point details
+        if op:
+            op_cols = st.columns(4)
+            with op_cols[0]:
+                st.metric("Flow", f"{op.flow_m3_hr:.0f} m³/hr" if op.flow_m3_hr else "N/A")
+            with op_cols[1]:
+                st.metric("Head", f"{op.head_kJ_kg:.1f} kJ/kg" if op.head_kJ_kg else "N/A")
+            with op_cols[2]:
+                st.metric("Speed", f"{op.speed_rpm:.0f} RPM" if op.speed_rpm else "N/A")
+            with op_cols[3]:
+                st.metric("Efficiency", f"{op.efficiency_pct:.1f}%" if op.efficiency_pct else "N/A")
+
+            if op.distance_to_surge is not None:
+                st.info(f"Surge margin: {op.distance_to_surge*100:.1f}%")
+            if op.distance_to_stonewall is not None:
+                st.info(f"Stonewall margin: {op.distance_to_stonewall*100:.1f}%")
+
+
+def _show_auto_size(autosize_result):
+    """Display auto-size results inline with sizing data and utilization."""
+    st.markdown("---")
+    st.markdown("**📐 Auto-Size & Utilization Report**")
+
+    # Top metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(
+            "Equipment Sized",
+            f"{autosize_result.sized_count}/{autosize_result.total_equipment}",
+        )
+    with col2:
+        st.metric(
+            "Bottleneck",
+            autosize_result.bottleneck_name or "None detected",
+        )
+    with col3:
+        if autosize_result.bottleneck_utilization_pct > 0:
+            st.metric(
+                "Bottleneck Utilization",
+                f"{autosize_result.bottleneck_utilization_pct:.1f}%",
+                delta=autosize_result.bottleneck_constraint,
+                delta_color="inverse",
+            )
+
+    # Utilization breakdown
+    if autosize_result.utilization:
+        st.markdown("**Equipment Utilization:**")
+        util_data = []
+        for u in sorted(autosize_result.utilization, key=lambda x: x.utilization_pct, reverse=True):
+            marker = "★" if u.is_bottleneck else ""
+            util_data.append({
+                "": marker,
+                "Equipment": u.name,
+                "Type": u.equipment_type,
+                "Utilization %": round(u.utilization_pct, 1),
+                "Constraint": u.constraint_name,
+                "Detail": u.detail,
+            })
+        st.dataframe(pd.DataFrame(util_data), use_container_width=True, hide_index=True)
+
+    # Sizing details
+    sized_items = [s for s in autosize_result.equipment_sized if s.auto_sized and s.sizing_data]
+    if sized_items:
+        with st.expander("📋 Equipment Sizing Details", expanded=False):
+            for si in sized_items:
+                st.markdown(f"**{si.name}** ({si.equipment_type})")
+                sizing_display = {k: v for k, v in si.sizing_data.items() if k != "sizing_report"}
+                if sizing_display:
+                    sizing_df = pd.DataFrame([sizing_display])
+                    st.dataframe(sizing_df, use_container_width=True, hide_index=True)
+                # JSON report
+                if "sizing_report" in si.sizing_data:
+                    with st.expander(f"Full sizing report — {si.name}", expanded=False):
+                        st.json(si.sizing_data["sizing_report"])
+
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -328,6 +654,22 @@ for msg in st.session_state["chat_messages"]:
         # If there's a comparison result attached, show it
         if "comparison" in msg and msg["comparison"] is not None:
             _show_comparison(msg["comparison"])
+
+        # If there's an optimization result attached, show it
+        if "optimization" in msg and msg["optimization"] is not None:
+            _show_optimization(msg["optimization"])
+
+        # If there's a risk analysis result attached, show it
+        if "risk_analysis" in msg and msg["risk_analysis"] is not None:
+            _show_risk_analysis(msg["risk_analysis"])
+
+        # If there's a compressor chart result attached, show it
+        if "chart" in msg and msg["chart"] is not None:
+            _show_compressor_chart(msg["chart"])
+
+        # If there's an auto-size result attached, show it
+        if "autosize" in msg and msg["autosize"] is not None:
+            _show_auto_size(msg["autosize"])
 
 
 # Handle pending question from sidebar buttons
@@ -380,6 +722,10 @@ if user_input:
                 session = st.session_state["chat_session"]
                 response = session.chat(user_input)
                 comparison = session.get_last_comparison()
+                optimization = session.get_last_optimization()
+                risk_analysis = session.get_last_risk_analysis()
+                chart = session.get_last_chart()
+                autosize = session.get_last_autosize()
 
                 # --- Sync model if builder created one ---
                 if session.model is not None and st.session_state.get("process_model") is None:
@@ -389,11 +735,23 @@ if user_input:
 
                 st.markdown(response)
 
-                # Store message with optional comparison
+                # Store message with optional comparison and optimization
                 msg_data = {"role": "assistant", "content": response}
                 if comparison is not None:
                     msg_data["comparison"] = comparison
                     _show_comparison(comparison)
+                if optimization is not None:
+                    msg_data["optimization"] = optimization
+                    _show_optimization(optimization)
+                if risk_analysis is not None:
+                    msg_data["risk_analysis"] = risk_analysis
+                    _show_risk_analysis(risk_analysis)
+                if chart is not None:
+                    msg_data["chart"] = chart
+                    _show_compressor_chart(chart)
+                if autosize is not None:
+                    msg_data["autosize"] = autosize
+                    _show_auto_size(autosize)
 
                 st.session_state["chat_messages"].append(msg_data)
 
