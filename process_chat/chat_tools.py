@@ -1180,6 +1180,33 @@ def extract_property_query(text: str) -> Optional[dict]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Tool-block stripping (safety net for followup LLM calls)
+# ---------------------------------------------------------------------------
+
+# All tool block types that the LLM might accidentally emit in a followup
+_TOOL_BLOCK_TYPES = (
+    "json", "chart", "autosize", "optimize", "risk", "emissions",
+    "dynamic", "sensitivity", "pvt", "safety", "flow_assurance",
+    "query", "build",
+)
+
+def _strip_tool_blocks(text: str) -> str:
+    """Remove any ```<tool> ... ``` code blocks from LLM output.
+
+    Followup LLM calls should only return natural-language explanations.
+    If the LLM accidentally emits a tool block, strip it so the user
+    doesn't see raw JSON.
+    """
+    import re
+    for block_type in _TOOL_BLOCK_TYPES:
+        pattern = rf'```{block_type}\s*\n.*?\n\s*```'
+        text = re.sub(pattern, '', text, flags=re.DOTALL)
+    # Also strip any remaining unlabelled ```{ ... }``` JSON blocks
+    text = re.sub(r'```\s*\n\s*\{.*?\}\s*\n\s*```', '', text, flags=re.DOTALL)
+    return text.strip()
+
+
 def extract_build_spec(text: str) -> Optional[dict]:
     """Extract a process build specification from LLM output.
 
@@ -2064,6 +2091,17 @@ class ProcessChatSession:
             self._last_chart = result
             self._chart_cache[cache_key] = result
 
+            # Also cache individual compressor entries so that a later
+            # "show chart for X" finds them even when they were generated
+            # as part of an "all compressors" request.
+            if cache_key == "__all__":
+                for cd in result.charts:
+                    individual_key = cd.compressor_name.lower()
+                    self._chart_cache[individual_key] = CompressorChartResult(
+                        charts=[cd],
+                        message=result.message,
+                    )
+
             results_text = format_chart_result(result)
 
             self.history.append({"role": "assistant", "content": assistant_text})
@@ -2477,7 +2515,11 @@ class ProcessChatSession:
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
-        """Make a follow-up LLM call and record the response."""
+        """Make a follow-up LLM call and record the response.
+
+        Strips any accidental tool/code blocks from the response so that
+        the user never sees raw JSON specs.
+        """
         contents = self._build_contents()
         response = client.models.generate_content(
             model=self.ai_model,
@@ -2487,7 +2529,7 @@ class ProcessChatSession:
                 temperature=0.3,
             ),
         )
-        final_text = response.text
+        final_text = _strip_tool_blocks(response.text)
         self.history.append({"role": "assistant", "content": final_text})
         return final_text
 
