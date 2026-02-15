@@ -1140,13 +1140,28 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
       - "streams.<name>.flow_kg_hr": calls stream.setFlowRate(value, "kg/hr")
       - "<unit_name>.<method>": tries process.getUnit(unit_name).method(value)
     
-    Also supports the direct unit access pattern from the user's code:
-      - "<unit_tag>.setOutTemperature(value, 'C')" style via simplified keys
+    Stream/unit names may contain dots (qualified names like "unit.stream"),
+    so we split from the *end* to find the property suffix.
     
     Returns a log of applied operations.
     """
     log = []
     proc = model.get_process()
+
+    def _split_key(key: str, prefix: str):
+        """Split 'prefix.objectName.property' where objectName may contain dots.
+
+        Strategy: strip the prefix, then split from the *right* on '.' to
+        get the property suffix.  If the resulting object name is not found,
+        progressively move dots from the property into the name (handles
+        multi-segment property names like rare edge cases).
+        """
+        remainder = key[len(prefix):]  # drop "streams." or "units."
+        # Try splitting from the right
+        parts = remainder.rsplit(".", 1)
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        return remainder, ""
 
     for key, raw_value in patch.changes.items():
         # Resolve relative operations
@@ -1155,9 +1170,8 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
             v = raw_value["value"]
             try:
                 if key.startswith("streams."):
-                    parts = key.split(".", 2)
-                    stream_name, prop = parts[1], parts[2]
-                    s = model.get_stream(stream_name)
+                    obj_name, prop = _split_key(key, "streams.")
+                    s = model.get_stream(obj_name)
                     current = _get_stream_value(s, prop)
                     if op == "add":
                         value = current + v
@@ -1166,9 +1180,8 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
                     else:
                         raise ValueError(f"Unknown op: {op}")
                 elif key.startswith("units."):
-                    parts = key.split(".", 2)
-                    unit_name, prop = parts[1], parts[2]
-                    u = model.get_unit(unit_name)
+                    obj_name, prop = _split_key(key, "units.")
+                    u = model.get_unit(obj_name)
                     current = _get_unit_value(u, prop)
                     if op == "add":
                         value = current + v
@@ -1200,16 +1213,14 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
         # Apply the value
         try:
             if key.startswith("streams."):
-                parts = key.split(".", 2)
-                stream_name, prop = parts[1], parts[2]
-                s = model.get_stream(stream_name)
+                obj_name, prop = _split_key(key, "streams.")
+                s = model.get_stream(obj_name)
                 _set_stream_value(s, prop, value)
                 log.append({"key": key, "value": value, "status": "OK"})
 
             elif key.startswith("units."):
-                parts = key.split(".", 2)
-                unit_name, prop = parts[1], parts[2]
-                u = model.get_unit(unit_name)
+                obj_name, prop = _split_key(key, "units.")
+                u = model.get_unit(obj_name)
                 _set_unit_value(u, prop, value)
                 log.append({"key": key, "value": value, "status": "OK"})
 

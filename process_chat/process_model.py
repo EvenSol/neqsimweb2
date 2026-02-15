@@ -746,14 +746,27 @@ class NeqSimProcessModel:
         raise KeyError(f"Unit not found: {name}")
 
     def get_stream(self, name: str):
-        """Get a stream by name (supports both qualified and unqualified names)."""
+        """Get a stream by name (supports qualified, unqualified, and case-insensitive names)."""
+        # Exact match
         if name in self._streams:
             return self._streams[name]
-        # Try matching as unqualified name (e.g. "outStream" -> "intercooler.outStream")
+        # Suffix match (e.g. "outStream" -> "intercooler.outStream")
         for key, s in self._streams.items():
             if key.endswith(f".{name}"):
                 return s
-        raise KeyError(f"Stream not found: {name}")
+        # Case-insensitive match
+        name_lower = name.lower()
+        for key, s in self._streams.items():
+            if key.lower() == name_lower or key.lower().endswith(f".{name_lower}"):
+                return s
+        # Try Java getUnit — Stream units are both units and streams
+        try:
+            u = self._proc.getUnit(name)
+            if u is not None:
+                return u
+        except Exception:
+            pass
+        raise KeyError(f"Stream not found: '{name}'. Available: {list(self._streams.keys())[:20]}")
 
     # ----- Run and report -----
 
