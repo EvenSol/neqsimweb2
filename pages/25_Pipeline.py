@@ -118,7 +118,10 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
 
                 # Calculate flow properties at inlet
                 rho = neqsim_fluid.getDensity("kg/m3")
-                mu = neqsim_fluid.getViscosity("Pa*s") if hasattr(neqsim_fluid, 'getViscosity') else 1e-5
+                try:
+                    mu = neqsim_fluid.getViscosity()  # returns Pa·s
+                except Exception:
+                    mu = 1e-5
                 mw = neqsim_fluid.getMolarMass("kg/mol")
 
                 # Convert flow rate to mass flow
@@ -167,7 +170,7 @@ if st.button("🔧 Calculate Hydraulics", type="primary"):
 
                     seg_rho = seg_fluid.getDensity("kg/m3")
                     try:
-                        seg_mu = seg_fluid.getViscosity("Pa*s")
+                        seg_mu = seg_fluid.getViscosity()  # returns Pa·s
                     except Exception:
                         seg_mu = 1e-5
 
