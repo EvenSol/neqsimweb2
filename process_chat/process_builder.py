@@ -81,8 +81,8 @@ _PARAM_SETTERS = {
     "isentropicefficiency":    lambda v: f"setIsentropicEfficiency({float(v)})",
     "polytropic_efficiency":   lambda v: f"setPolytropicEfficiency({float(v)})",
     "polytropicefficiency":    lambda v: f"setPolytropicEfficiency({float(v)})",
-    "pressure_drop_bar":       lambda v: f"setPressureDrop({float(v)}, 'bara')",
-    "pressure_drop":           lambda v: f"setPressureDrop({float(v)}, 'bara')",
+    "pressure_drop_bar":       lambda v: f"setPressureDrop({float(v)})",
+    "pressure_drop":           lambda v: f"setPressureDrop({float(v)})",
     "duty_kw":                 lambda v: f"setDuty({float(v) * 1000})",
     "duty":                    lambda v: f"setDuty({float(v) * 1000})",
     "speed":                   lambda v: f"setSpeed({float(v)})",
@@ -127,7 +127,7 @@ def _apply_param(unit, key: str, value):
         unit.setPolytropicEfficiency(float(value))
     elif k in ("pressure_drop_bar", "pressure_drop"):
         if hasattr(unit, "setPressureDrop"):
-            unit.setPressureDrop(float(value), "bara")
+            unit.setPressureDrop(float(value))
     elif k in ("duty_kw", "duty"):
         if hasattr(unit, "setDuty"):
             unit.setDuty(float(value) * 1000)  # kW → W

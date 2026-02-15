@@ -173,6 +173,10 @@ with st.sidebar:
     for q in example_questions:
         if st.button(q, key=f"ex_{hash(q)}", use_container_width=True):
             st.session_state["_pending_question"] = q
+            # If no model loaded, activate builder mode so the page
+            # doesn't hit st.stop() before the chat input is processed.
+            if model is None:
+                st.session_state["_builder_mode"] = True
 
 
 # ─────────────────────────────────────────────
