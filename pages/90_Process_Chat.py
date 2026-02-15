@@ -5,7 +5,6 @@ Upload a .neqsim process file → introspect → ask questions → run what-if s
 """
 import streamlit as st
 import pandas as pd
-import json
 import os
 import sys
 import traceback
@@ -719,25 +718,41 @@ def _show_dynamic(dynamic_result):
     if dynamic_result.time_series:
         ts = dynamic_result.time_series
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=[p.time_s for p in ts],
-            y=[p.values.get("pressure_bara", 0) for p in ts],
-            name="Pressure (bara)",
-            yaxis="y1",
-        ))
-        fig.add_trace(go.Scatter(
-            x=[p.time_s for p in ts],
-            y=[p.values.get("temperature_C", 0) for p in ts],
-            name="Temperature (°C)",
-            yaxis="y2",
-        ))
-        fig.update_layout(
+
+        # Determine which variables to plot from the result metadata
+        var_names = getattr(dynamic_result, "variable_names", []) or []
+        var_units = getattr(dynamic_result, "variable_units", {}) or {}
+        # Skip the time-fraction variable and pick up to two numeric series
+        plot_vars = [v for v in var_names if v not in ("time_frac",)]
+
+        if not plot_vars:
+            # Fallback to well-known keys
+            plot_vars = ["pressure_bara", "temperature_C"]
+
+        # Plot first variable on left y-axis, second on right y-axis
+        for idx, vname in enumerate(plot_vars[:2]):
+            unit = var_units.get(vname, "")
+            label = f"{vname} ({unit})" if unit else vname
+            yaxis_key = "y1" if idx == 0 else "y2"
+            fig.add_trace(go.Scatter(
+                x=[p.time_s for p in ts],
+                y=[p.values.get(vname, 0) for p in ts],
+                name=label,
+                yaxis=yaxis_key,
+            ))
+
+        layout_kwargs = dict(
             title=f"{dynamic_result.scenario_type.capitalize()} Simulation",
             xaxis_title="Time (s)",
-            yaxis=dict(title="Pressure (bara)", side="left"),
-            yaxis2=dict(title="Temperature (°C)", side="right", overlaying="y"),
             hovermode="x unified",
         )
+        if len(plot_vars) >= 1:
+            u0 = var_units.get(plot_vars[0], plot_vars[0])
+            layout_kwargs["yaxis"] = dict(title=u0, side="left")
+        if len(plot_vars) >= 2:
+            u1 = var_units.get(plot_vars[1], plot_vars[1])
+            layout_kwargs["yaxis2"] = dict(title=u1, side="right", overlaying="y")
+        fig.update_layout(**layout_kwargs)
         st.plotly_chart(fig, use_container_width=True)
 
     if getattr(dynamic_result, "message", ""):
@@ -791,9 +806,11 @@ def _show_sensitivity(sensitivity_result):
             for b in sorted(sensitivity_result.tornado_bars, key=_swing, reverse=True):
                 tornado_data.append({
                     "Variable": b.variable,
-                    "Low Value": round(b.kpi_at_low, 4),
-                    "Base Value": round(b.kpi_base, 4),
-                    "High Value": round(b.kpi_at_high, 4),
+                    "Input Low": round(b.low_value, 4),
+                    "Input High": round(b.high_value, 4),
+                    "KPI at Low": round(b.kpi_at_low, 4),
+                    "KPI at Base": round(b.kpi_base, 4),
+                    "KPI at High": round(b.kpi_at_high, 4),
                     "Swing": round(_swing(b), 4),
                 })
             st.dataframe(pd.DataFrame(tornado_data), use_container_width=True, hide_index=True)
@@ -1003,9 +1020,9 @@ def _show_flow_assurance(fa_result):
             wax_data.append({
                 "Stream": w.stream_name,
                 "Risk": f"{risk_icon} {w.risk_level}",
-                "WAT (°C)": round(w.wax_appearance_T_C, 1) if w.wax_appearance_T_C else "N/A",
-                "Stream T (°C)": round(w.operating_T_C, 1) if w.operating_T_C else "N/A",
-                "Margin (°C)": round(w.margin_C, 1) if w.margin_C else "N/A",
+                "WAT (°C)": round(w.wax_appearance_T_C, 1),
+                "Stream T (°C)": round(w.operating_T_C, 1),
+                "Margin (°C)": round(w.margin_C, 1),
             })
         st.dataframe(pd.DataFrame(wax_data), use_container_width=True, hide_index=True)
 
@@ -1119,6 +1136,31 @@ if user_input:
                         st.session_state["process_model_name"] = (
                             st.session_state.get("process_model_name") or "Built Process"
                         )
+
+                # --- Refresh operating points in old chart messages ---
+                # After any model change (scenario, build, etc.), old chart
+                # widgets in the chat history would show stale operating
+                # points.  Refresh them so the history always reflects the
+                # current model state.
+                if session.model is not None:
+                    try:
+                        from process_chat.compressor_chart import (
+                            refresh_operating_point,
+                            CompressorChartResult,
+                        )
+                        for old_msg in st.session_state["chat_messages"]:
+                            old_chart = old_msg.get("chart")
+                            if old_chart is not None:
+                                refreshed = [
+                                    refresh_operating_point(session.model, cd)
+                                    for cd in old_chart.charts
+                                ]
+                                old_msg["chart"] = CompressorChartResult(
+                                    charts=refreshed,
+                                    message=old_chart.message,
+                                )
+                    except Exception:
+                        pass
 
                 st.markdown(response)
 

@@ -2241,6 +2241,27 @@ class ProcessChatSession:
                 except Exception:
                     pass  # comparison still valid even if persistence fails
 
+            # --- Refresh cached chart operating points ---
+            # After any scenario changes the model state, cached charts
+            # hold stale operating-point data.  Refresh them now so that
+            # subsequent "show_only" requests (and history replays in the
+            # page) reflect the updated conditions.
+            if self._chart_cache:
+                try:
+                    refreshed_cache: dict = {}
+                    for ck, cr in self._chart_cache.items():
+                        new_charts = [
+                            refresh_operating_point(self.model, cd)
+                            for cd in cr.charts
+                        ]
+                        refreshed_cache[ck] = CompressorChartResult(
+                            charts=new_charts,
+                            message=cr.message,
+                        )
+                    self._chart_cache.update(refreshed_cache)
+                except Exception:
+                    pass
+
             self.history.append({"role": "assistant", "content": assistant_text})
 
             persist_note = ""
@@ -2437,11 +2458,19 @@ class ProcessChatSession:
             cache_key = (compressor_name or "__all__").lower()
             if show_only and cache_key in self._chart_cache:
                 cached = self._chart_cache[cache_key]
-                # Re-run the model to get updated operating conditions
+                # Re-run the model to get updated operating conditions.
+                # If run() fails the model still has _units from the last
+                # successful run (e.g. after a scenario), so refreshing the
+                # operating point will still pick up current values.
                 try:
                     self.model.run()
                 except Exception:
-                    pass
+                    # Model already ran during scenario persistence — units
+                    # are valid; just ensure _units dict is populated.
+                    try:
+                        self.model._index_model_objects()
+                    except Exception:
+                        pass
                 # Refresh the operating point(s) from current model state
                 refreshed_charts = []
                 for cd in cached.charts:
