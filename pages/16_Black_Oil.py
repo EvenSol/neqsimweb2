@@ -205,6 +205,7 @@ if st.button("🛢️ Generate Black Oil Tables", type="primary"):
                 TPflash(std_fluid)
                 std_fluid.initProperties()
 
+                prev_Rs = 0
                 for P in pressures:
                     dl_fluid.setPressure(P, "bara")
                     dl_fluid.setTemperature(reservoir_temp_C, "C")
@@ -241,31 +242,30 @@ if st.button("🛢️ Generate Black Oil Tables", type="primary"):
                     except Exception:
                         gas_viscosity = np.nan
 
-                    # Bo (simplified: ratio of oil volume at P,T to oil volume at standard conditions)
+                    # Bo (oil formation volume factor: volume at P,T / volume at standard conditions)
                     try:
-                        oil_vol = dl_fluid.getPhase("oil").getVolume("m3")
-                        # Use moles-based Bo
-                        Bo = oil_density / dl_fluid.getPhase("oil").getMolarMass("kg/mol") if oil_density else np.nan
-                        # Simplified Bo estimate using density ratio
-                        Bo = std_fluid.getDensity("kg/m3") / oil_density if oil_density > 0 else np.nan
+                        std_oil_rho = std_fluid.getDensity("kg/m3")
+                        Bo = std_oil_rho / oil_density if oil_density > 0 else np.nan
                     except Exception:
                         Bo = np.nan
 
-                    # Rs (simplified: moles of gas in oil at P / moles of oil)
+                    # Rs (solution gas-oil ratio)
                     try:
                         if n_phases > 1:
                             gas_vol_std = dl_fluid.getPhase("gas").getVolume("m3") * P / 1.01325
                             oil_vol_std = dl_fluid.getPhase("oil").getVolume("m3")
                             Rs = gas_vol_std / oil_vol_std if oil_vol_std > 0 else 0
                         else:
-                            Rs = 0  # No free gas above bubble point (all gas dissolved)
+                            # Above bubble point — all gas dissolved; Rs is at its maximum
+                            Rs = prev_Rs if prev_Rs > 0 else np.nan
                     except Exception:
-                        Rs = 0
+                        Rs = prev_Rs if prev_Rs > 0 else 0
+                    prev_Rs = Rs
 
-                    # Bg
+                    # Bg (gas formation volume factor)
                     try:
                         z_factor = dl_fluid.getPhase("gas").getZ()
-                        Bg = z_factor * reservoir_temp_C / (P * 273.15) * 1.01325 if P > 0 else np.nan
+                        Bg = z_factor * (reservoir_temp_C + 273.15) / (P * 273.15) * 1.01325 if P > 0 else np.nan
                     except Exception:
                         z_factor = np.nan
                         Bg = np.nan

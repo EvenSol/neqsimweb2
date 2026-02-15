@@ -31,8 +31,8 @@ st.write(
 st.write("Helium calculations are valid **only for normal helium (helium I)** up to **1500 K and 2000 MPa**.")
 
 # Initialize session state for temperature and pressure input
-if 'tp_flash_data' not in st.session_state:
-    st.session_state['tp_flash_data'] = pd.DataFrame({
+if 'he_tp_flash_data' not in st.session_state:
+    st.session_state['he_tp_flash_data'] = pd.DataFrame({
         'Temperature (C)': [20.0, 25.0],  # Default example temperature
         'Pressure (bara)': [1.0, 10.0]  # Default example pressure
     })
@@ -126,4 +126,4 @@ if st.button('Run Helium Property Calculations'):
         combined_results = pd.DataFrame(results_list)
         st.data_editor(combined_results)
 
-st.sidebar.file_uploader("Upload Data", key='uploaded_file', help='Upload a CSV file containing temperature and pressure values.')
+st.sidebar.file_uploader("Upload Data", key='he_uploaded_file', help='Upload a CSV file containing temperature and pressure values.')

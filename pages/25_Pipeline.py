@@ -10,7 +10,6 @@ visualisation.
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from theme import apply_theme
@@ -83,8 +82,8 @@ with tab_ss:
         ss_segments = st.number_input("Number of Segments", value=20, min_value=5, max_value=200, key="ss_seg")
 
     with col2:
-        st.markdown("**Inlet Conditions**")
-        ss_inlet_P = st.number_input("Inlet Pressure (bara)", value=80.0, min_value=1.0, step=5.0, key="ss_inP")
+        st.markdown("**Conditions**")
+        ss_outlet_P = st.number_input("Outlet Pressure (bara)", value=50.0, min_value=1.0, step=5.0, key="ss_outP")
         ss_inlet_T = st.number_input("Inlet Temperature (°C)", value=40.0, step=5.0, key="ss_inT")
         ss_flow = st.number_input("Flow Rate", value=10.0, min_value=0.001, step=1.0, key="ss_flow")
         ss_flow_unit = st.selectbox("Flow Unit", ["MSm3/day", "kg/s", "m3/hr"], key="ss_funit")
@@ -100,6 +99,159 @@ with tab_ss:
     st.divider()
 
     # -----------------------------------------------------------------
+    # Helper: march forward from a given inlet pressure and return all
+    # segment data including the calculated outlet pressure.
+    # -----------------------------------------------------------------
+    def _march_forward(inlet_P, edited_fluid, inlet_T, mass_flow_kgs,
+                       id_m, roughness_m, n_segments, seg_length, seg_elevation,
+                       htc, ambient_T):
+        """Forward march along the pipeline. Returns (outlet_P, result_dict)."""
+        from neqsim.thermo import fluid_df, TPflash
+
+        positions = [0]
+        pressures = [inlet_P]
+        temperatures = [inlet_T]
+        velocities, densities_list, viscosities_list = [], [], []
+        flow_regimes, reynolds_numbers = [], []
+        phase_counts, liquid_holdups = [], []
+        gas_velocities, liq_velocities = [], []
+        area = np.pi / 4 * id_m ** 2
+
+        current_P, current_T = inlet_P, inlet_T
+
+        for seg in range(n_segments):
+            seg_fluid = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
+            seg_fluid.setPressure(current_P, "bara")
+            seg_fluid.setTemperature(current_T + 273.15, "K")
+            TPflash(seg_fluid)
+            seg_fluid.initProperties()
+
+            seg_rho = seg_fluid.getDensity("kg/m3")
+            try:
+                seg_mu = seg_fluid.getViscosity()
+            except Exception:
+                seg_mu = 1e-5
+
+            vel = mass_flow_kgs / (seg_rho * area) if seg_rho > 0 else 0
+            Re = seg_rho * vel * id_m / seg_mu if seg_mu > 0 else 1e6
+
+            rel_rough = roughness_m / id_m
+            if Re > 2300:
+                ff = (-1.8 * np.log10((rel_rough / 3.7) ** 1.11 + 6.9 / Re)) ** (-2)
+            elif Re > 0:
+                ff = 64 / Re
+            else:
+                ff = 0.02
+
+            seg_n_phases = seg_fluid.getNumberOfPhases()
+            lambda_l, vsg, vsl = 0.0, 0.0, 0.0
+            if seg_n_phases > 1:
+                try:
+                    gas_vol, liq_vol, gas_mass, liq_mass = 0.0, 0.0, 0.0, 0.0
+                    for pi in range(seg_n_phases):
+                        phase = seg_fluid.getPhase(pi)
+                        pvol = phase.getVolume("m3")
+                        prho = phase.getDensity("kg/m3")
+                        ptype = str(phase.getPhaseTypeName()).lower()
+                        if "gas" in ptype:
+                            gas_vol += pvol; gas_mass += pvol * prho
+                        else:
+                            liq_vol += pvol; liq_mass += pvol * prho
+                    total_vol = gas_vol + liq_vol
+                    total_mass = gas_mass + liq_mass
+                    lambda_l = liq_vol / total_vol if total_vol > 0 else 0.5
+                    if total_mass > 0 and area > 0:
+                        gmf = gas_mass / total_mass
+                        lmf = liq_mass / total_mass
+                        grho = gas_mass / gas_vol if gas_vol > 0 else seg_rho
+                        lrho = liq_mass / liq_vol if liq_vol > 0 else seg_rho
+                        vsg = (mass_flow_kgs * gmf / grho) / area if grho > 0 else 0
+                        vsl = (mass_flow_kgs * lmf / lrho) / area if lrho > 0 else 0
+
+                    Vm = vel
+                    NFr = Vm ** 2 / (9.81 * id_m) if id_m > 0 else 0
+                    if 0.001 < lambda_l < 0.999:
+                        L1 = 316.0 * lambda_l ** 0.302
+                        L2 = 0.0009252 * lambda_l ** (-2.4684)
+                        L3 = 0.10 * lambda_l ** (-1.4516)
+                        L4 = 0.5 * lambda_l ** (-6.738)
+                        if (lambda_l < 0.01 and NFr < L1) or (lambda_l >= 0.01 and NFr < L2):
+                            regime = "Segregated"
+                        elif lambda_l >= 0.01 and L2 <= NFr <= L3:
+                            regime = "Transition"
+                        elif (0.01 <= lambda_l < 0.4 and L3 < NFr <= L1) or \
+                                (lambda_l >= 0.4 and L3 < NFr <= L4):
+                            regime = "Intermittent"
+                        elif (lambda_l < 0.4 and NFr >= L1) or \
+                                (lambda_l >= 0.4 and NFr > L4):
+                            regime = "Distributed"
+                        else:
+                            regime = "Intermittent"
+                    else:
+                        regime = "Turbulent" if Re > 2300 else "Laminar"
+                except Exception:
+                    regime = "Multiphase"
+            else:
+                ptype = str(seg_fluid.getPhase(0).getPhaseTypeName()).lower()
+                if "gas" in ptype:
+                    vsg = vel; vsl = 0.0
+                else:
+                    vsg = 0.0; vsl = vel
+                if Re > 2300:
+                    regime = "Turbulent"
+                elif Re > 0:
+                    regime = "Laminar"
+                else:
+                    regime = "Unknown"
+
+            dP_friction = ff * (seg_length / id_m) * 0.5 * seg_rho * vel ** 2
+            dP_gravity = seg_rho * 9.81 * seg_elevation
+            dP_total_bara = (dP_friction + dP_gravity) / 1e5
+
+            cp = 2000.0
+            try:
+                cp = seg_fluid.getCp("J/kg/K")
+            except Exception:
+                pass
+            if htc > 0 and mass_flow_kgs > 0:
+                perimeter = np.pi * id_m
+                Q_heat = htc * perimeter * seg_length * (current_T - ambient_T)
+                dT = Q_heat / (mass_flow_kgs * cp) if cp > 0 else 0
+            else:
+                dT = 0
+
+            current_P = max(current_P - dP_total_bara, 1.0)
+            current_T = current_T - dT
+
+            positions.append((seg + 1) * seg_length)
+            pressures.append(current_P)
+            temperatures.append(current_T)
+            velocities.append(vel)
+            densities_list.append(seg_rho)
+            viscosities_list.append(seg_mu)
+            flow_regimes.append(regime)
+            reynolds_numbers.append(Re)
+            phase_counts.append(seg_n_phases)
+            liquid_holdups.append(round(lambda_l, 4))
+            gas_velocities.append(round(vsg, 3))
+            liq_velocities.append(round(vsl, 3))
+
+        return {
+            "positions": positions,
+            "pressures": pressures,
+            "temperatures": temperatures,
+            "velocities": velocities,
+            "densities": densities_list,
+            "viscosities": viscosities_list,
+            "flow_regimes": flow_regimes,
+            "reynolds_numbers": reynolds_numbers,
+            "phase_counts": phase_counts,
+            "liquid_holdups": liquid_holdups,
+            "gas_velocities": gas_velocities,
+            "liq_velocities": liq_velocities,
+        }
+
+    # -----------------------------------------------------------------
     # Steady-state calculation
     # -----------------------------------------------------------------
     if st.button("🔧 Calculate Hydraulics", type="primary", key="ss_run"):
@@ -111,32 +263,18 @@ with tab_ss:
                     from neqsim.thermo import fluid_df, TPflash, dataFrame
                     from neqsim import jneqsim
 
+                    id_m = ss_diameter / 1000.0
+                    roughness_m = ss_roughness / 1e6
+                    seg_length = ss_length / ss_segments
+                    seg_elevation = ss_elevation / ss_segments
+
+                    # Calculate mass flow rate
                     neqsim_fluid = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
-                    neqsim_fluid.setPressure(ss_inlet_P, "bara")
+                    neqsim_fluid.setPressure(ss_outlet_P, "bara")
                     neqsim_fluid.setTemperature(ss_inlet_T + 273.15, "K")
                     TPflash(neqsim_fluid)
                     neqsim_fluid.initProperties()
-
-                    n_phases = neqsim_fluid.getNumberOfPhases()
-                    if n_phases > 1:
-                        phase_names = []
-                        for pi in range(n_phases):
-                            try:
-                                phase_names.append(str(neqsim_fluid.getPhase(pi).getPhaseTypeName()))
-                            except Exception:
-                                phase_names.append(f"Phase {pi}")
-                        st.info(f"Multiphase flow detected at inlet: {n_phases} phases "
-                                f"({', '.join(phase_names)}). "
-                                "Two-phase flow regime determined using the Beggs-Brill flow pattern map.")
-
-                    id_m = ss_diameter / 1000.0
-                    roughness_m = ss_roughness / 1e6
                     rho = neqsim_fluid.getDensity("kg/m3")
-                    try:
-                        mu = neqsim_fluid.getViscosity()
-                    except Exception:
-                        mu = 1e-5
-                    mw = neqsim_fluid.getMolarMass("kg/mol")
 
                     if ss_flow_unit == "MSm3/day":
                         std_fluid = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
@@ -152,144 +290,85 @@ with tab_ss:
                     else:
                         mass_flow_kgs = ss_flow / 3600.0 * rho
 
-                    area = np.pi / 4 * id_m ** 2
-                    seg_length = ss_length / ss_segments
-                    seg_elevation = ss_elevation / ss_segments
+                    # -----------------------------------------------------------
+                    # Bisection: find inlet P such that outlet P ≈ ss_outlet_P
+                    # -----------------------------------------------------------
+                    P_lo = ss_outlet_P            # minimum possible inlet P
+                    P_hi = ss_outlet_P + 500.0    # generous upper bound
+                    target_P = ss_outlet_P
+                    tol = 0.01                    # convergence tolerance (bar)
+                    max_iter = 40
 
-                    positions = [0]
-                    pressures = [ss_inlet_P]
-                    temperatures = [ss_inlet_T]
-                    velocities, densities, viscosities = [], [], []
-                    flow_regimes, reynolds_numbers = [], []
-                    phase_counts, liquid_holdups = [], []
-                    gas_velocities, liq_velocities = [], []
+                    # Quick check: even with the upper bound the dP may be too large
+                    res_hi = _march_forward(
+                        P_hi, edited_fluid, ss_inlet_T, mass_flow_kgs,
+                        id_m, roughness_m, ss_segments, seg_length, seg_elevation,
+                        ss_htc, ss_ambient)
+                    if res_hi["pressures"][-1] < target_P:
+                        # Need even higher upper bound
+                        P_hi = ss_outlet_P + 2000.0
 
-                    current_P, current_T = ss_inlet_P, ss_inlet_T
-
-                    for seg in range(ss_segments):
-                        seg_fluid = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
-                        seg_fluid.setPressure(current_P, "bara")
-                        seg_fluid.setTemperature(current_T + 273.15, "K")
-                        TPflash(seg_fluid)
-                        seg_fluid.initProperties()
-
-                        seg_rho = seg_fluid.getDensity("kg/m3")
-                        try:
-                            seg_mu = seg_fluid.getViscosity()
-                        except Exception:
-                            seg_mu = 1e-5
-
-                        vel = mass_flow_kgs / (seg_rho * area) if seg_rho > 0 else 0
-                        Re = seg_rho * vel * id_m / seg_mu if seg_mu > 0 else 1e6
-
-                        rel_rough = roughness_m / id_m
-                        if Re > 2300:
-                            ff = (-1.8 * np.log10((rel_rough / 3.7) ** 1.11 + 6.9 / Re)) ** (-2)
-                        elif Re > 0:
-                            ff = 64 / Re
+                    converged = False
+                    for _ in range(max_iter):
+                        P_mid = (P_lo + P_hi) / 2.0
+                        res = _march_forward(
+                            P_mid, edited_fluid, ss_inlet_T, mass_flow_kgs,
+                            id_m, roughness_m, ss_segments, seg_length, seg_elevation,
+                            ss_htc, ss_ambient)
+                        calc_out_P = res["pressures"][-1]
+                        if abs(calc_out_P - target_P) < tol:
+                            converged = True
+                            break
+                        if calc_out_P > target_P:
+                            P_hi = P_mid     # inlet P is too high
                         else:
-                            ff = 0.02
+                            P_lo = P_mid     # inlet P is too low
 
-                        seg_n_phases = seg_fluid.getNumberOfPhases()
-                        lambda_l, vsg, vsl = 0.0, 0.0, 0.0
-                        if seg_n_phases > 1:
+                    if not converged:
+                        st.warning(
+                            f"Inlet pressure solver did not fully converge. "
+                            f"Outlet P = {res['pressures'][-1]:.2f} bara "
+                            f"(target {target_P:.2f} bara). Results shown for best estimate.")
+
+                    ss_inlet_P = P_mid  # solved inlet pressure
+                    positions = res["positions"]
+                    pressures = res["pressures"]
+                    temperatures = res["temperatures"]
+                    velocities = res["velocities"]
+                    densities = res["densities"]
+                    viscosities = res["viscosities"]
+                    flow_regimes = res["flow_regimes"]
+                    reynolds_numbers = res["reynolds_numbers"]
+                    phase_counts = res["phase_counts"]
+                    liquid_holdups = res["liquid_holdups"]
+                    gas_velocities = res["gas_velocities"]
+                    liq_velocities = res["liq_velocities"]
+
+                    # Check for multiphase at inlet
+                    inlet_fluid = fluid_df(edited_fluid, lastIsPlusFraction=False, add_all_components=False)
+                    inlet_fluid.setPressure(ss_inlet_P, "bara")
+                    inlet_fluid.setTemperature(ss_inlet_T + 273.15, "K")
+                    TPflash(inlet_fluid)
+                    inlet_fluid.initProperties()
+                    n_phases = inlet_fluid.getNumberOfPhases()
+                    if n_phases > 1:
+                        phase_names = []
+                        for pi in range(n_phases):
                             try:
-                                gas_vol, liq_vol, gas_mass, liq_mass = 0.0, 0.0, 0.0, 0.0
-                                for pi in range(seg_n_phases):
-                                    phase = seg_fluid.getPhase(pi)
-                                    pvol = phase.getVolume("m3")
-                                    prho = phase.getDensity("kg/m3")
-                                    ptype = str(phase.getPhaseTypeName()).lower()
-                                    if "gas" in ptype:
-                                        gas_vol += pvol; gas_mass += pvol * prho
-                                    else:
-                                        liq_vol += pvol; liq_mass += pvol * prho
-                                total_vol = gas_vol + liq_vol
-                                total_mass = gas_mass + liq_mass
-                                lambda_l = liq_vol / total_vol if total_vol > 0 else 0.5
-                                if total_mass > 0 and area > 0:
-                                    gmf = gas_mass / total_mass
-                                    lmf = liq_mass / total_mass
-                                    grho = gas_mass / gas_vol if gas_vol > 0 else seg_rho
-                                    lrho = liq_mass / liq_vol if liq_vol > 0 else seg_rho
-                                    vsg = (mass_flow_kgs * gmf / grho) / area if grho > 0 else 0
-                                    vsl = (mass_flow_kgs * lmf / lrho) / area if lrho > 0 else 0
-
-                                Vm = vel
-                                NFr = Vm ** 2 / (9.81 * id_m) if id_m > 0 else 0
-                                if 0.001 < lambda_l < 0.999:
-                                    L1 = 316.0 * lambda_l ** 0.302
-                                    L2 = 0.0009252 * lambda_l ** (-2.4684)
-                                    L3 = 0.10 * lambda_l ** (-1.4516)
-                                    L4 = 0.5 * lambda_l ** (-6.738)
-                                    if (lambda_l < 0.01 and NFr < L1) or (lambda_l >= 0.01 and NFr < L2):
-                                        regime = "Segregated"
-                                    elif lambda_l >= 0.01 and L2 <= NFr <= L3:
-                                        regime = "Transition"
-                                    elif (0.01 <= lambda_l < 0.4 and L3 < NFr <= L1) or \
-                                            (lambda_l >= 0.4 and L3 < NFr <= L4):
-                                        regime = "Intermittent"
-                                    elif (lambda_l < 0.4 and NFr >= L1) or \
-                                            (lambda_l >= 0.4 and NFr > L4):
-                                        regime = "Distributed"
-                                    else:
-                                        regime = "Intermittent"
-                                else:
-                                    regime = "Turbulent" if Re > 2300 else "Laminar"
+                                phase_names.append(str(inlet_fluid.getPhase(pi).getPhaseTypeName()))
                             except Exception:
-                                regime = "Multiphase"
-                        else:
-                            ptype = str(seg_fluid.getPhase(0).getPhaseTypeName()).lower()
-                            if "gas" in ptype:
-                                vsg = vel; vsl = 0.0
-                            else:
-                                vsg = 0.0; vsl = vel
-                            if Re > 2300:
-                                regime = "Turbulent"
-                            elif Re > 0:
-                                regime = "Laminar"
-                            else:
-                                regime = "Unknown"
-
-                        dP_friction = ff * (seg_length / id_m) * 0.5 * seg_rho * vel ** 2
-                        dP_gravity = seg_rho * 9.81 * seg_elevation
-                        dP_total_bara = (dP_friction + dP_gravity) / 1e5
-
-                        cp = 2000.0
-                        try:
-                            cp = seg_fluid.getCp("J/kg/K")
-                        except Exception:
-                            pass
-                        if ss_htc > 0 and mass_flow_kgs > 0:
-                            perimeter = np.pi * id_m
-                            Q_heat = ss_htc * perimeter * seg_length * (current_T - ss_ambient)
-                            dT = Q_heat / (mass_flow_kgs * cp) if cp > 0 else 0
-                        else:
-                            dT = 0
-
-                        current_P = max(current_P - dP_total_bara, 1.0)
-                        current_T = current_T - dT
-
-                        positions.append((seg + 1) * seg_length)
-                        pressures.append(current_P)
-                        temperatures.append(current_T)
-                        velocities.append(vel)
-                        densities.append(seg_rho)
-                        viscosities.append(seg_mu)
-                        flow_regimes.append(regime)
-                        reynolds_numbers.append(Re)
-                        phase_counts.append(seg_n_phases)
-                        liquid_holdups.append(round(lambda_l, 4))
-                        gas_velocities.append(round(vsg, 3))
-                        liq_velocities.append(round(vsl, 3))
+                                phase_names.append(f"Phase {pi}")
+                        st.info(f"Multiphase flow detected at inlet: {n_phases} phases "
+                                f"({', '.join(phase_names)}). "
+                                "Two-phase flow regime determined using the Beggs-Brill flow pattern map.")
 
                     # --- results ---
                     st.subheader("📊 Results Summary")
                     cr1, cr2, cr3, cr4 = st.columns(4)
                     total_dp = ss_inlet_P - pressures[-1]
                     avg_vel = np.mean(velocities) if velocities else 0
-                    cr1.metric("Pressure Drop (bar)", f"{total_dp:.2f}")
-                    cr2.metric("Outlet Pressure (bara)", f"{pressures[-1]:.2f}")
+                    cr1.metric("Inlet Pressure (bara)", f"{ss_inlet_P:.2f}")
+                    cr2.metric("Pressure Drop (bar)", f"{total_dp:.2f}")
                     cr3.metric("Temperature Drop (°C)", f"{ss_inlet_T - temperatures[-1]:.2f}")
                     cr4.metric("Avg Velocity (m/s)", f"{avg_vel:.2f}")
                     cr5, cr6, cr7, cr8 = st.columns(4)
@@ -613,7 +692,7 @@ with tab_dyn:
                 fig_ss.update_xaxes(title_text="Distance (km)")
                 fig_ss.update_yaxes(title_text="bara", row=1, col=1)
                 fig_ss.update_yaxes(title_text="°C", row=1, col=2)
-                fig_ss.update_yaxes(title_text="Holdup (–)", row=1, col=2)
+                fig_ss.update_yaxes(title_text="Holdup (–)", row=2, col=1)
                 fig_ss.update_yaxes(title_text="m/s", row=2, col=2)
                 fig_ss.update_layout(height=650, legend=dict(x=0.75, y=0.35))
                 st.plotly_chart(fig_ss, use_container_width=True)
