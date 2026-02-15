@@ -499,6 +499,13 @@ class NeqSimProcessModel:
                                     if s is not None:
                                         sname = str(s.getName()) if s.getName() else None
                                         if sname:
+                                            try:
+                                                java_id = int(s.hashCode())
+                                            except Exception:
+                                                java_id = id(s)
+                                            if java_id in seen_java_ids:
+                                                continue  # same Java object already indexed
+                                            seen_java_ids.add(java_id)
                                             key = f"{uname}.{sname}"
                                             if key not in self._streams:
                                                 self._streams[key] = s

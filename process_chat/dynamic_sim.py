@@ -656,7 +656,14 @@ def _run_ramp(
     if time_data:
         result.final_state = time_data[-1].values.copy()
     result.method = "pseudo_transient"
-    result.message = f"Ramp {stream_name} from {start_value:.0f} to {end_value:.0f} kg/hr"
+    # Determine unit label for message
+    if ramp_variable in ("pressure", "pressure_bara"):
+        ramp_unit = "bara"
+    elif ramp_variable in ("temperature", "temperature_C"):
+        ramp_unit = "°C"
+    else:
+        ramp_unit = "kg/hr"
+    result.message = f"Ramp {stream_name} from {start_value:.0f} to {end_value:.0f} {ramp_unit}"
     return result
 
 
@@ -676,6 +683,7 @@ def run_dynamic_simulation(
     n_steps: int = 50,
     start_value: Optional[float] = None,
     end_value: Optional[float] = None,
+    ramp_variable: str = "feed_flow",
     changes: Optional[List[Dict[str, Any]]] = None,
     dt: Optional[float] = None,
 ) -> DynamicSimResult:
@@ -724,6 +732,7 @@ def run_dynamic_simulation(
             model, stream_name=stream_name,
             start_value=start_value, end_value=end_value,
             duration_s=duration_s, n_steps=n_steps,
+            ramp_variable=ramp_variable,
         )
     else:
         return DynamicSimResult(message=f"Unknown scenario type: {scenario_type}")

@@ -1318,10 +1318,10 @@ def _get_stream_value(stream, prop: str) -> float:
     elif "flow" in prop_lower:
         if "mol" in prop_lower and "sec" in prop_lower:
             return float(stream.getFlowRate("mol/sec"))
-        elif "m3" in prop_lower or "am3" in prop_lower:
-            return float(stream.getFlowRate("Am3/hr"))
         elif "sm3" in prop_lower or "std" in prop_lower:
             return float(stream.getFlowRate("Sm3/day"))
+        elif "m3" in prop_lower or "am3" in prop_lower:
+            return float(stream.getFlowRate("Am3/hr"))
         return float(stream.getFlowRate("kg/hr"))
     else:
         raise KeyError(f"Unknown stream property: {prop}")
@@ -1466,17 +1466,17 @@ def _set_unit_value(unit, prop: str, value: Any):
         return
 
     # ---- Pressure setters ----
+    if "outletpressure" in prop_lower or "outlet_pressure" in prop_lower:
+        if "barg" in prop_lower:
+            unit.setOutletPressure(float(value), "barg")
+        else:
+            unit.setOutletPressure(float(value), "bara")
+        return
     if "outpressure" in prop_lower or "out_pressure" in prop_lower:
         if "barg" in prop_lower:
             unit.setOutPressure(float(value), "barg")
         else:
             unit.setOutPressure(float(value), "bara")
-        return
-    if "outletpressure" in prop_lower or "outlet_pressure" in prop_lower:
-        if "barg" in prop_lower:
-            unit.setOutletPressure(float(value), "barg")
-        else:
-            unit.setOutletPressure(float(value))
         return
     if prop_lower in ("pressure", "pressure_bara") and hasattr(unit, "setPressure"):
         unit.setPressure(float(value), "bara")

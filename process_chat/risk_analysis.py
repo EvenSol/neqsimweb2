@@ -281,19 +281,33 @@ def _find_product_stream(model: NeqSimProcessModel) -> Optional[str]:
 
 def _get_production(model: NeqSimProcessModel,
                     product_stream: str) -> float:
-    """Return product stream flow in kg/hr after running the model."""
-    result = model.run()
-    kpis = result.kpis if result else {}
-    key = f"{product_stream}.flow_kg_hr"
-    if key in kpis:
-        return kpis[key].value
-    # Fallback: try Java object
+    """Return product stream flow in kg/hr.
+
+    Reads directly from the Java stream object — does NOT call
+    ``model.run()``.  The caller is responsible for ensuring the model
+    is in a solved state (either the live model after a previous run,
+    or a clone after ``clone.run()``).
+    """
+    # Primary: read directly from Java stream
     try:
         s = model.get_stream(product_stream)
         if s:
-            return float(s.getFlowRate("kg/hr"))
+            val = float(s.getFlowRate("kg/hr"))
+            if val > 0:
+                return val
     except Exception:
         pass
+
+    # Fallback: check KPI cache
+    try:
+        result = getattr(model, '_last_run_result', None)
+        if result and result.kpis:
+            key = f"{product_stream}.flow_kg_hr"
+            if key in result.kpis and result.kpis[key].value is not None:
+                return result.kpis[key].value
+    except Exception:
+        pass
+
     return 0.0
 
 
@@ -813,6 +827,12 @@ def _try_java_risk(model: NeqSimProcessModel,
 
         sys_avail = avail_pct
         most_crit = impacts[0].equipment_name if impacts else "unknown"
+
+        # If the Java path produced empty impacts / risk items, the
+        # criticality ranking failed silently.  Fall back to the Python
+        # engine which uses heuristic trip-loss estimates.
+        if not impacts and not risk_items:
+            return None
 
         return RiskAnalysisResult(
             equipment_reliability=reliability_list,

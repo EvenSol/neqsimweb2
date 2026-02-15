@@ -1000,7 +1000,7 @@ Example — change compressor outlet pressure:
     {
       "name": "Update pressure",
       "description": "Update compressor outlet pressure",
-      "changes": {"units.compressor 1.outletPressure": 120.0}
+      "patch": {"changes": {"units.compressor 1.outletPressure": 120.0}}
     }
   ]
 }
@@ -1013,7 +1013,7 @@ Example — update feed flow rate:
     {
       "name": "Increase flow",
       "description": "Increase feed flow rate",
-      "changes": {"streams.feed gas.flow_kg_hr": 15000}
+      "patch": {"changes": {"streams.feed gas.flow_kg_hr": 15000}}
     }
   ]
 }

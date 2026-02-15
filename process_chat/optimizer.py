@@ -843,7 +843,7 @@ def _binary_search_convergence(
             # (sometimes NeqSim "converges" but produces NaN or zero flow)
             out_ok = True
             for kpi_name, kpi in result.kpis.items():
-                if math.isnan(kpi.value) or math.isinf(kpi.value):
+                if kpi.value is None or math.isnan(kpi.value) or math.isinf(kpi.value):
                     out_ok = False
                     break
 

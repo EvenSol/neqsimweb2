@@ -599,7 +599,7 @@ def _show_compressor_chart(chart_result):
 
         # Operating point
         op = chart_data.operating_point
-        if op and op.flow_m3_hr > 0 and op.head_kJ_kg > 0:
+        if op and op.flow_m3_hr is not None and op.flow_m3_hr > 0 and op.head_kJ_kg is not None and op.head_kJ_kg > 0:
             fig.add_trace(go.Scatter(
                 x=[op.flow_m3_hr],
                 y=[op.head_kJ_kg],

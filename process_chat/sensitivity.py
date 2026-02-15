@@ -284,15 +284,19 @@ def _run_tornado(
         except Exception:
             pass
 
+        # Guard against None when patch failed
+        eff_low = kpi_low if kpi_low is not None else kpi_base
+        eff_high = kpi_high if kpi_high is not None else kpi_base
+
         bars.append(TornadoBar(
             variable=name,
             low_value=low,
             high_value=high,
-            kpi_at_low=kpi_low,
-            kpi_at_high=kpi_high,
+            kpi_at_low=eff_low,
+            kpi_at_high=eff_high,
             kpi_base=kpi_base,
-            delta_low=kpi_low - kpi_base,
-            delta_high=kpi_high - kpi_base,
+            delta_low=eff_low - kpi_base,
+            delta_high=eff_high - kpi_base,
         ))
 
     # Sort by total impact
@@ -334,8 +338,15 @@ def _run_two_variable_sweep(
         for v2 in vals_2:
             try:
                 clone = model.clone()
-                _apply_patch_key(clone, variable_1, v1)
-                _apply_patch_key(clone, variable_2, v2)
+                ok1 = _apply_patch_key(clone, variable_1, v1)
+                ok2 = _apply_patch_key(clone, variable_2, v2)
+                if not ok1 or not ok2:
+                    result.sweep_points.append(SweepPoint(
+                        input_values={variable_1: v1, variable_2: v2},
+                        feasible=False,
+                        error=f"Patch failed: var1={'OK' if ok1 else 'FAIL'}, var2={'OK' if ok2 else 'FAIL'}",
+                    ))
+                    continue
                 run_result = clone.run()
                 kpis = run_result.kpis
 

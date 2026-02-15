@@ -143,9 +143,9 @@ _PARAM_SETTERS = {
     "target_value":            lambda v: f"setTargetValue({float(v)})",
     "power_kw":                lambda v: f"setPower({float(v) * 1000})",
     "energy_input_kw":         lambda v: f"setEnergyInput({float(v) * 1000})",
-    "use_compressor_chart":    lambda v: "# compressor chart enabled via use_compressor_chart",
-    "chart_template":          lambda v: f"# chart_template={v}",
-    "chart_num_speeds":        lambda v: f"# chart_num_speeds={int(v)}",
+    "use_compressor_chart":    lambda v: None,  # handled separately, not a Java setter
+    "chart_template":          lambda v: None,  # handled separately, not a Java setter
+    "chart_num_speeds":        lambda v: None,  # handled separately, not a Java setter
 }
 
 
@@ -546,7 +546,9 @@ class ProcessBuilder:
             for pkey, pval in params.items():
                 setter_fn = _PARAM_SETTERS.get(pkey.lower().strip())
                 if setter_fn:
-                    lines.append(f"{var}.{setter_fn(pval)}")
+                    setter_call = setter_fn(pval)
+                    if setter_call is not None:
+                        lines.append(f"{var}.{setter_call}")
 
             lines.append(f"process.add({var})")
             prev_var = var
