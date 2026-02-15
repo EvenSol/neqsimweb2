@@ -690,10 +690,8 @@ def _show_emissions(emissions_result):
             })
         st.dataframe(pd.DataFrame(src_data), use_container_width=True, hide_index=True)
 
-    if emissions_result.recommendations:
-        with st.expander("💡 Reduction Opportunities", expanded=False):
-            for rec in emissions_result.recommendations:
-                st.markdown(f"- {rec}")
+    if getattr(emissions_result, "message", ""):
+        st.info(emissions_result.message)
 
 
 def _show_dynamic(dynamic_result):
@@ -709,22 +707,27 @@ def _show_dynamic(dynamic_result):
     with col2:
         st.metric("Time Steps", f"{len(dynamic_result.time_series)}")
     with col3:
-        if dynamic_result.min_temperature_C is not None:
-            st.metric("Min Temperature", f"{dynamic_result.min_temperature_C:.1f} °C",
-                       delta_color="inverse")
+        # Compute min temperature from time-series values
+        min_temp = None
+        for p in dynamic_result.time_series:
+            t = p.values.get("temperature_C")
+            if t is not None:
+                min_temp = t if min_temp is None else min(min_temp, t)
+        if min_temp is not None:
+            st.metric("Min Temperature", f"{min_temp:.1f} °C")
 
     if dynamic_result.time_series:
         ts = dynamic_result.time_series
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=[p.time_s for p in ts],
-            y=[p.pressure_bara for p in ts],
+            y=[p.values.get("pressure_bara", 0) for p in ts],
             name="Pressure (bara)",
             yaxis="y1",
         ))
         fig.add_trace(go.Scatter(
             x=[p.time_s for p in ts],
-            y=[p.temperature_C for p in ts],
+            y=[p.values.get("temperature_C", 0) for p in ts],
             name="Temperature (°C)",
             yaxis="y2",
         ))
@@ -737,9 +740,8 @@ def _show_dynamic(dynamic_result):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    if dynamic_result.warnings:
-        for w in dynamic_result.warnings:
-            st.warning(w)
+    if getattr(dynamic_result, "message", ""):
+        st.info(dynamic_result.message)
 
 
 def _show_sensitivity(sensitivity_result):
@@ -752,70 +754,79 @@ def _show_sensitivity(sensitivity_result):
     if sensitivity_result.analysis_type == "tornado":
         # Tornado chart
         if sensitivity_result.tornado_bars:
-            bars = sorted(sensitivity_result.tornado_bars, key=lambda b: b.swing)
+            def _swing(b):
+                return abs(b.kpi_at_high - b.kpi_at_low)
+
+            bars = sorted(sensitivity_result.tornado_bars, key=_swing)
             fig = go.Figure()
             fig.add_trace(go.Bar(
                 y=[b.variable for b in bars],
-                x=[b.high_value - b.base_value for b in bars],
-                base=[b.base_value for b in bars],
+                x=[b.kpi_at_high - b.kpi_base for b in bars],
+                base=[b.kpi_base for b in bars],
                 name="High",
                 orientation="h",
                 marker_color="indianred",
             ))
             fig.add_trace(go.Bar(
                 y=[b.variable for b in bars],
-                x=[b.low_value - b.base_value for b in bars],
-                base=[b.base_value for b in bars],
+                x=[b.kpi_at_low - b.kpi_base for b in bars],
+                base=[b.kpi_base for b in bars],
                 name="Low",
                 orientation="h",
                 marker_color="steelblue",
             ))
+            # Use response_kpis from the result if available
+            kpi_label = ""
+            if sensitivity_result.response_kpis:
+                kpi_label = sensitivity_result.response_kpis[0]
             fig.update_layout(
                 title="Tornado Chart",
-                xaxis_title=sensitivity_result.tornado_bars[0].response_kpi if sensitivity_result.tornado_bars else "KPI",
+                xaxis_title=kpi_label or "KPI",
                 barmode="overlay",
             )
             st.plotly_chart(fig, use_container_width=True)
 
             # Data table
             tornado_data = []
-            for b in sorted(sensitivity_result.tornado_bars, key=lambda x: x.swing, reverse=True):
+            for b in sorted(sensitivity_result.tornado_bars, key=_swing, reverse=True):
                 tornado_data.append({
                     "Variable": b.variable,
-                    "Low Value": round(b.low_value, 4),
-                    "Base Value": round(b.base_value, 4),
-                    "High Value": round(b.high_value, 4),
-                    "Swing": round(b.swing, 4),
+                    "Low Value": round(b.kpi_at_low, 4),
+                    "Base Value": round(b.kpi_base, 4),
+                    "High Value": round(b.kpi_at_high, 4),
+                    "Swing": round(_swing(b), 4),
                 })
             st.dataframe(pd.DataFrame(tornado_data), use_container_width=True, hide_index=True)
 
     elif sensitivity_result.analysis_type == "two_variable":
         if sensitivity_result.sweep_points:
-            import numpy as np
-
             pts = sensitivity_result.sweep_points
-            # Get unique x/y values
-            x_vals = sorted(set(p.input_values.get(list(p.input_values.keys())[0], 0) for p in pts if p.input_values))
-            y_vals = sorted(set(p.input_values.get(list(p.input_values.keys())[1], 0) for p in pts if len(p.input_values) > 1))
+            # Extract consistent key names from the first point with 2+ inputs
+            key_names = []
+            for p in pts:
+                if len(p.input_values) >= 2:
+                    key_names = list(p.input_values.keys())[:2]
+                    break
+            if len(key_names) == 2:
+                x_vals = sorted(set(p.input_values.get(key_names[0], 0) for p in pts if p.input_values))
+                y_vals = sorted(set(p.input_values.get(key_names[1], 0) for p in pts if len(p.input_values) > 1))
 
-            if x_vals and y_vals:
-                # Build surface for first KPI
-                first_kpi = list(pts[0].output_kpis.keys())[0] if pts[0].output_kpis else "KPI"
-                z_map = {}
-                for p in pts:
-                    keys = list(p.input_values.keys())
-                    if len(keys) >= 2:
-                        z_map[(p.input_values[keys[0]], p.input_values[keys[1]])] = p.output_kpis.get(first_kpi, 0)
-                z = [[z_map.get((x, y), 0) for x in x_vals] for y in y_vals]
+                if x_vals and y_vals:
+                    # Build surface for first output value
+                    first_kpi = list(pts[0].output_values.keys())[0] if pts[0].output_values else "KPI"
+                    z_map = {}
+                    for p in pts:
+                        if len(p.input_values) >= 2:
+                            z_map[(p.input_values[key_names[0]], p.input_values[key_names[1]])] = p.output_values.get(first_kpi, 0)
+                    z = [[z_map.get((x, y), 0) for x in x_vals] for y in y_vals]
 
-                fig = go.Figure(data=go.Heatmap(x=x_vals, y=y_vals, z=z, colorscale="Viridis"))
-                keys = list(pts[0].input_values.keys())
-                fig.update_layout(
-                    title=f"Sensitivity Surface — {first_kpi}",
-                    xaxis_title=keys[0] if keys else "Var 1",
-                    yaxis_title=keys[1] if len(keys) > 1 else "Var 2",
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                    fig = go.Figure(data=go.Heatmap(x=x_vals, y=y_vals, z=z, colorscale="Viridis"))
+                    fig.update_layout(
+                        title=f"Sensitivity Surface \u2014 {first_kpi}",
+                        xaxis_title=key_names[0],
+                        yaxis_title=key_names[1],
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
     else:  # single_sweep
         if sensitivity_result.sweep_points:
@@ -824,11 +835,11 @@ def _show_sensitivity(sensitivity_result):
             x_data = [p.input_values.get(var_name, 0) for p in pts]
 
             fig = go.Figure()
-            kpi_names = list(pts[0].output_kpis.keys()) if pts[0].output_kpis else []
+            kpi_names = list(pts[0].output_values.keys()) if pts[0].output_values else []
             for kpi in kpi_names:
                 fig.add_trace(go.Scatter(
                     x=x_data,
-                    y=[p.output_kpis.get(kpi, 0) for p in pts],
+                    y=[p.output_values.get(kpi, 0) for p in pts],
                     name=kpi,
                     mode="lines+markers",
                 ))
@@ -845,39 +856,45 @@ def _show_pvt(pvt_result):
     import plotly.graph_objects as go
 
     st.markdown("---")
-    st.markdown(f"**🧪 PVT Simulation — {pvt_result.experiment}**")
+    exp_name = getattr(pvt_result, "experiment_type", "") or "PVT"
+    st.markdown(f"**🧪 PVT Simulation — {exp_name}**")
 
     col1, col2 = st.columns(2)
     with col1:
-        if pvt_result.saturation_pressure_bara is not None:
+        if pvt_result.saturation_pressure_bara:
             st.metric("Saturation Pressure", f"{pvt_result.saturation_pressure_bara:.2f} bara")
     with col2:
-        st.metric("Temperature", f"{pvt_result.temperature_C:.1f} °C")
+        temp_c = getattr(pvt_result, "saturation_temperature_C", 0.0)
+        if temp_c:
+            st.metric("Temperature", f"{temp_c:.1f} °C")
 
     if pvt_result.data_points:
         pts = pvt_result.data_points
         fig = go.Figure()
 
-        if pvt_result.experiment in ("CME", "DifferentialLiberation"):
+        if exp_name in ("CME", "DifferentialLiberation"):
             fig.add_trace(go.Scatter(
                 x=[p.pressure_bara for p in pts],
-                y=[p.relative_volume if p.relative_volume else 0 for p in pts],
+                y=[p.values.get("relative_volume", 0) for p in pts],
                 name="Relative Volume",
                 mode="lines+markers",
             ))
             fig.update_layout(
-                title=pvt_result.experiment,
+                title=exp_name,
                 xaxis_title="Pressure (bara)",
                 yaxis_title="Relative Volume",
             )
         else:
-            fig.add_trace(go.Scatter(
-                x=list(range(len(pts))),
-                y=[p.gas_oil_ratio for p in pts if p.gas_oil_ratio is not None],
-                name="GOR",
-                mode="lines+markers",
-            ))
-            fig.update_layout(title=pvt_result.experiment, xaxis_title="Step", yaxis_title="GOR")
+            gor_data = [(i, p.values.get("gas_oil_ratio")) for i, p in enumerate(pts)]
+            gor_data = [(i, v) for i, v in gor_data if v is not None]
+            if gor_data:
+                fig.add_trace(go.Scatter(
+                    x=[i for i, _ in gor_data],
+                    y=[v for _, v in gor_data],
+                    name="GOR",
+                    mode="lines+markers",
+                ))
+            fig.update_layout(title=exp_name, xaxis_title="Step", yaxis_title="GOR")
 
         st.plotly_chart(fig, use_container_width=True)
 
@@ -885,16 +902,21 @@ def _show_pvt(pvt_result):
         pvt_data = []
         for p in pts:
             row = {"Pressure (bara)": round(p.pressure_bara, 2)}
-            if p.relative_volume is not None:
-                row["Rel. Volume"] = round(p.relative_volume, 4)
-            if p.liquid_volume_fraction is not None:
-                row["Liquid Vol. Frac."] = round(p.liquid_volume_fraction, 4)
-            if p.gas_Z is not None:
-                row["Gas Z"] = round(p.gas_Z, 4)
-            if p.gas_oil_ratio is not None:
-                row["GOR"] = round(p.gas_oil_ratio, 2)
-            if p.Bo is not None:
-                row["Bo"] = round(p.Bo, 4)
+            rv = p.values.get("relative_volume")
+            if rv is not None:
+                row["Rel. Volume"] = round(rv, 4)
+            lvf = p.values.get("liquid_volume_fraction")
+            if lvf is not None:
+                row["Liquid Vol. Frac."] = round(lvf, 4)
+            gz = p.values.get("gas_Z")
+            if gz is not None:
+                row["Gas Z"] = round(gz, 4)
+            gor = p.values.get("gas_oil_ratio")
+            if gor is not None:
+                row["GOR"] = round(gor, 2)
+            bo = p.values.get("Bo")
+            if bo is not None:
+                row["Bo"] = round(bo, 4)
             pvt_data.append(row)
         st.dataframe(pd.DataFrame(pvt_data), use_container_width=True, hide_index=True)
 
@@ -1005,49 +1027,27 @@ for msg in st.session_state["chat_messages"]:
     with st.chat_message(role):
         st.markdown(msg["content"])
 
-        # If there's a comparison result attached, show it
-        if "comparison" in msg and msg["comparison"] is not None:
-            _show_comparison(msg["comparison"])
-
-        # If there's an optimization result attached, show it
-        if "optimization" in msg and msg["optimization"] is not None:
-            _show_optimization(msg["optimization"])
-
-        # If there's a risk analysis result attached, show it
-        if "risk_analysis" in msg and msg["risk_analysis"] is not None:
-            _show_risk_analysis(msg["risk_analysis"])
-
-        # If there's a compressor chart result attached, show it
-        if "chart" in msg and msg["chart"] is not None:
-            _show_compressor_chart(msg["chart"])
-
-        # If there's an auto-size result attached, show it
-        if "autosize" in msg and msg["autosize"] is not None:
-            _show_auto_size(msg["autosize"])
-
-        # If there's an emissions result attached, show it
-        if "emissions" in msg and msg["emissions"] is not None:
-            _show_emissions(msg["emissions"])
-
-        # If there's a dynamic simulation result attached, show it
-        if "dynamic" in msg and msg["dynamic"] is not None:
-            _show_dynamic(msg["dynamic"])
-
-        # If there's a sensitivity analysis result attached, show it
-        if "sensitivity" in msg and msg["sensitivity"] is not None:
-            _show_sensitivity(msg["sensitivity"])
-
-        # If there's a PVT simulation result attached, show it
-        if "pvt" in msg and msg["pvt"] is not None:
-            _show_pvt(msg["pvt"])
-
-        # If there's a safety analysis result attached, show it
-        if "safety" in msg and msg["safety"] is not None:
-            _show_safety(msg["safety"])
-
-        # If there's a flow assurance result attached, show it
-        if "flow_assurance" in msg and msg["flow_assurance"] is not None:
-            _show_flow_assurance(msg["flow_assurance"])
+        # Render attached result objects with error protection
+        _RESULT_RENDERERS = [
+            ("comparison", _show_comparison),
+            ("optimization", _show_optimization),
+            ("risk_analysis", _show_risk_analysis),
+            ("chart", _show_compressor_chart),
+            ("autosize", _show_auto_size),
+            ("emissions", _show_emissions),
+            ("dynamic", _show_dynamic),
+            ("sensitivity", _show_sensitivity),
+            ("pvt", _show_pvt),
+            ("safety", _show_safety),
+            ("flow_assurance", _show_flow_assurance),
+        ]
+        for key, renderer in _RESULT_RENDERERS:
+            data = msg.get(key)
+            if data is not None:
+                try:
+                    renderer(data)
+                except Exception as e:
+                    st.warning(f"Could not render {key} result: {e}")
 
 
 # Handle pending question from sidebar buttons
@@ -1111,49 +1111,39 @@ if user_input:
                 safety = session.get_last_safety()
                 flow_assurance = session.get_last_flow_assurance()
 
-                # --- Sync model if builder created one ---
-                if session.model is not None and st.session_state.get("process_model") is None:
-                    st.session_state["process_model"] = session.model
-                    st.session_state["_builder_mode"] = False
-                    st.session_state["process_model_name"] = "Built Process"
+                # --- Sync model from session back to session_state ---
+                if session.model is not None:
+                    if st.session_state.get("process_model") is not session.model:
+                        st.session_state["process_model"] = session.model
+                        st.session_state["_builder_mode"] = False
+                        st.session_state["process_model_name"] = (
+                            st.session_state.get("process_model_name") or "Built Process"
+                        )
 
                 st.markdown(response)
 
-                # Store message with optional comparison and optimization
+                # Store message and render attached results
                 msg_data = {"role": "assistant", "content": response}
-                if comparison is not None:
-                    msg_data["comparison"] = comparison
-                    _show_comparison(comparison)
-                if optimization is not None:
-                    msg_data["optimization"] = optimization
-                    _show_optimization(optimization)
-                if risk_analysis is not None:
-                    msg_data["risk_analysis"] = risk_analysis
-                    _show_risk_analysis(risk_analysis)
-                if chart is not None:
-                    msg_data["chart"] = chart
-                    _show_compressor_chart(chart)
-                if autosize is not None:
-                    msg_data["autosize"] = autosize
-                    _show_auto_size(autosize)
-                if emissions is not None:
-                    msg_data["emissions"] = emissions
-                    _show_emissions(emissions)
-                if dynamic is not None:
-                    msg_data["dynamic"] = dynamic
-                    _show_dynamic(dynamic)
-                if sensitivity is not None:
-                    msg_data["sensitivity"] = sensitivity
-                    _show_sensitivity(sensitivity)
-                if pvt is not None:
-                    msg_data["pvt"] = pvt
-                    _show_pvt(pvt)
-                if safety is not None:
-                    msg_data["safety"] = safety
-                    _show_safety(safety)
-                if flow_assurance is not None:
-                    msg_data["flow_assurance"] = flow_assurance
-                    _show_flow_assurance(flow_assurance)
+                _result_pairs = [
+                    ("comparison", comparison, _show_comparison),
+                    ("optimization", optimization, _show_optimization),
+                    ("risk_analysis", risk_analysis, _show_risk_analysis),
+                    ("chart", chart, _show_compressor_chart),
+                    ("autosize", autosize, _show_auto_size),
+                    ("emissions", emissions, _show_emissions),
+                    ("dynamic", dynamic, _show_dynamic),
+                    ("sensitivity", sensitivity, _show_sensitivity),
+                    ("pvt", pvt, _show_pvt),
+                    ("safety", safety, _show_safety),
+                    ("flow_assurance", flow_assurance, _show_flow_assurance),
+                ]
+                for key, result_obj, renderer in _result_pairs:
+                    if result_obj is not None:
+                        msg_data[key] = result_obj
+                        try:
+                            renderer(result_obj)
+                        except Exception as e:
+                            st.warning(f"Could not render {key}: {e}")
 
                 st.session_state["chat_messages"].append(msg_data)
 

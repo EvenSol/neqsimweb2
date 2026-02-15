@@ -257,7 +257,69 @@ def _recreate_unit(original_unit, inlet_stream):
                 new_unit.setOutPressure(val, "bara")
         except Exception:
             pass
-    
+
+    # -------------------------------------------------------------------
+    # Compressor-specific: preserve chart, speed, polytropic settings
+    # -------------------------------------------------------------------
+    if java_class == "Compressor":
+        # Copy compressor chart (expensive to regenerate)
+        try:
+            if hasattr(original_unit, "getCompressorChart"):
+                chart = original_unit.getCompressorChart()
+                if chart is not None:
+                    new_unit.setCompressorChartType('interpolate and extrapolate')
+                    new_unit.setCompressorChart(chart)
+                    try:
+                        new_unit.getCompressorChart().setHeadUnit('kJ/kg')
+                    except Exception:
+                        pass
+                    if hasattr(new_unit, "setSolveSpeed"):
+                        new_unit.setSolveSpeed(True)
+        except Exception:
+            pass
+
+        # Copy speed setting
+        try:
+            if hasattr(original_unit, "getSpeed") and hasattr(new_unit, "setSpeed"):
+                speed = float(original_unit.getSpeed())
+                if speed > 0:
+                    new_unit.setSpeed(speed)
+        except Exception:
+            pass
+
+        # Copy polytropic calc flag
+        try:
+            if hasattr(original_unit, "getUsePolytropicCalc"):
+                new_unit.setUsePolytropicCalc(original_unit.getUsePolytropicCalc())
+        except Exception:
+            pass
+
+        # Copy compression ratio if set
+        try:
+            if hasattr(original_unit, "getCompressionRatio") and hasattr(new_unit, "setCompressionRatio"):
+                cr = float(original_unit.getCompressionRatio())
+                if cr > 1.0:
+                    new_unit.setCompressionRatio(cr)
+        except Exception:
+            pass
+
+    # -------------------------------------------------------------------
+    # Separator / valve / pump: preserve autoSize dimensions
+    # -------------------------------------------------------------------
+    if java_class in ("Separator", "TwoPhaseSeparator", "ThreePhaseSeparator",
+                       "GasScrubber", "GasScrubberSimple"):
+        for getter, setter in [
+            ("getInternalDiameter", "setInternalDiameter"),
+            ("getSeparatorLength", "setSeparatorLength"),
+        ]:
+            if hasattr(original_unit, getter) and hasattr(new_unit, setter):
+                try:
+                    val = float(getattr(original_unit, getter)())
+                    if val > 0:
+                        getattr(new_unit, setter)(val)
+                except Exception:
+                    pass
+
     return new_unit
 
 

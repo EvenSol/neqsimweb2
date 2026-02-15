@@ -485,6 +485,16 @@ When the user asks to save/download the process, output:
 ```
 Do NOT write Python scripts yourself — ALWAYS use the show_script action so the system generates the correct script.
 
+IMPORTANT — AVOID UNNECESSARY REBUILDS:
+Compressor charts, mechanical design, and auto-sizing data are expensive to compute and
+are lost when the process is rebuilt from scratch. To preserve them:
+  - To UPDATE PROPERTIES on existing equipment: use scenario JSON with "changes" (above).
+  - To ADD EQUIPMENT at the start/end: use ```build {{"add": [...]}}```.
+  - Do NOT regenerate compressor charts unless the user explicitly asks to generate a new chart.
+    When the user just updates flow or conditions, the existing chart is automatically used to
+    recalculate the operating point.
+  - Only emit a full build spec (with "fluid" and "process") when building a brand-new process.
+
 PROCESS OPTIMIZATION (for "find maximum production", "maximize throughput", "what is the max flow?"):
 When the user asks to optimize, find maximum production, or maximize throughput, output an ```optimize ... ``` block:
 ```optimize
@@ -938,6 +948,49 @@ To add equipment to an existing built process:
   ]
 }
 ```
+
+PROPERTY UPDATES (after a process has been built — PREFERRED over full rebuild):
+When the user wants to change parameters on existing equipment (pressure, temperature,
+flow rate, efficiency, etc.) WITHOUT changing the process structure, use a scenario JSON
+with ``changes``. This preserves compressor charts, auto-sizing data, and mechanical design.
+
+Example — change compressor outlet pressure:
+```json
+{
+  "scenarios": [
+    {
+      "name": "Update pressure",
+      "description": "Update compressor outlet pressure",
+      "changes": {"units.compressor 1.outletPressure": 120.0}
+    }
+  ]
+}
+```
+
+Example — update feed flow rate:
+```json
+{
+  "scenarios": [
+    {
+      "name": "Increase flow",
+      "description": "Increase feed flow rate",
+      "changes": {"streams.feed gas.flow_kg_hr": 15000}
+    }
+  ]
+}
+```
+
+IMPORTANT — AVOID UNNECESSARY REBUILDS:
+If a process has already been built, do NOT emit a new full build spec (with "fluid" and
+"process") just to update parameters or add equipment at the start/end. A full rebuild
+destroys compressor charts, mechanical design, and auto-sizing data. Instead:
+  - To UPDATE PROPERTIES: use scenario JSON changes (above)
+  - To ADD EQUIPMENT AT END: use incremental additions (```build {"add": [...]}```)
+  - To GENERATE COMPRESSOR CHARTS: use ```chart``` only when explicitly requested
+Only emit a full build spec when:
+  - Building a completely new process from scratch (no existing process)
+  - The user explicitly asks to "rebuild" or "start over"
+  - Equipment is inserted in the MIDDLE (not start/end) of the process
 
 DESIGN GUIDELINES (use these defaults unless the user specifies otherwise):
 - Compressor isentropic efficiency: 0.75 (centrifugal), 0.80 (reciprocating)
@@ -1450,6 +1503,91 @@ def format_comparison_for_llm(comparison) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Smart rebuild classification
+# ---------------------------------------------------------------------------
+
+def _classify_build_change(old_spec: dict, new_spec: dict):
+    """
+    Compare old and new build specs to decide whether a full rebuild is needed.
+
+    Returns ``(change_type, param_changes, fluid_changes, new_steps)`` where:
+
+    * **change_type**: one of ``"no_change"``, ``"property_update"``,
+      ``"append_end"``, ``"prepend_start"``, ``"append_both"``,
+      ``"full_rebuild"``.
+    * **param_changes**: ``{unit_name: {"type": ..., "old_params": ...,
+      "new_params": ...}}`` for units whose parameters differ.
+    * **fluid_changes**: ``{prop: new_value}`` for changed feed-stream
+      conditions (T, P, flow).
+    * **new_steps**: list of step dicts that were appended / prepended.
+    """
+    old_steps = old_spec.get("process", [])
+    new_steps = new_spec.get("process", [])
+
+    old_names = [s["name"] for s in old_steps]
+    new_names = [s["name"] for s in new_steps]
+
+    # --- Fluid component / EOS changes require a full rebuild ---
+    old_fluid = old_spec.get("fluid", {})
+    new_fluid = new_spec.get("fluid", {})
+    if (old_fluid.get("components") != new_fluid.get("components")
+            or old_fluid.get("eos_model", "srk") != new_fluid.get("eos_model", "srk")
+            or old_fluid.get("mixing_rule", 2) != new_fluid.get("mixing_rule", 2)
+            or old_fluid.get("composition_basis") != new_fluid.get("composition_basis")):
+        return "full_rebuild", {}, {}, []
+
+    # --- Fluid condition changes (T, P, flow) ---
+    fluid_changes: dict = {}
+    for prop in ("temperature_C", "pressure_bara", "total_flow", "flow_unit"):
+        old_val = old_fluid.get(prop)
+        new_val = new_fluid.get(prop)
+        if old_val != new_val and new_val is not None:
+            fluid_changes[prop] = new_val
+
+    if not old_names:
+        return "full_rebuild", {}, {}, []
+
+    # --- Find where old_names appear as a contiguous sub-sequence ---
+    start_idx = None
+    for i in range(max(len(new_names) - len(old_names) + 1, 1)):
+        if new_names[i:i + len(old_names)] == old_names:
+            start_idx = i
+            break
+
+    if start_idx is None:
+        return "full_rebuild", {}, {}, []
+
+    prepended = new_steps[:start_idx]
+    appended = new_steps[start_idx + len(old_names):]
+
+    # --- Param changes on the common (existing) steps ---
+    param_changes: dict = {}
+    for i, old_step in enumerate(old_steps):
+        new_step = new_steps[start_idx + i]
+        old_params = old_step.get("params", {})
+        new_params = new_step.get("params", {})
+        if old_params != new_params:
+            param_changes[old_step["name"]] = {
+                "type": old_step["type"],
+                "old_params": old_params,
+                "new_params": new_params,
+            }
+
+    if not prepended and not appended:
+        if not param_changes and not fluid_changes:
+            return "no_change", {}, {}, []
+        return "property_update", param_changes, fluid_changes, []
+
+    if not prepended and appended:
+        return "append_end", param_changes, fluid_changes, appended
+
+    if prepended and not appended:
+        return "prepend_start", param_changes, fluid_changes, prepended
+
+    return "append_both", param_changes, fluid_changes, prepended + appended
+
+
 class ProcessChatSession:
     """
     Manages a chat session with a NeqSim process model.
@@ -1697,6 +1835,25 @@ class ProcessChatSession:
 
         # --- Build a new process ---
         if "fluid" in build_spec and "process" in build_spec:
+            # ── Smart rebuild detection ──────────────────────────────
+            # If we already have a built model, check whether we can
+            # apply the change incrementally (preserving compressor
+            # charts, mechanical design, and auto-sizing data).
+            if self._builder and self._builder.spec and self.model:
+                change_type, param_changes, fluid_changes, extra_steps = (
+                    _classify_build_change(self._builder.spec, build_spec)
+                )
+                if change_type in (
+                    "no_change", "property_update", "append_end",
+                    "prepend_start", "append_both",
+                ):
+                    return self._handle_incremental_update(
+                        assistant_text, build_spec, change_type,
+                        param_changes, fluid_changes, extra_steps,
+                        client, types,
+                    )
+
+            # ── Full rebuild (new process or fundamental change) ─────
             try:
                 builder = ProcessBuilder()
                 model = builder.build_from_spec(build_spec)
@@ -1792,6 +1949,221 @@ class ProcessChatSession:
         self._last_comparison = None
         return assistant_text
 
+    # -- Incremental update (avoids full rebuild) ---------------------------
+
+    def _handle_incremental_update(
+        self,
+        assistant_text: str,
+        build_spec: dict,
+        change_type: str,
+        param_changes: dict,
+        fluid_changes: dict,
+        extra_steps: list,
+        client,
+        types,
+    ) -> str:
+        """Apply changes to the existing model without a full rebuild.
+
+        Preserves compressor charts, auto-sizing data, and mechanical
+        design by modifying the live Java objects in place (or appending
+        new units at the ends).
+        """
+        from .process_builder import _apply_param
+
+        try:
+            changes_applied: list = []
+
+            # 1. Apply fluid condition changes to the feed stream(s)
+            if fluid_changes:
+                proc = self.model.get_process()
+                for u in proc.getUnitOperations():
+                    try:
+                        java_class = str(u.getClass().getSimpleName())
+                        if java_class != "Stream":
+                            continue
+                        fluid = None
+                        for getter in ("getFluid", "getThermoSystem"):
+                            if hasattr(u, getter):
+                                fluid = getattr(u, getter)()
+                                if fluid is not None:
+                                    break
+                        if fluid is None:
+                            continue
+                        if "temperature_C" in fluid_changes:
+                            fluid.setTemperature(float(fluid_changes["temperature_C"]), "C")
+                            changes_applied.append(
+                                f"Feed temperature → {fluid_changes['temperature_C']}°C"
+                            )
+                        if "pressure_bara" in fluid_changes:
+                            fluid.setPressure(float(fluid_changes["pressure_bara"]), "bara")
+                            changes_applied.append(
+                                f"Feed pressure → {fluid_changes['pressure_bara']} bara"
+                            )
+                        if "total_flow" in fluid_changes:
+                            flow_unit = fluid_changes.get(
+                                "flow_unit",
+                                build_spec.get("fluid", {}).get("flow_unit", "kg/hr"),
+                            )
+                            fluid.setTotalFlowRate(
+                                float(fluid_changes["total_flow"]), flow_unit
+                            )
+                            changes_applied.append(
+                                f"Feed flow → {fluid_changes['total_flow']} {flow_unit}"
+                            )
+                        break  # only update the first (feed) stream
+                    except Exception:
+                        continue
+
+            # 2. Apply parameter changes to existing equipment
+            if param_changes:
+                for unit_name, change_info in param_changes.items():
+                    try:
+                        unit = self.model.get_unit(unit_name)
+                        new_params = change_info["new_params"]
+                        for k, v in new_params.items():
+                            try:
+                                _apply_param(unit, k, v)
+                                changes_applied.append(f"{unit_name}: {k}={v}")
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        changes_applied.append(f"{unit_name}: FAILED — {e}")
+
+            # 3. Append / prepend new equipment at the ends
+            if extra_steps and change_type in (
+                "append_end", "prepend_start", "append_both",
+            ):
+                from .scenario_engine import apply_add_units
+                from .patch_schema import AddUnitOp
+
+                old_steps = self._builder.spec.get("process", [])
+                old_names = [s["name"] for s in old_steps]
+
+                new_names = [s["name"] for s in build_spec.get("process", [])]
+                # Determine which are appended vs prepended
+                start_idx = 0
+                for i in range(len(new_names) - len(old_names) + 1):
+                    if new_names[i:i + len(old_names)] == old_names:
+                        start_idx = i
+                        break
+
+                prepended = build_spec["process"][:start_idx]
+                appended = build_spec["process"][start_idx + len(old_names):]
+
+                # Handle appended (after last existing unit)
+                if appended:
+                    last_existing = old_names[-1] if old_names else None
+                    add_ops = []
+                    prev_name = last_existing
+                    for step in appended:
+                        if step["type"].lower() == "stream":
+                            continue  # skip raw streams – they're feeds
+                        if prev_name is None:
+                            continue
+                        add_ops.append(AddUnitOp(
+                            name=step["name"],
+                            equipment_type=step["type"],
+                            insert_after=prev_name,
+                            params=step.get("params", {}),
+                        ))
+                        prev_name = step["name"]
+                    if add_ops:
+                        log = apply_add_units(self.model, add_ops)
+                        for entry in log:
+                            if entry.get("status") == "OK":
+                                changes_applied.append(
+                                    f"Added {entry.get('value', entry.get('key', '?'))} (end)"
+                                )
+
+                # Handle prepended (before first existing unit)
+                if prepended:
+                    first_existing = old_names[0] if old_names else None
+                    # Prepended units need to go before the first unit which
+                    # is difficult without a rebuild. Use apply_add_units
+                    # with a chain: insert each prepended unit after the
+                    # previous prepended unit, then reconnect.
+                    # For now, we insert them and let NeqSim handle the
+                    # stream wiring via apply_add_units.
+                    if first_existing:
+                        add_ops = []
+                        # We need to insert in reverse order so that each
+                        # unit is placed before the first existing.
+                        # Actually, insert the first prepended unit after
+                        # the feed stream (or as a new feed), then chain.
+                        # Get the feed stream name (first unit in process)
+                        proc = self.model.get_process()
+                        units = list(proc.getUnitOperations())
+                        feed_name = None
+                        for u in units:
+                            try:
+                                jc = str(u.getClass().getSimpleName())
+                                if jc == "Stream":
+                                    feed_name = str(u.getName())
+                                    break
+                            except Exception:
+                                pass
+
+                        prev_name = feed_name
+                        for step in prepended:
+                            if step["type"].lower() == "stream":
+                                continue
+                            if prev_name is None:
+                                continue
+                            add_ops.append(AddUnitOp(
+                                name=step["name"],
+                                equipment_type=step["type"],
+                                insert_after=prev_name,
+                                params=step.get("params", {}),
+                            ))
+                            prev_name = step["name"]
+                        if add_ops:
+                            log = apply_add_units(self.model, add_ops)
+                            for entry in log:
+                                if entry.get("status") == "OK":
+                                    changes_applied.append(
+                                        f"Added {entry.get('value', entry.get('key', '?'))} (start)"
+                                    )
+
+            # 4. Re-run the process
+            NeqSimProcessModel._run_until_converged(self.model.get_process())
+            self.model._index_model_objects()
+            self.model.refresh_source_bytes()
+
+            # 5. Update the builder spec (keep in sync)
+            self._builder._spec = build_spec
+            self._builder._process_name = build_spec.get(
+                "name", self._builder._process_name
+            )
+
+            # 6. Update system prompt
+            self._system_prompt = build_system_prompt(self.model)
+
+            summary = self.model.get_model_summary()
+            changes_str = (
+                "\n".join(f"  • {c}" for c in changes_applied)
+                if changes_applied
+                else "  No effective changes detected."
+            )
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Process updated incrementally (without full rebuild — "
+                    f"compressor charts, auto-sizing, and mechanical design are preserved). "
+                    f"Changes applied:\n{changes_str}\n\n"
+                    f"Updated model summary:\n{summary}\n\n"
+                    "Explain the updated results to the engineer. "
+                    "Mention the key changes and how they affected the process.]"
+                ),
+            })
+            return self._llm_followup(client, types)
+
+        except Exception as e:
+            # Incremental update failed — fall back to full rebuild
+            self._builder._spec = None  # force full rebuild path
+            return self._handle_build(assistant_text, build_spec, client, types)
+
     # -- Scenario handling --------------------------------------------------
 
     def _handle_scenario(self, assistant_text: str, scenario_data: dict, client, types) -> str:
@@ -1809,13 +2181,16 @@ class ProcessChatSession:
 
             results_text = format_comparison_for_llm(comparison)
 
-            # --- Persist structural additions to the base model ---
+            # --- Persist changes to the base model ---
+            # Both structural additions AND property-only changes are
+            # persisted so the model stays up-to-date for subsequent queries.
             structural_applied = False
             for sc in scenarios:
                 has_structural = (
                     sc.patch.add_units or sc.patch.add_streams or sc.patch.add_process
                 )
-                if not has_structural:
+                has_changes = bool(sc.patch.changes)
+                if not has_structural and not has_changes:
                     continue
                 # Only persist if the scenario actually succeeded
                 case_ok = any(
@@ -1871,9 +2246,10 @@ class ProcessChatSession:
             persist_note = ""
             if structural_applied:
                 persist_note = (
-                    "\n\n[SYSTEM NOTE: The structural additions (new equipment/streams) "
-                    "have been applied to the base model. Future questions will see "
-                    "the updated topology.]\n\nUpdated model summary:\n"
+                    "\n\n[SYSTEM NOTE: Changes have been applied to the base model "
+                    "(compressor charts and mechanical design preserved). "
+                    "Future questions will see the updated state.]\n\n"
+                    "Updated model summary:\n"
                     + self.model.get_model_summary()
                 )
 
@@ -2061,6 +2437,11 @@ class ProcessChatSession:
             cache_key = (compressor_name or "__all__").lower()
             if show_only and cache_key in self._chart_cache:
                 cached = self._chart_cache[cache_key]
+                # Re-run the model to get updated operating conditions
+                try:
+                    self.model.run()
+                except Exception:
+                    pass
                 # Refresh the operating point(s) from current model state
                 refreshed_charts = []
                 for cd in cached.charts:
