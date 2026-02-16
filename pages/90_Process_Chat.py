@@ -979,25 +979,88 @@ def _show_sensitivity(sensitivity_result):
 
     else:  # single_sweep
         if sensitivity_result.sweep_points:
-            pts = sensitivity_result.sweep_points
-            var_name = list(pts[0].input_values.keys())[0] if pts[0].input_values else "Input"
-            x_data = [p.input_values.get(var_name, 0) for p in pts]
+            # Filter to feasible points that have output data
+            pts = [p for p in sensitivity_result.sweep_points if p.feasible and p.output_values]
+            if not pts:
+                st.info("No feasible sweep points to display.")
+            else:
+                var_name = sensitivity_result.sweep_variable or (
+                    list(pts[0].input_values.keys())[0] if pts[0].input_values else "Input"
+                )
+                x_data = [p.input_values.get(var_name, 0) for p in pts]
 
-            fig = go.Figure()
-            kpi_names = list(pts[0].output_values.keys()) if pts[0].output_values else []
-            for kpi in kpi_names:
-                fig.add_trace(go.Scatter(
-                    x=x_data,
-                    y=[p.output_values.get(kpi, 0) for p in pts],
-                    name=kpi,
-                    mode="lines+markers",
-                ))
-            fig.update_layout(
-                title="Parameter Sweep",
-                xaxis_title=var_name,
-                yaxis_title="KPI Value",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                # Skip noise keywords and report.* duplicates (these exist
+                # as direct KPIs with proper units already)
+                _SKIP = {'mechdesign', 'sizing', 'composition', 'weight fraction',
+                         'mole fraction', 'maxdesign', 'maxoperating', 'json.',
+                         'molar_volume', 'molar_mass_kg', 'jointefficiency',
+                         'tensilestrength', 'maxallowablestress', 'mindesign',
+                         'report.'}
+
+                # Collect KPI series, filtering noise and constants
+                all_kpi_keys = sorted({k for p in pts for k in p.output_values})
+                filtered = {}
+                for k in all_kpi_keys:
+                    kl = k.lower()
+                    if any(s in kl for s in _SKIP):
+                        continue
+                    ys = [p.output_values.get(k, 0) for p in pts]
+                    rng = max(ys) - min(ys)
+                    if rng < 1e-9:
+                        continue  # constant across sweep
+                    if all(abs(v) < 1e-12 for v in ys):
+                        continue  # all zero
+                    filtered[k] = ys
+
+                if not filtered:
+                    st.info("All KPI values are constant across the sweep range.")
+                else:
+                    # Group traces by response_kpi keywords → one chart per keyword
+                    response_kpis = sensitivity_result.response_kpis or []
+                    used_keys = set()
+
+                    for resp_kpi in response_kpis:
+                        rkl = resp_kpi.lower()
+                        matching = {k: ys for k, ys in filtered.items()
+                                    if rkl in k.lower() and k not in used_keys}
+                        if not matching:
+                            continue
+                        # Sort by name length (shorter = more primary), limit 5
+                        sorted_keys = sorted(matching, key=len)[:5]
+                        used_keys.update(sorted_keys)
+                        fig = go.Figure()
+                        for mk in sorted_keys:
+                            fig.add_trace(go.Scatter(
+                                x=x_data, y=matching[mk],
+                                name=mk, mode="lines+markers"))
+                        fig.update_layout(
+                            title=f"Sweep — {resp_kpi}",
+                            xaxis_title=var_name,
+                            yaxis_title=resp_kpi,
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # Show remaining (unmatched) KPIs if any
+                    remaining = {k: ys for k, ys in filtered.items() if k not in used_keys}
+                    if remaining:
+                        sorted_rem = sorted(remaining, key=len)[:8]
+                        fig = go.Figure()
+                        for k in sorted_rem:
+                            fig.add_trace(go.Scatter(
+                                x=x_data, y=remaining[k],
+                                name=k, mode="lines+markers"))
+                        fig.update_layout(
+                            title="Sweep — Other KPIs",
+                            xaxis_title=var_name,
+                            yaxis_title="Value",
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # Data table
+                    table_data = {var_name: x_data}
+                    for k, ys in filtered.items():
+                        table_data[k] = [round(v, 4) for v in ys]
+                    st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
 
 
 def _show_pvt(pvt_result):
