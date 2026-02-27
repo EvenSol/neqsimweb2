@@ -493,6 +493,8 @@ class ProcessBuilder:
 
         mixing_rule = fluid_spec.get("mixing_rule", 2)
         lines.append(f"fluid.setMixingRule({mixing_rule})")
+        if eos == "gerg2008":
+            lines.append("fluid.setMultiPhaseCheck(False)  # GERG-2008 does not support multi-phase check")
         lines.append("")
 
         # --- Process ---
@@ -672,6 +674,9 @@ class ProcessBuilder:
 
         mixing_rule = fluid_spec.get("mixing_rule", 2)
         fluid.setMixingRule(int(mixing_rule))
+
+        if eos == "gerg2008":
+            fluid.setMultiPhaseCheck(False)  # GERG-2008 does not support multi-phase check
 
         return fluid
 

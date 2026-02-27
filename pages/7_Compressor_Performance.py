@@ -705,6 +705,10 @@ with st.sidebar:
 def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
 
+def is_gerg_model():
+    """Return True if the selected EoS model is GERG-2008."""
+    return get_selected_eos_model() == "gerg-2008"
+
 
 def parse_design_data_format(loaded_data):
     """
@@ -942,7 +946,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
             for comp_name, comp_moles in fluid_composition.items():
                 display_fluid.addComponent(comp_name, float(comp_moles))
             display_fluid.setMixingRule('classic')
-            display_fluid.setMultiPhaseCheck(True)
+            display_fluid.setMultiPhaseCheck(not is_gerg_model())
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
             TPflash(display_fluid)
@@ -1447,7 +1451,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     for comp_name, comp_moles in new_fluid_composition.items():
                         new_fluid.addComponent(comp_name, float(comp_moles))
                     new_fluid.setMixingRule('classic')
-                    new_fluid.setMultiPhaseCheck(True)
+                    new_fluid.setMultiPhaseCheck(not is_gerg_model())
                     new_fluid.setPressure(ref_pressure, 'bara')
                     new_fluid.setTemperature(ref_temp, 'C')
                     TPflash(new_fluid)
@@ -2144,7 +2148,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     for comp_name, comp_moles in fluid_composition.items():
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
                     inlet_fluid.setMixingRule('classic')
-                    inlet_fluid.setMultiPhaseCheck(True)
+                    inlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                     
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
@@ -2181,7 +2185,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         for comp_name, comp_moles in fluid_composition.items():
                             std_fluid.addComponent(comp_name, float(comp_moles))
                         std_fluid.setMixingRule('classic')
-                        std_fluid.setMultiPhaseCheck(True)
+                        std_fluid.setMultiPhaseCheck(not is_gerg_model())
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
                         TPflash(std_fluid)
@@ -2197,7 +2201,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     for comp_name, comp_moles in fluid_composition.items():
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
                     outlet_fluid.setMixingRule('classic')
-                    outlet_fluid.setMultiPhaseCheck(True)
+                    outlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                     outlet_fluid.setPressure(float(p_out), 'bara')
                     outlet_fluid.setTemperature(float(t_out), 'C')
                     TPflash(outlet_fluid)
@@ -2237,7 +2241,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     for comp_name, comp_moles in fluid_composition.items():
                         process_fluid.addComponent(comp_name, float(comp_moles))
                     process_fluid.setMixingRule('classic')
-                    process_fluid.setMultiPhaseCheck(True)
+                    process_fluid.setMultiPhaseCheck(not is_gerg_model())
                     process_fluid.setPressure(float(p_in), 'bara')
                     process_fluid.setTemperature(float(t_in), 'C')
                     process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
@@ -3330,7 +3334,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             for comp_name, comp_moles in pert_composition.items():
                                 inlet_fluid.addComponent(comp_name, float(comp_moles))
                             inlet_fluid.setMixingRule('classic')
-                            inlet_fluid.setMultiPhaseCheck(True)
+                            inlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                             inlet_fluid.setPressure(float(p_in_pert), 'bara')
                             inlet_fluid.setTemperature(float(t_in_pert), 'C')
                             TPflash(inlet_fluid)
@@ -3352,7 +3356,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             for comp_name, comp_moles in pert_composition.items():
                                 outlet_fluid.addComponent(comp_name, float(comp_moles))
                             outlet_fluid.setMixingRule('classic')
-                            outlet_fluid.setMultiPhaseCheck(True)
+                            outlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                             outlet_fluid.setPressure(float(p_out_pert), 'bara')
                             outlet_fluid.setTemperature(float(t_out_pert), 'C')
                             TPflash(outlet_fluid)
@@ -3372,7 +3376,7 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             for comp_name, comp_moles in pert_composition.items():
                                 process_fluid.addComponent(comp_name, float(comp_moles))
                             process_fluid.setMixingRule('classic')
-                            process_fluid.setMultiPhaseCheck(True)
+                            process_fluid.setMultiPhaseCheck(not is_gerg_model())
                             process_fluid.setPressure(float(p_in_pert), 'bara')
                             process_fluid.setTemperature(float(t_in_pert), 'C')
                             process_fluid.setTotalFlowRate(float(mass_flow_pert), 'kg/sec')

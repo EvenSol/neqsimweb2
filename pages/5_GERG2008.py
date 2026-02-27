@@ -169,6 +169,7 @@ if st.button('Run GERG-2008 TP Flash'):
                         
                         # Create GERG-2008 fluid using SystemGERG2008Eos for proper H2 support
                         gerg_fluid = jneqsim.thermo.system.SystemGERG2008Eos(273.15, 1.0)
+                        gerg_fluid.setMultiPhaseCheck(False)  # GERG-2008 does not support multi-phase check
                         
                         # Enable GERG-2008-H2 model if selected
                         if use_gerg_h2:
