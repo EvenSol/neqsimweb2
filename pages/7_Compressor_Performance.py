@@ -658,6 +658,9 @@ with st.sidebar:
         help="GERG-2008: High accuracy for natural gas. PR: Peng-Robinson cubic EoS. SRK: Soave-Redlich-Kwong cubic EoS."
     )
     st.session_state['eos_model'] = selected_eos
+    if selected_eos == "GERG-2008":
+        st.caption("ℹ️ GERG-2008 valid ranges — Normal: 90–450 K, ≤ 350 bar (±0.1%). Extended: 60–700 K, ≤ 700 bar (±0.2–0.5%).")
+    
     
     st.divider()
     st.header("Calculation Method")

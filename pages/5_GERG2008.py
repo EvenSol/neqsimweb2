@@ -18,6 +18,13 @@ GERG-2008 supports the following **18 components** typical for natural gas mixtu
 - **Alkanes**: Methane, Ethane, Propane, n-Butane, i-Butane, n-Pentane, i-Pentane, n-Hexane, n-Heptane, n-Octane
 - **Non-hydrocarbons**: Nitrogen, CO2, Hydrogen, Oxygen, CO (Carbon Monoxide), Water, Helium, Argon
 
+**Validity ranges (ISO 20765-2):**
+
+| Range | Temperature | Pressure | Typical uncertainty (density) |
+|---|---|---|---|
+| **Normal** | 90 – 450 K (–183 to 177 °C) | ≤ 350 bar | ±0.1 % |
+| **Extended** | 60 – 700 K (–213 to 427 °C) | ≤ 700 bar | ±0.2 – 0.5 % |
+
 The flash calculation will determine phase equilibrium at specified temperatures and pressures 
 using the highly accurate GERG-2008 multiparameter equation of state.
 """
@@ -128,17 +135,17 @@ st.edited_dfTP = st.data_editor(
     column_config={
         'Temperature (C)': st.column_config.NumberColumn(
             label="Temperature (°C)",
-            min_value=-200.0,
-            max_value=450.0,
+            min_value=-213.0,
+            max_value=427.0,
             format='%f',
-            help='Enter the temperature in degrees Celsius. GERG-2008 valid range: 90-450 K (-183 to 177°C for highest accuracy)'
+            help='GERG-2008 normal range: 90–450 K (–183 to 177 °C, ±0.1%). Extended range: 60–700 K (–213 to 427 °C, ±0.2–0.5%).'
         ),
         'Pressure (bara)': st.column_config.NumberColumn(
             label="Pressure (bara)",
             min_value=0.0,
-            max_value=350.0,
+            max_value=700.0,
             format='%f',
-            help='Enter the pressure in bar absolute. GERG-2008 valid range: up to 350 bar'
+            help='GERG-2008 normal range: ≤ 350 bar (±0.1%). Extended range: ≤ 700 bar (±0.2–0.5%).'
         ),
     }
 )
@@ -247,9 +254,9 @@ European Gas Research Group (GERG).
 - Valid for natural gas mixtures
 - 18 supported components
 
-**Valid Ranges:**
-- Temperature: 90-450 K
-- Pressure: up to 350 bar
+**Valid Ranges (ISO 20765-2):**
+- Normal: 90–450 K, ≤ 350 bar (±0.1%)
+- Extended: 60–700 K, ≤ 700 bar (±0.2–0.5%)
 
 **Reference:**
 Kunz, O. and Wagner, W. (2012). 

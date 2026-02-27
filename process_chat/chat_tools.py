@@ -935,7 +935,7 @@ AVAILABLE EOS MODELS:
 - "cpa" or "cpa-srk" — CPA-SRK (required for polar: water, MEG, methanol)
 - "cpa-pr" — CPA-Peng-Robinson
 - "umr-pru" — UMR-PRU (accurate phase envelopes)
-- "gerg2008" — GERG-2008 (fiscal metering, custody transfer)
+- "gerg2008" — GERG-2008 (fiscal metering, custody transfer; normal range: 90–450 K / ≤ 350 bar; extended: 60–700 K / ≤ 700 bar)
 - "pcsaft" — PC-SAFT
 - "ideal" — Ideal gas (testing only)
 Choose CPA if the fluid contains water, MEG, TEG, or methanol at significant amounts.
