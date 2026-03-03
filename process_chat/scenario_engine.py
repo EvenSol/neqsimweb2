@@ -451,7 +451,9 @@ def apply_add_streams(
 
     for ast in add_streams:
         try:
-            proc = model.get_process()
+            proc = model.find_process_system_for_unit(ast.insert_after)
+            if proc is None:
+                proc = model.get_process()  # fallback
             original_units = list(proc.getUnitOperations())
 
             after_idx = None
@@ -947,6 +949,13 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     proc = model.get_process()
 
     # Collect all current units in order
+    # For ProcessModel, apply_add_units works per ProcessSystem; find the
+    # right child system for the first add_op's insert_after target.
+    target_ps = None
+    if add_units:
+        target_ps = model.find_process_system_for_unit(add_units[0].insert_after)
+    if target_ps is not None:
+        proc = target_ps
     original_units = list(proc.getUnitOperations())
     
     # Build an insertion plan: list of (position, AddUnitOp) 
@@ -1208,7 +1217,6 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
     Returns a log of applied operations.
     """
     log = []
-    proc = model.get_process()
 
     def _split_key(key: str, prefix: str):
         """Split 'prefix.objectName.property' where objectName may contain dots.
@@ -1256,7 +1264,7 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
                     parts = key.rsplit(".", 1)
                     if len(parts) == 2:
                         unit_name, prop = parts
-                        u = proc.getUnit(unit_name)
+                        u = model.get_unit(unit_name)
                         current = _get_unit_value(u, prop)
                         if op == "add":
                             value = current + v
@@ -1292,7 +1300,7 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
                 if len(parts) == 2:
                     unit_name, prop = parts
                     try:
-                        u = proc.getUnit(unit_name)
+                        u = model.get_unit(unit_name)
                         _set_unit_value(u, prop, value)
                         log.append({"key": key, "value": value, "status": "OK"})
                     except Exception:

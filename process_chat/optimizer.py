@@ -423,6 +423,12 @@ def _try_java_optimizer(
         SearchAlgorithm = ProcessOptimizationEngine.SearchAlgorithm
 
         proc = model.get_process()
+        # ProcessOptimizationEngine requires a ProcessSystem; for ProcessModel
+        # find the child system containing the feed stream.
+        if model.is_process_model:
+            ps = model.find_process_system_for_unit(feed_stream_name)
+            if ps is not None:
+                proc = ps
         engine = ProcessOptimizationEngine(proc)
         engine.setFeedStreamName(feed_stream_name)
         engine.setSearchAlgorithm(SearchAlgorithm.GOLDEN_SECTION)
@@ -503,9 +509,8 @@ def _evaluate_at_flow(
 
 def _find_feed_stream(model: NeqSimProcessModel) -> Optional[str]:
     """Auto-detect the feed stream name (first stream in the process)."""
-    proc = model.get_process()
     try:
-        units = list(proc.getUnitOperations())
+        units = model.get_all_unit_operations()
         if units:
             first = units[0]
             name = str(first.getName())

@@ -1932,19 +1932,7 @@ class ProcessChatSession:
                 return self._llm_followup(client, types)
             elif self.model:
                 # Model was uploaded — save current state
-                import neqsim, tempfile, os
-                proc = self.model.get_process()
-                with tempfile.NamedTemporaryFile(suffix=".neqsim", delete=False) as tmp:
-                    tmp_path = tmp.name
-                try:
-                    neqsim.save_neqsim(proc, tmp_path)
-                    with open(tmp_path, "rb") as f:
-                        self._last_save_bytes = f.read()
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
+                self._last_save_bytes = self.model.save_bytes()
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({
                     "role": "user",
@@ -2041,7 +2029,7 @@ class ProcessChatSession:
                     raise RuntimeError(f"Add unit errors: {failed}")
 
                 # Re-run, re-index, refresh source bytes
-                NeqSimProcessModel._run_until_converged(self.model.get_process())
+                self.model.rerun()
                 self.model._index_model_objects()
                 self.model.refresh_source_bytes()
 
@@ -2112,8 +2100,7 @@ class ProcessChatSession:
 
             # 1. Apply fluid condition changes to the feed stream(s)
             if fluid_changes:
-                proc = self.model.get_process()
-                for u in proc.getUnitOperations():
+                for u in self.model.get_all_unit_operations():
                     try:
                         java_class = str(u.getClass().getSimpleName())
                         if java_class != "Stream":
@@ -2235,8 +2222,7 @@ class ProcessChatSession:
                         # Actually, insert the first prepended unit after
                         # the feed stream (or as a new feed), then chain.
                         # Get the feed stream name (first unit in process)
-                        proc = self.model.get_process()
-                        units = list(proc.getUnitOperations())
+                        units = self.model.get_all_unit_operations()
                         feed_name = None
                         for u in units:
                             try:
@@ -2269,7 +2255,7 @@ class ProcessChatSession:
                                     )
 
             # 4. Re-run the process
-            NeqSimProcessModel._run_until_converged(self.model.get_process())
+            self.model.rerun()
             self.model._index_model_objects()
             self.model.refresh_source_bytes()
 
@@ -2363,9 +2349,7 @@ class ProcessChatSession:
                         apply_patch_to_model(self.model, sc.patch)
                     # Re-run, re-index, and refresh source bytes so clones
                     # see the updated topology
-                    NeqSimProcessModel._run_until_converged(
-                        self.model.get_process()
-                    )
+                    self.model.rerun()
                     self.model._index_model_objects()
                     self.model.refresh_source_bytes()
                     self._system_prompt = build_system_prompt(self.model)

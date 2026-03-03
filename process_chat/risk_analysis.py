@@ -704,6 +704,10 @@ def _try_java_risk(model: NeqSimProcessModel,
     proc = model.get_process()
     if proc is None:
         return None
+    # Java safety classes require ProcessSystem; for ProcessModel use the first child
+    if model.is_process_model:
+        systems = model.get_process_systems()
+        proc = systems[0] if systems else proc
 
     try:
         # --- Risk matrix ---

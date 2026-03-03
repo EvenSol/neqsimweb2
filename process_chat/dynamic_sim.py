@@ -423,7 +423,7 @@ def _run_transient(
 
     # --- Discover units ---
     try:
-        java_units = list(proc.getUnitOperations())
+        java_units = clone.get_all_unit_operations()
     except Exception:
         java_units = []
 

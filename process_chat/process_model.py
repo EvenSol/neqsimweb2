@@ -126,8 +126,15 @@ class StreamInfo:
 
 class NeqSimProcessModel:
     """
-    Wraps a NeqSim ProcessSystem loaded from a .neqsim file.
-    
+    Wraps a NeqSim ProcessSystem **or ProcessModel** loaded from a .neqsim file.
+
+    A ``ProcessModel`` contains multiple named ``ProcessSystem`` objects.
+    This adapter transparently handles both:
+
+    - Single ``ProcessSystem``: behaves as before.
+    - ``ProcessModel``: iterates over all child ``ProcessSystem`` instances
+      when indexing units/streams, extracting results, and generating summaries.
+
     Provides introspection, cloning, and scenario execution capabilities
     for the chat + what-if engine.
     """
@@ -135,14 +142,118 @@ class NeqSimProcessModel:
     def __init__(self, process_system, source_bytes: Optional[bytes] = None):
         """
         Args:
-            process_system: A NeqSim ProcessSystem Java object.
+            process_system: A NeqSim ProcessSystem **or ProcessModel** Java object.
             source_bytes: Original file bytes for clone-by-reload.
         """
         self._proc = process_system
         self._source_bytes = source_bytes
         self._units: Dict[str, Any] = {}
         self._streams: Dict[str, Any] = {}
+        self._is_process_model = self._detect_process_model(process_system)
         self._index_model_objects()
+
+    # ----- ProcessModel detection -----
+
+    @staticmethod
+    def _detect_process_model(obj) -> bool:
+        """Return True if *obj* is a NeqSim ``ProcessModel`` (multi-system)."""
+        try:
+            cls_name = str(obj.getClass().getSimpleName())
+            if cls_name == "ProcessModel":
+                return True
+        except Exception:
+            pass
+        # Duck-type: ProcessModel has getAllProcesses() but not getUnitOperations()
+        return hasattr(obj, "getAllProcesses") and not hasattr(obj, "getUnitOperations")
+
+    @property
+    def is_process_model(self) -> bool:
+        """True when the underlying Java object is a ProcessModel (multi-system)."""
+        return self._is_process_model
+
+    def get_process_systems(self) -> List[Any]:
+        """Return the list of child ProcessSystem objects.
+
+        For a single ProcessSystem this returns ``[self._proc]``.
+        For a ProcessModel it returns all children from ``getAllProcesses()``.
+        """
+        if self._is_process_model:
+            try:
+                return list(self._proc.getAllProcesses())
+            except Exception:
+                return []
+        return [self._proc]
+
+    def get_process_system_names(self) -> List[str]:
+        """Return names of all child ProcessSystems (ProcessModel only)."""
+        if not self._is_process_model:
+            try:
+                return [str(self._proc.getName())]
+            except Exception:
+                return ["process"]
+        names = []
+        try:
+            for ps in self._proc.getAllProcesses():
+                try:
+                    names.append(str(ps.getName()))
+                except Exception:
+                    names.append("unnamed")
+        except Exception:
+            pass
+        return names
+
+    def get_all_unit_operations(self) -> list:
+        """Return a flat list of all Java unit-operation objects.
+
+        For a single ProcessSystem this delegates to getUnitOperations().
+        For a ProcessModel it iterates every child ProcessSystem.
+        """
+        all_units: list = []
+        if self._is_process_model:
+            for ps in self.get_process_systems():
+                try:
+                    all_units.extend(list(ps.getUnitOperations()))
+                except Exception:
+                    pass
+        else:
+            try:
+                all_units = list(self._proc.getUnitOperations())
+            except Exception:
+                pass
+        return all_units
+
+    def find_process_system_for_unit(self, unit_name: str):
+        """Return the ProcessSystem that contains the named unit.
+
+        For a single ProcessSystem, returns that system directly.
+        For a ProcessModel, searches each child ProcessSystem.
+        Returns None if not found.
+        """
+        if not self._is_process_model:
+            return self._proc
+        for ps in self.get_process_systems():
+            try:
+                for u in ps.getUnitOperations():
+                    try:
+                        if str(u.getName()) == unit_name:
+                            return ps
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Fallback: case-insensitive search
+        unit_lower = unit_name.lower()
+        for ps in self.get_process_systems():
+            try:
+                for u in ps.getUnitOperations():
+                    try:
+                        if str(u.getName()).lower() == unit_lower:
+                            return ps
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return None
 
     # ----- Factory methods -----
 
@@ -429,6 +540,14 @@ class NeqSimProcessModel:
             except OSError:
                 pass
 
+    def save_bytes(self) -> Optional[bytes]:
+        """Return the current process state as serialized .neqsim bytes.
+
+        Works for both ProcessSystem and ProcessModel.
+        """
+        self.refresh_source_bytes()
+        return self._source_bytes
+
     def clone(self) -> "NeqSimProcessModel":
         """
         Create an independent copy by re-deserializing from the original bytes.
@@ -444,28 +563,69 @@ class NeqSimProcessModel:
     # ----- Introspection -----
 
     def _index_model_objects(self):
-        """Discover all unit operations and streams in the process."""
+        """Discover all unit operations and streams in the process.
+
+        For a ``ProcessModel`` (multi-system), iterates every child
+        ``ProcessSystem`` and collects units/streams across all of them.
+        Unit names are kept as-is when unique; when a name appears in
+        multiple process systems it is qualified with the system name.
+        """
         self._units.clear()
         self._streams.clear()
 
-        proc = self._proc
-
-        # Get all unit operations
-        try:
-            units = list(proc.getUnitOperations())
-        except Exception:
+        # Collect all (process_system_name, unit_operations_list) pairs
+        ps_units: List[Tuple[str, list]] = []
+        if self._is_process_model:
+            for ps in self.get_process_systems():
+                try:
+                    ps_name = str(ps.getName()) if ps.getName() else "unnamed"
+                except Exception:
+                    ps_name = "unnamed"
+                try:
+                    units = list(ps.getUnitOperations())
+                except Exception:
+                    try:
+                        units = list(ps.getUnitOperationList())
+                    except Exception:
+                        units = []
+                ps_units.append((ps_name, units))
+        else:
+            proc = self._proc
+            ps_name = ""
             try:
-                units = list(proc.getUnitOperationList())
-            except Exception:
-                units = []
-
-        for u in units:
-            try:
-                name = str(u.getName()) if u.getName() else None
-                if name:
-                    self._units[name] = u
+                ps_name = str(proc.getName()) if proc.getName() else ""
             except Exception:
                 pass
+            try:
+                units = list(proc.getUnitOperations())
+            except Exception:
+                try:
+                    units = list(proc.getUnitOperationList())
+                except Exception:
+                    units = []
+            ps_units.append((ps_name, units))
+
+        # Flatten all units, detect name collisions across systems
+        all_units_flat: list = []  # (ps_name, unit, raw_name)
+        name_count: Dict[str, int] = {}
+        for ps_name, units in ps_units:
+            for u in units:
+                try:
+                    raw_name = str(u.getName()) if u.getName() else None
+                except Exception:
+                    raw_name = None
+                if raw_name:
+                    all_units_flat.append((ps_name, u, raw_name))
+                    name_count[raw_name] = name_count.get(raw_name, 0) + 1
+
+        # Register units — qualify with process-system name when ambiguous
+        for ps_name, u, raw_name in all_units_flat:
+            if name_count[raw_name] > 1 and ps_name:
+                key = f"{ps_name}/{raw_name}"
+            else:
+                key = raw_name
+            if key not in self._units:
+                self._units[key] = u
 
         # Discover streams from unit in/out connections.
         # Always use qualified keys ("unitName.streamName") as primary to
@@ -473,6 +633,9 @@ class NeqSimProcessModel:
         # Also add short aliases for stream names that are globally unique.
         seen_java_ids = set()  # track Java object identity to skip duplicates
         raw_name_count: Dict[str, int] = {}  # count how many units produce same stream name
+
+        # Flatten units list for stream indexing
+        units = [u for _ps_name, u, _raw_name in all_units_flat]
 
         for u in units:
             try:
@@ -552,7 +715,12 @@ class NeqSimProcessModel:
                 self._streams[sname] = s
 
     def get_process(self):
-        """Return the underlying Java ProcessSystem object."""
+        """Return the underlying Java object (ProcessSystem or ProcessModel).
+
+        For a ``ProcessModel``, this returns the ``ProcessModel`` itself —
+        callers that need individual ``ProcessSystem`` objects should use
+        :meth:`get_process_systems` instead.
+        """
         return self._proc
 
     def get_diagram_dot(
@@ -602,6 +770,24 @@ class NeqSimProcessModel:
             "ENGINEERING": DiagramDetailLevel.ENGINEERING,
             "DEBUG": DiagramDetailLevel.DEBUG,
         }
+
+        # For ProcessModel, generate diagrams for each process system and combine
+        if self._is_process_model:
+            dots = []
+            for ps in self.get_process_systems():
+                try:
+                    exporter = ps.createDiagramExporter()
+                    exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
+                    exporter.setDetailLevel(level_map.get(detail_level.upper(), DiagramDetailLevel.ENGINEERING))
+                    exporter.setShowStreamValues(show_stream_values)
+                    exporter.setUseStreamTables(use_stream_tables)
+                    exporter.setShowControlEquipment(show_control_equipment)
+                    ps_name = str(ps.getName()) if ps.getName() else ""
+                    exporter.setTitle(title or ps_name)
+                    dots.append(str(exporter.toDOT()))
+                except Exception:
+                    pass
+            return "\n\n".join(dots) if dots else ""
 
         exporter = self._proc.createDiagramExporter()
         exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
@@ -749,13 +935,32 @@ class NeqSimProcessModel:
         """Get a unit operation by name. Raises KeyError if not found."""
         if name in self._units:
             return self._units[name]
-        # Also try via process.getUnit()
-        try:
-            u = self._proc.getUnit(name)
-            if u is not None:
+        # Case-insensitive fallback
+        name_lower = name.lower()
+        for key, u in self._units.items():
+            if key.lower() == name_lower:
                 return u
-        except Exception:
-            pass
+        # For ProcessModel, units might be qualified with process-system name
+        for key, u in self._units.items():
+            if key.endswith(f"/{name}") or key.endswith(f"/{name_lower}"):
+                return u
+        # Also try via process.getUnit() (ProcessSystem only)
+        if not self._is_process_model:
+            try:
+                u = self._proc.getUnit(name)
+                if u is not None:
+                    return u
+            except Exception:
+                pass
+        else:
+            # ProcessModel: search each child ProcessSystem
+            for ps in self.get_process_systems():
+                try:
+                    u = ps.getUnit(name)
+                    if u is not None:
+                        return u
+                except Exception:
+                    pass
         raise KeyError(f"Unit not found: {name}")
 
     def get_stream(self, name: str):
@@ -773,12 +978,21 @@ class NeqSimProcessModel:
             if key.lower() == name_lower or key.lower().endswith(f".{name_lower}"):
                 return s
         # Try Java getUnit — Stream units are both units and streams
-        try:
-            u = self._proc.getUnit(name)
-            if u is not None:
-                return u
-        except Exception:
-            pass
+        if not self._is_process_model:
+            try:
+                u = self._proc.getUnit(name)
+                if u is not None:
+                    return u
+            except Exception:
+                pass
+        else:
+            for ps in self.get_process_systems():
+                try:
+                    u = ps.getUnit(name)
+                    if u is not None:
+                        return u
+                except Exception:
+                    pass
         raise KeyError(f"Stream not found: '{name}'. Available: {list(self._streams.keys())[:20]}")
 
     # ----- Run and report -----
@@ -792,12 +1006,52 @@ class NeqSimProcessModel:
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
-        self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
+        if self._is_process_model:
+            # ProcessModel has its own run() that iterates all children
+            self._run_process_model(self._proc, timeout_ms=timeout_ms)
+        else:
+            self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
 
         return self._extract_results()
+
+    def rerun(self, timeout_ms: int = 120000):
+        """Re-run the process without extracting results.
+
+        Convenience method for callers that just need to re-execute the
+        simulation (e.g. after modifying parameters) and then re-index.
+        Handles both ProcessSystem and ProcessModel transparently.
+        """
+        if self._is_process_model:
+            self._run_process_model(self._proc, timeout_ms=timeout_ms)
+        else:
+            self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
+        self._index_model_objects()
+
+    @staticmethod
+    def _run_process_model(proc_model, timeout_ms: int = 180000):
+        """Run a ProcessModel (which iterates all child ProcessSystems)."""
+        try:
+            if timeout_ms > 0:
+                thread = proc_model.runAsThread()
+                thread.join(timeout_ms)
+                if thread.isAlive():
+                    thread.interrupt()
+                    thread.join()
+            else:
+                proc_model.run()
+        except Exception:
+            # Fallback: run each ProcessSystem individually
+            try:
+                for ps in proc_model.getAllProcesses():
+                    try:
+                        NeqSimProcessModel._run_until_converged(ps)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _extract_results(self) -> ModelRunResult:
         """Extract KPIs, constraints, and JSON report from solved process."""
@@ -849,17 +1103,44 @@ class NeqSimProcessModel:
 
         # Try to get JSON report
         json_report = None
-        try:
-            from neqsim import jneqsim
-            report_obj = jneqsim.process.util.report.Report(self._proc)
-            json_str = str(report_obj.generateJsonReport())
-            json_report = json.loads(json_str)
-        except Exception:
+        if self._is_process_model:
+            # ProcessModel has its own getReport_json() that aggregates all systems
             try:
                 json_str = str(self._proc.getReport_json())
                 json_report = json.loads(json_str)
             except Exception:
-                pass
+                # Fallback: collect reports from each ProcessSystem
+                try:
+                    from neqsim import jneqsim
+                    combined = {}
+                    for ps in self.get_process_systems():
+                        try:
+                            ps_name = str(ps.getName()) if ps.getName() else "process"
+                            report_obj = jneqsim.process.util.report.Report(ps)
+                            r_str = str(report_obj.generateJsonReport())
+                            r_data = json.loads(r_str)
+                            if isinstance(r_data, dict):
+                                # Prefix keys with process system name if multiple
+                                for k, v in r_data.items():
+                                    combined[f"{ps_name}/{k}"] = v
+                        except Exception:
+                            pass
+                    if combined:
+                        json_report = combined
+                except Exception:
+                    pass
+        else:
+            try:
+                from neqsim import jneqsim
+                report_obj = jneqsim.process.util.report.Report(self._proc)
+                json_str = str(report_obj.generateJsonReport())
+                json_report = json.loads(json_str)
+            except Exception:
+                try:
+                    json_str = str(self._proc.getReport_json())
+                    json_report = json.loads(json_str)
+                except Exception:
+                    pass
 
         # Extract all properties from JSON report into flat KPIs
         if json_report:
@@ -929,8 +1210,19 @@ class NeqSimProcessModel:
         # "export oil", "fuel gas").  If none are found, we fall back to
         # the last non-utility unit's ALL outlets.
         try:
-            proc = self._proc
-            all_units = list(proc.getUnitOperations())
+            # Collect all unit operations across all process systems
+            all_units = []
+            if self._is_process_model:
+                for ps in self.get_process_systems():
+                    try:
+                        all_units.extend(list(ps.getUnitOperations()))
+                    except Exception:
+                        pass
+            else:
+                try:
+                    all_units = list(self._proc.getUnitOperations())
+                except Exception:
+                    pass
             feed_flow = 0.0
             product_flow = 0.0
             product_details = []  # for diagnostic output
@@ -1443,77 +1735,113 @@ class NeqSimProcessModel:
         # present (i.e. from an earlier autoSize call).
         try:
             SMD = jneqsim.process.mechanicaldesign.SystemMechanicalDesign
-            smd = SMD(self._proc)
 
-            # System totals
-            for prop, getter, unit in [
+            # For ProcessModel, aggregate SystemMechanicalDesign across all children
+            proc_systems = self.get_process_systems() if self._is_process_model else [self._proc]
+            smd_list = []
+            for ps in proc_systems:
+                try:
+                    smd_list.append(SMD(ps))
+                except Exception:
+                    pass
+
+            if not smd_list:
+                raise RuntimeError("No SystemMechanicalDesign created")
+
+            # Aggregate additive system totals across all process systems
+            additive_props = [
                 ("system.totalWeight_kg", "getTotalWeight", "kg"),
                 ("system.totalVolume_m3", "getTotalVolume", "m3"),
                 ("system.plotSpace_m2", "getTotalPlotSpace", "m2"),
-                ("system.footprintLength_m", "getTotalFootprintLength", "m"),
-                ("system.footprintWidth_m", "getTotalFootprintWidth", "m"),
-                ("system.maxEquipmentHeight_m", "getMaxEquipmentHeight", "m"),
                 ("system.totalPowerRequired_kW", "getTotalPowerRequired", "kW"),
                 ("system.totalCoolingDuty_kW", "getTotalCoolingDuty", "kW"),
                 ("system.totalHeatingDuty_kW", "getTotalHeatingDuty", "kW"),
                 ("system.netPowerRequirement_kW", "getNetPowerRequirement", "kW"),
-            ]:
-                if hasattr(smd, getter):
-                    try:
-                        val = float(getattr(smd, getter)())
-                        if math.isnan(val):
-                            continue
-                        # Convert W to kW for power/duty values
-                        if "Power" in getter or "Duty" in getter or "Power" in prop:
-                            val = val / 1000.0
-                        kpis[prop] = KPI(prop, val, unit)
-                    except Exception:
-                        pass
+            ]
+            max_props = [
+                ("system.footprintLength_m", "getTotalFootprintLength", "m"),
+                ("system.footprintWidth_m", "getTotalFootprintWidth", "m"),
+                ("system.maxEquipmentHeight_m", "getMaxEquipmentHeight", "m"),
+            ]
+            for prop, getter, unit in additive_props:
+                total_val = 0.0
+                for smd in smd_list:
+                    if hasattr(smd, getter):
+                        try:
+                            val = float(getattr(smd, getter)())
+                            if not math.isnan(val):
+                                if "Power" in getter or "Duty" in getter or "Power" in prop:
+                                    val = val / 1000.0
+                                total_val += val
+                        except Exception:
+                            pass
+                if total_val != 0.0:
+                    kpis[prop] = KPI(prop, total_val, unit)
+            for prop, getter, unit in max_props:
+                max_val = 0.0
+                for smd in smd_list:
+                    if hasattr(smd, getter):
+                        try:
+                            val = float(getattr(smd, getter)())
+                            if not math.isnan(val) and val > max_val:
+                                max_val = val
+                        except Exception:
+                            pass
+                if max_val > 0.0:
+                    kpis[prop] = KPI(prop, max_val, unit)
 
-            # Number of modules
-            try:
-                n_modules = int(smd.getTotalNumberOfModules())
-                kpis["system.numberOfModules"] = KPI("system.numberOfModules", float(n_modules), "[-]")
-            except Exception:
-                pass
+            # Number of modules (sum across systems)
+            total_modules = 0
+            for smd in smd_list:
+                try:
+                    total_modules += int(smd.getTotalNumberOfModules())
+                except Exception:
+                    pass
+            if total_modules > 0:
+                kpis["system.numberOfModules"] = KPI("system.numberOfModules", float(total_modules), "[-]")
 
-            # Weight breakdown by equipment type
-            try:
-                wbt = smd.getWeightByEquipmentType()
-                if wbt is not None:
-                    for k in wbt.keySet():
-                        w = float(wbt.get(k))
-                        if w > 0:
-                            kpis[f"system.weightByType.{k}_kg"] = KPI(
-                                f"system.weightByType.{k}_kg", w, "kg"
-                            )
-            except Exception:
-                pass
+            # Weight breakdown by equipment type (aggregate)
+            weight_by_type: Dict[str, float] = {}
+            for smd in smd_list:
+                try:
+                    wbt = smd.getWeightByEquipmentType()
+                    if wbt is not None:
+                        for k in wbt.keySet():
+                            w = float(wbt.get(k))
+                            if w > 0:
+                                weight_by_type[str(k)] = weight_by_type.get(str(k), 0.0) + w
+                except Exception:
+                    pass
+            for k, w in weight_by_type.items():
+                kpis[f"system.weightByType.{k}_kg"] = KPI(f"system.weightByType.{k}_kg", w, "kg")
 
-            # Weight breakdown by discipline
-            try:
-                wbd = smd.getWeightByDiscipline()
-                if wbd is not None:
-                    for k in wbd.keySet():
-                        w = float(wbd.get(k))
-                        if w > 0:
-                            kpis[f"system.weightByDiscipline.{k}_kg"] = KPI(
-                                f"system.weightByDiscipline.{k}_kg", w, "kg"
-                            )
-            except Exception:
-                pass
+            # Weight breakdown by discipline (aggregate)
+            weight_by_disc: Dict[str, float] = {}
+            for smd in smd_list:
+                try:
+                    wbd = smd.getWeightByDiscipline()
+                    if wbd is not None:
+                        for k in wbd.keySet():
+                            w = float(wbd.get(k))
+                            if w > 0:
+                                weight_by_disc[str(k)] = weight_by_disc.get(str(k), 0.0) + w
+                except Exception:
+                    pass
+            for k, w in weight_by_disc.items():
+                kpis[f"system.weightByDiscipline.{k}_kg"] = KPI(f"system.weightByDiscipline.{k}_kg", w, "kg")
 
-            # Equipment count by type
-            try:
-                ec = smd.getEquipmentCountByType()
-                if ec is not None:
-                    for k in ec.keySet():
-                        cnt = int(ec.get(k))
-                        kpis[f"system.equipmentCount.{k}"] = KPI(
-                            f"system.equipmentCount.{k}", float(cnt), "[-]"
-                        )
-            except Exception:
-                pass
+            # Equipment count by type (aggregate)
+            equip_count: Dict[str, int] = {}
+            for smd in smd_list:
+                try:
+                    ec = smd.getEquipmentCountByType()
+                    if ec is not None:
+                        for k in ec.keySet():
+                            equip_count[str(k)] = equip_count.get(str(k), 0) + int(ec.get(k))
+                except Exception:
+                    pass
+            for k, cnt in equip_count.items():
+                kpis[f"system.equipmentCount.{k}"] = KPI(f"system.equipmentCount.{k}", float(cnt), "[-]")
 
             # Total cost across all equipment
             total_cost = 0.0
@@ -1722,6 +2050,26 @@ class NeqSimProcessModel:
 
     def get_json_report(self) -> Optional[dict]:
         """Get the full JSON report from the last run."""
+        if self._is_process_model:
+            try:
+                json_str = str(self._proc.getReport_json())
+                return json.loads(json_str)
+            except Exception:
+                # Fallback: collect from children
+                from neqsim import jneqsim
+                combined = {}
+                for ps in self.get_process_systems():
+                    try:
+                        ps_name = str(ps.getName()) if ps.getName() else "process"
+                        report_obj = jneqsim.process.util.report.Report(ps)
+                        r_str = str(report_obj.generateJsonReport())
+                        r_data = json.loads(r_str)
+                        if isinstance(r_data, dict):
+                            for k, v in r_data.items():
+                                combined[f"{ps_name}/{k}"] = v
+                    except Exception:
+                        pass
+                return combined if combined else None
         try:
             from neqsim import jneqsim
             report_obj = jneqsim.process.util.report.Report(self._proc)
@@ -1797,21 +2145,58 @@ class NeqSimProcessModel:
 
         lines = []
         lines.append(f"Process Model Summary")
-        try:
-            lines.append(f"Name: {self._proc.getName()}")
-        except Exception:
-            pass
+        if self._is_process_model:
+            ps_names = self.get_process_system_names()
+            lines.append(f"Type: ProcessModel ({len(ps_names)} process systems)")
+            lines.append(f"Process Systems: {', '.join(ps_names)}")
+        else:
+            try:
+                lines.append(f"Name: {self._proc.getName()}")
+            except Exception:
+                pass
         lines.append(f"Units: {len(units)}")
         lines.append(f"Streams: {len(streams)}")
         lines.append("")
 
         # Process topology — show units in order with inlet/outlet stream conditions
-        lines.append("== Process Topology (units in process order) ==")
-        try:
-            ordered_units = list(self._proc.getUnitOperations())
-        except Exception:
-            ordered_units = []
+        # For ProcessModel, show each process system separately
+        if self._is_process_model:
+            for ps in self.get_process_systems():
+                try:
+                    ps_name = str(ps.getName()) if ps.getName() else "unnamed"
+                except Exception:
+                    ps_name = "unnamed"
+                lines.append(f"== Process System: {ps_name} ==")
+                try:
+                    ordered_units = list(ps.getUnitOperations())
+                except Exception:
+                    ordered_units = []
+                self._append_topology(lines, ordered_units)
+                lines.append("")
+        else:
+            lines.append("== Process Topology (units in process order) ==")
+            try:
+                ordered_units = list(self._proc.getUnitOperations())
+            except Exception:
+                ordered_units = []
+            self._append_topology(lines, ordered_units)
 
+        lines.append("")
+        lines.append("== All Streams ==")
+        for s in streams:
+            parts = []
+            if s.temperature_C is not None:
+                parts.append(f"T={s.temperature_C:.1f}°C")
+            if s.pressure_bara is not None:
+                parts.append(f"P={s.pressure_bara:.2f} bara")
+            if s.flow_rate_kg_hr is not None:
+                parts.append(f"F={s.flow_rate_kg_hr:.1f} kg/hr")
+            lines.append(f"  {s.name}: {', '.join(parts)}")
+
+        return "\n".join(lines)
+
+    def _append_topology(self, lines: list, ordered_units: list):
+        """Render a list of ordered unit operations into *lines*."""
         for idx, u in enumerate(ordered_units):
             try:
                 name = str(u.getName())
@@ -1836,14 +2221,12 @@ class NeqSimProcessModel:
                         fval = float(val)
                         if prop in ("power_kW", "duty_kW"):
                             fval = fval / 1000.0
-                        # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
                         if fval == 0.0 and prop == "duty_kW" and utype in self._DUTY_UNITS:
                             if hasattr(u, "getEnergyInput"):
                                 try:
                                     fval = float(u.getEnergyInput()) / 1000.0
                                 except Exception:
                                     pass
-                        # Skip zero power/duty for non-relevant equipment
                         if fval == 0.0 and prop == "power_kW" and utype not in self._POWER_UNITS:
                             continue
                         if fval == 0.0 and prop == "duty_kW" and utype not in self._DUTY_UNITS:
@@ -1852,7 +2235,6 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
 
-            # Outlet temperature for heaters/coolers
             if utype in self._HEAT_EXCHANGE_UNITS:
                 for m in ("getOutletStream", "getOutStream"):
                     if hasattr(u, m):
@@ -1866,7 +2248,6 @@ class NeqSimProcessModel:
 
             prop_str = ", ".join(f"{k}={v:.2f}" for k, v in props.items()) if props else ""
 
-            # Inlet stream conditions
             inlet_str = ""
             for m in ("getInletStream", "getInStream", "getFeed"):
                 if hasattr(u, m):
@@ -1881,12 +2262,10 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
 
-            # Outlet stream conditions — show ALL outlets for separators
             outlet_strs = []
             is_separator = "Separator" in utype or "Scrubber" in utype
 
             if is_separator:
-                # Show gas, oil, liquid, water outlets separately
                 for m, label in [
                     ("getGasOutStream", "GAS"),
                     ("getOilOutStream", "OIL"),
@@ -1920,7 +2299,6 @@ class NeqSimProcessModel:
                         except Exception:
                             pass
 
-            # Splitter: show split streams
             if "Splitter" in utype and hasattr(u, "getSplitStream"):
                 for j in range(10):
                     try:
@@ -1940,17 +2318,3 @@ class NeqSimProcessModel:
                 lines.append(f"        {inlet_str}")
             for outlet_str in outlet_strs:
                 lines.append(f"        {outlet_str}")
-
-        lines.append("")
-        lines.append("== All Streams ==")
-        for s in streams:
-            parts = []
-            if s.temperature_C is not None:
-                parts.append(f"T={s.temperature_C:.1f}°C")
-            if s.pressure_bara is not None:
-                parts.append(f"P={s.pressure_bara:.2f} bara")
-            if s.flow_rate_kg_hr is not None:
-                parts.append(f"F={s.flow_rate_kg_hr:.1f} kg/hr")
-            lines.append(f"  {s.name}: {', '.join(parts)}")
-
-        return "\n".join(lines)
