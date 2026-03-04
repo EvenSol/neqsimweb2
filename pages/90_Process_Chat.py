@@ -71,6 +71,8 @@ with st.sidebar:
                  help="Build a process from scratch by describing it in chat"):
         # Enter builder mode — clear any stale state
         st.session_state.pop("process_model", None)
+        st.session_state.pop("process_model_bytes", None)
+        st.session_state.pop("process_model_name", None)
         st.session_state.pop("_loaded_file_key", None)
         st.session_state.pop("chat_session", None)
         st.session_state["chat_messages"] = []
@@ -1374,6 +1376,8 @@ if user_input:
                     )
 
                 session = st.session_state["chat_session"]
+                # Sync API key in case the user changed it
+                session.api_key = api_key_val
                 response = session.chat(user_input)
                 comparison = session.get_last_comparison()
                 optimization = session.get_last_optimization()
@@ -1471,6 +1475,8 @@ with col1:
 with col2:
     if st.button("🔄 Reset All"):
         st.session_state.pop("process_model", None)
+        st.session_state.pop("process_model_bytes", None)
+        st.session_state.pop("process_model_name", None)
         st.session_state.pop("_loaded_file_key", None)
         st.session_state.pop("_builder_mode", None)
         st.session_state.pop("chat_session", None)
