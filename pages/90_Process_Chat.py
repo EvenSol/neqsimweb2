@@ -283,7 +283,11 @@ if model is not None:
             if units:
                 unit_data = []
                 for u in units:
-                    row = {"Name": u.name, "Type": u.unit_type}
+                    row = {}
+                    if model.is_process_model:
+                        row["System"] = u.process_system
+                    row["Name"] = u.name
+                    row["Type"] = u.unit_type
                     row.update(u.properties)
                     unit_data.append(row)
                 st.dataframe(pd.DataFrame(unit_data), use_container_width=True, hide_index=True)
@@ -296,12 +300,14 @@ if model is not None:
             if streams:
                 stream_data = []
                 for s in streams:
-                    stream_data.append({
-                        "Name": s.name,
-                        "T (°C)": f"{s.temperature_C:.1f}" if s.temperature_C is not None else "—",
-                        "P (bara)": f"{s.pressure_bara:.2f}" if s.pressure_bara is not None else "—",
-                        "Flow (kg/hr)": f"{s.flow_rate_kg_hr:.1f}" if s.flow_rate_kg_hr is not None else "—",
-                    })
+                    row = {}
+                    if model.is_process_model:
+                        row["System"] = s.process_system
+                    row["Name"] = s.name
+                    row["T (°C)"] = f"{s.temperature_C:.1f}" if s.temperature_C is not None else "—"
+                    row["P (bara)"] = f"{s.pressure_bara:.2f}" if s.pressure_bara is not None else "—"
+                    row["Flow (kg/hr)"] = f"{s.flow_rate_kg_hr:.1f}" if s.flow_rate_kg_hr is not None else "—"
+                    stream_data.append(row)
                 st.dataframe(pd.DataFrame(stream_data), use_container_width=True, hide_index=True)
             else:
                 st.info("No streams found.")
@@ -316,12 +322,37 @@ if model is not None:
         try:
             pfd_style = st.session_state.get("diagram_style", "HYSYS")
             pfd_detail = st.session_state.get("diagram_detail", "ENGINEERING")
-            dot_source = model.get_diagram_dot(
-                style=pfd_style,
-                detail_level=pfd_detail,
-                show_stream_values=(pfd_detail != "CONCEPTUAL"),
-            )
-            st.graphviz_chart(dot_source, use_container_width=True)
+            show_values = pfd_detail != "CONCEPTUAL"
+
+            if model.is_process_model:
+                # ProcessModel: show each ProcessSystem in its own tab
+                dot_pairs = model.get_diagram_dots(
+                    style=pfd_style,
+                    detail_level=pfd_detail,
+                    show_stream_values=show_values,
+                )
+                # Also add a combined view
+                combined_dot = model.get_diagram_dot(
+                    style=pfd_style,
+                    detail_level=pfd_detail,
+                    show_stream_values=show_values,
+                )
+                tab_names = [name or f"System {i+1}" for i, (name, _) in enumerate(dot_pairs)]
+                tab_names.insert(0, "🗂️ Combined")
+                tabs = st.tabs(tab_names)
+                with tabs[0]:
+                    st.graphviz_chart(combined_dot, use_container_width=True)
+                for i, (ps_name, dot_src) in enumerate(dot_pairs):
+                    with tabs[i + 1]:
+                        st.graphviz_chart(dot_src, use_container_width=True)
+            else:
+                # Single ProcessSystem
+                dot_source = model.get_diagram_dot(
+                    style=pfd_style,
+                    detail_level=pfd_detail,
+                    show_stream_values=show_values,
+                )
+                st.graphviz_chart(dot_source, use_container_width=True)
         except Exception as e:
             st.warning(f"Could not render process flow diagram: {e}")
 

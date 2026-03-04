@@ -108,6 +108,7 @@ class UnitInfo:
     name: str
     unit_type: str
     java_class: str
+    process_system: str = ""
     properties: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -118,6 +119,7 @@ class StreamInfo:
     pressure_bara: Optional[float] = None
     flow_rate_kg_hr: Optional[float] = None
     flow_rate_mol_sec: Optional[float] = None
+    process_system: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +589,8 @@ class NeqSimProcessModel:
         """
         self._units.clear()
         self._streams.clear()
+        self._unit_ps_name: Dict[str, str] = {}
+        self._stream_ps_name: Dict[str, str] = {}
 
         # Collect all (process_system_name, unit_operations_list) pairs
         ps_units: List[Tuple[str, list]] = []
@@ -641,6 +645,7 @@ class NeqSimProcessModel:
                 key = raw_name
             if key not in self._units:
                 self._units[key] = u
+                self._unit_ps_name[key] = ps_name
 
         # Discover streams from unit in/out connections.
         # Always use qualified keys ("unitName.streamName") as primary to
@@ -649,10 +654,8 @@ class NeqSimProcessModel:
         seen_java_ids = set()  # track Java object identity to skip duplicates
         raw_name_count: Dict[str, int] = {}  # count how many units produce same stream name
 
-        # Flatten units list for stream indexing
-        units = [u for _ps_name, u, _raw_name in all_units_flat]
-
-        for u in units:
+        # Iterate all_units_flat to preserve ps_name for stream tracking
+        for ps_name, u, _raw_name in all_units_flat:
             try:
                 uname = str(u.getName()) if u.getName() else "unknown"
             except Exception:
@@ -687,6 +690,7 @@ class NeqSimProcessModel:
                                             key = f"{uname}.{sname}"
                                             if key not in self._streams:
                                                 self._streams[key] = s
+                                                self._stream_ps_name[key] = ps_name
                                             raw_name_count[sname] = raw_name_count.get(sname, 0) + 1
                                 except Exception:
                                     break
@@ -704,6 +708,7 @@ class NeqSimProcessModel:
                                     seen_java_ids.add(java_id)
                                     key = f"{uname}.{sname}"
                                     self._streams[key] = s
+                                    self._stream_ps_name[key] = ps_name
                                     raw_name_count[sname] = raw_name_count.get(sname, 0) + 1
                     except Exception:
                         pass
@@ -714,6 +719,7 @@ class NeqSimProcessModel:
                 java_class = str(u.getClass().getSimpleName())
                 if "Stream" in java_class and name not in self._streams:
                     self._streams[name] = u
+                    self._stream_ps_name[name] = self._unit_ps_name.get(name, "")
                     raw_name_count[name] = raw_name_count.get(name, 0) + 1
             except Exception:
                 pass
@@ -728,6 +734,7 @@ class NeqSimProcessModel:
                 sname = None
             if sname and sname in unique_streams and sname not in self._streams:
                 self._streams[sname] = s
+                self._stream_ps_name[sname] = self._stream_ps_name.get(key, "")
 
     def get_process(self):
         """Return the underlying Java object (ProcessSystem or ProcessModel).
@@ -810,7 +817,7 @@ class NeqSimProcessModel:
                 return None
 
         # --- Attempt Java exporter on each ProcessSystem ---
-        dots: list = []
+        dots: list = []  # (ps_name, dot_string)
         for ps in self.get_process_systems():
             try:
                 ps_name = str(ps.getName()) if ps.getName() else ""
@@ -818,10 +825,13 @@ class NeqSimProcessModel:
                 ps_name = ""
             result = _try_java_exporter(ps, title or ps_name)
             if result:
-                dots.append(result)
+                dots.append((ps_name, result))
 
         if dots:
-            return "\n\n".join(dots)
+            if len(dots) == 1:
+                return dots[0][1]
+            # Merge multiple DOTs into a single digraph with subgraph clusters
+            return self._merge_dots(dots, title=title)
 
         # --- Fallback: pure-Python DOT generator ---
         return self._generate_dot_fallback(
@@ -830,6 +840,130 @@ class NeqSimProcessModel:
             show_control_equipment=show_control_equipment,
             title=title,
         )
+
+    def get_diagram_dots(
+        self,
+        style: str = "HYSYS",
+        detail_level: str = "ENGINEERING",
+        show_stream_values: bool = True,
+        use_stream_tables: bool = False,
+        show_control_equipment: bool = True,
+    ) -> List[Tuple[str, str]]:
+        """Return a list of ``(system_name, dot_string)`` tuples.
+
+        For a single ProcessSystem the list has one entry.
+        For a ProcessModel each child ProcessSystem gets its own DOT.
+
+        This is useful for rendering each system in its own tab / expander.
+        """
+        results: List[Tuple[str, str]] = []
+        systems = self.get_process_systems()
+        for ps in systems:
+            try:
+                ps_name = str(ps.getName()) if ps.getName() else "Process"
+            except Exception:
+                ps_name = "Process"
+            # Try Java exporter first
+            if hasattr(ps, "createDiagramExporter"):
+                try:
+                    from neqsim import jneqsim
+                    DiagramStyle = jneqsim.process.processmodel.diagram.DiagramStyle
+                    DiagramDetailLevel = jneqsim.process.processmodel.diagram.DiagramDetailLevel
+                    style_map = {
+                        "HYSYS": DiagramStyle.HYSYS,
+                        "NEQSIM": DiagramStyle.NEQSIM,
+                        "PROII": DiagramStyle.PROII,
+                        "ASPEN_PLUS": DiagramStyle.ASPEN_PLUS,
+                    }
+                    level_map = {
+                        "CONCEPTUAL": DiagramDetailLevel.CONCEPTUAL,
+                        "ENGINEERING": DiagramDetailLevel.ENGINEERING,
+                        "DEBUG": DiagramDetailLevel.DEBUG,
+                    }
+                    exporter = ps.createDiagramExporter()
+                    exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
+                    exporter.setDetailLevel(level_map.get(detail_level.upper(), DiagramDetailLevel.ENGINEERING))
+                    exporter.setShowStreamValues(show_stream_values)
+                    exporter.setUseStreamTables(use_stream_tables)
+                    exporter.setShowControlEquipment(show_control_equipment)
+                    exporter.setTitle(ps_name)
+                    dot = str(exporter.toDOT())
+                    if dot:
+                        results.append((ps_name, dot))
+                        continue
+                except Exception:
+                    pass
+
+        # If Java exporter produced nothing for any system, use fallback for all
+        if len(results) < len(systems):
+            fallback = self._generate_dot_fallback(
+                detail_level=detail_level,
+                show_stream_values=show_stream_values,
+                show_control_equipment=show_control_equipment,
+            )
+            if fallback:
+                combined_name = "Process"
+                try:
+                    combined_name = str(self._proc.getName()) or "Process"
+                except Exception:
+                    pass
+                results = [(combined_name, fallback)]
+
+        return results
+
+    @staticmethod
+    def _merge_dots(dots: List[Tuple[str, str]], title: str = "") -> str:
+        """Merge multiple ``digraph { ... }`` DOT strings into a single
+        DOT graph using ``subgraph cluster_*`` blocks.
+
+        Each child DOT's contents are extracted and placed inside a named
+        cluster so they render as grouped regions of a single diagram.
+        """
+        import re
+
+        overall_title = title or "Process Model"
+        parts = [
+            "digraph ProcessModel {",
+            '  graph [rankdir=LR splines=ortho nodesep=0.8 ranksep=1.2',
+            f'         fontname="Arial" fontsize=14 label="{overall_title}"',
+            '         labelloc=t labeljust=c bgcolor="white" pad=0.5 compound=true];',
+            '  node [fontname="Arial" fontsize=10 style=filled];',
+            '  edge [fontname="Arial" fontsize=8 color="#666666"];',
+            "",
+        ]
+
+        for idx, (ps_name, dot_str) in enumerate(dots):
+            # Extract body between first '{' and last '}'
+            body_match = re.search(r"\{(.*)\}", dot_str, re.DOTALL)
+            if not body_match:
+                continue
+            body = body_match.group(1)
+
+            # Remove any graph-level attributes that would conflict
+            # (label, bgcolor, rankdir, etc.) — they're on lines starting
+            # with 'graph [' or standalone attribute statements
+            body_lines = []
+            for line in body.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("graph [") or stripped.startswith("graph["):
+                    continue
+                # Keep node/edge defaults and actual nodes/edges
+                body_lines.append(line)
+            body_clean = "\n".join(body_lines)
+
+            safe_name = re.sub(r"[^a-zA-Z0-9]", "_", ps_name)
+            parts.append(f"  subgraph cluster_{idx}_{safe_name} {{")
+            parts.append(f'    label="{ps_name}";')
+            parts.append('    style=dashed;')
+            parts.append(f'    color="#999999";')
+            parts.append('    fontname="Arial";')
+            parts.append('    fontsize=12;')
+            parts.append(body_clean)
+            parts.append("  }")
+            parts.append("")
+
+        parts.append("}")
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Pure-Python DOT fallback
@@ -1137,6 +1271,8 @@ class NeqSimProcessModel:
             except Exception:
                 java_class = "Unknown"
 
+            ps_name = self._unit_ps_name.get(name, "")
+
             props = {}
             # Try to extract common properties
             for prop, getter in [
@@ -1197,14 +1333,15 @@ class NeqSimProcessModel:
                 except Exception:
                     pass
 
-            result.append(UnitInfo(name=name, unit_type=java_class, java_class=java_class, properties=props))
+            result.append(UnitInfo(name=name, unit_type=java_class, java_class=java_class, process_system=ps_name, properties=props))
         return result
 
     def list_streams(self) -> List[StreamInfo]:
         """List all streams with current conditions."""
         result = []
         for name, s in self._streams.items():
-            info = StreamInfo(name=name)
+            ps_name = self._stream_ps_name.get(name, "")
+            info = StreamInfo(name=name, process_system=ps_name)
             try:
                 info.temperature_C = float(s.getTemperature("C"))
             except Exception:
