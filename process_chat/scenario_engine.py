@@ -1197,6 +1197,77 @@ def apply_add_process(
 
 
 # ---------------------------------------------------------------------------
+# Upstream equipment discovery helpers
+# ---------------------------------------------------------------------------
+
+_VALVE_CLASSES = ("ThrottlingValve", "Valve", "ControlValve")
+
+def _find_upstream_valve(model, separator_name: str):
+    """Find the valve directly upstream of a separator in the process.
+
+    Walks the process unit list and checks if any valve's outlet stream feeds
+    into the separator.  Returns ``(valve_name, valve_java_obj)`` or ``None``.
+    """
+    try:
+        sep = model.get_unit(separator_name)
+    except Exception:
+        return None
+
+    # Get the separator's inlet stream Java identity
+    sep_feed_id = None
+    for m in ("getFeedStream", "getInletStream", "getInStream", "getFeed"):
+        if hasattr(sep, m):
+            try:
+                feed = getattr(sep, m)()
+                if feed is not None:
+                    sep_feed_id = int(feed.hashCode())
+                    break
+            except Exception:
+                pass
+
+    if sep_feed_id is None:
+        return None
+
+    # Search all units for a valve whose outlet matches the separator feed
+    for info in model.list_units():
+        try:
+            u = model.get_unit(info.name)
+            java_class = str(u.getClass().getSimpleName())
+        except Exception:
+            continue
+        if java_class not in _VALVE_CLASSES:
+            continue
+        for out_method in ("getOutletStream", "getOutStream"):
+            if hasattr(u, out_method):
+                try:
+                    out_s = getattr(u, out_method)()
+                    if out_s is not None and int(out_s.hashCode()) == sep_feed_id:
+                        return (info.name, u)
+                except Exception:
+                    pass
+
+    # Also check the unit *immediately before* the separator in execution order
+    # (common case: valve → separator are adjacent in the process)
+    units_list = model.list_units()
+    sep_idx = None
+    for idx, info in enumerate(units_list):
+        if info.name == separator_name:
+            sep_idx = idx
+            break
+    if sep_idx is not None and sep_idx > 0:
+        prev = units_list[sep_idx - 1]
+        try:
+            u = model.get_unit(prev.name)
+            java_class = str(u.getClass().getSimpleName())
+            if java_class in _VALVE_CLASSES:
+                return (prev.name, u)
+        except Exception:
+            pass
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Applying patches to a loaded model
 # ---------------------------------------------------------------------------
 
@@ -1291,6 +1362,31 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
             elif key.startswith("units."):
                 obj_name, prop = _split_key(key, "units.")
                 u = model.get_unit(obj_name)
+
+                # Smart redirect: separator pressure → upstream valve outlet pressure
+                prop_lower = prop.lower()
+                if prop_lower in ("pressure", "pressure_bara", "pressure_barg"):
+                    _SEP_CLASSES = ("Separator", "TwoPhaseSeparator",
+                                    "ThreePhaseSeparator", "GasScrubber",
+                                    "GasScrubberSimple", "Hydrocyclone")
+                    try:
+                        java_class = str(u.getClass().getSimpleName())
+                    except Exception:
+                        java_class = ""
+                    if java_class in _SEP_CLASSES:
+                        upstream_valve = _find_upstream_valve(model, obj_name)
+                        if upstream_valve is not None:
+                            uv_name, uv = upstream_valve
+                            unit_str = "barg" if "barg" in prop_lower else "bara"
+                            uv.setOutletPressure(float(value), unit_str)
+                            log.append({
+                                "key": key, "value": value, "status": "OK",
+                                "note": f"Redirected to upstream valve '{uv_name}' outletPressure",
+                            })
+                            continue
+                        # No upstream valve — fall through to _set_unit_value
+                        # which will set the separator's feed stream pressure
+
                 _set_unit_value(u, prop, value)
                 log.append({"key": key, "value": value, "status": "OK"})
 
@@ -1487,9 +1583,63 @@ def _set_unit_value(unit, prop: str, value: Any):
             unit.setOutPressure(float(value), "bara")
         return
     if prop_lower in ("pressure", "pressure_bara") and hasattr(unit, "setPressure"):
+        # Separators don't support setPressure(float, str) — set on inlet stream
+        _SEPARATOR_CLASSES = ("Separator", "TwoPhaseSeparator", "ThreePhaseSeparator",
+                             "GasScrubber", "GasScrubberSimple", "Hydrocyclone")
+        try:
+            java_class = str(unit.getClass().getSimpleName())
+        except Exception:
+            java_class = ""
+        if java_class in _SEPARATOR_CLASSES:
+            # Set pressure via inlet stream — that determines separator operating pressure
+            for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                if hasattr(unit, m):
+                    try:
+                        inlet = getattr(unit, m)()
+                        if inlet is not None:
+                            inlet.setPressure(float(value), "bara")
+                            return
+                    except Exception:
+                        pass
+            # Last resort: try single-arg setPressure (inherited from base class)
+            try:
+                unit.setPressure(float(value))
+                return
+            except Exception:
+                pass
+            raise KeyError(
+                f"Cannot set pressure on {java_class}. "
+                "Set outletpressure_bara on the upstream valve instead."
+            )
         unit.setPressure(float(value), "bara")
         return
     if prop_lower == "pressure_barg" and hasattr(unit, "setPressure"):
+        # Same separator guard for barg
+        _SEPARATOR_CLASSES = ("Separator", "TwoPhaseSeparator", "ThreePhaseSeparator",
+                             "GasScrubber", "GasScrubberSimple", "Hydrocyclone")
+        try:
+            java_class = str(unit.getClass().getSimpleName())
+        except Exception:
+            java_class = ""
+        if java_class in _SEPARATOR_CLASSES:
+            for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                if hasattr(unit, m):
+                    try:
+                        inlet = getattr(unit, m)()
+                        if inlet is not None:
+                            inlet.setPressure(float(value), "barg")
+                            return
+                    except Exception:
+                        pass
+            try:
+                unit.setPressure(float(value))
+                return
+            except Exception:
+                pass
+            raise KeyError(
+                f"Cannot set pressure on {java_class}. "
+                "Set outletpressure_barg on the upstream valve instead."
+            )
         unit.setPressure(float(value), "barg")
         return
     if "pressure_drop" in prop_lower or "pressuredrop" in prop_lower or prop_lower == "dp_bar":

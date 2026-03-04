@@ -197,6 +197,18 @@ __TAG_REF__
 
 __EQUIP_TEMPLATES__
 
+PROCESS ENGINEERING NOTES (for creating correct patches):
+- **Separator pressure**: Separators operate at the pressure of their inlet feed.
+  To change a separator's pressure, EITHER:
+  (a) Use units.<separator_name>.pressure_bara (this sets the inlet stream pressure), OR
+  (b) Set the upstream valve's outlet pressure: units.<valve_name>.outletpressure_bara
+  Both approaches are valid. Option (a) is simpler; option (b) is more realistic when a throttling valve controls the separator pressure.
+- **Compressor discharge**: Use units.<compressor_name>.outletpressure_bara
+- **Valve outlet**: Use units.<valve_name>.outletpressure_bara
+- **Heater/cooler**: Use units.<name>.outtemperature_C for target temperature
+- When the user says "reduce pressure in a separator", generate a patch with
+  units.<separator_name>.pressure_bara — the system handles it automatically.
+
 SCENARIO JSON FORMAT (for what-if and planning questions):
 When you need to run a scenario, output a JSON block wrapped in ```json ... ``` with this structure:
 {{
@@ -253,6 +265,7 @@ Supported patch keys:
 - units.<name>.outtemperature_C — set unit outlet temperature (heaters, coolers)
 - units.<name>.outpressure_bara — set unit outlet pressure (heaters)
 - units.<name>.outpressure_barg — set unit outlet pressure in barg
+- units.<name>.pressure_bara — set unit pressure (streams, separators via inlet stream)
 - units.<name>.isentropicEfficiency — set compressor isentropic efficiency (0-1)
 - units.<name>.polytropicEfficiency — set compressor polytropic efficiency (0-1)
 - units.<name>.speed — set compressor speed (rpm)
@@ -287,7 +300,7 @@ Use the "add_units" array inside "patch" to insert new equipment. Each entry nee
 Supported params by equipment type:
   cooler/heater/air_cooler/water_cooler: outlet_temperature_C, pressure_drop_bar, duty_kW, uaValue
   compressor: outlet_pressure_bara, isentropic_efficiency (default 0.75), polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
-  separator/two_phase_separator/three_phase_separator/gas_scrubber: (no special params needed)
+  separator/two_phase_separator/three_phase_separator/gas_scrubber: pressure_bara (sets inlet stream pressure — separator operates at feed pressure)
   valve/control_valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening
   expander: outlet_pressure_bara, isentropic_efficiency
   pump/esp_pump: outlet_pressure_bara, efficiency, head
