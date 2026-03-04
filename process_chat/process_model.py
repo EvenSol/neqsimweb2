@@ -648,9 +648,14 @@ class NeqSimProcessModel:
                 key = f"{ps_name}/{raw_name}"
             else:
                 key = raw_name
-            if key not in self._units:
-                self._units[key] = u
-                self._unit_ps_name[key] = ps_name
+            # Deduplicate: if the key already exists, append a numeric suffix
+            if key in self._units:
+                suffix = 2
+                while f"{key}_{suffix}" in self._units:
+                    suffix += 1
+                key = f"{key}_{suffix}"
+            self._units[key] = u
+            self._unit_ps_name[key] = ps_name
 
         # Discover streams from unit in/out connections.
         # Always use qualified keys ("unitName.streamName") as primary to

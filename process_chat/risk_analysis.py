@@ -386,27 +386,53 @@ def _simulate_trip(model: NeqSimProcessModel,
             elif java_class == "Compressor":
                 # Bypass: outlet pressure = inlet pressure (no compression)
                 try:
-                    inlet = unit.getInletStream()
-                    p_in = float(inlet.getPressure("bara"))
-                    unit.setOutletPressure(p_in)
-                    applied = True
+                    inlet = None
+                    for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                        if hasattr(unit, m):
+                            try:
+                                inlet = getattr(unit, m)()
+                                if inlet is not None:
+                                    break
+                            except Exception:
+                                pass
+                    if inlet is not None:
+                        p_in = float(inlet.getPressure("bara"))
+                        unit.setOutletPressure(p_in)
+                        applied = True
                 except Exception:
                     pass
             elif java_class in ("Pump", "ESPPump"):
                 try:
-                    inlet = unit.getInletStream()
-                    p_in = float(inlet.getPressure("bara"))
-                    if hasattr(unit, "setOutletPressure"):
+                    inlet = None
+                    for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                        if hasattr(unit, m):
+                            try:
+                                inlet = getattr(unit, m)()
+                                if inlet is not None:
+                                    break
+                            except Exception:
+                                pass
+                    if inlet is not None and hasattr(unit, "setOutletPressure"):
+                        p_in = float(inlet.getPressure("bara"))
                         unit.setOutletPressure(p_in)
                         applied = True
                 except Exception:
                     pass
             elif java_class == "Expander":
                 try:
-                    inlet = unit.getInletStream()
-                    p_in = float(inlet.getPressure("bara"))
-                    unit.setOutletPressure(p_in)
-                    applied = True
+                    inlet = None
+                    for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                        if hasattr(unit, m):
+                            try:
+                                inlet = getattr(unit, m)()
+                                if inlet is not None:
+                                    break
+                            except Exception:
+                                pass
+                    if inlet is not None:
+                        p_in = float(inlet.getPressure("bara"))
+                        unit.setOutletPressure(p_in)
+                        applied = True
                 except Exception:
                     pass
             elif java_class in ("Cooler", "Heater", "HeatExchanger"):

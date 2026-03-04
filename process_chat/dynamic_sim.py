@@ -124,7 +124,7 @@ def _run_blowdown(
     M_gas = 0.020     # kg/mol (≈ natural gas)
     R = 8.314         # J/(mol·K)
 
-    dt = duration_s / n_steps
+    dt = duration_s / max(n_steps, 1)
     P = p0 * 1e5      # Pa
     T = T0
     P_back = final_pressure_bara * 1e5
@@ -600,7 +600,7 @@ def _run_ramp(
     if end_value is None:
         end_value = current_flow
 
-    dt = duration_s / n_steps
+    dt = duration_s / max(n_steps, 1)
     variables = []
     time_data: List[TimeSeriesPoint] = []
 
