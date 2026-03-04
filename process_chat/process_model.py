@@ -163,6 +163,12 @@ class NeqSimProcessModel:
                 return True
         except Exception:
             pass
+        try:
+            full_name = str(obj.getClass().getName())
+            if "ProcessModel" in full_name and "ProcessSystem" not in full_name:
+                return True
+        except Exception:
+            pass
         # Duck-type: ProcessModel has getAllProcesses() but not getUnitOperations()
         return hasattr(obj, "getAllProcesses") and not hasattr(obj, "getUnitOperations")
 
@@ -176,12 +182,21 @@ class NeqSimProcessModel:
 
         For a single ProcessSystem this returns ``[self._proc]``.
         For a ProcessModel it returns all children from ``getAllProcesses()``.
+        If ``getAllProcesses()`` fails or returns nothing, falls back to
+        returning ``[self._proc]`` so callers always have something to iterate.
         """
         if self._is_process_model:
             try:
-                return list(self._proc.getAllProcesses())
+                children = list(self._proc.getAllProcesses())
+                if children:
+                    return children
             except Exception:
-                return []
+                pass
+            # Fallback: if ProcessModel itself has getUnitOperations, treat it
+            # as a single process system so units/streams are still discovered.
+            if hasattr(self._proc, "getUnitOperations"):
+                return [self._proc]
+            return []
         return [self._proc]
 
     def get_process_system_names(self) -> List[str]:
@@ -734,12 +749,17 @@ class NeqSimProcessModel:
     ) -> str:
         """Export the process flow diagram as a Graphviz DOT string.
 
+        Tries the Java ``createDiagramExporter()`` first (available on
+        ``ProcessSystem``).  If the method does not exist (e.g. on
+        ``ProcessModel``) or fails at runtime, falls back to a pure-Python
+        DOT generator built from the indexed units and streams.
+
         Parameters
         ----------
         style : str
-            Diagram style: ``HYSYS`` (default), ``NEQSIM``, ``PROII``, or ``ASPEN_PLUS``.
+            Diagram style hint (used by Java exporter; ignored by fallback).
         detail_level : str
-            Detail level: ``CONCEPTUAL``, ``ENGINEERING`` (default), or ``DEBUG``.
+            ``CONCEPTUAL``, ``ENGINEERING`` (default), or ``DEBUG``.
         show_stream_values : bool
             Show temperature, pressure, and flow on streams.
         use_stream_tables : bool
@@ -754,51 +774,353 @@ class NeqSimProcessModel:
         str
             Graphviz DOT source string.
         """
-        from neqsim import jneqsim
 
-        DiagramStyle = jneqsim.process.processmodel.diagram.DiagramStyle
-        DiagramDetailLevel = jneqsim.process.processmodel.diagram.DiagramDetailLevel
+        # --- Helper: try the Java exporter on a single ProcessSystem ---
+        def _try_java_exporter(ps, ps_title: str) -> Optional[str]:
+            """Return DOT from Java exporter or None on failure."""
+            if not hasattr(ps, "createDiagramExporter"):
+                return None
+            try:
+                from neqsim import jneqsim
+                DiagramStyle = jneqsim.process.processmodel.diagram.DiagramStyle
+                DiagramDetailLevel = jneqsim.process.processmodel.diagram.DiagramDetailLevel
 
-        style_map = {
-            "HYSYS": DiagramStyle.HYSYS,
-            "NEQSIM": DiagramStyle.NEQSIM,
-            "PROII": DiagramStyle.PROII,
-            "ASPEN_PLUS": DiagramStyle.ASPEN_PLUS,
-        }
-        level_map = {
-            "CONCEPTUAL": DiagramDetailLevel.CONCEPTUAL,
-            "ENGINEERING": DiagramDetailLevel.ENGINEERING,
-            "DEBUG": DiagramDetailLevel.DEBUG,
-        }
+                style_map = {
+                    "HYSYS": DiagramStyle.HYSYS,
+                    "NEQSIM": DiagramStyle.NEQSIM,
+                    "PROII": DiagramStyle.PROII,
+                    "ASPEN_PLUS": DiagramStyle.ASPEN_PLUS,
+                }
+                level_map = {
+                    "CONCEPTUAL": DiagramDetailLevel.CONCEPTUAL,
+                    "ENGINEERING": DiagramDetailLevel.ENGINEERING,
+                    "DEBUG": DiagramDetailLevel.DEBUG,
+                }
 
-        # For ProcessModel, generate diagrams for each process system and combine
-        if self._is_process_model:
-            dots = []
-            for ps in self.get_process_systems():
+                exporter = ps.createDiagramExporter()
+                exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
+                exporter.setDetailLevel(level_map.get(detail_level.upper(), DiagramDetailLevel.ENGINEERING))
+                exporter.setShowStreamValues(show_stream_values)
+                exporter.setUseStreamTables(use_stream_tables)
+                exporter.setShowControlEquipment(show_control_equipment)
+                if ps_title:
+                    exporter.setTitle(ps_title)
+                return str(exporter.toDOT())
+            except Exception:
+                return None
+
+        # --- Attempt Java exporter on each ProcessSystem ---
+        dots: list = []
+        for ps in self.get_process_systems():
+            try:
+                ps_name = str(ps.getName()) if ps.getName() else ""
+            except Exception:
+                ps_name = ""
+            result = _try_java_exporter(ps, title or ps_name)
+            if result:
+                dots.append(result)
+
+        if dots:
+            return "\n\n".join(dots)
+
+        # --- Fallback: pure-Python DOT generator ---
+        return self._generate_dot_fallback(
+            detail_level=detail_level,
+            show_stream_values=show_stream_values,
+            show_control_equipment=show_control_equipment,
+            title=title,
+        )
+
+    # ------------------------------------------------------------------
+    # Pure-Python DOT fallback
+    # ------------------------------------------------------------------
+
+    # Shape mapping for unit operation types
+    _UNIT_SHAPES = {
+        "Stream": ("ellipse", "#E8F5E9"),
+        "Compressor": ("box", "#BBDEFB"),
+        "Pump": ("box", "#BBDEFB"),
+        "ESPPump": ("box", "#BBDEFB"),
+        "Expander": ("box", "#C8E6C9"),
+        "GasTurbine": ("box", "#C8E6C9"),
+        "Cooler": ("box", "#B3E5FC"),
+        "Heater": ("box", "#FFCCBC"),
+        "HeatExchanger": ("box", "#FFE0B2"),
+        "AirCooler": ("box", "#B3E5FC"),
+        "WaterCooler": ("box", "#B3E5FC"),
+        "Separator": ("hexagon", "#FFF9C4"),
+        "ThreePhaseSeparator": ("hexagon", "#FFF9C4"),
+        "TwoPhaseSeparator": ("hexagon", "#FFF9C4"),
+        "Mixer": ("invtriangle", "#E1BEE7"),
+        "Splitter": ("triangle", "#E1BEE7"),
+        "ThrottlingValve": ("diamond", "#F0F4C3"),
+        "Valve": ("diamond", "#F0F4C3"),
+        "Recycle": ("doubleoctagon", "#D7CCC8"),
+        "Absorber": ("box3d", "#DCEDC8"),
+        "DistillationColumn": ("box3d", "#DCEDC8"),
+        "Filter": ("trapezium", "#CFD8DC"),
+        "WellStream": ("ellipse", "#E8F5E9"),
+    }
+
+    _CONTROL_TYPES = {"Recycle", "Calculator", "Adjuster", "SetPoint"}
+
+    def _generate_dot_fallback(
+        self,
+        detail_level: str = "ENGINEERING",
+        show_stream_values: bool = True,
+        show_control_equipment: bool = True,
+        title: str = "",
+    ) -> str:
+        """Build a Graphviz DOT string from indexed units and streams.
+
+        Uses process execution order and inlet/outlet stream matching to
+        determine connectivity between unit operations.
+        """
+
+        # Collect ordered unit info from each ProcessSystem
+        all_units_ordered: list = []  # (unit_java_obj, name, java_class)
+        for ps in self.get_process_systems():
+            try:
+                ops = list(ps.getUnitOperations())
+            except Exception:
                 try:
-                    exporter = ps.createDiagramExporter()
-                    exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
-                    exporter.setDetailLevel(level_map.get(detail_level.upper(), DiagramDetailLevel.ENGINEERING))
-                    exporter.setShowStreamValues(show_stream_values)
-                    exporter.setUseStreamTables(use_stream_tables)
-                    exporter.setShowControlEquipment(show_control_equipment)
-                    ps_name = str(ps.getName()) if ps.getName() else ""
-                    exporter.setTitle(title or ps_name)
-                    dots.append(str(exporter.toDOT()))
+                    ops = list(ps.getUnitOperationList())
                 except Exception:
-                    pass
-            return "\n\n".join(dots) if dots else ""
+                    ops = []
+            for u in ops:
+                try:
+                    name = str(u.getName()) if u.getName() else "unit"
+                except Exception:
+                    name = "unit"
+                try:
+                    cls = str(u.getClass().getSimpleName())
+                except Exception:
+                    cls = "Unknown"
+                all_units_ordered.append((u, name, cls))
 
-        exporter = self._proc.createDiagramExporter()
-        exporter.setDiagramStyle(style_map.get(style.upper(), DiagramStyle.HYSYS))
-        exporter.setDetailLevel(level_map.get(detail_level.upper(), DiagramDetailLevel.ENGINEERING))
-        exporter.setShowStreamValues(show_stream_values)
-        exporter.setUseStreamTables(use_stream_tables)
-        exporter.setShowControlEquipment(show_control_equipment)
-        if title:
-            exporter.setTitle(title)
+        # If no units from process systems, fall back to indexed units
+        if not all_units_ordered:
+            for name, u in self._units.items():
+                try:
+                    cls = str(u.getClass().getSimpleName())
+                except Exception:
+                    cls = "Unknown"
+                all_units_ordered.append((u, name, cls))
 
-        return str(exporter.toDOT())
+        if not all_units_ordered:
+            return 'digraph G { label="No units found"; }'
+
+        # Assign stable node IDs
+        node_ids: Dict[str, str] = {}
+        for idx, (_u, name, _cls) in enumerate(all_units_ordered):
+            node_ids[name] = f"n{idx}"
+
+        # Build connectivity: outlet_hash → source unit name
+        # and inlet_hash → destination unit name
+        _OUTLET_METHODS = (
+            "getOutletStream", "getOutStream",
+            "getGasOutStream", "getOilOutStream",
+            "getLiquidOutStream", "getWaterOutStream",
+        )
+        _INLET_METHODS = ("getInletStream", "getInStream", "getFeed")
+
+        # Map: Java stream id → (source_unit_name, stream_label)
+        outlet_map: Dict[int, Tuple[str, str]] = {}
+        # Map: Java stream id → dest_unit_name
+        inlet_map: Dict[int, str] = {}
+
+        # Gather stream conditions for edge labels
+        stream_conditions: Dict[int, str] = {}
+
+        def _stream_id(s) -> int:
+            try:
+                return int(s.hashCode())
+            except Exception:
+                return id(s)
+
+        def _stream_label(s, method_name: str) -> str:
+            try:
+                sname = str(s.getName()) if s.getName() else ""
+            except Exception:
+                sname = ""
+            # Tag multi-phase outlets
+            if "Gas" in method_name:
+                return sname or "gas"
+            elif "Oil" in method_name or "Liquid" in method_name:
+                return sname or "liquid"
+            elif "Water" in method_name:
+                return sname or "water"
+            return sname
+
+        def _stream_condition_label(s) -> str:
+            parts = []
+            try:
+                t = float(s.getTemperature("C"))
+                parts.append(f"{t:.1f} °C")
+            except Exception:
+                pass
+            try:
+                p = float(s.getPressure("bara"))
+                parts.append(f"{p:.1f} bara")
+            except Exception:
+                pass
+            try:
+                f = float(s.getFlowRate("kg/hr"))
+                if f > 0:
+                    parts.append(f"{f:.0f} kg/h")
+            except Exception:
+                pass
+            return "\\n".join(parts)
+
+        for u, name, cls in all_units_ordered:
+            # Outlets
+            for mname in _OUTLET_METHODS:
+                if hasattr(u, mname):
+                    try:
+                        s = getattr(u, mname)()
+                        if s is not None:
+                            sid = _stream_id(s)
+                            if sid not in outlet_map:
+                                outlet_map[sid] = (name, _stream_label(s, mname))
+                            if show_stream_values and sid not in stream_conditions:
+                                cond = _stream_condition_label(s)
+                                if cond:
+                                    stream_conditions[sid] = cond
+                    except Exception:
+                        pass
+
+            # Splitter outputs via getSplitStream(i)
+            if hasattr(u, "getSplitStream"):
+                for i in range(10):
+                    try:
+                        s = u.getSplitStream(i)
+                        if s is not None:
+                            sid = _stream_id(s)
+                            if sid not in outlet_map:
+                                slabel = _stream_label(s, "getSplitStream")
+                                outlet_map[sid] = (name, slabel or f"split_{i}")
+                            if show_stream_values and sid not in stream_conditions:
+                                cond = _stream_condition_label(s)
+                                if cond:
+                                    stream_conditions[sid] = cond
+                    except Exception:
+                        break
+
+            # Inlets
+            for mname in _INLET_METHODS:
+                if hasattr(u, mname):
+                    try:
+                        s = getattr(u, mname)()
+                        if s is not None:
+                            sid = _stream_id(s)
+                            inlet_map[sid] = name
+                    except Exception:
+                        pass
+
+        # Build edges from matching outlet → inlet stream IDs
+        edges: list = []  # (src_name, dst_name, label)
+        matched_sources = set()
+        matched_dests = set()
+        for sid, (src, slabel) in outlet_map.items():
+            if sid in inlet_map:
+                dst = inlet_map[sid]
+                if src != dst:  # skip self-loops
+                    edge_label = slabel
+                    if show_stream_values and sid in stream_conditions:
+                        if edge_label:
+                            edge_label += "\\n" + stream_conditions[sid]
+                        else:
+                            edge_label = stream_conditions[sid]
+                    edges.append((src, dst, edge_label))
+                    matched_sources.add(src)
+                    matched_dests.add(dst)
+
+        # For units with no connectivity found, connect sequentially
+        # (fallback for units where inlet/outlet methods are not standard)
+        unconnected = [
+            name for _u, name, cls in all_units_ordered
+            if name not in matched_sources and name not in matched_dests
+            and cls not in self._CONTROL_TYPES
+        ]
+        # Don't sequentially connect if we already have good edges
+        if not edges and len(all_units_ordered) > 1:
+            # No edges found at all — connect in process order
+            prev = None
+            for _u, name, cls in all_units_ordered:
+                if not show_control_equipment and cls in self._CONTROL_TYPES:
+                    continue
+                if prev is not None:
+                    edges.append((prev, name, ""))
+                prev = name
+
+        # Determine diagram title
+        if not title:
+            try:
+                title = str(self._proc.getName()) if self._proc.getName() else "Process Flow Diagram"
+            except Exception:
+                title = "Process Flow Diagram"
+
+        # --- Generate DOT ---
+        lines = [
+            "digraph ProcessFlowDiagram {",
+            '  graph [rankdir=LR splines=ortho nodesep=0.8 ranksep=1.2',
+            f'         fontname="Arial" fontsize=12 label="{title}"',
+            '         labelloc=t labeljust=c bgcolor="white" pad=0.5];',
+            '  node [fontname="Arial" fontsize=10 style=filled];',
+            '  edge [fontname="Arial" fontsize=8 color="#666666"];',
+            "",
+        ]
+
+        # Nodes
+        for _u, name, cls in all_units_ordered:
+            if not show_control_equipment and cls in self._CONTROL_TYPES:
+                continue
+            nid = node_ids[name]
+            shape, fill = self._UNIT_SHAPES.get(cls, ("box", "#E0E0E0"))
+            # Build label
+            if detail_level == "CONCEPTUAL":
+                label = name
+            else:
+                label = f"{name}\\n[{cls}]"
+                # Add key properties
+                if cls in self._POWER_UNITS:
+                    try:
+                        pwr = float(_u.getPower()) / 1000.0
+                        if abs(pwr) > 0.01:
+                            label += f"\\n{pwr:.1f} kW"
+                    except Exception:
+                        pass
+                elif cls in self._DUTY_UNITS:
+                    try:
+                        duty = float(_u.getDuty()) / 1000.0
+                        if abs(duty) > 0.01:
+                            label += f"\\n{duty:.1f} kW"
+                    except Exception:
+                        pass
+
+            lines.append(
+                f'  {nid} [label="{label}" shape={shape} fillcolor="{fill}"];'
+            )
+
+        lines.append("")
+
+        # Edges
+        seen_edges = set()
+        for src, dst, label in edges:
+            src_id = node_ids.get(src)
+            dst_id = node_ids.get(dst)
+            if src_id and dst_id:
+                edge_key = (src_id, dst_id)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                if label:
+                    lines.append(f'  {src_id} -> {dst_id} [label="{label}"];')
+                else:
+                    lines.append(f'  {src_id} -> {dst_id};')
+
+        lines.append("}")
+        return "\n".join(lines)
 
     # Unit types that legitimately produce power or duty
     _POWER_UNITS = {"Compressor", "Pump", "ESPPump", "Expander", "GasTurbine"}
