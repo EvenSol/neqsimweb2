@@ -188,21 +188,58 @@ with st.sidebar:
             "What are the current stream conditions?",
             "What is the total compressor power?",
             "What if we increase the export pressure by 10 bara?",
-            "What if we reduce the cooler outlet temperature to 30°C?",
             "What happens if we increase feed flow by 10%?",
             "Find maximum production for this process",
-            "What is the bottleneck equipment?",
             "Show the risk matrix for this process",
-            "Run a Monte Carlo availability simulation",
             "Calculate the CO₂ emissions for this process",
             "Run a blowdown simulation on the separator",
             "Sweep the inlet temperature from 20 to 60°C",
             "Run a flow assurance assessment (hydrates, corrosion)",
             "Size the relief valves for all vessels",
             "Run a CME PVT experiment on the feed stream",
+            "Run pinch analysis / heat integration study",
+            "Turndown analysis — what is the operating envelope?",
+            "Run a debottleneck study",
+            "Run energy audit / utility balance",
+            "Analyse flare sources and recovery options",
+            "Seasonal planning — summer vs winter performance",
+            "Generate operator training upset scenarios",
             "Show me the Python script",
-            "Save the process",
         ]
+
+        with st.expander("📚 Available Capabilities", expanded=False):
+            st.markdown("""
+**Analysis & Simulation:**
+- **What-if scenarios** — change pressures, temperatures, flows
+- **Sensitivity analysis** — single sweep, tornado, 2D surface
+- **Dynamic simulation** — blowdown, transient, startup/shutdown
+- **PVT simulation** — CME, CVD, differential liberation
+
+**Equipment & Sizing:**
+- **Auto-size equipment** — sizing report, utilization, bottleneck
+- **Compressor charts** — performance maps, surge limits
+- **Optimization** — find max throughput / bottleneck
+
+**Safety & Environmental:**
+- **Risk analysis** — criticality ranking, Monte Carlo availability
+- **Safety analysis** — PSV sizing, relief scenarios (API 520)
+- **Emissions analysis** — CO₂, fugitives, emission intensity
+- **Flare analysis** — flare sources, recovery options, carbon tax
+
+**Plant Operations:**
+- **Energy integration** — pinch analysis, composite curves, heat recovery
+- **Turndown analysis** — operating envelope, min/max stable flow
+- **Performance monitoring** — actual vs predicted, degradation alerts
+- **Debottleneck study** — upgrade options, cost-effectiveness ranking
+- **Energy audit** — utility balance, benchmarking, fuel cost
+- **Training scenarios** — upset simulations with quiz Q&A
+- **Seasonal planning** — multi-period production comparison
+
+**Build & Export:**
+- **Build process** — create from natural language description
+- **Python script** — generate NeqSim Python code
+- **Save/download** — export .neqsim file
+            """)
     else:
         example_questions = [
             "Build a simple gas compression process",
