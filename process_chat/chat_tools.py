@@ -39,6 +39,11 @@ from .training_scenarios import run_training_scenarios, format_training_result, 
 from .energy_audit import run_energy_audit, format_energy_audit_result, EnergyAuditResult
 from .flare_analysis import run_flare_analysis, format_flare_analysis_result, FlareAnalysisResult
 from .multi_period import run_multi_period, format_multi_period_result, MultiPeriodResult
+from .weather import run_weather_analysis, format_weather_result, WeatherResult, geocode_city
+from .lab_import import (
+    run_lab_import, format_lab_import_result, LabImportResult,
+    parse_csv_composition, parse_json_composition, parse_inline_composition,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -996,6 +1001,59 @@ Parameters:
 Use this for: "seasonal planning", "summer vs winter performance", "annual production plan",
 "multi-period analysis", "how does ambient temperature affect production?"
 
+WEATHER INTEGRATION (for "weather", "ambient temperature", "current conditions", "forecast"):
+When the user asks about weather conditions or their impact on the process, output a ```weather ... ``` block:
+```weather
+{{
+  "city": "Stavanger",
+  "design_ambient_C": 30
+}}
+```
+Or with coordinates:
+```weather
+{{
+  "latitude": 58.97,
+  "longitude": 5.73,
+  "design_ambient_C": 30
+}}
+```
+Parameters:
+  - city: City/location name (uses geocoding)
+  - latitude/longitude: GPS coordinates (alternative to city)
+  - design_ambient_C: Design-basis ambient temperature for air coolers (default 30)
+
+Use this for: "what's the weather at our plant?", "current ambient temperature",
+"will it be hot this week?", "impact of weather on coolers"
+
+LAB/LIMS COMPOSITION IMPORT (for "lab results", "new composition", "LIMS data", "update feed"):
+When the user provides lab analysis data or asks to update feed composition, output a ```lab_import ... ``` block:
+```lab_import
+{{
+  "sample_id": "LAB-2024-001",
+  "stream_name": "feed gas",
+  "apply": false,
+  "format": "inline",
+  "components": {{
+    "methane": 0.85,
+    "ethane": 0.07,
+    "propane": 0.03,
+    "CO2": 0.02,
+    "nitrogen": 0.03
+  }}
+}}
+```
+Parameters:
+  - sample_id: Lab sample identifier
+  - stream_name: Target stream name (auto-detects feed if omitted)
+  - apply: true to actually update the model, false for preview only
+  - format: "inline" (components dict), "csv" (csv_data field), or "json" (json_data field)
+  - components: component→mole fraction dict (for inline format)
+  - csv_data: raw CSV text (for csv format)
+  - json_data: raw JSON text (for json format)
+
+Use this for: "update feed with lab results", "new gas analysis", "import LIMS data",
+"here are the latest lab numbers", "change feed composition"
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -1432,6 +1490,29 @@ When the user asks about seasonal or multi-period planning, output:
 }
 ```
 Use this for: "seasonal planning", "summer vs winter", "annual plan", "multi-period analysis".
+
+WEATHER INTEGRATION (after a process has been built):
+When the user asks about weather conditions or impact, output:
+```weather
+{
+  "city": "Stavanger",
+  "design_ambient_C": 30
+}
+```
+Use this for: "weather", "ambient temperature", "forecast", "cooler capacity".
+
+LAB/LIMS COMPOSITION IMPORT (after a process has been built):
+When the user provides lab data or wants to update feed composition, output:
+```lab_import
+{
+  "sample_id": "LAB-001",
+  "stream_name": "feed gas",
+  "apply": false,
+  "format": "inline",
+  "components": {"methane": 0.85, "ethane": 0.07, "propane": 0.03, "CO2": 0.02, "nitrogen": 0.03}
+}
+```
+Use this for: "lab results", "new composition", "update feed", "LIMS data".
 """
 
 
@@ -1548,6 +1629,8 @@ _TOOL_BLOCK_TYPES = (
     "energy_integration", "turndown", "performance_monitor",
     "debottleneck", "training", "energy_audit", "flare_analysis",
     "multi_period",
+    "weather",
+    "lab_import",
 )
 
 def _strip_tool_blocks(text: str) -> str:
@@ -1864,6 +1947,32 @@ def extract_multi_period_spec(text: str) -> Optional[dict]:
     return None
 
 
+def extract_weather_spec(text: str) -> Optional[dict]:
+    """Extract a weather analysis specification from LLM output."""
+    import re
+    pattern = r'```weather\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_lab_import_spec(text: str) -> Optional[dict]:
+    """Extract a lab/LIMS composition import specification from LLM output."""
+    import re
+    pattern = r'```lab_import\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
@@ -2095,6 +2204,8 @@ class ProcessChatSession:
         self._last_energy_audit = None
         self._last_flare_analysis = None
         self._last_multi_period = None
+        self._last_weather = None
+        self._last_lab_import = None
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
         self._last_save_bytes = None  # Last generated .neqsim bytes
@@ -2141,6 +2252,8 @@ class ProcessChatSession:
         self._last_energy_audit = None
         self._last_flare_analysis = None
         self._last_multi_period = None
+        self._last_weather = None
+        self._last_lab_import = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -2269,6 +2382,16 @@ class ProcessChatSession:
         mp_spec = extract_multi_period_spec(assistant_text)
         if mp_spec and self.model:
             return self._handle_multi_period(assistant_text, mp_spec, client, types)
+
+        # --- Check for weather spec ---
+        wx_spec = extract_weather_spec(assistant_text)
+        if wx_spec:
+            return self._handle_weather(assistant_text, wx_spec, client, types)
+
+        # --- Check for lab import spec ---
+        lab_spec = extract_lab_import_spec(assistant_text)
+        if lab_spec:
+            return self._handle_lab_import(assistant_text, lab_spec, client, types)
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
@@ -3812,6 +3935,97 @@ class ProcessChatSession:
         """Get the last multi-period planning result (for UI display)."""
         return getattr(self, "_last_multi_period", None)
 
+    # -- Weather handler ----------------------------------------------------
+
+    def _handle_weather(self, assistant_text: str, wx_spec: dict, client, types) -> str:
+        """Fetch weather data and feed results back to LLM."""
+        try:
+            result = run_weather_analysis(
+                model=self.model,
+                latitude=wx_spec.get("latitude"),
+                longitude=wx_spec.get("longitude"),
+                city=wx_spec.get("city"),
+                design_ambient_C=float(wx_spec.get("design_ambient_C", 30)),
+            )
+
+            self._last_weather = result
+            results_text = format_weather_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Weather data fetched for {result.location_name}. Results below. "
+                    f"Explain current conditions, cooler impact assessment, forecast outlook, "
+                    f"and operational recommendations.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Weather fetch failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_weather(self) -> Optional[WeatherResult]:
+        """Get the last weather analysis result (for UI display)."""
+        return getattr(self, "_last_weather", None)
+
+    # -- Lab Import handler -------------------------------------------------
+
+    def _handle_lab_import(self, assistant_text: str, lab_spec: dict, client, types) -> str:
+        """Parse lab composition data and feed results back to LLM."""
+        try:
+            fmt = lab_spec.get("format", "inline")
+            csv_text = lab_spec.get("csv_data")
+            json_text = lab_spec.get("json_data")
+            inline_comp = lab_spec.get("components")
+
+            result = run_lab_import(
+                model=self.model,
+                csv_text=csv_text if fmt == "csv" else None,
+                json_text=json_text if fmt == "json" else None,
+                inline_comp=inline_comp if fmt == "inline" else None,
+                stream_name=lab_spec.get("stream_name"),
+                sample_id=lab_spec.get("sample_id", "LAB-001"),
+                apply_to_model=bool(lab_spec.get("apply", False)),
+            )
+
+            self._last_lab_import = result
+            results_text = format_lab_import_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Lab composition imported (sample {result.sample.sample_id}). "
+                    f"Results below. Explain the composition changes, highlight major shifts, "
+                    f"flag any unmapped components, and suggest process impact.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Lab import failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_lab_import(self) -> Optional[LabImportResult]:
+        """Get the last lab import result (for UI display)."""
+        return getattr(self, "_last_lab_import", None)
+
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
@@ -3883,5 +4097,7 @@ class ProcessChatSession:
         self._last_energy_audit = None
         self._last_flare_analysis = None
         self._last_multi_period = None
+        self._last_weather = None
+        self._last_lab_import = None
         self._builder = None
 

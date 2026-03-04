@@ -160,6 +160,27 @@ with st.sidebar:
                 )
             st.divider()
 
+    # --- Lab Data Upload ---
+    if st.session_state.get("process_model") is not None:
+        st.subheader("🧪 Lab Data Import")
+        lab_file = st.file_uploader(
+            "Upload CSV/JSON composition",
+            type=["csv", "json"],
+            key="lab_file_upload",
+            help="Upload lab/LIMS data with component names and mole fractions",
+        )
+        if lab_file is not None:
+            lab_text = lab_file.read().decode("utf-8")
+            ext = lab_file.name.rsplit(".", 1)[-1].lower()
+            if ext == "csv":
+                prompt = f"Import this lab CSV data and preview the composition changes:\n```csv\n{lab_text}\n```"
+            else:
+                prompt = f"Import this lab JSON data and preview the composition changes:\n```json\n{lab_text}\n```"
+            st.session_state["_pending_question"] = prompt
+            st.session_state["_lab_upload_data"] = lab_text
+            st.session_state["_lab_upload_format"] = ext
+        st.divider()
+
     # --- Diagram Settings ---
     if st.session_state.get("process_model") is not None:
         st.subheader("📐 Diagram Settings")
@@ -204,6 +225,8 @@ with st.sidebar:
             "Analyse flare sources and recovery options",
             "Seasonal planning — summer vs winter performance",
             "Generate operator training upset scenarios",
+            "What is the weather at Stavanger? Impact on coolers?",
+            "Update feed composition: 85% methane, 7% ethane, 3% propane, 2% CO2, 3% N2",
             "Show me the Python script",
         ]
 
@@ -234,6 +257,10 @@ with st.sidebar:
 - **Energy audit** — utility balance, benchmarking, fuel cost
 - **Training scenarios** — upset simulations with quiz Q&A
 - **Seasonal planning** — multi-period production comparison
+
+**External Data Integration:**
+- **Weather API** — live ambient conditions, 7-day forecast, cooler impact
+- **Lab/LIMS import** — update feed composition from lab data (CSV/JSON/inline)
 
 **Build & Export:**
 - **Build process** — create from natural language description
@@ -1728,6 +1755,82 @@ def _show_multi_period(mp_result):
                     st.warning(f"{s.name}: {w}")
 
 
+def _show_weather(wx_result):
+    """Display weather analysis results inline."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown(f"**🌤️ Weather — {wx_result.location_name}**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Temperature", f"{wx_result.current.temperature_C:.1f}°C")
+    with col2:
+        st.metric("Humidity", f"{wx_result.current.relative_humidity_pct:.0f}%")
+    with col3:
+        st.metric("Wind", f"{wx_result.current.wind_speed_m_s:.1f} m/s")
+
+    # Cooler impact
+    if wx_result.cooler_impact:
+        ci = wx_result.cooler_impact
+        status_color = {"OK": "🟢", "WARNING": "🟡", "CRITICAL": "🔴"}.get(ci.status, "⚪")
+        st.markdown(f"{status_color} **Cooler Status:** {ci.status} — "
+                    f"Capacity {ci.capacity_factor:.0%} "
+                    f"(design {ci.design_ambient_C:.0f}°C, actual {ci.current_ambient_C:.1f}°C, "
+                    f"Δ{ci.delta_C:+.1f}°C)")
+
+    # 7-day forecast chart
+    if wx_result.forecast:
+        dates = [d.date for d in wx_result.forecast]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=dates, y=[d.temp_max_C for d in wx_result.forecast],
+                                 name="Max", mode="lines+markers", line=dict(color="red")))
+        fig.add_trace(go.Scatter(x=dates, y=[d.temp_avg_C for d in wx_result.forecast],
+                                 name="Avg", mode="lines+markers", line=dict(color="orange")))
+        fig.add_trace(go.Scatter(x=dates, y=[d.temp_min_C for d in wx_result.forecast],
+                                 name="Min", mode="lines+markers", line=dict(color="blue")))
+        if wx_result.cooler_impact:
+            fig.add_hline(y=wx_result.cooler_impact.design_ambient_C,
+                          line_dash="dash", line_color="gray",
+                          annotation_text="Design Basis")
+        fig.update_layout(title="7-Day Temperature Forecast",
+                          xaxis_title="Date", yaxis_title="Temperature (°C)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Recommendations
+    if wx_result.recommendations:
+        with st.expander("Recommendations", expanded=True):
+            for r in wx_result.recommendations:
+                st.markdown(f"• {r}")
+
+
+def _show_lab_import(lab_result):
+    """Display lab composition import results inline."""
+    st.markdown("---")
+    st.markdown(f"**🧪 Lab Composition Import — {lab_result.sample.sample_id}**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Components", len(lab_result.sample.components))
+    with col2:
+        st.metric("Stream", lab_result.stream_name)
+    with col3:
+        status = "✅ Applied" if lab_result.applied else "👁️ Preview"
+        st.metric("Status", status)
+
+    # Composition table
+    if lab_result.composition_df is not None and not lab_result.composition_df.empty:
+        st.dataframe(lab_result.composition_df, use_container_width=True, hide_index=True)
+
+    # Warnings
+    for w in lab_result.warnings:
+        st.warning(w)
+
+    # Unmapped components
+    if lab_result.sample.unmapped:
+        st.info(f"Unmapped components (used as-is): {', '.join(lab_result.sample.unmapped)}")
+
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -1761,6 +1864,8 @@ for msg in st.session_state["chat_messages"]:
             ("energy_audit", _show_energy_audit),
             ("flare_analysis", _show_flare_analysis),
             ("multi_period", _show_multi_period),
+            ("weather", _show_weather),
+            ("lab_import", _show_lab_import),
         ]
         for key, renderer in _RESULT_RENDERERS:
             data = msg.get(key)
@@ -1841,6 +1946,8 @@ if user_input:
                 energy_audit = session.get_last_energy_audit()
                 flare_analysis = session.get_last_flare_analysis()
                 multi_period = session.get_last_multi_period()
+                weather = session.get_last_weather()
+                lab_import = session.get_last_lab_import()
 
                 # --- Sync model from session back to session_state ---
                 if session.model is not None:
@@ -1900,6 +2007,8 @@ if user_input:
                     ("energy_audit", energy_audit, _show_energy_audit),
                     ("flare_analysis", flare_analysis, _show_flare_analysis),
                     ("multi_period", multi_period, _show_multi_period),
+                    ("weather", weather, _show_weather),
+                    ("lab_import", lab_import, _show_lab_import),
                 ]
                 for key, result_obj, renderer in _result_pairs:
                     if result_obj is not None:
