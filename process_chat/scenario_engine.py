@@ -1645,7 +1645,7 @@ def _set_unit_value(unit, prop: str, value: Any):
     if "pressure_drop" in prop_lower or "pressuredrop" in prop_lower or prop_lower == "dp_bar":
         # Apply pressure drop by reducing outlet pressure relative to inlet
         inlet_p = None
-        for m in ("getInletStream", "getInStream", "getFeed"):
+        for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
             if hasattr(unit, m):
                 try:
                     inlet_p = float(getattr(unit, m)().getPressure("bara"))

@@ -90,7 +90,7 @@ def _run_blowdown(
                         except Exception:
                             pass
                     # Read T and P from the vessel's inlet stream
-                    for m_name in ("getInletStream", "getInStream", "getFeed"):
+                    for m_name in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                         if hasattr(java_obj, m_name):
                             try:
                                 inlet = getattr(java_obj, m_name)()

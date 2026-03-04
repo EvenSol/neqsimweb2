@@ -518,7 +518,7 @@ def _find_feed_stream(model: NeqSimProcessModel) -> Optional[str]:
             if "Stream" in java_class:
                 return name
             # If first unit isn't a stream, look for its inlet
-            for m in ("getInletStream", "getInStream", "getFeed"):
+            for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                 if hasattr(first, m):
                     try:
                         s = getattr(first, m)()

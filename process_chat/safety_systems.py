@@ -222,7 +222,7 @@ def run_safety_analysis(
                         pass
             # Fallback: inlet stream
             if operating_p <= 0:
-                for m in ("getInletStream", "getInStream", "getFeed"):
+                for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                     if hasattr(java_obj, m):
                         try:
                             s = getattr(java_obj, m)()
@@ -245,7 +245,7 @@ def run_safety_analysis(
         fluid = None
 
         try:
-            for m_name in ("getInletStream", "getInStream", "getFeed"):
+            for m_name in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                 if hasattr(java_obj, m_name):
                     stream = getattr(java_obj, m_name)()
                     if stream:

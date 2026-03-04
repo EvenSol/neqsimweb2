@@ -411,7 +411,7 @@ def _simulate_trip(model: NeqSimProcessModel,
                     pass
             elif java_class in ("Cooler", "Heater", "HeatExchanger"):
                 # No heat transfer – outlet temperature ≈ inlet temperature
-                for m in ("getInletStream", "getInStream", "getFeedStream"):
+                for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                     if hasattr(unit, m):
                         try:
                             s = getattr(unit, m)()
@@ -438,7 +438,7 @@ def _simulate_trip(model: NeqSimProcessModel,
                             pass
 
             if not applied:
-                for m in ("getInletStream", "getInStream", "getFeed"):
+                for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                     if hasattr(unit, m):
                         try:
                             s = getattr(unit, m)()
@@ -543,7 +543,7 @@ def _simulate_degraded(model: NeqSimProcessModel,
 
             # Generic fallback: reduce inlet flow
             if not applied:
-                for m in ("getInletStream", "getInStream", "getFeed"):
+                for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                     if hasattr(unit, m):
                         try:
                             s = getattr(unit, m)()

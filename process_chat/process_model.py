@@ -1056,7 +1056,7 @@ class NeqSimProcessModel:
             "getGasOutStream", "getOilOutStream",
             "getLiquidOutStream", "getWaterOutStream",
         )
-        _INLET_METHODS = ("getInletStream", "getInStream", "getFeed")
+        _INLET_METHODS = ("getInletStream", "getInStream", "getFeed", "getFeedStream")
 
         # Map: Java stream id → (source_unit_name, stream_label)
         outlet_map: Dict[int, Tuple[str, str]] = {}
@@ -2708,7 +2708,7 @@ class NeqSimProcessModel:
             prop_str = ", ".join(f"{k}={v:.2f}" for k, v in props.items()) if props else ""
 
             inlet_str = ""
-            for m in ("getInletStream", "getInStream", "getFeed"):
+            for m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
                 if hasattr(u, m):
                     try:
                         s = getattr(u, m)()
