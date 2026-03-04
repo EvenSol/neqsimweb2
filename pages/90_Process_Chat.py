@@ -1324,6 +1324,373 @@ def _show_flow_assurance(fa_result):
                 st.markdown(f"- {rec}")
 
 
+def _show_energy_integration(ei_result):
+    """Display energy integration / pinch analysis results inline."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown("**🔥 Energy Integration / Pinch Analysis**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Pinch Temperature", f"{ei_result.pinch_temperature_C:.1f} °C")
+    with col2:
+        st.metric("Min Hot Utility", f"{ei_result.min_hot_utility_kW:,.0f} kW")
+    with col3:
+        st.metric("Min Cold Utility", f"{ei_result.min_cold_utility_kW:,.0f} kW")
+
+    if ei_result.max_heat_recovery_kW > 0:
+        st.metric("Max Heat Recovery", f"{ei_result.max_heat_recovery_kW:,.0f} kW")
+
+    # Composite curves
+    if ei_result.hot_composite or ei_result.cold_composite:
+        fig = go.Figure()
+        if ei_result.hot_composite:
+            fig.add_trace(go.Scatter(
+                x=[p.duty_kW for p in ei_result.hot_composite],
+                y=[p.temperature_C for p in ei_result.hot_composite],
+                name="Hot Composite", line=dict(color="red"),
+            ))
+        if ei_result.cold_composite:
+            fig.add_trace(go.Scatter(
+                x=[p.duty_kW for p in ei_result.cold_composite],
+                y=[p.temperature_C for p in ei_result.cold_composite],
+                name="Cold Composite", line=dict(color="blue"),
+            ))
+        fig.update_layout(
+            title="Composite Curves",
+            xaxis_title="Duty (kW)",
+            yaxis_title="Temperature (°C)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Heat streams table
+    if ei_result.hot_streams or ei_result.cold_streams:
+        with st.expander("🔍 Heat Stream Details", expanded=False):
+            all_streams = []
+            for h in ei_result.hot_streams:
+                all_streams.append({
+                    "Name": h.name, "Type": "HOT",
+                    "Tin (°C)": round(h.t_in_C, 1),
+                    "Tout (°C)": round(h.t_out_C, 1),
+                    "Duty (kW)": round(h.duty_kW, 0),
+                })
+            for c in ei_result.cold_streams:
+                all_streams.append({
+                    "Name": c.name, "Type": "COLD",
+                    "Tin (°C)": round(c.t_in_C, 1),
+                    "Tout (°C)": round(c.t_out_C, 1),
+                    "Duty (kW)": round(c.duty_kW, 0),
+                })
+            st.dataframe(pd.DataFrame(all_streams), use_container_width=True, hide_index=True)
+
+    # Suggestions
+    if ei_result.suggestions:
+        with st.expander("💡 Heat Recovery Suggestions", expanded=False):
+            for s in ei_result.suggestions:
+                st.markdown(f"- **{s.hot_stream}** → **{s.cold_stream}**: "
+                           f"{s.recoverable_kW:.0f} kW ({s.detail})")
+
+
+def _show_turndown(td_result):
+    """Display turndown / operating envelope results inline."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown("**📉 Turndown / Operating Envelope**")
+
+    col1, col2, col3 = st.columns(3)
+    if td_result.min_stable:
+        with col1:
+            st.metric("Min Stable Flow",
+                      f"{td_result.min_stable.flow_pct:.0f}%",
+                      delta=f"Limit: {td_result.min_stable.limiting_equipment}")
+    if td_result.max_capacity:
+        with col2:
+            st.metric("Max Capacity",
+                      f"{td_result.max_capacity.flow_pct:.0f}%",
+                      delta=f"Limit: {td_result.max_capacity.limiting_equipment}")
+    with col3:
+        st.metric("Design Flow", f"{td_result.design_flow_kg_hr:,.0f} kg/hr")
+
+    # Envelope chart
+    if td_result.envelope:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=[p.flow_pct for p in td_result.envelope],
+            y=[p.max_utilization for p in td_result.envelope],
+            name="Max Utilization", line=dict(color="blue"),
+        ))
+        fig.add_hline(y=1.0, line_dash="dash", line_color="red",
+                      annotation_text="Equipment Limit")
+        fig.update_layout(
+            title="Operating Envelope",
+            xaxis_title="Flow (% of design)",
+            yaxis_title="Max Equipment Utilization",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Data table
+        with st.expander("📊 Envelope Data", expanded=False):
+            env_data = [{
+                "Flow (%)": p.flow_pct,
+                "Product (kg/hr)": round(p.product_rate_kg_hr, 0),
+                "Power (kW)": round(p.total_power_kW, 0),
+                "Max Util": round(p.max_utilization, 3),
+                "Limiting Equipment": p.limiting_equipment,
+            } for p in td_result.envelope]
+            st.dataframe(pd.DataFrame(env_data), use_container_width=True, hide_index=True)
+
+
+def _show_performance_monitor(pm_result):
+    """Display performance monitoring results inline."""
+    st.markdown("---")
+    st.markdown("**📊 Performance Monitoring**")
+
+    # Overall health
+    health_icon = {"HEALTHY": "🟢", "DEGRADED": "🟡", "CRITICAL": "🔴"}.get(
+        pm_result.overall_health, "⚪")
+    st.markdown(f"**Overall Health:** {health_icon} {pm_result.overall_health}")
+
+    # Alerts
+    if pm_result.alerts:
+        st.markdown("**Degradation Alerts:**")
+        alert_data = []
+        for a in pm_result.alerts:
+            icon = {"NORMAL": "🟢", "WARNING": "🟡", "ALARM": "🔴"}.get(a.severity, "⚪")
+            alert_data.append({
+                "Equipment": a.equipment,
+                "Measurement": a.measurement,
+                "Status": f"{icon} {a.severity}",
+                "Actual": round(a.actual_value, 2),
+                "Predicted": round(a.predicted_value, 2),
+                "Residual": round(a.residual, 2),
+                "Diagnosis": a.diagnosis,
+            })
+        st.dataframe(pd.DataFrame(alert_data), use_container_width=True, hide_index=True)
+
+    # Details
+    if pm_result.measurements:
+        with st.expander("🔍 All Measurements", expanded=False):
+            m_data = [{
+                "Path": m.path,
+                "Actual": round(m.actual_value, 2),
+                "Predicted": round(m.predicted_value, 2),
+                "Residual": round(m.residual, 2),
+                "Unit": m.unit,
+                "Status": m.status,
+            } for m in pm_result.measurements]
+            st.dataframe(pd.DataFrame(m_data), use_container_width=True, hide_index=True)
+
+
+def _show_debottleneck(db_result):
+    """Display debottleneck study results inline."""
+    st.markdown("---")
+    st.markdown("**🔧 Debottleneck Study**")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Current Production", f"{db_result.current_production_kg_hr:,.0f} kg/hr")
+    with col2:
+        if db_result.potential_increase_pct > 0:
+            st.metric("Potential Increase", f"{db_result.potential_increase_pct:.0f}%")
+
+    # Bottleneck equipment
+    if db_result.bottlenecks:
+        st.markdown("**High-Utilization Equipment:**")
+        bn_data = [{
+            "Equipment": b.name,
+            "Type": b.equipment_type,
+            "Utilization": f"{b.utilization_pct:.0f}%",
+            "Limiting Parameter": b.limiting_parameter,
+        } for b in db_result.bottlenecks]
+        st.dataframe(pd.DataFrame(bn_data), use_container_width=True, hide_index=True)
+
+    # Upgrade options
+    if db_result.upgrade_options:
+        st.markdown("**Upgrade Options (ranked by cost-effectiveness):**")
+        up_data = [{
+            "Equipment": u.equipment,
+            "Strategy": u.strategy,
+            "Capacity Gain": f"{u.capacity_gain_pct:.0f}%",
+            "Cost (USD)": f"${u.estimated_cost_usd:,.0f}",
+            "Extra Flow (kg/hr)": f"{u.extra_throughput_kg_hr:,.0f}",
+            "Cost-Eff (t/yr/$MM)": f"{u.cost_effectiveness:,.0f}",
+        } for u in db_result.upgrade_options]
+        st.dataframe(pd.DataFrame(up_data), use_container_width=True, hide_index=True)
+
+
+def _show_training(tr_result):
+    """Display training scenario results inline."""
+    st.markdown("---")
+    st.markdown("**🎓 Operator Training Scenarios**")
+
+    for scenario in tr_result.scenarios:
+        severity_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "🔴"}.get(
+            scenario.severity, "⚪")
+
+        with st.expander(f"{severity_icon} {scenario.name} — {scenario.severity}", expanded=False):
+            st.markdown(f"**Description:** {scenario.description}")
+            st.markdown(f"**Recommended Response:** {scenario.recommended_response}")
+
+            if scenario.impacts:
+                st.markdown("**Impacts:**")
+                imp_data = [{
+                    "KPI": i.kpi_name,
+                    "Before": round(i.base_value, 2),
+                    "After": round(i.upset_value, 2),
+                    "Change (%)": round(i.change_pct, 1),
+                } for i in scenario.impacts]
+                st.dataframe(pd.DataFrame(imp_data), use_container_width=True, hide_index=True)
+
+            if scenario.recovery_actions:
+                st.markdown("**Recovery Actions:**")
+                for idx, action in enumerate(scenario.recovery_actions, 1):
+                    st.markdown(f"  {idx}. {action}")
+
+            if scenario.quiz_question:
+                st.markdown(f"**Quiz:** {scenario.quiz_question}")
+                st.markdown(f"**Answer:** ||{scenario.quiz_answer}||")
+
+
+def _show_energy_audit(ea_result):
+    """Display energy audit results inline."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown("**⚡ Energy Audit / Utility Balance**")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Power", f"{ea_result.total_power_kW:,.0f} kW")
+    with col2:
+        st.metric("Total Cooling", f"{ea_result.total_cooling_kW:,.0f} kW")
+    with col3:
+        st.metric("Total Heating", f"{ea_result.total_heating_kW:,.0f} kW")
+    with col4:
+        st.metric("Specific Energy", f"{ea_result.specific_energy_kWh_per_tonne:.1f} kWh/t")
+
+    # Pie chart of energy consumers
+    if ea_result.consumers:
+        power_consumers = [c for c in ea_result.consumers if c.energy_type == "POWER" and c.consumption_kW > 0]
+        if power_consumers:
+            fig = go.Figure(data=[go.Pie(
+                labels=[c.name for c in power_consumers],
+                values=[c.consumption_kW for c in power_consumers],
+                hole=0.3,
+            )])
+            fig.update_layout(title="Power Consumption Breakdown")
+            st.plotly_chart(fig, use_container_width=True)
+
+    # Benchmarks
+    if ea_result.benchmarks:
+        st.markdown("**Benchmark Comparison:**")
+        bm_data = [{
+            "Metric": b.metric,
+            "Actual": round(b.actual_value, 1),
+            "Benchmark": round(b.benchmark_value, 1),
+            "Unit": b.unit,
+            "Status": {"GOOD": "🟢 Good", "NORMAL": "🟡 Normal", "POOR": "🔴 Poor"}.get(b.status, b.status),
+        } for b in ea_result.benchmarks]
+        st.dataframe(pd.DataFrame(bm_data), use_container_width=True, hide_index=True)
+
+    # Suggestions
+    if ea_result.suggestions:
+        with st.expander("💡 Improvement Suggestions", expanded=False):
+            for s in ea_result.suggestions:
+                st.markdown(f"- **{s.equipment}**: {s.suggestion} "
+                           f"(~{s.potential_saving_kW:.0f} kW, {s.potential_saving_pct:.0f}%)")
+
+
+def _show_flare_analysis(fl_result):
+    """Display flare analysis results inline."""
+    st.markdown("---")
+    st.markdown("**🔥 Flare Minimization Analysis**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Flare Rate", f"{fl_result.total_flare_rate_kg_hr:,.0f} kg/hr")
+    with col2:
+        st.metric("CO₂ Equivalent", f"{fl_result.total_co2_equiv_tonnes_yr:,.0f} t/yr")
+    with col3:
+        st.metric("Carbon Tax Exposure", f"${fl_result.carbon_tax_exposure_usd_yr:,.0f}/yr")
+
+    # Flare sources
+    if fl_result.sources:
+        st.markdown("**Flare Sources:**")
+        src_data = [{
+            "Source": s.name,
+            "Type": s.source_type,
+            "Flow (kg/hr)": round(s.flow_rate_kg_hr, 0),
+            "CO₂e (t/yr)": round(s.co2_equiv_tonnes_yr, 0),
+            "Detail": s.detail,
+        } for s in fl_result.sources]
+        st.dataframe(pd.DataFrame(src_data), use_container_width=True, hide_index=True)
+
+    # Recovery options
+    if fl_result.recovery_options:
+        st.markdown("**Recovery Options:**")
+        opt_data = [{
+            "Option": o.name,
+            "Recovery": f"{o.recovery_pct:.0f}%",
+            "CAPEX": f"${o.capex_usd:,.0f}",
+            "Revenue ($/yr)": f"${o.revenue_usd_yr:,.0f}",
+            "Payback (yr)": round(o.payback_years, 1),
+            "CO₂ Reduction (t/yr)": round(o.co2_reduction_tonnes_yr, 0),
+        } for o in fl_result.recovery_options]
+        st.dataframe(pd.DataFrame(opt_data), use_container_width=True, hide_index=True)
+
+    if fl_result.best_option:
+        st.success(f"**Recommended:** {fl_result.best_option}")
+
+
+def _show_multi_period(mp_result):
+    """Display multi-period / seasonal planning results inline."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown("**📅 Multi-Period / Seasonal Planning**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Production", f"{mp_result.total_production_tonnes_yr:,.0f} t/yr")
+    with col2:
+        st.metric("Total Energy", f"{mp_result.total_energy_MWh_yr:,.0f} MWh/yr")
+    with col3:
+        st.metric("Avg Specific Energy", f"{mp_result.avg_specific_energy:.1f} kWh/t")
+
+    if mp_result.best_scenario:
+        st.markdown(f"**Best Efficiency:** {mp_result.best_scenario} | "
+                   f"**Worst Efficiency:** {mp_result.worst_scenario}")
+
+    # Comparison chart
+    if mp_result.scenarios:
+        names = [s.name for s in mp_result.scenarios]
+        fig = go.Figure(data=[
+            go.Bar(name="Product (t/period)", x=names,
+                   y=[s.production_tonnes_period for s in mp_result.scenarios]),
+        ])
+        fig.update_layout(title="Production by Scenario")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Data table
+        sc_data = [{
+            "Scenario": s.name,
+            "Product (kg/hr)": round(s.product_rate_kg_hr, 0),
+            "Power (kW)": round(s.total_power_kW, 0),
+            "Cooling (kW)": round(s.total_cooling_kW, 0),
+            "Spec. Energy (kWh/t)": round(s.specific_energy_kWh_tonne, 1),
+            "CO₂ (t/yr)": round(s.co2_equiv_tonnes_yr, 0),
+        } for s in mp_result.scenarios]
+        st.dataframe(pd.DataFrame(sc_data), use_container_width=True, hide_index=True)
+
+        # Warnings
+        for s in mp_result.scenarios:
+            if s.warnings:
+                for w in s.warnings:
+                    st.warning(f"{s.name}: {w}")
+
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -1349,6 +1716,14 @@ for msg in st.session_state["chat_messages"]:
             ("pvt", _show_pvt),
             ("safety", _show_safety),
             ("flow_assurance", _show_flow_assurance),
+            ("energy_integration", _show_energy_integration),
+            ("turndown", _show_turndown),
+            ("performance_monitor", _show_performance_monitor),
+            ("debottleneck", _show_debottleneck),
+            ("training", _show_training),
+            ("energy_audit", _show_energy_audit),
+            ("flare_analysis", _show_flare_analysis),
+            ("multi_period", _show_multi_period),
         ]
         for key, renderer in _RESULT_RENDERERS:
             data = msg.get(key)
@@ -1421,6 +1796,14 @@ if user_input:
                 pvt = session.get_last_pvt()
                 safety = session.get_last_safety()
                 flow_assurance = session.get_last_flow_assurance()
+                energy_integration = session.get_last_energy_integration()
+                turndown = session.get_last_turndown()
+                performance_monitor = session.get_last_performance_monitor()
+                debottleneck = session.get_last_debottleneck()
+                training = session.get_last_training()
+                energy_audit = session.get_last_energy_audit()
+                flare_analysis = session.get_last_flare_analysis()
+                multi_period = session.get_last_multi_period()
 
                 # --- Sync model from session back to session_state ---
                 if session.model is not None:
@@ -1472,6 +1855,14 @@ if user_input:
                     ("pvt", pvt, _show_pvt),
                     ("safety", safety, _show_safety),
                     ("flow_assurance", flow_assurance, _show_flow_assurance),
+                    ("energy_integration", energy_integration, _show_energy_integration),
+                    ("turndown", turndown, _show_turndown),
+                    ("performance_monitor", performance_monitor, _show_performance_monitor),
+                    ("debottleneck", debottleneck, _show_debottleneck),
+                    ("training", training, _show_training),
+                    ("energy_audit", energy_audit, _show_energy_audit),
+                    ("flare_analysis", flare_analysis, _show_flare_analysis),
+                    ("multi_period", multi_period, _show_multi_period),
                 ]
                 for key, result_obj, renderer in _result_pairs:
                     if result_obj is not None:

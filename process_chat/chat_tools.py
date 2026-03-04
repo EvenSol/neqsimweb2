@@ -31,6 +31,14 @@ from .sensitivity import run_sensitivity_analysis, format_sensitivity_result, Se
 from .pvt_simulation import run_pvt_simulation, format_pvt_result, PVTResult
 from .safety_systems import run_safety_analysis, format_safety_result, SafetyReport
 from .flow_assurance import run_flow_assurance, format_flow_assurance_result, FlowAssuranceResult
+from .energy_integration import run_energy_integration, format_energy_integration_result, EnergyIntegrationResult
+from .turndown import run_turndown_analysis, format_turndown_result, TurndownResult
+from .performance_monitor import run_performance_monitor, format_performance_monitor_result, PerformanceMonitorResult
+from .debottleneck import run_debottleneck_study, format_debottleneck_result, DebottleneckResult
+from .training_scenarios import run_training_scenarios, format_training_result, TrainingResult
+from .energy_audit import run_energy_audit, format_energy_audit_result, EnergyAuditResult
+from .flare_analysis import run_flare_analysis, format_flare_analysis_result, FlareAnalysisResult
+from .multi_period import run_multi_period, format_multi_period_result, MultiPeriodResult
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +861,141 @@ Parameters:
 Use this for: "check for hydrate risk", "flow assurance assessment", "is there wax risk?",
 "corrosion analysis", "MEG injection rate", "what is the hydrate temperature?"
 
+ENERGY INTEGRATION / PINCH ANALYSIS (for "pinch analysis", "heat recovery", "composite curves", "energy integration"):
+When the user asks about heat integration, pinch analysis, or heat recovery opportunities, output an ```energy_integration ... ``` block:
+```energy_integration
+{{
+  "delta_t_min_C": 10.0
+}}
+```
+Parameters:
+  - delta_t_min_C: minimum approach temperature (default: 10°C)
+
+Use this for: "run pinch analysis", "heat integration study", "composite curves",
+"heat recovery opportunities", "energy integration", "what is the pinch temperature?"
+
+TURNDOWN / OPERATING ENVELOPE (for "turndown analysis", "operating envelope", "minimum flow", "maximum capacity"):
+When the user asks about turndown, operating range, or minimum/maximum flow, output a ```turndown ... ``` block:
+```turndown
+{{
+  "feed_stream": "feed gas",
+  "min_pct": 30,
+  "max_pct": 130,
+  "n_points": 11
+}}
+```
+Parameters:
+  - feed_stream: name of feed stream (auto-detected if omitted)
+  - min_pct: minimum % of design flow to test (default: 30)
+  - max_pct: maximum % of design flow to test (default: 130)
+  - n_points: number of evaluation points (default: 11)
+
+Use this for: "turndown analysis", "operating envelope", "minimum stable flow",
+"maximum capacity", "can we operate at 50% capacity?", "operating range"
+
+PERFORMANCE MONITORING (for "performance monitoring", "degradation detection", "actual vs predicted"):
+When the user provides actual plant data and wants to compare against simulation, output a ```performance_monitor ... ``` block:
+```performance_monitor
+{{
+  "actual_data": {{
+    "compressor.outlet_temperature_C": 165.0,
+    "compressor.power_kW": 3200.0,
+    "cooler.outlet_temperature_C": 42.0
+  }},
+  "boundary_conditions": {{
+    "feed gas.flow_kg_hr": 45000,
+    "feed gas.temperature_C": 28
+  }}
+}}
+```
+Parameters:
+  - actual_data: dict of measurement_path → actual_value
+  - boundary_conditions: dict of stream/unit → value to set before simulation
+
+Use this for: "compare actual vs simulation", "performance monitoring", "equipment degradation",
+"is the compressor degraded?", "fouling detection"
+
+DEBOTTLENECK STUDY (for "debottleneck", "capacity increase", "upgrade options", "what limits throughput"):
+When the user asks about debottlenecking or capacity upgrades, output a ```debottleneck ... ``` block:
+```debottleneck
+{{
+  "feed_stream": "feed gas",
+  "utilization_threshold": 0.70
+}}
+```
+Parameters:
+  - feed_stream: name of feed stream (auto-detected if omitted)
+  - utilization_threshold: equipment utilization threshold to flag (default: 0.70)
+
+Use this for: "debottleneck study", "capacity increase options", "what limits throughput?",
+"upgrade options", "cost-effective debottleneck"
+
+TRAINING SCENARIOS (for "training scenarios", "operator training", "upset scenarios", "what-if upset"):
+When the user asks for operator training scenarios or upset simulations, output a ```training ... ``` block:
+```training
+{{
+  "scenarios": ["cooling_water_failure", "compressor_trip", "high_co2_feed", "flow_surge", "temperature_drop"]
+}}
+```
+Parameters:
+  - scenarios: list of scenario names (default: all available). Options:
+    "cooling_water_failure", "compressor_trip", "high_co2_feed", "flow_surge", "temperature_drop"
+
+Use this for: "generate training scenarios", "operator training", "upset simulations",
+"what happens if cooling water fails?", "compressor trip scenario"
+
+ENERGY AUDIT (for "energy audit", "utility balance", "energy consumption", "specific energy"):
+When the user asks for a comprehensive energy audit, utility balance, or energy breakdown, output an ```energy_audit ... ``` block:
+```energy_audit
+{{
+  "product_stream": "export gas",
+  "fuel_gas_price": 0.15
+}}
+```
+Parameters:
+  - product_stream: name of product stream for intensity calculation (auto-detected if omitted)
+  - fuel_gas_price: fuel gas price in USD/kg (default: 0.15)
+
+Use this for: "energy audit", "utility balance", "energy consumption breakdown",
+"specific energy consumption", "energy benchmarking", "how much energy does the plant use?"
+
+FLARE ANALYSIS (for "flare minimization", "flare gas recovery", "flare emissions", "carbon tax"):
+When the user asks about flare sources, flare gas recovery, or flare-related emissions, output a ```flare_analysis ... ``` block:
+```flare_analysis
+{{
+  "carbon_price": 50.0,
+  "gas_price": 0.12
+}}
+```
+Parameters:
+  - carbon_price: carbon tax/ETS price in USD/tonne CO2 (default: 50)
+  - gas_price: gas commodity price in USD/kg (default: 0.12)
+
+Use this for: "flare analysis", "flare gas recovery options", "how much are we flaring?",
+"flare minimization", "carbon tax exposure from flaring"
+
+MULTI-PERIOD / SEASONAL PLANNING (for "seasonal planning", "summer vs winter", "annual plan", "multi-period"):
+When the user asks about seasonal or multi-period performance planning, output a ```multi_period ... ``` block:
+```multi_period
+{{
+  "feed_stream": "feed gas",
+  "product_stream": "export gas",
+  "scenarios": [
+    {{"name": "Summer Peak", "feed_flow_mult": 1.1, "ambient_temp_C": 40, "duration_hours": 2000}},
+    {{"name": "Summer Normal", "feed_flow_mult": 1.0, "ambient_temp_C": 35, "duration_hours": 2000}},
+    {{"name": "Winter Normal", "feed_flow_mult": 1.0, "ambient_temp_C": 10, "duration_hours": 2000}},
+    {{"name": "Winter Turndown", "feed_flow_mult": 0.6, "ambient_temp_C": 5, "duration_hours": 2000}}
+  ]
+}}
+```
+Parameters:
+  - feed_stream: feed stream name (auto-detected if omitted)
+  - product_stream: product stream name (auto-detected if omitted)
+  - scenarios: list of scenario definitions (uses defaults if omitted)
+
+Use this for: "seasonal planning", "summer vs winter performance", "annual production plan",
+"multi-period analysis", "how does ambient temperature affect production?"
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -1205,6 +1348,90 @@ When the user asks about hydrates, wax, corrosion, or flow assurance, output:
 }
 ```
 Use this for: "hydrate risk", "wax risk", "corrosion analysis", "MEG dosing", "flow assurance".
+
+ENERGY INTEGRATION / PINCH ANALYSIS (after a process has been built):
+When the user asks about heat integration or pinch analysis, output:
+```energy_integration
+{
+  "delta_t_min_C": 10.0
+}
+```
+Use this for: "pinch analysis", "heat recovery", "composite curves", "energy integration".
+
+TURNDOWN / OPERATING ENVELOPE (after a process has been built):
+When the user asks about turndown or operating range, output:
+```turndown
+{
+  "feed_stream": "feed gas",
+  "min_pct": 30,
+  "max_pct": 130,
+  "n_points": 11
+}
+```
+Use this for: "turndown analysis", "operating envelope", "minimum flow", "maximum capacity".
+
+PERFORMANCE MONITORING (after a process has been built):
+When the user provides actual plant data for comparison, output:
+```performance_monitor
+{
+  "actual_data": {"compressor.outlet_temperature_C": 165.0},
+  "boundary_conditions": {"feed gas.flow_kg_hr": 45000}
+}
+```
+Use this for: "compare actual vs simulation", "performance monitoring", "degradation detection".
+
+DEBOTTLENECK STUDY (after a process has been built):
+When the user asks about debottlenecking or capacity upgrades, output:
+```debottleneck
+{
+  "feed_stream": "feed gas",
+  "utilization_threshold": 0.70
+}
+```
+Use this for: "debottleneck study", "capacity increase", "upgrade options".
+
+TRAINING SCENARIOS (after a process has been built):
+When the user asks for operator training scenarios, output:
+```training
+{
+  "scenarios": ["cooling_water_failure", "compressor_trip", "high_co2_feed", "flow_surge", "temperature_drop"]
+}
+```
+Use this for: "training scenarios", "operator training", "upset simulations".
+
+ENERGY AUDIT (after a process has been built):
+When the user asks for energy audit or utility balance, output:
+```energy_audit
+{
+  "product_stream": "export gas",
+  "fuel_gas_price": 0.15
+}
+```
+Use this for: "energy audit", "utility balance", "energy consumption", "specific energy".
+
+FLARE ANALYSIS (after a process has been built):
+When the user asks about flare sources or flare gas recovery, output:
+```flare_analysis
+{
+  "carbon_price": 50.0,
+  "gas_price": 0.12
+}
+```
+Use this for: "flare analysis", "flare gas recovery", "flare emissions", "carbon tax".
+
+MULTI-PERIOD PLANNING (after a process has been built):
+When the user asks about seasonal or multi-period planning, output:
+```multi_period
+{
+  "feed_stream": "feed gas",
+  "product_stream": "export gas",
+  "scenarios": [
+    {"name": "Summer Peak", "feed_flow_mult": 1.1, "ambient_temp_C": 40, "duration_hours": 2000},
+    {"name": "Winter Turndown", "feed_flow_mult": 0.6, "ambient_temp_C": 5, "duration_hours": 2000}
+  ]
+}
+```
+Use this for: "seasonal planning", "summer vs winter", "annual plan", "multi-period analysis".
 """
 
 
@@ -1318,6 +1545,9 @@ _TOOL_BLOCK_TYPES = (
     "json", "chart", "autosize", "optimize", "risk", "emissions",
     "dynamic", "sensitivity", "pvt", "safety", "flowassurance",
     "flow_assurance", "query", "build",
+    "energy_integration", "turndown", "performance_monitor",
+    "debottleneck", "training", "energy_audit", "flare_analysis",
+    "multi_period",
 )
 
 def _strip_tool_blocks(text: str) -> str:
@@ -1521,6 +1751,110 @@ def extract_flow_assurance_spec(text: str) -> Optional[dict]:
     """Extract a flow assurance specification from LLM output."""
     import re
     pattern = r'```flowassurance\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_energy_integration_spec(text: str) -> Optional[dict]:
+    """Extract an energy integration / pinch analysis specification from LLM output."""
+    import re
+    pattern = r'```energy_integration\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_turndown_spec(text: str) -> Optional[dict]:
+    """Extract a turndown / operating envelope specification from LLM output."""
+    import re
+    pattern = r'```turndown\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_performance_monitor_spec(text: str) -> Optional[dict]:
+    """Extract a performance monitoring specification from LLM output."""
+    import re
+    pattern = r'```performance_monitor\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_debottleneck_spec(text: str) -> Optional[dict]:
+    """Extract a debottleneck study specification from LLM output."""
+    import re
+    pattern = r'```debottleneck\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_training_spec(text: str) -> Optional[dict]:
+    """Extract a training scenario specification from LLM output."""
+    import re
+    pattern = r'```training\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_energy_audit_spec(text: str) -> Optional[dict]:
+    """Extract an energy audit specification from LLM output."""
+    import re
+    pattern = r'```energy_audit\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_flare_analysis_spec(text: str) -> Optional[dict]:
+    """Extract a flare analysis specification from LLM output."""
+    import re
+    pattern = r'```flare_analysis\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_multi_period_spec(text: str) -> Optional[dict]:
+    """Extract a multi-period planning specification from LLM output."""
+    import re
+    pattern = r'```multi_period\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
@@ -1753,6 +2087,14 @@ class ProcessChatSession:
         self._last_pvt = None
         self._last_safety = None
         self._last_flow_assurance = None
+        self._last_energy_integration = None
+        self._last_turndown = None
+        self._last_performance_monitor = None
+        self._last_debottleneck = None
+        self._last_training = None
+        self._last_energy_audit = None
+        self._last_flare_analysis = None
+        self._last_multi_period = None
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
         self._last_save_bytes = None  # Last generated .neqsim bytes
@@ -1791,6 +2133,14 @@ class ProcessChatSession:
         self._last_pvt = None
         self._last_safety = None
         self._last_flow_assurance = None
+        self._last_energy_integration = None
+        self._last_turndown = None
+        self._last_performance_monitor = None
+        self._last_debottleneck = None
+        self._last_training = None
+        self._last_energy_audit = None
+        self._last_flare_analysis = None
+        self._last_multi_period = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -1879,6 +2229,46 @@ class ProcessChatSession:
         fa_spec = extract_flow_assurance_spec(assistant_text)
         if fa_spec and self.model:
             return self._handle_flow_assurance(assistant_text, fa_spec, client, types)
+
+        # --- Check for energy integration spec ---
+        ei_spec = extract_energy_integration_spec(assistant_text)
+        if ei_spec and self.model:
+            return self._handle_energy_integration(assistant_text, ei_spec, client, types)
+
+        # --- Check for turndown spec ---
+        td_spec = extract_turndown_spec(assistant_text)
+        if td_spec and self.model:
+            return self._handle_turndown(assistant_text, td_spec, client, types)
+
+        # --- Check for performance monitor spec ---
+        pm_spec = extract_performance_monitor_spec(assistant_text)
+        if pm_spec and self.model:
+            return self._handle_performance_monitor(assistant_text, pm_spec, client, types)
+
+        # --- Check for debottleneck spec ---
+        db_spec = extract_debottleneck_spec(assistant_text)
+        if db_spec and self.model:
+            return self._handle_debottleneck(assistant_text, db_spec, client, types)
+
+        # --- Check for training spec ---
+        tr_spec = extract_training_spec(assistant_text)
+        if tr_spec and self.model:
+            return self._handle_training(assistant_text, tr_spec, client, types)
+
+        # --- Check for energy audit spec ---
+        ea_spec = extract_energy_audit_spec(assistant_text)
+        if ea_spec and self.model:
+            return self._handle_energy_audit(assistant_text, ea_spec, client, types)
+
+        # --- Check for flare analysis spec ---
+        fl_spec = extract_flare_analysis_spec(assistant_text)
+        if fl_spec and self.model:
+            return self._handle_flare_analysis(assistant_text, fl_spec, client, types)
+
+        # --- Check for multi-period spec ---
+        mp_spec = extract_multi_period_spec(assistant_text)
+        if mp_spec and self.model:
+            return self._handle_multi_period(assistant_text, mp_spec, client, types)
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
@@ -3082,6 +3472,346 @@ class ProcessChatSession:
         """Get the last flow assurance result (for UI display)."""
         return getattr(self, "_last_flow_assurance", None)
 
+    # -- Energy integration handling -----------------------------------------
+
+    def _handle_energy_integration(self, assistant_text: str, ei_spec: dict, client, types) -> str:
+        """Run energy integration / pinch analysis and feed results back to LLM."""
+        try:
+            result = run_energy_integration(
+                model=self.model,
+                delta_t_min_C=float(ei_spec.get("delta_t_min_C", 10.0)),
+            )
+
+            self._last_energy_integration = result
+            results_text = format_energy_integration_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Energy integration / pinch analysis completed. Results below. "
+                    f"Explain the pinch temperature, composite curves, and heat recovery "
+                    f"opportunities to the engineer. Highlight potential energy savings.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Energy integration analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_energy_integration(self) -> Optional[EnergyIntegrationResult]:
+        """Get the last energy integration result (for UI display)."""
+        return getattr(self, "_last_energy_integration", None)
+
+    # -- Turndown analysis handling ------------------------------------------
+
+    def _handle_turndown(self, assistant_text: str, td_spec: dict, client, types) -> str:
+        """Run turndown / operating envelope analysis and feed results back to LLM."""
+        try:
+            result = run_turndown_analysis(
+                model=self.model,
+                feed_stream=td_spec.get("feed_stream"),
+                min_pct=int(td_spec.get("min_pct", 30)),
+                max_pct=int(td_spec.get("max_pct", 130)),
+                n_points=int(td_spec.get("n_points", 11)),
+            )
+
+            self._last_turndown = result
+            results_text = format_turndown_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Turndown / operating envelope analysis completed. Results below. "
+                    f"Explain the operating range, minimum stable flow, maximum capacity, "
+                    f"and limiting equipment to the engineer.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Turndown analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_turndown(self) -> Optional[TurndownResult]:
+        """Get the last turndown analysis result (for UI display)."""
+        return getattr(self, "_last_turndown", None)
+
+    # -- Performance monitor handling ----------------------------------------
+
+    def _handle_performance_monitor(self, assistant_text: str, pm_spec: dict, client, types) -> str:
+        """Run performance monitoring analysis and feed results back to LLM."""
+        try:
+            actual_data = pm_spec.get("actual_data", {})
+            boundary_conditions = pm_spec.get("boundary_conditions", {})
+
+            result = run_performance_monitor(
+                model=self.model,
+                actual_data=actual_data,
+                boundary_conditions=boundary_conditions,
+            )
+
+            self._last_performance_monitor = result
+            results_text = format_performance_monitor_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Performance monitoring analysis completed. Results below. "
+                    f"Explain any degradation alerts and residuals to the engineer. "
+                    f"Highlight equipment requiring attention and root cause analysis.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Performance monitoring failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_performance_monitor(self) -> Optional[PerformanceMonitorResult]:
+        """Get the last performance monitoring result (for UI display)."""
+        return getattr(self, "_last_performance_monitor", None)
+
+    # -- Debottleneck study handling -----------------------------------------
+
+    def _handle_debottleneck(self, assistant_text: str, db_spec: dict, client, types) -> str:
+        """Run debottleneck study and feed results back to LLM."""
+        try:
+            result = run_debottleneck_study(
+                model=self.model,
+                feed_stream=db_spec.get("feed_stream"),
+                utilization_threshold=float(db_spec.get("utilization_threshold", 0.70)),
+            )
+
+            self._last_debottleneck = result
+            results_text = format_debottleneck_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Debottleneck study completed. Results below. "
+                    f"Explain the bottleneck equipment, upgrade options, and "
+                    f"cost-effectiveness ranking to the engineer.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Debottleneck study failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_debottleneck(self) -> Optional[DebottleneckResult]:
+        """Get the last debottleneck study result (for UI display)."""
+        return getattr(self, "_last_debottleneck", None)
+
+    # -- Training scenarios handling -----------------------------------------
+
+    def _handle_training(self, assistant_text: str, tr_spec: dict, client, types) -> str:
+        """Run training scenarios and feed results back to LLM."""
+        try:
+            scenario_names = tr_spec.get("scenarios", [])
+
+            result = run_training_scenarios(
+                model=self.model,
+                scenario_names=scenario_names if scenario_names else None,
+            )
+
+            self._last_training = result
+            results_text = format_training_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Training scenarios completed. Results below. "
+                    f"Explain each upset scenario to the engineer: what happened, "
+                    f"what the impact was, the recommended response, and the quiz question.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Training scenarios failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_training(self) -> Optional[TrainingResult]:
+        """Get the last training scenarios result (for UI display)."""
+        return getattr(self, "_last_training", None)
+
+    # -- Energy audit handling -----------------------------------------------
+
+    def _handle_energy_audit(self, assistant_text: str, ea_spec: dict, client, types) -> str:
+        """Run energy audit and feed results back to LLM."""
+        try:
+            result = run_energy_audit(
+                model=self.model,
+                product_stream=ea_spec.get("product_stream"),
+                fuel_gas_price_usd_per_kg=float(ea_spec.get("fuel_gas_price", 0.15)),
+            )
+
+            self._last_energy_audit = result
+            results_text = format_energy_audit_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Energy audit completed. Results below. "
+                    f"Explain the energy breakdown, specific energy consumption, "
+                    f"benchmark comparison, and improvement suggestions to the engineer.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Energy audit failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_energy_audit(self) -> Optional[EnergyAuditResult]:
+        """Get the last energy audit result (for UI display)."""
+        return getattr(self, "_last_energy_audit", None)
+
+    # -- Flare analysis handling ---------------------------------------------
+
+    def _handle_flare_analysis(self, assistant_text: str, fl_spec: dict, client, types) -> str:
+        """Run flare analysis and feed results back to LLM."""
+        try:
+            result = run_flare_analysis(
+                model=self.model,
+                carbon_price_usd_per_tonne=float(fl_spec.get("carbon_price", 50.0)),
+                gas_price_usd_per_kg=float(fl_spec.get("gas_price", 0.12)),
+            )
+
+            self._last_flare_analysis = result
+            results_text = format_flare_analysis_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Flare minimization analysis completed. Results below. "
+                    f"Explain the flare sources, CO2 emissions, recovery options, "
+                    f"and best economic option to the engineer.]\n\n{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Flare analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_flare_analysis(self) -> Optional[FlareAnalysisResult]:
+        """Get the last flare analysis result (for UI display)."""
+        return getattr(self, "_last_flare_analysis", None)
+
+    # -- Multi-period planning handling --------------------------------------
+
+    def _handle_multi_period(self, assistant_text: str, mp_spec: dict, client, types) -> str:
+        """Run multi-period / seasonal planning and feed results back to LLM."""
+        try:
+            from .multi_period import ScenarioSpec
+
+            scenarios = None
+            raw_scenarios = mp_spec.get("scenarios")
+            if raw_scenarios and isinstance(raw_scenarios, list):
+                scenarios = []
+                for s in raw_scenarios:
+                    scenarios.append(ScenarioSpec(
+                        name=s.get("name", "Scenario"),
+                        description=s.get("description", ""),
+                        feed_flow_mult=float(s.get("feed_flow_mult", 1.0)),
+                        ambient_temp_C=s.get("ambient_temp_C"),
+                        feed_temp_C=s.get("feed_temp_C"),
+                        feed_pressure_bara=s.get("feed_pressure_bara"),
+                        duration_hours=float(s.get("duration_hours", 2000)),
+                    ))
+
+            result = run_multi_period(
+                model=self.model,
+                scenarios=scenarios,
+                feed_stream=mp_spec.get("feed_stream"),
+                product_stream=mp_spec.get("product_stream"),
+            )
+
+            self._last_multi_period = result
+            results_text = format_multi_period_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Multi-period / seasonal planning completed. Results below. "
+                    f"Explain the scenario comparison, total annual production, "
+                    f"best/worst efficiency periods, and seasonal constraints.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Multi-period analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_multi_period(self) -> Optional[MultiPeriodResult]:
+        """Get the last multi-period planning result (for UI display)."""
+        return getattr(self, "_last_multi_period", None)
+
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
@@ -3145,5 +3875,13 @@ class ProcessChatSession:
         self._last_pvt = None
         self._last_safety = None
         self._last_flow_assurance = None
+        self._last_energy_integration = None
+        self._last_turndown = None
+        self._last_performance_monitor = None
+        self._last_debottleneck = None
+        self._last_training = None
+        self._last_energy_audit = None
+        self._last_flare_analysis = None
+        self._last_multi_period = None
         self._builder = None
 
