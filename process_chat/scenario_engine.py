@@ -243,8 +243,17 @@ def _recreate_unit(original_unit, inlet_stream):
             # Get outlet temperature spec from original
             out_t = float(original_unit.getOutletStream().getTemperature("C"))
             # Check if it was actually specified (not just inlet T passing through)
-            in_t = float(original_unit.getInletStream().getTemperature("C"))
-            if abs(out_t - in_t) > 0.1:  # Temperature was actually changed
+            in_t = None
+            for _m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                if hasattr(original_unit, _m):
+                    try:
+                        _s = getattr(original_unit, _m)()
+                        if _s is not None:
+                            in_t = float(_s.getTemperature("C"))
+                            break
+                    except Exception:
+                        pass
+            if in_t is not None and abs(out_t - in_t) > 0.1:  # Temperature was actually changed
                 new_unit.setOutTemperature(out_t, "C")
         except Exception:
             pass
@@ -695,7 +704,10 @@ def solve_for_target(
     iteration_log = []
     
     # First: run base case
-    base_clone = model.clone()
+    try:
+        base_clone = model.clone()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to clone model for target solving: {exc}") from exc
     base_result = base_clone.run(timeout_ms=timeout_ms)
     base_scenario = Scenario(
         name="BASE", description="Base case (no changes)",
@@ -1835,7 +1847,10 @@ def run_scenarios(
       4. Compare KPIs against base
     """
     # --- Base case ---
-    base_clone = model.clone()
+    try:
+        base_clone = model.clone()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to clone model for scenario comparison: {exc}") from exc
     base_result = base_clone.run(timeout_ms=timeout_ms)
     base_scenario = Scenario(name="BASE", description="Base case (no changes)", patch=InputPatch(changes={}))
     base_sr = ScenarioResult(scenario=base_scenario, result=base_result)

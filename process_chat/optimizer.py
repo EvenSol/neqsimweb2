@@ -493,7 +493,10 @@ def _evaluate_at_flow(
     Clone model, set feed flow, run, and check feasibility.
     Returns (feasible, max_utilization, bottleneck, utils, run_result).
     """
-    clone = model.clone()
+    try:
+        clone = model.clone()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to clone model for flow evaluation: {exc}") from exc
     # Set the feed stream flow rate
     stream = clone.get_stream(feed_stream_name)
     stream.setFlowRate(target_flow, "kg/hr")

@@ -198,6 +198,11 @@ class NeqSimProcessModel:
             # as a single process system so units/streams are still discovered.
             if hasattr(self._proc, "getUnitOperations"):
                 return [self._proc]
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "ProcessModel.getAllProcesses() returned no children "
+                "and object lacks getUnitOperations — model will appear empty."
+            )
             return []
         return [self._proc]
 

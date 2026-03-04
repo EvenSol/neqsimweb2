@@ -318,7 +318,16 @@ def _extract_speed_curves(unit: Any, generator: Any = None) -> List[SpeedCurve]:
                     effs = []
                     try:
                         n_points = 10
-                        cur_flow = float(unit.getInletStream().getFlowRate("m3/hr"))
+                        inlet_stream = None
+                        for _m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                            if hasattr(unit, _m):
+                                try:
+                                    inlet_stream = getattr(unit, _m)()
+                                    if inlet_stream is not None:
+                                        break
+                                except Exception:
+                                    pass
+                        cur_flow = float(inlet_stream.getFlowRate("m3/hr")) if inlet_stream else 0.0
                         if cur_flow <= 0:
                             continue
                         for j in range(n_points):
@@ -441,8 +450,17 @@ def _extract_operating_point(unit: Any) -> Optional[OperatingPoint]:
     try:
         flow = 0.0
         try:
-            inlet = unit.getInletStream() if hasattr(unit, "getInletStream") else unit.getInStream()
-            flow = float(inlet.getFlowRate("m3/hr"))
+            inlet = None
+            for _m in ("getInletStream", "getInStream", "getFeed", "getFeedStream"):
+                if hasattr(unit, _m):
+                    try:
+                        inlet = getattr(unit, _m)()
+                        if inlet is not None:
+                            break
+                    except Exception:
+                        pass
+            if inlet is not None:
+                flow = float(inlet.getFlowRate("m3/hr"))
         except Exception:
             pass
 
