@@ -44,6 +44,8 @@ from .lab_import import (
     run_lab_import, format_lab_import_result, LabImportResult,
     parse_csv_composition, parse_json_composition, parse_inline_composition,
 )
+from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
+from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
 
 
 # ---------------------------------------------------------------------------
@@ -1054,6 +1056,123 @@ Parameters:
 Use this for: "update feed with lab results", "new gas analysis", "import LIMS data",
 "here are the latest lab numbers", "change feed composition"
 
+PRODUCTION / RESERVOIR FLUID SCENARIOS (for "vary well feed", "GOR sweep", "water cut", "well blending"):
+When the user asks about changing well feed composition, GOR, water cut, or comparing well feeds, output a ```production ... ``` block:
+
+For composition sweep (vary one component):
+```production
+{{
+  "scenario_type": "composition_sweep",
+  "feed_stream": "feed gas",
+  "component": "CO2",
+  "min_value": 0.01,
+  "max_value": 0.10,
+  "n_points": 8,
+  "response_kpis": ["power", "duty", "temperature"]
+}}
+```
+
+For GOR (Gas-Oil Ratio) sweep:
+```production
+{{
+  "scenario_type": "gor_sweep",
+  "feed_stream": "feed gas",
+  "min_value": 50,
+  "max_value": 500,
+  "n_points": 8,
+  "response_kpis": ["power", "flow"]
+}}
+```
+
+For water cut sweep:
+```production
+{{
+  "scenario_type": "watercut_sweep",
+  "feed_stream": "feed gas",
+  "min_value": 0,
+  "max_value": 50,
+  "n_points": 8,
+  "response_kpis": ["power", "duty", "flow"]
+}}
+```
+
+For multi-well blending (compare different well compositions):
+```production
+{{
+  "scenario_type": "well_blend",
+  "feed_stream": "feed gas",
+  "wells": [
+    {{"name": "Well A (lean)", "composition": {{"methane": 0.92, "ethane": 0.04, "propane": 0.02, "CO2": 0.02}}}},
+    {{"name": "Well B (rich)", "composition": {{"methane": 0.80, "ethane": 0.08, "propane": 0.05, "CO2": 0.03, "n-butane": 0.04}}}},
+    {{"name": "50/50 Blend", "composition": {{"methane": 0.86, "ethane": 0.06, "propane": 0.035, "CO2": 0.025, "n-butane": 0.02}}, "fraction": 1.0}}
+  ],
+  "response_kpis": ["power", "duty"]
+}}
+```
+
+Use this for: "effect of varying well feed", "what if CO2 increases", "GOR variation study",
+"increasing water cut impact", "compare lean vs rich gas", "well blending analysis",
+"production decline effect", "reservoir fluid change"
+
+SIGNAL TRACKING (for "track", "follow", "watch", "monitor signals"):
+When the user asks to track, follow, or watch specific signals/properties over time, output a ```tracker ... ``` block:
+
+To start tracking signals:
+```tracker
+{{
+  "action": "add",
+  "signals": ["compressor power", "feed gas temperature", "export gas flow"]
+}}
+```
+
+To show current tracked values and history:
+```tracker
+{{
+  "action": "show"
+}}
+```
+
+To take a snapshot with a label:
+```tracker
+{{
+  "action": "snapshot",
+  "label": "After pressure increase"
+}}
+```
+
+To stop tracking a signal:
+```tracker
+{{
+  "action": "remove",
+  "signal_ref": "compressor power"
+}}
+```
+
+To clear all tracked signals:
+```tracker
+{{
+  "action": "clear"
+}}
+```
+
+Use this for: "track compressor power", "follow the separator temperature",
+"watch export gas flow rate", "show tracked signals", "stop tracking",
+"I want to see how power changes", "monitor these signals",
+"track TVP of feed gas", "follow RVP", "track viscosity"
+
+Available stream properties: temperature, pressure, flow, TVP (true vapor pressure),
+RVP (Reid vapor pressure), viscosity, density, molar mass, Z-factor, enthalpy,
+entropy, Cp, Cv, Joule-Thomson coefficient, sound speed, thermal conductivity,
+gas/oil/water phase fraction, number of phases.
+
+Available unit properties: power, duty, compression ratio, polytropic head,
+speed (rpm), distance to surge / surge margin, polytropic exponent, utilization,
+gas load factor, gas velocity, liquid level, carryover, carryunder,
+pressure drop, UA value.
+
+Any property that appears in the process model's KPI dictionary can be tracked.
+NOTE: Tracked signals are automatically snapshotted after every scenario or what-if run.
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -1973,6 +2092,32 @@ def extract_lab_import_spec(text: str) -> Optional[dict]:
     return None
 
 
+def extract_production_spec(text: str) -> Optional[dict]:
+    """Extract a production / reservoir fluid scenario specification from LLM output."""
+    import re
+    pattern = r'```production\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_tracker_spec(text: str) -> Optional[dict]:
+    """Extract a signal tracker specification from LLM output."""
+    import re
+    pattern = r'```tracker\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
@@ -2206,6 +2351,8 @@ class ProcessChatSession:
         self._last_multi_period = None
         self._last_weather = None
         self._last_lab_import = None
+        self._last_production_scenario = None
+        self._signal_tracker = SignalTracker()
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
         self._last_save_bytes = None  # Last generated .neqsim bytes
@@ -2254,6 +2401,7 @@ class ProcessChatSession:
         self._last_multi_period = None
         self._last_weather = None
         self._last_lab_import = None
+        self._last_production_scenario = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -2392,6 +2540,16 @@ class ProcessChatSession:
         lab_spec = extract_lab_import_spec(assistant_text)
         if lab_spec:
             return self._handle_lab_import(assistant_text, lab_spec, client, types)
+
+        # --- Check for production scenario spec ---
+        prod_spec = extract_production_spec(assistant_text)
+        if prod_spec and self.model:
+            return self._handle_production_scenario(assistant_text, prod_spec, client, types)
+
+        # --- Check for signal tracker spec ---
+        tracker_spec = extract_tracker_spec(assistant_text)
+        if tracker_spec and self.model:
+            return self._handle_signal_tracker(assistant_text, tracker_spec, client, types)
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
@@ -2899,6 +3057,15 @@ class ProcessChatSession:
                                 })
                 except Exception:
                     pass  # comparison still valid even if persistence fails
+
+            # --- Auto-snapshot tracked signals ---
+            if self._signal_tracker.has_signals():
+                try:
+                    scenario_names = [sc.name for sc in scenarios]
+                    snap_label = scenario_names[0] if scenario_names else "Scenario"
+                    self._signal_tracker.snapshot(self.model, label=snap_label)
+                except Exception:
+                    pass
 
             # --- Refresh cached chart operating points ---
             # After any scenario changes the model state, cached charts
@@ -4026,6 +4193,101 @@ class ProcessChatSession:
         """Get the last lab import result (for UI display)."""
         return getattr(self, "_last_lab_import", None)
 
+    # -- Production scenario handling ----------------------------------------
+
+    def _handle_production_scenario(self, assistant_text: str, prod_spec: dict, client, types) -> str:
+        """Run production / reservoir-fluid scenario and feed results back to LLM."""
+        try:
+            result = run_production_scenario(
+                model=self.model,
+                scenario_type=prod_spec.get("scenario_type", "composition_sweep"),
+                feed_stream=prod_spec.get("feed_stream"),
+                component=prod_spec.get("component"),
+                min_value=prod_spec.get("min_value"),
+                max_value=prod_spec.get("max_value"),
+                n_points=int(prod_spec.get("n_points", 8)),
+                response_kpis=prod_spec.get("response_kpis"),
+                gas_components=prod_spec.get("gas_components"),
+                oil_components=prod_spec.get("oil_components"),
+                wells=prod_spec.get("wells"),
+            )
+
+            self._last_production_scenario = result
+            results_text = format_production_scenario_result(result)
+
+            # Auto-snapshot tracked signals after production scenario
+            if self._signal_tracker.has_signals():
+                self._signal_tracker.snapshot(
+                    self.model,
+                    label=prod_spec.get("scenario_type", "production scenario"),
+                )
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Production scenario completed. Results below. "
+                    f"Explain the production scenario results to the engineer. "
+                    f"Highlight how the process KPIs change across the sweep and "
+                    f"identify any operational limits or sensitivities.]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Production scenario failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_production_scenario(self) -> Optional[ProductionScenarioResult]:
+        """Get the last production scenario result (for UI display)."""
+        return getattr(self, "_last_production_scenario", None)
+
+    # -- Signal tracker handling ---------------------------------------------
+
+    def _handle_signal_tracker(self, assistant_text: str, tracker_spec: dict, client, types) -> str:
+        """Execute signal tracker action and feed results back to LLM."""
+        try:
+            result_text = run_signal_tracker(
+                model=self.model,
+                tracker=self._signal_tracker,
+                action=tracker_spec.get("action", "snapshot"),
+                signals=tracker_spec.get("signals"),
+                label=tracker_spec.get("label", ""),
+                signal_ref=tracker_spec.get("signal_ref", ""),
+            )
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: Signal tracker updated. Results below. "
+                    f"Present the tracking information clearly and note any trends.]\n\n"
+                    f"{result_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Signal tracker failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_signal_tracker(self) -> SignalTracker:
+        """Get the signal tracker instance (for UI trend display)."""
+        return self._signal_tracker
+
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
@@ -4099,5 +4361,7 @@ class ProcessChatSession:
         self._last_multi_period = None
         self._last_weather = None
         self._last_lab_import = None
+        self._last_production_scenario = None
+        self._signal_tracker = SignalTracker()
         self._builder = None
 

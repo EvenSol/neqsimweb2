@@ -17,4 +17,6 @@ Modules:
     pvt_simulation   — PVT experiments (CME, differential liberation, separator test)
     safety_systems   — PSV sizing per API 520/521, relief scenario analysis
     flow_assurance   — Hydrate, wax, corrosion prediction and inhibitor dosing
+    production_scenario — Production/reservoir fluid scenario studies (GOR, watercut, blending)
+    signal_tracker   — Signal/property tracking across multiple chat interactions
 """
