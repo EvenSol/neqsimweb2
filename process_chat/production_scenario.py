@@ -14,8 +14,6 @@ Returns a ``ProductionScenarioResult`` with per-case KPIs for comparison.
 """
 from __future__ import annotations
 
-import copy
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -102,20 +100,13 @@ def _find_feed_stream(model: NeqSimProcessModel, stream_name: Optional[str] = No
 
 
 def _set_stream_composition(model: NeqSimProcessModel, stream_name: str,
-                            composition: Dict[str, float], flow_unit: str = "mol/sec"):
+                            composition: Dict[str, float]):
     """Replace the composition of a stream with new mole-fraction-based values.
     
-    Scales absolute flow rates to match the original total molar flow,
-    then sets each component flow.
+    Sets z-fractions for each component and re-normalises.
     """
     java_stream = model.get_stream(stream_name)
     fl = java_stream.getFluid()
-
-    # Get current total molar flow
-    try:
-        total_molar = float(fl.getTotalNumberOfMoles())
-    except Exception:
-        total_molar = 1.0
 
     # Normalise composition
     total_frac = sum(composition.values())
@@ -124,11 +115,10 @@ def _set_stream_composition(model: NeqSimProcessModel, stream_name: str,
 
     for comp_name, frac in composition.items():
         norm_frac = frac / total_frac
-        moles = norm_frac * total_molar
         try:
             idx = fl.getComponentIndex(comp_name)
             if idx >= 0:
-                fl.addComponent(comp_name, moles - fl.getComponent(idx).getNumberOfmable(), "mol/sec")
+                fl.getComponent(idx).setz(norm_frac)
         except Exception:
             pass
     # Re-init after composition change
@@ -213,7 +203,6 @@ def _run_composition_sweep(
                 error=str(e),
             ))
 
-    result.n_points = len(result.cases)
     result.message = (
         f"Composition sweep: {component} from {min_frac:.4f} to {max_frac:.4f} "
         f"({n_points} points) in stream '{feed_stream}'"
@@ -382,9 +371,8 @@ def _run_watercut_sweep(
 
             # Water cut as mole fraction approximation
             # wc% ≈ water_moles / (water_moles + hc_moles) * 100
-            if wc >= 100.0:
-                wc = 99.9
-            water_frac = (wc / 100.0) * total_hc / (1.0 - wc / 100.0)
+            wc_clamped = min(wc, 99.9)
+            water_frac = (wc_clamped / 100.0) * total_hc / (1.0 - wc_clamped / 100.0)
 
             if water_idx >= 0:
                 fl.getComponent(water_idx).setz(water_frac)

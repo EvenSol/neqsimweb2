@@ -138,6 +138,12 @@ _UNIT_PROPS = {
 }
 
 
+def _alias_matches(alias: str, text: str) -> bool:
+    """Check if alias appears in text as a whole word (not as a substring of another word)."""
+    import re
+    return bool(re.search(r'\b' + re.escape(alias) + r'\b', text))
+
+
 def _resolve_signal(
     model: NeqSimProcessModel,
     user_signal: str,
@@ -169,7 +175,7 @@ def _resolve_signal(
             best_match = None
             best_len = 0
             for alias, (prop_id, unit) in _STREAM_PROPS.items():
-                if alias in remainder or alias in ul:
+                if _alias_matches(alias, remainder) or _alias_matches(alias, ul):
                     if len(alias) > best_len:
                         best_match = (prop_id, unit)
                         best_len = len(alias)
@@ -190,7 +196,7 @@ def _resolve_signal(
             best_match = None
             best_len = 0
             for alias, (prop_id, unit) in _UNIT_PROPS.items():
-                if alias in remainder or alias in ul:
+                if _alias_matches(alias, remainder) or _alias_matches(alias, ul):
                     if len(alias) > best_len:
                         best_match = (prop_id, unit)
                         best_len = len(alias)
