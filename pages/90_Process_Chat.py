@@ -1804,6 +1804,31 @@ def _show_weather(wx_result):
                 st.markdown(f"• {r}")
 
 
+def _show_report(report_data):
+    """Display a JSON report (full process, unit, or stream) inline."""
+    import json as _json
+    st.markdown("---")
+
+    # Determine scope label
+    if isinstance(report_data, dict):
+        scope = "Process Report"
+        # Check for unit/stream hints
+        if "equipmentName" in report_data:
+            scope = f"Unit Report — {report_data['equipmentName']}"
+        elif "streamName" in report_data:
+            scope = f"Stream Report — {report_data['streamName']}"
+        elif "name" in report_data:
+            scope = f"Report — {report_data['name']}"
+    else:
+        scope = "Report"
+
+    st.markdown(f"**📋 {scope}**")
+
+    # Show interactive JSON viewer in an expander
+    with st.expander("View raw JSON report", expanded=False):
+        st.json(report_data)
+
+
 def _show_lab_import(lab_result):
     """Display lab composition import results inline."""
     st.markdown("---")
@@ -1866,6 +1891,7 @@ for msg in st.session_state["chat_messages"]:
             ("multi_period", _show_multi_period),
             ("weather", _show_weather),
             ("lab_import", _show_lab_import),
+            ("report", _show_report),
         ]
         for key, renderer in _RESULT_RENDERERS:
             data = msg.get(key)
@@ -1948,6 +1974,7 @@ if user_input:
                 multi_period = session.get_last_multi_period()
                 weather = session.get_last_weather()
                 lab_import = session.get_last_lab_import()
+                report = session.get_last_report()
 
                 # --- Sync model from session back to session_state ---
                 if session.model is not None:
@@ -2009,6 +2036,7 @@ if user_input:
                     ("multi_period", multi_period, _show_multi_period),
                     ("weather", weather, _show_weather),
                     ("lab_import", lab_import, _show_lab_import),
+                    ("report", report, _show_report),
                 ]
                 for key, result_obj, renderer in _result_pairs:
                     if result_obj is not None:

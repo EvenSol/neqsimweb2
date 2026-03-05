@@ -2551,6 +2551,36 @@ class NeqSimProcessModel:
             except Exception:
                 return None
 
+    def get_unit_json_report(self, unit_name: str) -> Optional[dict]:
+        """Get the JSON report for a single unit operation.
+
+        Extracts the unit's section from the full process JSON report.
+        Falls back to reading directly from the Java unit if available.
+        """
+        full = self.get_json_report()
+        if full:
+            # Try exact match
+            if unit_name in full:
+                return {unit_name: full[unit_name]}
+            # Case-insensitive / substring match
+            ul = unit_name.lower()
+            for k, v in full.items():
+                if ul in k.lower():
+                    return {k: v}
+        return None
+
+    def get_stream_json_report(self, stream_name: str) -> Optional[dict]:
+        """Get the JSON report section for a specific stream."""
+        full = self.get_json_report()
+        if full:
+            if stream_name in full:
+                return {stream_name: full[stream_name]}
+            sl = stream_name.lower()
+            for k, v in full.items():
+                if sl in k.lower():
+                    return {k: v}
+        return None
+
     def query_properties(self, query: str, _cached_result: Optional[ModelRunResult] = None) -> str:
         """
         Run the model and return properties matching a natural-language query.

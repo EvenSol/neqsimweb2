@@ -1114,6 +1114,37 @@ Use this for: "effect of varying well feed", "what if CO2 increases", "GOR varia
 "increasing water cut impact", "compare lean vs rich gas", "well blending analysis",
 "production decline effect", "reservoir fluid change"
 
+JSON REPORT (for "show report", "get report", "detailed report", "unit report"):
+When the user asks for a detailed JSON report of the process, a unit operation, or a stream,
+output a ```report ... ``` block:
+
+Full process report:
+```report
+{{
+  "scope": "process"
+}}
+```
+
+Single unit report:
+```report
+{{
+  "scope": "unit",
+  "name": "1st stage compressor"
+}}
+```
+
+Single stream report:
+```report
+{{
+  "scope": "stream",
+  "name": "feed gas"
+}}
+```
+
+Use this for: "show report", "get process report", "show compressor report",
+"detailed report for separator", "show JSON report", "stream report for export gas",
+"show me all the data for the inlet separator"
+
 SIGNAL TRACKING (for "track", "follow", "watch", "monitor signals"):
 When the user asks to track, follow, or watch specific signals/properties over time, output a ```tracker ... ``` block:
 
@@ -2118,6 +2149,19 @@ def extract_tracker_spec(text: str) -> Optional[dict]:
     return None
 
 
+def extract_report_spec(text: str) -> Optional[dict]:
+    """Extract a JSON report specification from LLM output."""
+    import re
+    pattern = r'```report\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
@@ -2352,6 +2396,7 @@ class ProcessChatSession:
         self._last_weather = None
         self._last_lab_import = None
         self._last_production_scenario = None
+        self._last_report = None
         self._signal_tracker = SignalTracker()
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
@@ -2402,6 +2447,7 @@ class ProcessChatSession:
         self._last_weather = None
         self._last_lab_import = None
         self._last_production_scenario = None
+        self._last_report = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -2550,6 +2596,11 @@ class ProcessChatSession:
         tracker_spec = extract_tracker_spec(assistant_text)
         if tracker_spec and self.model:
             return self._handle_signal_tracker(assistant_text, tracker_spec, client, types)
+
+        # --- Check for report spec ---
+        report_spec = extract_report_spec(assistant_text)
+        if report_spec and self.model:
+            return self._handle_report(assistant_text, report_spec, client, types)
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
@@ -4288,6 +4339,68 @@ class ProcessChatSession:
         """Get the signal tracker instance (for UI trend display)."""
         return self._signal_tracker
 
+    # -- Report handling -----------------------------------------------------
+
+    def _handle_report(self, assistant_text: str, report_spec: dict, client, types) -> str:
+        """Retrieve JSON report and feed it back to LLM for explanation."""
+        try:
+            # Run the model first to get fresh data
+            self.model.run()
+
+            scope = report_spec.get("scope", "process")
+            name = report_spec.get("name", "")
+
+            if scope == "unit" and name:
+                report_data = self.model.get_unit_json_report(name)
+            elif scope == "stream" and name:
+                report_data = self.model.get_stream_json_report(name)
+            else:
+                report_data = self.model.get_json_report()
+
+            if report_data is None:
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: Could not generate JSON report. The model may need to be run first.]"
+                })
+                return self._llm_followup(client, types)
+
+            self._last_report = report_data
+
+            # Truncate large reports to avoid token overflow
+            import json as _json
+            report_text = _json.dumps(report_data, indent=2, default=str)
+            if len(report_text) > 12000:
+                report_text = report_text[:12000] + "\n... (truncated)"
+
+            scope_desc = f"{scope}" if scope == "process" else f"{scope} '{name}'"
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: JSON report for {scope_desc} retrieved. "
+                    f"Summarise the key information clearly for the engineer. "
+                    f"Highlight important values like temperatures, pressures, "
+                    f"compositions, power, duty, and any notable findings.]\n\n"
+                    f"{report_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: Report generation failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_report(self) -> Optional[dict]:
+        """Get the last JSON report (for UI display)."""
+        return getattr(self, "_last_report", None)
+
     # -- Helpers ------------------------------------------------------------
 
     def _llm_followup(self, client, types) -> str:
@@ -4362,6 +4475,7 @@ class ProcessChatSession:
         self._last_weather = None
         self._last_lab_import = None
         self._last_production_scenario = None
+        self._last_report = None
         self._signal_tracker = SignalTracker()
         self._builder = None
 
