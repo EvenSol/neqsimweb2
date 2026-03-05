@@ -87,11 +87,12 @@ def _predict_hydrate_temperature(fluid, pressure_bara: float) -> float:
         # Ensure water is present
         has_water = False
         for i in range(fl.getNumberOfComponents()):
-            if fl.getComponent(i).getName().lower() == "water":
+            if str(fl.getComponent(i).getName()).lower() == "water":
                 has_water = True
                 break
         if not has_water:
             fl.addComponent("water", 0.01)
+            fl.setMixingRule(10)  # Re-initialize mixing rule for new component
 
         fl.setHydrateCheck(True)
         thermoOps = jneqsim.thermodynamicoperations.ThermodynamicOperations(fl)
@@ -271,7 +272,7 @@ def run_flow_assurance(
                 water_rate = flow_kg_hr * 0.001  # estimate water content
                 try:
                     for i in range(fluid.getNumberOfComponents()):
-                        if fluid.getComponent(i).getName().lower() == "water":
+                        if str(fluid.getComponent(i).getName()).lower() == "water":
                             water_rate = float(fluid.getComponent(i).getFlowRate("kg/hr"))
                             break
                 except Exception:
