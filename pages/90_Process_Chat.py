@@ -1805,28 +1805,41 @@ def _show_weather(wx_result):
 
 
 def _show_report(report_data):
-    """Display a JSON report (full process, unit, or stream) inline."""
-    import json as _json
+    """Display a JSON report (full process, module, unit, or stream) inline."""
     st.markdown("---")
 
     # Determine scope label
     if isinstance(report_data, dict):
         scope = "Process Report"
-        # Check for unit/stream hints
         if "equipmentName" in report_data:
             scope = f"Unit Report — {report_data['equipmentName']}"
         elif "streamName" in report_data:
             scope = f"Stream Report — {report_data['streamName']}"
         elif "name" in report_data:
             scope = f"Report — {report_data['name']}"
+        # Check for multi-system (module) structure: keys like "system_name/unit"
+        top_keys = list(report_data.keys())
+        has_slash = any("/" in k for k in top_keys[:20])
     else:
         scope = "Report"
+        has_slash = False
 
-    st.markdown(f"**📋 {scope}**")
-
-    # Show interactive JSON viewer in an expander
-    with st.expander("View raw JSON report", expanded=False):
-        st.json(report_data)
+    with st.expander(f"📋 {scope}", expanded=False):
+        if isinstance(report_data, dict) and has_slash:
+            # Multi-module report — group by module prefix
+            modules: dict = {}
+            for k, v in report_data.items():
+                if "/" in k:
+                    mod, rest = k.split("/", 1)
+                    modules.setdefault(mod, {})[rest] = v
+                else:
+                    modules.setdefault("_root", {})[k] = v
+            for mod_name, mod_data in modules.items():
+                label = mod_name if mod_name != "_root" else "General"
+                st.subheader(label)
+                st.json(mod_data)
+        else:
+            st.json(report_data)
 
 
 def _show_lab_import(lab_result):

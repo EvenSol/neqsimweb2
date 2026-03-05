@@ -2569,6 +2569,26 @@ class NeqSimProcessModel:
                     return {k: v}
         return None
 
+    def get_module_json_report(self, module_name: str) -> Optional[dict]:
+        """Get the JSON report for a specific process system (module).
+
+        For a ProcessModel with multiple child ProcessSystems, generates
+        the report for the matching child system only.
+        For a single ProcessSystem, returns the full report if the name matches.
+        """
+        ml = module_name.lower()
+        for ps in self.get_process_systems():
+            try:
+                ps_name = str(ps.getName()) if ps.getName() else "process"
+                if ml in ps_name.lower():
+                    from neqsim import jneqsim
+                    report_obj = jneqsim.process.util.report.Report(ps)
+                    r_str = str(report_obj.generateJsonReport())
+                    return json.loads(r_str)
+            except Exception:
+                continue
+        return None
+
     def get_stream_json_report(self, stream_name: str) -> Optional[dict]:
         """Get the JSON report section for a specific stream."""
         full = self.get_json_report()

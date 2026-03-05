@@ -1141,9 +1141,17 @@ Single stream report:
 }}
 ```
 
+Process system / module report (for multi-system ProcessModel):
+```report
+{{
+  "scope": "module",
+  "name": "gas processing"
+}}
+```
+
 Use this for: "show report", "get process report", "show compressor report",
 "detailed report for separator", "show JSON report", "stream report for export gas",
-"show me all the data for the inlet separator"
+"show me all the data for the inlet separator", "show report for the gas processing module"
 
 SIGNAL TRACKING (for "track", "follow", "watch", "monitor signals"):
 When the user asks to track, follow, or watch specific signals/properties over time, output a ```tracker ... ``` block:
@@ -4354,6 +4362,8 @@ class ProcessChatSession:
                 report_data = self.model.get_unit_json_report(name)
             elif scope == "stream" and name:
                 report_data = self.model.get_stream_json_report(name)
+            elif scope == "module" and name:
+                report_data = self.model.get_module_json_report(name)
             else:
                 report_data = self.model.get_json_report()
 
