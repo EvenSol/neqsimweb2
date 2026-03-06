@@ -1297,9 +1297,11 @@ pressure drop, UA value.
 Any property that appears in the process model's KPI dictionary can be tracked.
 NOTE: Tracked signals are automatically snapshotted after every scenario or what-if run.
 
-DEXPI P&ID ANALYSIS (for "DEXPI", "P&ID", "Proteus XML", "analyze P&ID", "equipment list from P&ID", "export to DEXPI"):
-When the user asks to analyze a DEXPI file, extract P&ID information, or work with a DEXPI/Proteus XML,
-output a ```dexpi ... ``` block:
+DEXPI P&ID IMPORT / EXPORT (for "DEXPI", "P&ID", "Proteus XML", "analyze P&ID", "export to DEXPI", "create DEXPI", "generate DEXPI", "convert to DEXPI", "download DEXPI"):
+When the user asks to analyze a DEXPI file, export/create/generate a DEXPI file from the current model, or work with DEXPI/Proteus XML,
+you MUST output a ```dexpi ... ``` block. To EXPORT/CREATE a DEXPI file from the current NeqSim model, use action "export".
+IMPORTANT: You CAN create/export DEXPI XML from any loaded NeqSim model. Do NOT say you cannot do it.
+Examples of ANALYZE:
 ```dexpi
 {{
   "action": "analyze"
@@ -1337,7 +1339,9 @@ Parameters:
 Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
 "show me the piping from the P&ID", "import DEXPI into NeqSim",
 "list all instruments", "what valves are in the P&ID?",
-"export to DEXPI", "download as DEXPI XML", "convert to DEXPI"
+"export to DEXPI", "download as DEXPI XML", "convert to DEXPI",
+"create DEXPI", "generate DEXPI", "create DEXPI from model",
+"make DEXPI file", "DEXPI export", "save as DEXPI"
 
 NOTES:
 - After a DEXPI file is imported into NeqSim, ALL process analysis tools become available.
@@ -1867,9 +1871,11 @@ When the user provides lab data or wants to update feed composition, output:
 ```
 Use this for: "lab results", "new composition", "update feed", "LIMS data".
 
-DEXPI P&ID ANALYSIS (when a DEXPI file has been loaded, or to export a process to DEXPI):
-When the user asks to analyze a DEXPI file, extract P&ID information, or work with a DEXPI/Proteus XML,
-output a ```dexpi ... ``` block:
+DEXPI P&ID IMPORT / EXPORT (for analyzing DEXPI files OR creating/exporting DEXPI from the current process):
+When the user asks to analyze a DEXPI file, export/create/generate a DEXPI file from the current model, or work with DEXPI/Proteus XML,
+you MUST output a ```dexpi ... ``` block. To EXPORT/CREATE a DEXPI file from the current NeqSim model, use action "export".
+IMPORTANT: You CAN create/export DEXPI XML from any loaded NeqSim model. Do NOT say you cannot do it.
+Examples of ANALYZE:
 ```dexpi
 {{
   "action": "analyze"
@@ -1903,7 +1909,9 @@ Parameters:
   - fluid: optional fluid composition for NeqSim import. If omitted, auto-detected from P&ID FluidCode.
 
 Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
-"import DEXPI into NeqSim", "export to DEXPI", "download as DEXPI XML"
+"import DEXPI into NeqSim", "export to DEXPI", "download as DEXPI XML",
+"create DEXPI", "generate DEXPI", "create DEXPI from model",
+"make DEXPI file", "DEXPI export", "save as DEXPI"
 
 NOTES:
 - After DEXPI import, ALL process analysis tools become available.

@@ -57,18 +57,49 @@ with st.sidebar:
                     pass
 
             if _is_dexpi:
-                # DEXPI P&ID file — store XML for chat analysis
+                # DEXPI P&ID file — store XML and auto-build NeqSim model
                 st.session_state["dexpi_xml"] = file_bytes
                 st.session_state["dexpi_filename"] = uploaded_file.name
                 st.session_state["_loaded_file_key"] = file_key
-                # Reset chat session to inject DEXPI context
                 st.session_state.pop("chat_session", None)
                 st.session_state["chat_messages"] = []
-                # Keep any existing process_model — DEXPI & .neqsim coexist
-                if st.session_state.get("process_model") is None:
-                    st.session_state["_builder_mode"] = True
-                st.session_state["_pending_question"] = "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
-                st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+
+                # Auto-build NeqSim process model from DEXPI topology
+                _fluid_note = ""
+                try:
+                    from process_chat.dexpi_integration import run_dexpi_analysis
+                    _dexpi_result = run_dexpi_analysis(
+                        xml_bytes=file_bytes,
+                        filename=uploaded_file.name,
+                        try_neqsim_import=True,
+                    )
+                    if _dexpi_result.neqsim_model is not None:
+                        st.session_state["process_model"] = _dexpi_result.neqsim_model
+                        st.session_state["process_model_name"] = uploaded_file.name
+                        st.session_state.pop("_builder_mode", None)
+                        # Determine which fluid was auto-selected
+                        _codes = _dexpi_result.piping_summary.get("fluid_codes", [])
+                        _fluid_label = _codes[0] if _codes else "NG (natural gas)"
+                        _fluid_note = (
+                            f" A default **{_fluid_label}** fluid composition was used. "
+                            "You can change it by saying e.g. "
+                            "*'rebuild with fluid: methane 0.9, ethane 0.05, propane 0.03, CO2 0.02'*."
+                        )
+                        st.success(f"✓ DEXPI P&ID loaded + NeqSim model created: {uploaded_file.name}")
+                    else:
+                        if st.session_state.get("process_model") is None:
+                            st.session_state["_builder_mode"] = True
+                        st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+                        st.info("Could not auto-build NeqSim model — ask in chat to analyze and import.")
+                except Exception:
+                    if st.session_state.get("process_model") is None:
+                        st.session_state["_builder_mode"] = True
+                    st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+
+                st.session_state["_pending_question"] = (
+                    "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
+                    + _fluid_note
+                )
                 st.rerun()
             else:
                 # Standard .neqsim model file
@@ -81,7 +112,15 @@ with st.sidebar:
                         st.session_state["process_model_bytes"] = file_bytes
                         st.session_state["process_model_name"] = uploaded_file.name
                         st.session_state["_loaded_file_key"] = file_key
-                        # Keep DEXPI state — .neqsim & DEXPI coexist
+                        # Auto-generate DEXPI XML from the loaded model
+                        try:
+                            from process_chat.dexpi_integration import export_to_dexpi
+                            _dexpi_bytes = export_to_dexpi(model)
+                            if _dexpi_bytes:
+                                st.session_state["dexpi_xml"] = _dexpi_bytes
+                                st.session_state["dexpi_filename"] = uploaded_file.name.rsplit('.', 1)[0] + ".dexpi.xml"
+                        except Exception:
+                            pass
                         # Reset chat session when model changes
                         st.session_state.pop("chat_session", None)
                         st.session_state["chat_messages"] = []
@@ -134,6 +173,15 @@ with st.sidebar:
                     st.session_state.pop("_builder_mode", None)
                     st.session_state.pop("chat_session", None)
                     st.session_state["chat_messages"] = []
+                    # Auto-generate DEXPI XML from loaded model
+                    try:
+                        from process_chat.dexpi_integration import export_to_dexpi
+                        _dexpi_bytes = export_to_dexpi(model)
+                        if _dexpi_bytes:
+                            st.session_state["dexpi_xml"] = _dexpi_bytes
+                            st.session_state["dexpi_filename"] = "test_process.dexpi.xml"
+                    except Exception:
+                        pass
                     st.success("✓ Test process loaded")
                     st.rerun()
                 except Exception as e:
@@ -155,12 +203,38 @@ with st.sidebar:
             st.session_state["dexpi_xml"] = dexpi_bytes
             st.session_state["dexpi_filename"] = "test_dexpi_pid.xml"
             st.session_state["_loaded_file_key"] = "test_dexpi_builtin"
-            # Keep any existing process_model — DEXPI & .neqsim coexist
             st.session_state.pop("chat_session", None)
             st.session_state["chat_messages"] = []
-            if st.session_state.get("process_model") is None:
-                st.session_state["_builder_mode"] = True
-            st.session_state["_pending_question"] = "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
+            # Auto-build NeqSim model from DEXPI topology
+            _fluid_note = ""
+            try:
+                from process_chat.dexpi_integration import run_dexpi_analysis
+                _dexpi_result = run_dexpi_analysis(
+                    xml_bytes=dexpi_bytes,
+                    filename="test_dexpi_pid.xml",
+                    try_neqsim_import=True,
+                )
+                if _dexpi_result.neqsim_model is not None:
+                    st.session_state["process_model"] = _dexpi_result.neqsim_model
+                    st.session_state["process_model_name"] = "test_dexpi_pid.xml"
+                    st.session_state.pop("_builder_mode", None)
+                    _codes = _dexpi_result.piping_summary.get("fluid_codes", [])
+                    _fluid_label = _codes[0] if _codes else "NG (natural gas)"
+                    _fluid_note = (
+                        f" A default **{_fluid_label}** fluid composition was used. "
+                        "You can change it by saying e.g. "
+                        "*'rebuild with fluid: methane 0.9, ethane 0.05, propane 0.03, CO2 0.02'*."
+                    )
+                else:
+                    if st.session_state.get("process_model") is None:
+                        st.session_state["_builder_mode"] = True
+            except Exception:
+                if st.session_state.get("process_model") is None:
+                    st.session_state["_builder_mode"] = True
+            st.session_state["_pending_question"] = (
+                "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
+                + _fluid_note
+            )
             st.rerun()
     
     st.divider()
@@ -2374,6 +2448,17 @@ if user_input:
                         st.session_state["process_model_name"] = (
                             st.session_state.get("process_model_name") or "Built Process"
                         )
+                        # Auto-generate DEXPI XML for the new model
+                        if not st.session_state.get("dexpi_xml"):
+                            try:
+                                from process_chat.dexpi_integration import export_to_dexpi
+                                _dexpi_bytes = export_to_dexpi(session.model)
+                                if _dexpi_bytes:
+                                    st.session_state["dexpi_xml"] = _dexpi_bytes
+                                    _name = st.session_state.get("process_model_name", "process")
+                                    st.session_state["dexpi_filename"] = _name.rsplit('.', 1)[0] + ".dexpi.xml"
+                            except Exception:
+                                pass
 
                 # --- Refresh operating points in old chart messages ---
                 # After any model change (scenario, build, etc.), old chart
