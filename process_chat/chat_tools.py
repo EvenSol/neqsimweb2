@@ -4913,15 +4913,26 @@ class ProcessChatSession:
                 )
             })
 
-            # Get LLM fix
-            fix_response = self._llm_followup(client, types)
+            # Get LLM fix — use raw call so neqsim_code block isn't stripped
+            contents = self._build_contents()
+            fix_resp = client.models.generate_content(
+                model=self.ai_model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=self._system_prompt,
+                    temperature=0.3,
+                ),
+            )
+            fix_response = fix_resp.text
+            self.history.append({"role": "assistant", "content": fix_response})
+
             fixed_code = extract_neqsim_code(fix_response)
 
             if not fixed_code:
                 # LLM didn't produce a code block — give up, return the explanation
                 result["attempts"] = attempts
                 self._last_neqsim_code = result
-                return fix_response
+                return _strip_tool_blocks(fix_response)
 
             current_code = fixed_code
             current_assistant = fix_response

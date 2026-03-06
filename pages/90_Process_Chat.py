@@ -320,6 +320,10 @@ with st.sidebar:
 - **Build process** — create from natural language description
 - **Python script** — generate NeqSim Python code
 - **Save/download** — export .neqsim file
+- **Custom code** — run arbitrary NeqSim Python calculations
+- **DEXPI P&ID** — import and analyze engineering diagrams
+
+📖 **[Full Documentation →](Process_Chat_Help)**
             """)
     else:
         example_questions = [
