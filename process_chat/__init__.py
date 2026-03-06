@@ -19,4 +19,5 @@ Modules:
     flow_assurance   — Hydrate, wax, corrosion prediction and inhibitor dosing
     production_scenario — Production/reservoir fluid scenario studies (GOR, watercut, blending)
     signal_tracker   — Signal/property tracking across multiple chat interactions
+    dexpi_integration — DEXPI P&ID (Proteus XML) import, parsing, and NeqSim bridge
 """

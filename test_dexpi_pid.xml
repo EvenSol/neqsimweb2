@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PlantModel>
+  <PlantInformation Application="NeqSim DEXPI Test" SchemaVersion="3.3.3"/>
+
+  <MetaData>
+    <GenericAttributes>
+      <GenericAttribute Name="DrawingTitle" Value="Gas Processing Unit - Test P&amp;ID"/>
+      <GenericAttribute Name="DrawingNumber" Value="GPU-PID-001"/>
+      <GenericAttribute Name="RevisionNumber" Value="A1"/>
+    </GenericAttributes>
+  </MetaData>
+
+  <!-- ============================================================ -->
+  <!-- Equipment                                                    -->
+  <!-- ============================================================ -->
+  <Equipment>
+
+    <!-- Inlet separator (3-phase) -->
+    <Separator ComponentClass="Separator" ID="V-100">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="V-100"/>
+        <GenericAttribute Name="DesignPressure" Value="85" Units="barg"/>
+        <GenericAttribute Name="DesignTemperature" Value="120" Units="degC"/>
+      </GenericAttributes>
+      <Nozzle ID="V100-N1"/>
+      <Nozzle ID="V100-N2"/>
+      <Nozzle ID="V100-N3"/>
+      <Nozzle ID="V100-N4"/>
+    </Separator>
+
+    <!-- Gas-gas heat exchanger (feed/product) -->
+    <TubularHeatExchanger ComponentClass="TubularHeatExchanger" ID="E-101">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="E-101"/>
+        <GenericAttribute Name="DesignPressure" Value="85" Units="barg"/>
+        <GenericAttribute Name="DesignTemperature" Value="120" Units="degC"/>
+      </GenericAttributes>
+      <Nozzle ID="E101-N1"/>
+      <Nozzle ID="E101-N2"/>
+      <Nozzle ID="E101-N3"/>
+      <Nozzle ID="E101-N4"/>
+    </TubularHeatExchanger>
+
+    <!-- Low-temperature separator -->
+    <Separator ComponentClass="Separator" ID="V-101">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="V-101"/>
+        <GenericAttribute Name="DesignPressure" Value="80" Units="barg"/>
+        <GenericAttribute Name="DesignTemperature" Value="80" Units="degC"/>
+      </GenericAttributes>
+      <Nozzle ID="V101-N1"/>
+      <Nozzle ID="V101-N2"/>
+      <Nozzle ID="V101-N3"/>
+    </Separator>
+
+    <!-- Condensate pump -->
+    <CentrifugalPump ComponentClass="CentrifugalPump" ID="P-100">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="P-100"/>
+        <GenericAttribute Name="DesignPressure" Value="100" Units="barg"/>
+        <GenericAttribute Name="Power" Value="15" Units="kW"/>
+      </GenericAttributes>
+      <Nozzle ID="P100-N1"/>
+      <Nozzle ID="P100-N2"/>
+    </CentrifugalPump>
+
+    <!-- Compressor -->
+    <Compressor ComponentClass="Compressor" ID="K-100">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="K-100"/>
+        <GenericAttribute Name="DesignPressure" Value="120" Units="barg"/>
+        <GenericAttribute Name="Power" Value="500" Units="kW"/>
+      </GenericAttributes>
+      <Nozzle ID="K100-N1"/>
+      <Nozzle ID="K100-N2"/>
+    </Compressor>
+
+    <!-- Export cooler -->
+    <PlateHeatExchanger ComponentClass="PlateHeatExchanger" ID="E-102">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="E-102"/>
+        <GenericAttribute Name="DesignPressure" Value="120" Units="barg"/>
+        <GenericAttribute Name="DesignTemperature" Value="100" Units="degC"/>
+      </GenericAttributes>
+      <Nozzle ID="E102-N1"/>
+      <Nozzle ID="E102-N2"/>
+      <Nozzle ID="E102-N3"/>
+      <Nozzle ID="E102-N4"/>
+    </PlateHeatExchanger>
+
+    <!-- Condensate storage tank -->
+    <Tank ComponentClass="Tank" ID="T-100">
+      <GenericAttributes>
+        <GenericAttribute Name="TagNameAssignmentClass" Value="T-100"/>
+        <GenericAttribute Name="DesignPressure" Value="5" Units="barg"/>
+        <GenericAttribute Name="Capacity" Value="50" Units="m3"/>
+      </GenericAttributes>
+      <Nozzle ID="T100-N1"/>
+      <Nozzle ID="T100-N2"/>
+      <Nozzle ID="T100-N3"/>
+    </Tank>
+
+  </Equipment>
+
+  <!-- ============================================================ -->
+  <!-- Piping Network Systems                                       -->
+  <!-- ============================================================ -->
+
+  <!-- Feed gas line -->
+  <PipingNetworkSystem ID="PNS-001">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="NG"/>
+      <GenericAttribute Name="LineNumber" Value="6-NG-001"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="6 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="A1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-001-SEG1">
+      <Connection FromID="INLET" ToID="V100-N1"/>
+      <PipingComponent ComponentClass="BallValve" ID="XV-001">
+        <GenericAttributes>
+          <GenericAttribute Name="PipingComponentName" Value="XV-001"/>
+        </GenericAttributes>
+      </PipingComponent>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Gas from separator to heat exchanger -->
+  <PipingNetworkSystem ID="PNS-002">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="NG"/>
+      <GenericAttribute Name="LineNumber" Value="6-NG-002"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="6 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="A1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-002-SEG1">
+      <Connection FromID="V100-N2" ToID="E101-N1"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Gas from heat exchanger to LT separator -->
+  <PipingNetworkSystem ID="PNS-003">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="NG"/>
+      <GenericAttribute Name="LineNumber" Value="4-NG-003"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="4 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="A1B"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-003-SEG1">
+      <Connection FromID="E101-N2" ToID="V101-N1"/>
+      <PipingComponent ComponentClass="GlobeValve" ID="FV-100">
+        <GenericAttributes>
+          <GenericAttribute Name="PipingComponentName" Value="FV-100"/>
+        </GenericAttributes>
+      </PipingComponent>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Gas from LT separator to compressor -->
+  <PipingNetworkSystem ID="PNS-004">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="NG"/>
+      <GenericAttribute Name="LineNumber" Value="4-NG-004"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="4 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="A1B"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-004-SEG1">
+      <Connection FromID="V101-N2" ToID="K100-N1"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Compressed gas to export cooler -->
+  <PipingNetworkSystem ID="PNS-005">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="NG"/>
+      <GenericAttribute Name="LineNumber" Value="4-NG-005"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="4 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="A2A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-005-SEG1">
+      <Connection FromID="K100-N2" ToID="E102-N1"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Export gas -->
+  <PipingNetworkSystem ID="PNS-006">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="NG"/>
+      <GenericAttribute Name="LineNumber" Value="4-NG-006"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="4 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="A2A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-006-SEG1">
+      <Connection FromID="E102-N2" ToID="EXPORT"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Condensate from inlet separator to pump -->
+  <PipingNetworkSystem ID="PNS-007">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="HC"/>
+      <GenericAttribute Name="LineNumber" Value="3-HC-001"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="3 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="B1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-007-SEG1">
+      <Connection FromID="V100-N3" ToID="P100-N1"/>
+      <PipingComponent ComponentClass="SwingCheckValve" ID="CV-001">
+        <GenericAttributes>
+          <GenericAttribute Name="PipingComponentName" Value="CV-001"/>
+        </GenericAttributes>
+      </PipingComponent>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Condensate from pump to tank -->
+  <PipingNetworkSystem ID="PNS-008">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="HC"/>
+      <GenericAttribute Name="LineNumber" Value="3-HC-002"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="3 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="B1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-008-SEG1">
+      <Connection FromID="P100-N2" ToID="T100-N1"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Condensate from LT separator to tank -->
+  <PipingNetworkSystem ID="PNS-009">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="HC"/>
+      <GenericAttribute Name="LineNumber" Value="2-HC-003"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="2 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="B1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-009-SEG1">
+      <Connection FromID="V101-N3" ToID="T100-N2"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Cooling water supply -->
+  <PipingNetworkSystem ID="PNS-010">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="CW"/>
+      <GenericAttribute Name="LineNumber" Value="4-CW-001"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="4 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="C1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-010-SEG1">
+      <Connection FromID="CW-SUPPLY" ToID="E102-N3"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- Cooling water return -->
+  <PipingNetworkSystem ID="PNS-011">
+    <GenericAttributes>
+      <GenericAttribute Name="FluidCode" Value="CW"/>
+      <GenericAttribute Name="LineNumber" Value="4-CW-002"/>
+      <GenericAttribute Name="NominalDiameterRepresentation" Value="4 inch"/>
+      <GenericAttribute Name="PipingClassCode" Value="C1A"/>
+    </GenericAttributes>
+    <PipingNetworkSegment ID="PNS-011-SEG1">
+      <Connection FromID="E102-N4" ToID="CW-RETURN"/>
+    </PipingNetworkSegment>
+  </PipingNetworkSystem>
+
+  <!-- ============================================================ -->
+  <!-- Instrumentation                                              -->
+  <!-- ============================================================ -->
+
+  <!-- Pressure transmitter on inlet separator -->
+  <ProcessInstrumentationFunction ComponentClass="PressureTransmitter" ID="PT-100">
+    <Label>
+      <Text String="PT-100"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Temperature transmitter on inlet separator -->
+  <ProcessInstrumentationFunction ComponentClass="TemperatureTransmitter" ID="TT-100">
+    <Label>
+      <Text String="TT-100"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Level transmitter on inlet separator -->
+  <ProcessInstrumentationFunction ComponentClass="LevelTransmitter" ID="LT-100">
+    <Label>
+      <Text String="LT-100"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Flow transmitter on feed gas -->
+  <ProcessInstrumentationFunction ComponentClass="FlowTransmitter" ID="FT-100">
+    <Label>
+      <Text String="FT-100"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Pressure transmitter on compressor discharge -->
+  <ProcessInstrumentationFunction ComponentClass="PressureTransmitter" ID="PT-101">
+    <Label>
+      <Text String="PT-101"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Temperature transmitter on export gas -->
+  <ProcessInstrumentationFunction ComponentClass="TemperatureTransmitter" ID="TT-101">
+    <Label>
+      <Text String="TT-101"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Level transmitter on condensate tank -->
+  <ProcessInstrumentationFunction ComponentClass="LevelTransmitter" ID="LT-101">
+    <Label>
+      <Text String="LT-101"/>
+    </Label>
+  </ProcessInstrumentationFunction>
+
+  <!-- Pressure safety valve on inlet separator -->
+  <ProcessSignalGeneratingFunction ComponentClass="SafetyValve" ID="PSV-100">
+    <Label>
+      <Text String="PSV-100"/>
+    </Label>
+  </ProcessSignalGeneratingFunction>
+
+  <!-- ============================================================ -->
+  <!-- Actuating Systems                                            -->
+  <!-- ============================================================ -->
+
+  <ActuatingSystem ID="AS-001">
+    <GenericAttributes>
+      <GenericAttribute Name="ActuatingFunction" Value="Emergency Shutdown"/>
+    </GenericAttributes>
+  </ActuatingSystem>
+
+  <ActuatingSystem ID="AS-002">
+    <GenericAttributes>
+      <GenericAttribute Name="ActuatingFunction" Value="Level Control"/>
+    </GenericAttributes>
+  </ActuatingSystem>
+
+</PlantModel>

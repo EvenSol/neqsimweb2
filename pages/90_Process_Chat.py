@@ -37,34 +37,65 @@ with st.sidebar:
     uploaded_file = st.file_uploader(
         "Upload .neqsim process file",
         type=["neqsim", "xml", "zip"],
-        help="Upload a NeqSim process model file (.neqsim compressed XML)",
+        help="Upload a NeqSim process model file (.neqsim) or a DEXPI P&ID XML file",
     )
 
     if uploaded_file is not None:
         # Only reload if file changed
         file_key = f"{uploaded_file.name}_{uploaded_file.size}"
         if st.session_state.get("_loaded_file_key") != file_key:
-            with st.spinner("Loading process model..."):
-                try:
-                    from process_chat.process_model import NeqSimProcessModel
+            file_bytes = uploaded_file.read()
 
-                    file_bytes = uploaded_file.read()
-                    model = NeqSimProcessModel.from_bytes(file_bytes, uploaded_file.name)
-                    st.session_state["process_model"] = model
-                    st.session_state["process_model_bytes"] = file_bytes
-                    st.session_state["process_model_name"] = uploaded_file.name
-                    st.session_state["_loaded_file_key"] = file_key
-                    # Reset chat session when model changes
-                    st.session_state.pop("chat_session", None)
-                    st.session_state["chat_messages"] = []
-                    st.success(f"✓ Model loaded: {uploaded_file.name}")
-                except Exception as e:
-                    st.error(f"Failed to load model: {str(e)}")
-                    with st.expander("📋 Error Details"):
-                        st.code(traceback.format_exc())
-                    st.session_state.pop("process_model", None)
+            # Detect DEXPI Proteus XML by checking for <PlantModel> root
+            _is_dexpi = False
+            if uploaded_file.name.lower().endswith(".xml"):
+                try:
+                    _snippet = file_bytes[:2000].decode("utf-8", errors="ignore")
+                    if "<PlantModel" in _snippet or "PlantInformation" in _snippet:
+                        _is_dexpi = True
+                except Exception:
+                    pass
+
+            if _is_dexpi:
+                # DEXPI P&ID file — store XML for chat analysis
+                st.session_state["dexpi_xml"] = file_bytes
+                st.session_state["dexpi_filename"] = uploaded_file.name
+                st.session_state["_loaded_file_key"] = file_key
+                # Reset chat session to inject DEXPI context
+                st.session_state.pop("chat_session", None)
+                st.session_state["chat_messages"] = []
+                # Enter builder mode (no .neqsim model, but DEXPI available)
+                st.session_state.pop("process_model", None)
+                st.session_state["_builder_mode"] = True
+                st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+            else:
+                # Standard .neqsim model file
+                with st.spinner("Loading process model..."):
+                    try:
+                        from process_chat.process_model import NeqSimProcessModel
+
+                        model = NeqSimProcessModel.from_bytes(file_bytes, uploaded_file.name)
+                        st.session_state["process_model"] = model
+                        st.session_state["process_model_bytes"] = file_bytes
+                        st.session_state["process_model_name"] = uploaded_file.name
+                        st.session_state["_loaded_file_key"] = file_key
+                        # Clear DEXPI state if any
+                        st.session_state.pop("dexpi_xml", None)
+                        st.session_state.pop("dexpi_filename", None)
+                        # Reset chat session when model changes
+                        st.session_state.pop("chat_session", None)
+                        st.session_state["chat_messages"] = []
+                        st.success(f"✓ Model loaded: {uploaded_file.name}")
+                    except Exception as e:
+                        st.error(f"Failed to load model: {str(e)}")
+                        with st.expander("📋 Error Details"):
+                            st.code(traceback.format_exc())
+                        st.session_state.pop("process_model", None)
         else:
-            st.success(f"✓ {uploaded_file.name}")
+            if st.session_state.get("dexpi_xml"):
+                st.success(f"✓ DEXPI: {uploaded_file.name}")
+            else:
+                st.success(f"✓ {uploaded_file.name}")
 
     # --- Start New Process button ---
     if st.button("🔨 Start New Process", use_container_width=True,
@@ -108,6 +139,26 @@ with st.sidebar:
         st.caption(
             "[View process description on Colab](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/process/comparesimulations.ipynb)"
         )
+
+    # --- Load Test DEXPI P&ID button ---
+    _TEST_DEXPI_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "test_dexpi_pid.xml",
+    )
+    if os.path.exists(_TEST_DEXPI_PATH):
+        if st.button("📐 Load Test DEXPI P&ID", use_container_width=True,
+                     help="Load a sample DEXPI P&ID (gas processing unit) for testing"):
+            with open(_TEST_DEXPI_PATH, "rb") as f:
+                dexpi_bytes = f.read()
+            st.session_state["dexpi_xml"] = dexpi_bytes
+            st.session_state["dexpi_filename"] = "test_dexpi_pid.xml"
+            st.session_state["_loaded_file_key"] = "test_dexpi_builtin"
+            st.session_state.pop("process_model", None)
+            st.session_state.pop("chat_session", None)
+            st.session_state["chat_messages"] = []
+            st.session_state["_builder_mode"] = True
+            st.success("✓ Test DEXPI P&ID loaded")
+            st.rerun()
     
     st.divider()
 
@@ -291,12 +342,17 @@ model = st.session_state.get("process_model")
 builder_mode = st.session_state.get("_builder_mode", False)
 
 if model is None and not builder_mode:
-    st.info("👆 Upload a `.neqsim` process model file in the sidebar, click **Load Test Process** to try a sample, or click **Start New Process** to build one from scratch.")
+    st.info("👆 Upload a `.neqsim` process model or a **DEXPI P&ID XML** file in the sidebar, click **Load Test Process** to try a sample, or click **Start New Process** to build one from scratch.")
     st.markdown("""
     ### Getting Started
     
     **Option 1: Upload an existing model**
     Upload a `.neqsim` file to analyze, query, and run what-if scenarios.
+    
+    **Option 1b: Upload a DEXPI P&ID**
+    Upload a DEXPI Proteus XML (`.xml`) file to extract equipment, piping,
+    instrumentation, and connectivity. The chat can analyze the P&ID topology
+    and optionally import it into a NeqSim simulation model.
     
     **Option 2: Load the test process**
     Click **📂 Load Test Process** in the sidebar to load a pre-built gas processing model.
@@ -1869,6 +1925,81 @@ def _show_lab_import(lab_result):
         st.info(f"Unmapped components (used as-is): {', '.join(lab_result.sample.unmapped)}")
 
 
+def _show_dexpi(dexpi_result):
+    """Display DEXPI P&ID analysis results inline."""
+    st.markdown("---")
+    pid = dexpi_result.pid_summary
+    title = pid.title or pid.drawing_number or "DEXPI P&ID"
+    st.markdown(f"**📐 DEXPI P&ID Analysis — {title}**")
+
+    if pid.drawing_number or pid.revision:
+        st.caption(f"Drawing: {pid.drawing_number}  Rev: {pid.revision}  Schema: {pid.schema_version}")
+
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Equipment", len(pid.equipment))
+    with col2:
+        st.metric("Piping Lines", len(pid.piping))
+    with col3:
+        st.metric("Instruments", len(pid.instruments))
+    with col4:
+        st.metric("Connections", pid.connection_count)
+
+    # Equipment table
+    if pid.equipment:
+        st.markdown("**Equipment:**")
+        eq_data = []
+        for eq in pid.equipment:
+            eq_data.append({
+                "Tag": eq.tag_name,
+                "Type": eq.component_class,
+                "Nozzles": len(eq.nozzles),
+            })
+        st.dataframe(pd.DataFrame(eq_data), use_container_width=True, hide_index=True)
+
+    # Equipment type counts
+    if dexpi_result.equipment_type_counts:
+        with st.expander("Equipment Type Counts", expanded=False):
+            for cls, count in sorted(dexpi_result.equipment_type_counts.items()):
+                st.markdown(f"- **{cls}**: {count}")
+
+    # Piping table
+    if pid.piping:
+        st.markdown("**Piping Networks:**")
+        pip_data = []
+        for p in pid.piping:
+            pip_data.append({
+                "Line": p.line_number,
+                "Fluid": p.fluid_code,
+                "Diameter": p.nominal_diameter,
+                "Class": p.piping_class,
+                "Segments": p.segments,
+                "Valves": len(p.valves),
+            })
+        st.dataframe(pd.DataFrame(pip_data), use_container_width=True, hide_index=True)
+
+    # Instrumentation
+    if pid.instruments:
+        with st.expander(f"Instrumentation ({len(pid.instruments)} items)", expanded=False):
+            inst_data = []
+            for inst in pid.instruments:
+                inst_data.append({
+                    "Tag": inst.tag,
+                    "Class": inst.component_class,
+                    "Type": inst.function_type or "—",
+                })
+            st.dataframe(pd.DataFrame(inst_data), use_container_width=True, hide_index=True)
+
+    # NeqSim import status
+    if dexpi_result.neqsim_model_loaded:
+        st.success(f"✅ NeqSim model imported: {dexpi_result.neqsim_units} units, {dexpi_result.neqsim_streams} streams")
+
+    # Warnings
+    for w in dexpi_result.warnings:
+        st.warning(w)
+
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -1905,6 +2036,7 @@ for msg in st.session_state["chat_messages"]:
             ("weather", _show_weather),
             ("lab_import", _show_lab_import),
             ("report", _show_report),
+            ("dexpi", _show_dexpi),
         ]
         for key, renderer in _RESULT_RENDERERS:
             data = msg.get(key)
@@ -1965,6 +2097,12 @@ if user_input:
                 session = st.session_state["chat_session"]
                 # Sync API key in case the user changed it
                 session.api_key = api_key_val
+                # Inject DEXPI XML if available
+                if st.session_state.get("dexpi_xml"):
+                    session.set_dexpi_xml(
+                        st.session_state["dexpi_xml"],
+                        st.session_state.get("dexpi_filename", "dexpi.xml"),
+                    )
                 response = session.chat(user_input)
                 comparison = session.get_last_comparison()
                 optimization = session.get_last_optimization()
@@ -1988,6 +2126,7 @@ if user_input:
                 weather = session.get_last_weather()
                 lab_import = session.get_last_lab_import()
                 report = session.get_last_report()
+                dexpi = session.get_last_dexpi()
 
                 # --- Sync model from session back to session_state ---
                 if session.model is not None:
@@ -2050,6 +2189,7 @@ if user_input:
                     ("weather", weather, _show_weather),
                     ("lab_import", lab_import, _show_lab_import),
                     ("report", report, _show_report),
+                    ("dexpi", dexpi, _show_dexpi),
                 ]
                 for key, result_obj, renderer in _result_pairs:
                     if result_obj is not None:

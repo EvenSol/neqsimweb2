@@ -46,6 +46,7 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
+from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult
 
 
 # ---------------------------------------------------------------------------
@@ -1212,6 +1213,39 @@ pressure drop, UA value.
 Any property that appears in the process model's KPI dictionary can be tracked.
 NOTE: Tracked signals are automatically snapshotted after every scenario or what-if run.
 
+DEXPI P&ID ANALYSIS (for "DEXPI", "P&ID", "Proteus XML", "analyze P&ID", "equipment list from P&ID"):
+When the user asks to analyze a DEXPI file, extract P&ID information, or work with a DEXPI/Proteus XML,
+output a ```dexpi ... ``` block:
+```dexpi
+{{
+  "action": "analyze"
+}}
+```
+Or to analyze and import into NeqSim with a specific fluid:
+```dexpi
+{{
+  "action": "analyze",
+  "try_neqsim_import": true,
+  "fluid": {{
+    "components": {{
+      "methane": 0.85,
+      "ethane": 0.07,
+      "propane": 0.03,
+      "CO2": 0.02,
+      "nitrogen": 0.03
+    }}
+  }}
+}}
+```
+Parameters:
+  - action: "analyze" (parse P&ID and extract all equipment, piping, instrumentation)
+  - try_neqsim_import: attempt to create a NeqSim ProcessSystem from the P&ID (default: true)
+  - fluid: optional fluid composition for NeqSim import template stream
+
+Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
+"show me the piping from the P&ID", "import DEXPI into NeqSim",
+"list all instruments", "what valves are in the P&ID?"
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -1789,6 +1823,7 @@ _TOOL_BLOCK_TYPES = (
     "multi_period",
     "weather",
     "lab_import",
+    "dexpi",
 )
 
 def _strip_tool_blocks(text: str) -> str:
@@ -2170,6 +2205,19 @@ def extract_report_spec(text: str) -> Optional[dict]:
     return None
 
 
+def extract_dexpi_spec(text: str) -> Optional[dict]:
+    """Extract a DEXPI analysis specification from LLM output."""
+    import re
+    pattern = r'```dexpi\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    for match in matches:
+        try:
+            return json.loads(_normalise_json(match))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
@@ -2405,10 +2453,13 @@ class ProcessChatSession:
         self._last_lab_import = None
         self._last_production_scenario = None
         self._last_report = None
+        self._last_dexpi = None
         self._signal_tracker = SignalTracker()
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
         self._last_save_bytes = None  # Last generated .neqsim bytes
+        self._dexpi_xml: Optional[bytes] = None  # Cached DEXPI XML bytes
+        self._dexpi_filename: str = ""
 
         # Build appropriate system prompt
         if model is not None:
@@ -2456,6 +2507,7 @@ class ProcessChatSession:
         self._last_lab_import = None
         self._last_production_scenario = None
         self._last_report = None
+        self._last_dexpi = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -2609,6 +2661,11 @@ class ProcessChatSession:
         report_spec = extract_report_spec(assistant_text)
         if report_spec and self.model:
             return self._handle_report(assistant_text, report_spec, client, types)
+
+        # --- Check for DEXPI spec ---
+        dexpi_spec = extract_dexpi_spec(assistant_text)
+        if dexpi_spec and self._dexpi_xml:
+            return self._handle_dexpi(assistant_text, dexpi_spec, client, types)
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
@@ -4407,6 +4464,63 @@ class ProcessChatSession:
             })
             return self._llm_followup(client, types)
 
+    # -- DEXPI handling -----------------------------------------------------
+
+    def set_dexpi_xml(self, xml_bytes: bytes, filename: str = "dexpi_pid.xml"):
+        """Store DEXPI XML bytes for later analysis by the chat tool."""
+        self._dexpi_xml = xml_bytes
+        self._dexpi_filename = filename
+
+    def _handle_dexpi(self, assistant_text: str, dexpi_spec: dict, client, types) -> str:
+        """Run DEXPI P&ID analysis and feed results back to LLM."""
+        try:
+            fluid_spec = dexpi_spec.get("fluid")
+            try_import = bool(dexpi_spec.get("try_neqsim_import", True))
+
+            result = run_dexpi_analysis(
+                xml_bytes=self._dexpi_xml,
+                filename=self._dexpi_filename,
+                fluid_spec=fluid_spec,
+                try_neqsim_import=try_import,
+            )
+
+            self._last_dexpi = result
+
+            # If NeqSim model was created, adopt it so chat can query it
+            if result.neqsim_model is not None and self.model is None:
+                self.model = result.neqsim_model
+
+            results_text = format_dexpi_result(result)
+
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: DEXPI P&ID analysis completed. Results below. "
+                    f"Summarise the P&ID for the engineer: list the main equipment "
+                    f"with tag names, piping networks with fluid codes and sizes, "
+                    f"instrumentation, and connectivity. "
+                    f"If NeqSim import was successful, mention the simulation model. "
+                    f"Highlight any notable design data (pressures, temperatures, etc.).]\n\n"
+                    f"{results_text}"
+                )
+            })
+
+            final_text = self._llm_followup(client, types)
+            return final_text
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: DEXPI analysis failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
+    def get_last_dexpi(self) -> Optional[DexpiAnalysisResult]:
+        """Get the last DEXPI analysis result (for UI display)."""
+        return getattr(self, "_last_dexpi", None)
+
     def get_last_report(self) -> Optional[dict]:
         """Get the last JSON report (for UI display)."""
         return getattr(self, "_last_report", None)
@@ -4486,6 +4600,7 @@ class ProcessChatSession:
         self._last_lab_import = None
         self._last_production_scenario = None
         self._last_report = None
+        self._last_dexpi = None
         self._signal_tracker = SignalTracker()
         self._builder = None
 
