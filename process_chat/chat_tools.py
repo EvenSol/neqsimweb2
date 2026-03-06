@@ -48,6 +48,60 @@ from .production_scenario import run_production_scenario, format_production_scen
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
 from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml
 
+from dataclasses import dataclass, field as dc_field
+
+
+# ---------------------------------------------------------------------------
+# Model built result (for inline display in chat)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelBuiltResult:
+    """Summary data for displaying a newly built/updated model inline in chat."""
+    units: list = dc_field(default_factory=list)       # list of dicts with Name, Type, ...
+    streams: list = dc_field(default_factory=list)      # list of dicts with Name, T, P, Flow
+    pfd_dot: str = ""                                   # Graphviz DOT source for PFD
+    is_process_model: bool = False
+
+
+def _build_model_built_result(model: NeqSimProcessModel) -> ModelBuiltResult:
+    """Extract overview data from a model into a ModelBuiltResult."""
+    units_data = []
+    for u in model.list_units():
+        row = {}
+        if model.is_process_model:
+            row["System"] = u.process_system
+        row["Name"] = u.name
+        row["Type"] = u.unit_type
+        row.update(u.properties)
+        units_data.append(row)
+
+    streams_data = []
+    for s in model.list_streams():
+        row = {}
+        if model.is_process_model:
+            row["System"] = s.process_system
+        row["Name"] = s.name
+        row["T (\u00b0C)"] = f"{s.temperature_C:.1f}" if s.temperature_C is not None else "\u2014"
+        row["P (bara)"] = f"{s.pressure_bara:.2f}" if s.pressure_bara is not None else "\u2014"
+        row["Flow (kg/hr)"] = f"{s.flow_rate_kg_hr:.1f}" if s.flow_rate_kg_hr is not None else "\u2014"
+        streams_data.append(row)
+
+    pfd_dot = ""
+    try:
+        pfd_dot = model.get_diagram_dot(
+            style="HYSYS", detail_level="ENGINEERING", show_stream_values=True
+        )
+    except Exception:
+        pass
+
+    return ModelBuiltResult(
+        units=units_data,
+        streams=streams_data,
+        pfd_dot=pfd_dot,
+        is_process_model=model.is_process_model,
+    )
+
 
 # ---------------------------------------------------------------------------
 # System prompt builder
@@ -2742,6 +2796,7 @@ class ProcessChatSession:
         self._last_report = None
         self._last_dexpi = None
         self._last_neqsim_code = None
+        self._last_model_built = None
         self._signal_tracker = SignalTracker()
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
@@ -2797,6 +2852,7 @@ class ProcessChatSession:
         self._last_report = None
         self._last_dexpi = None
         self._last_neqsim_code = None
+        self._last_model_built = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -3071,6 +3127,9 @@ class ProcessChatSession:
                 # Rebuild system prompt now that we have a model
                 self._system_prompt = build_system_prompt(model)
 
+                # Build inline model overview for chat display
+                self._last_model_built = _build_model_built_result(model)
+
                 # Prepare summary for LLM
                 summary = model.get_model_summary()
                 build_log = "\n".join(builder.build_log)
@@ -3129,6 +3188,9 @@ class ProcessChatSession:
 
                 # Update system prompt
                 self._system_prompt = build_system_prompt(self.model)
+
+                # Build inline model overview for chat display
+                self._last_model_built = _build_model_built_result(self.model)
 
                 summary = self.model.get_model_summary()
                 log_str = "\n".join(str(e) for e in log)
@@ -3361,6 +3423,9 @@ class ProcessChatSession:
 
             # 6. Update system prompt
             self._system_prompt = build_system_prompt(self.model)
+
+            # Build inline model overview for chat display
+            self._last_model_built = _build_model_built_result(self.model)
 
             summary = self.model.get_model_summary()
             changes_str = (
@@ -4954,6 +5019,10 @@ class ProcessChatSession:
         """Get the last neqsim_code execution result (for UI display)."""
         return getattr(self, "_last_neqsim_code", None)
 
+    def get_last_model_built(self) -> Optional[ModelBuiltResult]:
+        """Get the last model built/updated result (for inline display)."""
+        return getattr(self, "_last_model_built", None)
+
     def get_last_report(self) -> Optional[dict]:
         """Get the last JSON report (for UI display)."""
         return getattr(self, "_last_report", None)
@@ -5035,6 +5104,7 @@ class ProcessChatSession:
         self._last_report = None
         self._last_dexpi = None
         self._last_neqsim_code = None
+        self._last_model_built = None
         self._dexpi_xml = None
         self._dexpi_filename = ""
         self._signal_tracker = SignalTracker()

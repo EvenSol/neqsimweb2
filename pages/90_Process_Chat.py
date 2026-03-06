@@ -2191,6 +2191,35 @@ def _show_neqsim_code(code_result):
         )
 
 
+def _show_model_built(model_result):
+    """Display model overview inline in chat after a build or update."""
+    st.markdown("---")
+    st.markdown("**📊 Process Model Overview**")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Unit Operations**")
+        if model_result.units:
+            st.dataframe(pd.DataFrame(model_result.units), use_container_width=True, hide_index=True)
+        else:
+            st.info("No unit operations found.")
+
+    with col2:
+        st.markdown("**Streams**")
+        if model_result.streams:
+            st.dataframe(pd.DataFrame(model_result.streams), use_container_width=True, hide_index=True)
+        else:
+            st.info("No streams found.")
+
+    if model_result.pfd_dot:
+        st.markdown("**Process Flow Diagram**")
+        try:
+            st.graphviz_chart(model_result.pfd_dot, use_container_width=True)
+        except Exception:
+            pass
+
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -2229,6 +2258,7 @@ for msg in st.session_state["chat_messages"]:
             ("report", _show_report),
             ("dexpi", _show_dexpi),
             ("neqsim_code", _show_neqsim_code),
+            ("model_built", _show_model_built),
         ]
         for key, renderer in _RESULT_RENDERERS:
             data = msg.get(key)
@@ -2320,6 +2350,7 @@ if user_input:
                 report = session.get_last_report()
                 dexpi = session.get_last_dexpi()
                 neqsim_code = session.get_last_neqsim_code()
+                model_built = session.get_last_model_built()
 
                 # --- Sync model from session back to session_state ---
                 if session.model is not None:
@@ -2384,6 +2415,7 @@ if user_input:
                     ("report", report, _show_report),
                     ("dexpi", dexpi, _show_dexpi),
                     ("neqsim_code", neqsim_code, _show_neqsim_code),
+                    ("model_built", model_built, _show_model_built),
                 ]
                 for key, result_obj, renderer in _result_pairs:
                     if result_obj is not None:
