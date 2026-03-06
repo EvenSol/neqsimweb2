@@ -1330,6 +1330,10 @@ Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
 "show me the piping from the P&ID", "import DEXPI into NeqSim",
 "list all instruments", "what valves are in the P&ID?"
 
+IMPORTANT: After a DEXPI file is imported into NeqSim, ALL process analysis tools become
+available (optimization, risk analysis, emissions, sensitivity, dynamic simulation, etc.).
+The user can ask any process engineering question about the imported model.
+
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
 
@@ -1850,6 +1854,43 @@ When the user provides lab data or wants to update feed composition, output:
 }
 ```
 Use this for: "lab results", "new composition", "update feed", "LIMS data".
+
+DEXPI P&ID ANALYSIS (when a DEXPI file has been loaded):
+When the user asks to analyze a DEXPI file, extract P&ID information, or work with a DEXPI/Proteus XML,
+output a ```dexpi ... ``` block:
+```dexpi
+{{
+  "action": "analyze"
+}}
+```
+Or to analyze and import into NeqSim with a specific fluid:
+```dexpi
+{{
+  "action": "analyze",
+  "try_neqsim_import": true,
+  "fluid": {{
+    "components": {{
+      "methane": 0.85,
+      "ethane": 0.07,
+      "propane": 0.03,
+      "CO2": 0.02,
+      "nitrogen": 0.03
+    }}
+  }}
+}}
+```
+Parameters:
+  - action: "analyze" (parse P&ID and extract all equipment, piping, instrumentation)
+  - try_neqsim_import: attempt to create a NeqSim ProcessSystem from the P&ID (default: true)
+  - fluid: optional fluid composition for NeqSim import template stream
+
+Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
+"show me the piping from the P&ID", "import DEXPI into NeqSim",
+"list all instruments", "what valves are in the P&ID?"
+
+IMPORTANT: After a DEXPI file is imported into NeqSim, ALL process analysis tools become
+available (optimization, risk analysis, emissions, sensitivity, dynamic simulation, etc.).
+The user can then ask any process engineering question about the imported model.
 
 NEQSIM CODE EXECUTION (for custom simulations outside the build system):
 See the NEQSIM CODE EXECUTION section above for the ```neqsim_code``` tool.
@@ -3513,6 +3554,9 @@ class ProcessChatSession:
                     self.model.refresh_source_bytes()
                     self._system_prompt = build_system_prompt(self.model)
                     structural_applied = True
+                    # Show updated model overview inline when structure changes
+                    if has_structural:
+                        self._last_model_built = _build_model_built_result(self.model)
 
                     # Keep builder spec in sync so to_python_script() is accurate
                     if self._builder and self._builder.spec:
@@ -4877,8 +4921,23 @@ class ProcessChatSession:
             # If NeqSim model was created, adopt it so chat can query it
             if result.neqsim_model is not None and self.model is None:
                 self.model = result.neqsim_model
+                # Switch to full model system prompt so ALL tools become available
+                self._system_prompt = build_system_prompt(self.model)
+                # Build inline model overview for chat display
+                self._last_model_built = _build_model_built_result(self.model)
 
             results_text = format_dexpi_result(result)
+
+            # Build tool availability message
+            tools_msg = ""
+            if result.neqsim_model is not None:
+                tools_msg = (
+                    "\n\nThe NeqSim model is now active. ALL process analysis tools are available: "
+                    "what-if scenarios, optimization, risk analysis, emissions, sensitivity, "
+                    "dynamic simulation, PVT, safety/PSV sizing, flow assurance, energy integration, "
+                    "turndown, debottleneck, compressor charts, auto-sizing, and more. "
+                    "Tell the engineer they can now ask any process engineering question."
+                )
 
             self.history.append({"role": "assistant", "content": assistant_text})
             self.history.append({
@@ -4888,8 +4947,10 @@ class ProcessChatSession:
                     f"Summarise the P&ID for the engineer: list the main equipment "
                     f"with tag names, piping networks with fluid codes and sizes, "
                     f"instrumentation, and connectivity. "
-                    f"If NeqSim import was successful, mention the simulation model. "
-                    f"Highlight any notable design data (pressures, temperatures, etc.).]\n\n"
+                    f"If NeqSim import was successful, mention the simulation model "
+                    f"and list the available analysis capabilities."
+                    f"{tools_msg}"
+                    f"\nHighlight any notable design data (pressures, temperatures, etc.).]\n\n"
                     f"{results_text}"
                 )
             })
