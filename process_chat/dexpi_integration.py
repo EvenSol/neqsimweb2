@@ -518,14 +518,7 @@ def create_neqsim_process_from_dexpi(
 
         # Build directed edges: (from_eq, to_eq) from piping connections
         # Only follow the primary fluid code path for the main process chain
-        primary_code = "NG"
-        if pid_summary.piping:
-            code_counts: Dict[str, int] = {}
-            for p in pid_summary.piping:
-                if p.fluid_code:
-                    code_counts[p.fluid_code] = code_counts.get(p.fluid_code, 0) + 1
-            if code_counts:
-                primary_code = max(code_counts, key=code_counts.get)
+        # (reuse primary_code already computed above for the fluid)
 
         # adjacency: from_eq_id → list of to_eq_id (on the primary fluid path)
         adjacency: Dict[str, List[str]] = {}

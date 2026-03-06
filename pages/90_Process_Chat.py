@@ -2112,6 +2112,7 @@ def _show_dexpi_export(export_bytes):
         data=export_bytes,
         file_name="process_export.dexpi.xml",
         mime="application/xml",
+        key=f"dexpi_export_dl_{id(export_bytes)}",
     )
 
 
@@ -2184,21 +2185,6 @@ def _show_dexpi(dexpi_result):
     # NeqSim import status
     if dexpi_result.neqsim_model_loaded:
         st.success(f"✅ NeqSim model imported: {dexpi_result.neqsim_units} units, {dexpi_result.neqsim_streams} streams")
-
-        # DEXPI export / download button
-        if dexpi_result.neqsim_model is not None:
-            try:
-                from process_chat.dexpi_integration import export_to_dexpi
-                dexpi_bytes = export_to_dexpi(dexpi_result.neqsim_model)
-                if dexpi_bytes:
-                    st.download_button(
-                        "📥 Download as DEXPI XML",
-                        data=dexpi_bytes,
-                        file_name="neqsim_export.xml",
-                        mime="application/xml",
-                    )
-            except Exception:
-                pass
 
     # Warnings
     for w in dexpi_result.warnings:
