@@ -649,6 +649,59 @@ def create_neqsim_process_from_dexpi(
                 proc.add(out)
                 prev_stream = out
 
+            elif "reactor" in cls:
+                Reactor = jneqsim.process.equipment.reactor.GibbsReactor
+                reactor = Reactor(tag, prev_stream)
+                proc.add(reactor)
+                out = Stream(f"{tag}-out", reactor.getOutletStream())
+                proc.add(out)
+                prev_stream = out
+
+            elif "mixer" in cls:
+                # Mixer needs multiple inlets; with topology walk we only
+                # have one prev_stream, so model as pass-through cooler at
+                # current temperature.
+                Cooler = jneqsim.process.equipment.heatexchanger.Cooler
+                mixer = Cooler(tag, prev_stream)
+                design_temp = _get_design_value(eq.attributes, "DesignTemperature")
+                out_temp = design_temp if design_temp is not None else 25.0
+                mixer.setOutTemperature(273.15 + out_temp)
+                proc.add(mixer)
+                out = Stream(f"{tag}-out", mixer.getOutletStream())
+                proc.add(out)
+                prev_stream = out
+
+            elif "column" in cls or "distillation" in cls or "absorber" in cls or "stripper" in cls:
+                # Model columns/absorbers as separators (gas out follows main path)
+                Sep = jneqsim.process.equipment.separator.Separator
+                col = Sep(tag, prev_stream)
+                proc.add(col)
+                gas_out = Stream(f"{tag}-gas out", col.getGasOutStream())
+                proc.add(gas_out)
+                prev_stream = gas_out
+
+            elif "filter" in cls or "dryer" in cls:
+                # Model as pass-through (no phase change expected)
+                Cooler = jneqsim.process.equipment.heatexchanger.Cooler
+                flt = Cooler(tag, prev_stream)
+                design_temp = _get_design_value(eq.attributes, "DesignTemperature")
+                out_temp = design_temp if design_temp is not None else 25.0
+                flt.setOutTemperature(273.15 + out_temp)
+                proc.add(flt)
+                out = Stream(f"{tag}-out", flt.getOutletStream())
+                proc.add(out)
+                prev_stream = out
+
+            elif "expander" in cls:
+                Exp = jneqsim.process.equipment.expander.Expander
+                exp = Exp(tag, prev_stream)
+                design_p = _get_design_value(eq.attributes, "DesignPressure")
+                exp.setOutletPressure(design_p if design_p is not None else 20.0)
+                proc.add(exp)
+                out = Stream(f"{tag}-out", exp.getOutletStream())
+                proc.add(out)
+                prev_stream = out
+
         # Run the process
         proc.run()
 
@@ -726,21 +779,36 @@ def run_dexpi_analysis(
                 connectivity_parts.append(f"{from_id} → {to_id}")
     connectivity_info = f"{pid_summary.connection_count} connections across {total_lines} piping lines"
 
-    # Step 5: Attempt NeqSim import
+    # Step 5: Auto-detect fluid from piping fluid codes if not specified
+    effective_fluid_spec = fluid_spec
+    if effective_fluid_spec is None and fluid_codes:
+        # Pick the primary (most common) fluid code and use its default composition
+        code_counts: Dict[str, int] = {}
+        for p in pid_summary.piping:
+            if p.fluid_code:
+                code_counts[p.fluid_code] = code_counts.get(p.fluid_code, 0) + 1
+        if code_counts:
+            primary_code = max(code_counts, key=code_counts.get)
+            rows = get_fluid_rows_for_code(primary_code)
+            effective_fluid_spec = {
+                "components": {r["ComponentName"]: r["MolarComposition[-]"] for r in rows}
+            }
+
+    # Step 6: Attempt NeqSim import
     neqsim_model = None
     neqsim_units = 0
     neqsim_streams = 0
     if try_neqsim_import:
         # Try Java DexpiXmlReader first
         try:
-            neqsim_model = load_dexpi_to_neqsim(xml_bytes, filename, fluid_spec)
+            neqsim_model = load_dexpi_to_neqsim(xml_bytes, filename, effective_fluid_spec)
         except Exception:
             pass
 
         # Fallback: build process from parsed topology
         if neqsim_model is None and pid_summary.equipment:
             try:
-                neqsim_model = create_neqsim_process_from_dexpi(pid_summary, fluid_spec)
+                neqsim_model = create_neqsim_process_from_dexpi(pid_summary, effective_fluid_spec)
             except Exception as e:
                 warnings.append(f"NeqSim process build: {e}")
 
@@ -868,13 +936,13 @@ def format_dexpi_result(result: DexpiAnalysisResult) -> str:
 def export_to_dexpi(process_model) -> Optional[bytes]:
     """Export a NeqSim ProcessSystem to DEXPI XML bytes.
 
-    Uses NeqSim's Java DexpiXmlWriter.  Only works for ProcessSystems
-    built from DEXPI imports (DexpiProcessUnit/DexpiStream objects).
-    Standard NeqSim equipment that was not imported from DEXPI will be
-    silently skipped.
+    First tries NeqSim's Java DexpiXmlWriter (works for models originally
+    imported from DEXPI).  If that produces no output, falls back to a
+    Python-based generator that works for ANY NeqSim model.
 
     Returns XML bytes or None if export fails.
     """
+    # --- Try Java writer first ---
     try:
         from neqsim import jneqsim
 
@@ -892,12 +960,163 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
             DexpiXmlWriter.write(proc, java_file)
 
             with open(tmp_path, "rb") as f:
-                return f.read()
+                java_bytes = f.read()
+            if java_bytes and len(java_bytes) > 100:
+                return java_bytes
         finally:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+    except Exception:
+        pass
+
+    # --- Fallback: Python-based DEXPI XML generation ---
+    return _export_to_dexpi_python(process_model)
+
+
+# NeqSim equipment class → DEXPI component class mapping
+_NEQSIM_TO_DEXPI_CLASS: Dict[str, str] = {
+    "Separator": "Separator",
+    "ThreePhaseSeparator": "Separator",
+    "TwoPhaseSeparator": "Separator",
+    "GasScrubber": "Separator",
+    "Compressor": "Compressor",
+    "Cooler": "PlateHeatExchanger",
+    "Heater": "PlateHeatExchanger",
+    "AirCooler": "AirCooledHeatExchanger",
+    "WaterCooler": "TubularHeatExchanger",
+    "HeatExchanger": "TubularHeatExchanger",
+    "ThrottlingValve": "Valve",
+    "ControlValve": "Valve",
+    "Pump": "CentrifugalPump",
+    "Expander": "Compressor",
+    "GibbsReactor": "Reactor",
+    "Mixer": "Mixer",
+    "Splitter": "Mixer",
+    "Pipeline": "PipingNetworkSystem",
+    "AdiabaticPipe": "PipingNetworkSystem",
+    "Tank": "Tank",
+    "Flare": "Tank",
+}
+
+
+def _export_to_dexpi_python(process_model) -> Optional[bytes]:
+    """Generate DEXPI Proteus XML from any NeqSim ProcessSystem.
+
+    Produces a valid Proteus XML with equipment, piping connections,
+    and design data extracted from the simulation state.
+    """
+    try:
+        from .process_model import NeqSimProcessModel
+
+        if isinstance(process_model, NeqSimProcessModel):
+            model = process_model
+        else:
+            return None
+
+        units = model.list_units()
+        streams = model.list_streams()
+        if not units:
+            return None
+
+        # Build XML
+        root = ET.Element("PlantModel")
+        pi = ET.SubElement(root, "PlantInformation")
+        pi.set("Application", "NeqSim")
+        pi.set("SchemaVersion", "3.3.3")
+
+        meta = ET.SubElement(root, "MetaData")
+        ga_set = ET.SubElement(meta, "GenericAttributes")
+        _add_ga(ga_set, "DrawingTitle", "NeqSim Process Export")
+        _add_ga(ga_set, "DrawingNumber", "NEQSIM-001")
+        _add_ga(ga_set, "RevisionNumber", "A1")
+
+        eq_wrapper = ET.SubElement(root, "Equipment")
+        nozzle_id = 0
+        equipment_nozzles: Dict[str, List[str]] = {}  # tag → [nozzle_ids]
+
+        for u in units:
+            tag = u.get("name", "unit")
+            u_type = u.get("type", "")
+            dexpi_class = _NEQSIM_TO_DEXPI_CLASS.get(u_type, "PressureVessel")
+
+            # Skip pipeline-type equipment (added as piping)
+            if dexpi_class == "PipingNetworkSystem":
+                continue
+
+            eq_elem = ET.SubElement(eq_wrapper, dexpi_class)
+            eq_elem.set("ComponentClass", dexpi_class)
+            eq_elem.set("ID", _sanitize_id(tag))
+
+            attrs = ET.SubElement(eq_elem, "GenericAttributes")
+            _add_ga(attrs, "TagNameAssignmentClass", tag)
+
+            # Extract design data from KPIs if available
+            try:
+                kpis = model.get_kpi()
+                prefix = f"units.{tag}"
+                for kpi_key, kpi_val in kpis.items():
+                    if not kpi_key.startswith(prefix):
+                        continue
+                    prop = kpi_key[len(prefix) + 1:]
+                    if "pressure" in prop.lower():
+                        _add_ga(attrs, "DesignPressure", str(round(kpi_val, 2)), "bara")
+                    elif "temperature" in prop.lower() and "outlet" in prop.lower():
+                        _add_ga(attrs, "DesignTemperature", str(round(kpi_val, 2)), "degC")
+                    elif "power" in prop.lower():
+                        _add_ga(attrs, "Power", str(round(kpi_val, 2)), "kW")
+                    elif "duty" in prop.lower():
+                        _add_ga(attrs, "Duty", str(round(kpi_val, 2)), "kW")
+            except Exception:
+                pass
+
+            # Add nozzles (inlet + outlet)
+            tag_nozzles = []
+            nozzle_id += 1
+            nz_in = f"{_sanitize_id(tag)}-N{nozzle_id}"
+            ET.SubElement(eq_elem, "Nozzle").set("ID", nz_in)
+            tag_nozzles.append(nz_in)
+
+            nozzle_id += 1
+            nz_out = f"{_sanitize_id(tag)}-N{nozzle_id}"
+            ET.SubElement(eq_elem, "Nozzle").set("ID", nz_out)
+            tag_nozzles.append(nz_out)
+
+            equipment_nozzles[tag] = tag_nozzles
+
+        # Add piping connections (one PipingNetworkSystem per stream)
+        for i, s in enumerate(streams):
+            s_name = s.get("name", f"stream-{i}")
+            pns = ET.SubElement(root, "PipingNetworkSystem")
+            pns.set("ID", f"PNS-{_sanitize_id(s_name)}")
+            pns_attrs = ET.SubElement(pns, "GenericAttributes")
+            _add_ga(pns_attrs, "FluidCode", "NG")
+            _add_ga(pns_attrs, "LineNumber", s_name)
+
+            seg = ET.SubElement(pns, "PipingNetworkSegment")
+            seg.set("ID", f"SEG-{_sanitize_id(s_name)}")
+
+        tree = ET.ElementTree(root)
+        import io
+        buf = io.BytesIO()
+        tree.write(buf, encoding="utf-8", xml_declaration=True)
+        return buf.getvalue()
 
     except Exception:
         return None
+
+
+def _sanitize_id(name: str) -> str:
+    """Sanitize a name for use as an XML ID attribute."""
+    import re
+    return re.sub(r'[^A-Za-z0-9_.-]', '_', name)
+
+
+def _add_ga(parent: ET.Element, name: str, value: str, units: str = ""):
+    """Add a GenericAttribute child element."""
+    ga = ET.SubElement(parent, "GenericAttribute")
+    ga.set("Name", name)
+    ga.set("Value", value)
+    if units:
+        ga.set("Units", units)

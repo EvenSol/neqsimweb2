@@ -46,7 +46,7 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
-from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml
+from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi
 
 from dataclasses import dataclass, field as dc_field
 
@@ -1297,7 +1297,7 @@ pressure drop, UA value.
 Any property that appears in the process model's KPI dictionary can be tracked.
 NOTE: Tracked signals are automatically snapshotted after every scenario or what-if run.
 
-DEXPI P&ID ANALYSIS (for "DEXPI", "P&ID", "Proteus XML", "analyze P&ID", "equipment list from P&ID"):
+DEXPI P&ID ANALYSIS (for "DEXPI", "P&ID", "Proteus XML", "analyze P&ID", "equipment list from P&ID", "export to DEXPI"):
 When the user asks to analyze a DEXPI file, extract P&ID information, or work with a DEXPI/Proteus XML,
 output a ```dexpi ... ``` block:
 ```dexpi
@@ -1321,18 +1321,30 @@ Or to analyze and import into NeqSim with a specific fluid:
   }}
 }}
 ```
+To export the current NeqSim model to DEXPI XML (works for ANY model, not just DEXPI imports):
+```dexpi
+{{
+  "action": "export"
+}}
+```
 Parameters:
-  - action: "analyze" (parse P&ID and extract all equipment, piping, instrumentation)
+  - action: "analyze" or "export". Analyze parses a loaded DEXPI P&ID. Export converts the current NeqSim model to DEXPI XML.
   - try_neqsim_import: attempt to create a NeqSim ProcessSystem from the P&ID (default: true)
-  - fluid: optional fluid composition for NeqSim import template stream
+  - fluid: optional fluid composition for NeqSim import template stream.
+    If omitted, the system auto-detects fluid type from the P&ID piping FluidCode
+    (NG=natural gas, HC=condensate, CW=cooling water).
 
 Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
 "show me the piping from the P&ID", "import DEXPI into NeqSim",
-"list all instruments", "what valves are in the P&ID?"
+"list all instruments", "what valves are in the P&ID?",
+"export to DEXPI", "download as DEXPI XML", "convert to DEXPI"
 
-IMPORTANT: After a DEXPI file is imported into NeqSim, ALL process analysis tools become
-available (optimization, risk analysis, emissions, sensitivity, dynamic simulation, etc.).
-The user can ask any process engineering question about the imported model.
+NOTES:
+- After a DEXPI file is imported into NeqSim, ALL process analysis tools become available.
+- Fluid auto-detection: if no fluid is specified, the primary FluidCode from the piping
+  networks is used (e.g., NG→natural gas defaults, HC→condensate defaults, CW→water).
+- Re-importing: if a model already exists, DEXPI import replaces it with the new P&ID model.
+- Export works for: DEXPI-imported models, builder-created models, uploaded models.
 
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
@@ -1855,7 +1867,7 @@ When the user provides lab data or wants to update feed composition, output:
 ```
 Use this for: "lab results", "new composition", "update feed", "LIMS data".
 
-DEXPI P&ID ANALYSIS (when a DEXPI file has been loaded):
+DEXPI P&ID ANALYSIS (when a DEXPI file has been loaded, or to export a process to DEXPI):
 When the user asks to analyze a DEXPI file, extract P&ID information, or work with a DEXPI/Proteus XML,
 output a ```dexpi ... ``` block:
 ```dexpi
@@ -1879,18 +1891,24 @@ Or to analyze and import into NeqSim with a specific fluid:
   }}
 }}
 ```
+To export the current NeqSim model to DEXPI XML:
+```dexpi
+{{
+  "action": "export"
+}}
+```
 Parameters:
-  - action: "analyze" (parse P&ID and extract all equipment, piping, instrumentation)
+  - action: "analyze" or "export". Analyze parses a loaded DEXPI P&ID. Export converts the current NeqSim model to DEXPI XML.
   - try_neqsim_import: attempt to create a NeqSim ProcessSystem from the P&ID (default: true)
-  - fluid: optional fluid composition for NeqSim import template stream
+  - fluid: optional fluid composition for NeqSim import. If omitted, auto-detected from P&ID FluidCode.
 
 Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
-"show me the piping from the P&ID", "import DEXPI into NeqSim",
-"list all instruments", "what valves are in the P&ID?"
+"import DEXPI into NeqSim", "export to DEXPI", "download as DEXPI XML"
 
-IMPORTANT: After a DEXPI file is imported into NeqSim, ALL process analysis tools become
-available (optimization, risk analysis, emissions, sensitivity, dynamic simulation, etc.).
-The user can then ask any process engineering question about the imported model.
+NOTES:
+- After DEXPI import, ALL process analysis tools become available.
+- Fluid auto-detection: uses piping FluidCode (NG, HC, CW) for default compositions.
+- Re-importing replaces the current model. Export works for any model type.
 
 NEQSIM CODE EXECUTION (for custom simulations outside the build system):
 See the NEQSIM CODE EXECUTION section above for the ```neqsim_code``` tool.
@@ -2838,6 +2856,7 @@ class ProcessChatSession:
         self._last_dexpi = None
         self._last_neqsim_code = None
         self._last_model_built = None
+        self._last_dexpi_export = None
         self._signal_tracker = SignalTracker()
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
@@ -2894,6 +2913,7 @@ class ProcessChatSession:
         self._last_dexpi = None
         self._last_neqsim_code = None
         self._last_model_built = None
+        self._last_dexpi_export = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -2912,7 +2932,7 @@ class ProcessChatSession:
             ),
         )
 
-        assistant_text = response.text
+        assistant_text = response.text or ""
 
         # --- Check for build spec ---
         build_spec = extract_build_spec(assistant_text)
@@ -3050,8 +3070,23 @@ class ProcessChatSession:
 
         # --- Check for DEXPI spec ---
         dexpi_spec = extract_dexpi_spec(assistant_text)
-        if dexpi_spec and self._dexpi_xml:
-            return self._handle_dexpi(assistant_text, dexpi_spec, client, types)
+        if dexpi_spec:
+            # Export works without DEXPI XML (any model can export)
+            # Analyze requires DEXPI XML to be loaded
+            dexpi_action = dexpi_spec.get("action", "analyze")
+            if dexpi_action == "export" or self._dexpi_xml:
+                return self._handle_dexpi(assistant_text, dexpi_spec, client, types)
+            else:
+                # LLM tried to use the DEXPI tool but no XML is loaded
+                cleaned = _strip_tool_blocks(assistant_text)
+                fallback = (
+                    cleaned
+                    or "No DEXPI P&ID file has been loaded yet. "
+                    "Please upload a DEXPI XML file using the sidebar file uploader, "
+                    "or click **Load Test DEXPI P&ID** to try a sample."
+                )
+                self.history.append({"role": "assistant", "content": fallback})
+                return fallback
 
         # --- Check for neqsim_code spec ---
         neqsim_code = extract_neqsim_code(assistant_text)
@@ -3060,6 +3095,8 @@ class ProcessChatSession:
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
+        if not cleaned:
+            cleaned = "I'm here to help with process engineering questions. Could you please rephrase your request?"
         self.history.append({"role": "assistant", "content": cleaned})
         self._last_comparison = None
         return cleaned
@@ -4904,7 +4941,14 @@ class ProcessChatSession:
                 pass
 
     def _handle_dexpi(self, assistant_text: str, dexpi_spec: dict, client, types) -> str:
-        """Run DEXPI P&ID analysis and feed results back to LLM."""
+        """Run DEXPI P&ID analysis or export, and feed results back to LLM."""
+        action = dexpi_spec.get("action", "analyze")
+
+        # --- Export action: convert current model to DEXPI XML ---
+        if action == "export":
+            return self._handle_dexpi_export(assistant_text, client, types)
+
+        # --- Analyze action ---
         try:
             fluid_spec = dexpi_spec.get("fluid")
             try_import = bool(dexpi_spec.get("try_neqsim_import", True))
@@ -4918,8 +4962,9 @@ class ProcessChatSession:
 
             self._last_dexpi = result
 
-            # If NeqSim model was created, adopt it so chat can query it
-            if result.neqsim_model is not None and self.model is None:
+            # If NeqSim model was created, adopt it (even if one already exists —
+            # re-import replaces the current model with the DEXPI-derived one)
+            if result.neqsim_model is not None:
                 self.model = result.neqsim_model
                 # Switch to full model system prompt so ALL tools become available
                 self._system_prompt = build_system_prompt(self.model)
@@ -4936,6 +4981,7 @@ class ProcessChatSession:
                     "what-if scenarios, optimization, risk analysis, emissions, sensitivity, "
                     "dynamic simulation, PVT, safety/PSV sizing, flow assurance, energy integration, "
                     "turndown, debottleneck, compressor charts, auto-sizing, and more. "
+                    "You can also export the model back to DEXPI XML. "
                     "Tell the engineer they can now ask any process engineering question."
                 )
 
@@ -4966,9 +5012,53 @@ class ProcessChatSession:
             })
             return self._llm_followup(client, types)
 
+    def _handle_dexpi_export(self, assistant_text: str, client, types) -> str:
+        """Export the current NeqSim model to DEXPI XML."""
+        try:
+            if self.model is None:
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: No process model is loaded. Build or import a process first before exporting to DEXPI.]"
+                })
+                return self._llm_followup(client, types)
+
+            dexpi_bytes = export_to_dexpi(self.model)
+            if dexpi_bytes:
+                self._last_dexpi_export = dexpi_bytes
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        "[SYSTEM: DEXPI XML export successful. "
+                        "A download button is now available. "
+                        "Tell the engineer they can download the DEXPI XML file.]"
+                    )
+                })
+                return self._llm_followup(client, types)
+            else:
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": "[SYSTEM: DEXPI export produced no output. The model may not contain exportable equipment.]"
+                })
+                return self._llm_followup(client, types)
+
+        except Exception as e:
+            self.history.append({"role": "assistant", "content": assistant_text})
+            self.history.append({
+                "role": "user",
+                "content": f"[SYSTEM: DEXPI export failed: {str(e)}. Inform the engineer.]"
+            })
+            return self._llm_followup(client, types)
+
     def get_last_dexpi(self) -> Optional[DexpiAnalysisResult]:
         """Get the last DEXPI analysis result (for UI display)."""
         return getattr(self, "_last_dexpi", None)
+
+    def get_last_dexpi_export(self) -> Optional[bytes]:
+        """Get the last DEXPI XML export bytes (for download button)."""
+        return getattr(self, "_last_dexpi_export", None)
 
     # -- NeqSim code execution -----------------------------------------------
 
@@ -5105,7 +5195,9 @@ class ProcessChatSession:
                 temperature=0.3,
             ),
         )
-        final_text = _strip_tool_blocks(response.text)
+        final_text = _strip_tool_blocks(response.text or "")
+        if not final_text:
+            final_text = "The analysis is complete. Let me know if you have any follow-up questions."
         self.history.append({"role": "assistant", "content": final_text})
         return final_text
 
@@ -5166,6 +5258,7 @@ class ProcessChatSession:
         self._last_dexpi = None
         self._last_neqsim_code = None
         self._last_model_built = None
+        self._last_dexpi_export = None
         self._dexpi_xml = None
         self._dexpi_filename = ""
         self._signal_tracker = SignalTracker()

@@ -2029,6 +2029,18 @@ def _show_lab_import(lab_result):
         st.info(f"Unmapped components (used as-is): {', '.join(lab_result.sample.unmapped)}")
 
 
+def _show_dexpi_export(export_bytes):
+    """Display a download button for exported DEXPI XML."""
+    st.markdown("---")
+    st.markdown("**📐 DEXPI P&ID Export**")
+    st.download_button(
+        label="⬇️ Download DEXPI XML",
+        data=export_bytes,
+        file_name="process_export.dexpi.xml",
+        mime="application/xml",
+    )
+
+
 def _show_dexpi(dexpi_result):
     """Display DEXPI P&ID analysis results inline."""
     st.markdown("---")
@@ -2257,6 +2269,7 @@ for msg in st.session_state["chat_messages"]:
             ("lab_import", _show_lab_import),
             ("report", _show_report),
             ("dexpi", _show_dexpi),
+            ("dexpi_export", _show_dexpi_export),
             ("neqsim_code", _show_neqsim_code),
             ("model_built", _show_model_built),
         ]
@@ -2349,6 +2362,7 @@ if user_input:
                 lab_import = session.get_last_lab_import()
                 report = session.get_last_report()
                 dexpi = session.get_last_dexpi()
+                dexpi_export = session.get_last_dexpi_export()
                 neqsim_code = session.get_last_neqsim_code()
                 model_built = session.get_last_model_built()
 
@@ -2414,6 +2428,7 @@ if user_input:
                     ("lab_import", lab_import, _show_lab_import),
                     ("report", report, _show_report),
                     ("dexpi", dexpi, _show_dexpi),
+                    ("dexpi_export", dexpi_export, _show_dexpi_export),
                     ("neqsim_code", neqsim_code, _show_neqsim_code),
                     ("model_built", model_built, _show_model_built),
                 ]
