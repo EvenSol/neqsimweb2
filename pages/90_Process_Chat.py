@@ -64,10 +64,12 @@ with st.sidebar:
                 # Reset chat session to inject DEXPI context
                 st.session_state.pop("chat_session", None)
                 st.session_state["chat_messages"] = []
-                # Enter builder mode (no .neqsim model, but DEXPI available)
-                st.session_state.pop("process_model", None)
-                st.session_state["_builder_mode"] = True
+                # Keep any existing process_model — DEXPI & .neqsim coexist
+                if st.session_state.get("process_model") is None:
+                    st.session_state["_builder_mode"] = True
+                st.session_state["_pending_question"] = "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
                 st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+                st.rerun()
             else:
                 # Standard .neqsim model file
                 with st.spinner("Loading process model..."):
@@ -79,9 +81,7 @@ with st.sidebar:
                         st.session_state["process_model_bytes"] = file_bytes
                         st.session_state["process_model_name"] = uploaded_file.name
                         st.session_state["_loaded_file_key"] = file_key
-                        # Clear DEXPI state if any
-                        st.session_state.pop("dexpi_xml", None)
-                        st.session_state.pop("dexpi_filename", None)
+                        # Keep DEXPI state — .neqsim & DEXPI coexist
                         # Reset chat session when model changes
                         st.session_state.pop("chat_session", None)
                         st.session_state["chat_messages"] = []
@@ -155,11 +155,12 @@ with st.sidebar:
             st.session_state["dexpi_xml"] = dexpi_bytes
             st.session_state["dexpi_filename"] = "test_dexpi_pid.xml"
             st.session_state["_loaded_file_key"] = "test_dexpi_builtin"
-            st.session_state.pop("process_model", None)
+            # Keep any existing process_model — DEXPI & .neqsim coexist
             st.session_state.pop("chat_session", None)
             st.session_state["chat_messages"] = []
-            st.session_state["_builder_mode"] = True
-            st.success("✓ Test DEXPI P&ID loaded")
+            if st.session_state.get("process_model") is None:
+                st.session_state["_builder_mode"] = True
+            st.session_state["_pending_question"] = "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
             st.rerun()
     
     st.divider()
@@ -435,6 +436,15 @@ if model is not None:
                 st.info("No streams found.")
 elif builder_mode:
     st.info("🔨 **Builder mode** — Describe the process you want to create in the chat below.")
+
+# DEXPI P&ID status banner (shown regardless of model state)
+if st.session_state.get("dexpi_xml"):
+    _dexpi_fname = st.session_state.get("dexpi_filename", "DEXPI file")
+    _dexpi_info = f"📐 **DEXPI P&ID loaded:** {_dexpi_fname}"
+    if model is not None:
+        _dexpi_info += "  ·  Combined with NeqSim process model"
+    _dexpi_info += '  —  Ask *"analyze the P&ID"* to run full analysis.'
+    st.info(_dexpi_info)
 
 # ─────────────────────────────────────────────
 # Process Flow Diagram (PFD)
