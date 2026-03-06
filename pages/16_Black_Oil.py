@@ -136,7 +136,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
             ),
         },
         num_rows='dynamic',
-        use_container_width=True,
+        width='stretch',
     )
 
     isplusfluid = st.checkbox("Last component is plus fraction", value=True)
@@ -290,7 +290,7 @@ if st.button("🛢️ Generate Black Oil Tables", type="primary"):
                 if bubble_point is not None:
                     st.info(f"Estimated bubble point pressure: **{bubble_point:.2f} bara** at {reservoir_temp_C}°C")
 
-                st.dataframe(dl_df, use_container_width=True, hide_index=True)
+                st.dataframe(dl_df, width='stretch', hide_index=True)
 
                 # ============================================================
                 # Charts
@@ -354,7 +354,7 @@ if st.button("🛢️ Generate Black Oil Tables", type="primary"):
                 fig.update_yaxes(title_text="μg (cP)", row=2, col=3)
 
                 fig.update_layout(height=700, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 # ============================================================
                 # Eclipse Export

@@ -53,7 +53,7 @@ with st.sidebar:
             ),
         },
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
     )
 
 # =============================================================================
@@ -391,7 +391,7 @@ with tab_ss:
                     fig.update_yaxes(title_text="Pressure (bara)", row=1, col=1)
                     fig.update_yaxes(title_text="Temperature (°C)", row=1, col=2)
                     fig.update_layout(height=400, showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
                     fig2 = make_subplots(rows=1, cols=2,
                                          subplot_titles=("Velocity Profile", "Density Profile"))
@@ -403,7 +403,7 @@ with tab_ss:
                     fig2.update_yaxes(title_text="Velocity (m/s)", row=1, col=1)
                     fig2.update_yaxes(title_text="Density (kg/m³)", row=1, col=2)
                     fig2.update_layout(height=400, showlegend=False)
-                    st.plotly_chart(fig2, use_container_width=True)
+                    st.plotly_chart(fig2, width='stretch')
 
                     st.subheader("📋 Segment Data")
                     seg_table = pd.DataFrame({
@@ -419,7 +419,7 @@ with tab_ss:
                         "Liq. Holdup": liquid_holdups,
                         "Flow Regime": flow_regimes,
                     })
-                    st.dataframe(seg_table, use_container_width=True, hide_index=True)
+                    st.dataframe(seg_table, width='stretch', hide_index=True)
 
                     # Erosional velocity check — every segment
                     erosion_exceeded = []
@@ -496,7 +496,7 @@ with tab_dyn:
             "Elevation (m)": st.column_config.NumberColumn("Elevation (m)", format="%.1f"),
         },
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
         key="dyn_profile_editor",
     )
 
@@ -519,7 +519,7 @@ with tab_dyn:
             height=280,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig_prof, use_container_width=True)
+        st.plotly_chart(fig_prof, width='stretch')
 
     st.divider()
 
@@ -740,7 +740,7 @@ with tab_dyn:
                 fig_ss.update_yaxes(title_text="Holdup (–)", row=2, col=1)
                 fig_ss.update_yaxes(title_text="m/s", row=2, col=2)
                 fig_ss.update_layout(height=650, legend=dict(x=0.75, y=0.35))
-                st.plotly_chart(fig_ss, use_container_width=True)
+                st.plotly_chart(fig_ss, width='stretch')
 
                 # Flow regime by section
                 with st.expander("📋 Steady-State Segment Data"):
@@ -753,7 +753,7 @@ with tab_dyn:
                         "Vl (m/s)": [round(v, 3) for v in lv_ss],
                         "Flow Regime": reg_ss,
                     })
-                    st.dataframe(ss_df, use_container_width=True, hide_index=True)
+                    st.dataframe(ss_df, width='stretch', hide_index=True)
 
                 # ==========================================================
                 #  TRANSIENT SIMULATION  — live updates
@@ -815,7 +815,7 @@ with tab_dyn:
                         fig_l.update_yaxes(title_text="bara", row=1, col=1)
                         fig_l.update_yaxes(title_text="Holdup (–)", row=1, col=2)
                         fig_l.update_layout(height=350, showlegend=False)
-                        st.plotly_chart(fig_l, use_container_width=True)
+                        st.plotly_chart(fig_l, width='stretch')
 
                     # ---- holdup bar colouring ----
                     with holdup_bar.container():
@@ -829,7 +829,7 @@ with tab_dyn:
                             xaxis_title="Distance (km)",
                             yaxis_title="Holdup (–)",
                             height=280)
-                        st.plotly_chart(fig_hb, use_container_width=True)
+                        st.plotly_chart(fig_hb, width='stretch')
 
                     # ---- liquid accumulation & outlet conditions ----
                     with accum_chart.container():
@@ -852,7 +852,7 @@ with tab_dyn:
                         fig_a.update_yaxes(title_text="bara", row=1, col=2)
                         fig_a.update_yaxes(title_text="°C", row=1, col=3)
                         fig_a.update_layout(height=300)
-                        st.plotly_chart(fig_a, use_container_width=True)
+                        st.plotly_chart(fig_a, width='stretch')
 
                     # ---- slug statistics ----
                     if dyn_slug:
@@ -879,7 +879,7 @@ with tab_dyn:
                     "Vl (m/s)": [round(v, 3) for v in lv_f],
                     "Flow Regime": reg_f,
                 })
-                st.dataframe(final_df, use_container_width=True, hide_index=True)
+                st.dataframe(final_df, width='stretch', hide_index=True)
 
                 # Final phase velocity chart
                 fig_fin = make_subplots(rows=1, cols=2,
@@ -910,7 +910,7 @@ with tab_dyn:
                 fig_fin.update_yaxes(visible=False, row=1, col=2)
                 fig_fin.update_layout(height=400, barmode="stack",
                                       legend=dict(orientation="h", y=-0.15))
-                st.plotly_chart(fig_fin, use_container_width=True)
+                st.plotly_chart(fig_fin, width='stretch')
 
                 # Liquid accumulation summary
                 st.subheader("💧 Liquid Accumulation Summary")

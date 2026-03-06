@@ -137,7 +137,7 @@ with st.sidebar:
                 st.success(f"✓ {uploaded_file.name}")
 
     # --- Start New Process button ---
-    if st.button("🔨 Start New Process", use_container_width=True,
+    if st.button("🔨 Start New Process", width='stretch',
                  help="Build a process from scratch by describing it in chat"):
         # Enter builder mode — clear any stale state
         st.session_state.pop("process_model", None)
@@ -157,7 +157,7 @@ with st.sidebar:
         "test_process.neqsim",
     )
     if os.path.exists(_TEST_PROCESS_PATH):
-        if st.button("📂 Load Test Process", use_container_width=True,
+        if st.button("📂 Load Test Process", width='stretch',
                      help="Load a sample gas processing model for testing"):
             with st.spinner("Loading test process model..."):
                 try:
@@ -196,7 +196,7 @@ with st.sidebar:
         "test_dexpi_pid.xml",
     )
     if os.path.exists(_TEST_DEXPI_PATH):
-        if st.button("📐 Load Test DEXPI P&ID", use_container_width=True,
+        if st.button("📐 Load Test DEXPI P&ID", width='stretch',
                      help="Load a sample DEXPI P&ID (gas processing unit) for testing"):
             with open(_TEST_DEXPI_PATH, "rb") as f:
                 dexpi_bytes = f.read()
@@ -271,7 +271,7 @@ with st.sidebar:
                     data=last_script,
                     file_name=script_fname,
                     mime="text/x-python",
-                    use_container_width=True,
+                    width='stretch',
                 )
             if last_save:
                 save_fname = ""
@@ -284,7 +284,7 @@ with st.sidebar:
                     data=last_save,
                     file_name=save_fname,
                     mime="application/octet-stream",
-                    use_container_width=True,
+                    width='stretch',
                 )
             st.divider()
 
@@ -408,7 +408,7 @@ with st.sidebar:
             "Build a gas processing plant with separation and compression",
         ]
     for q in example_questions:
-        if st.button(q, key=f"ex_{hash(q)}", use_container_width=True):
+        if st.button(q, key=f"ex_{hash(q)}", width='stretch'):
             st.session_state["_pending_question"] = q
             # If no model loaded, activate builder mode so the page
             # doesn't hit st.stop() before the chat input is processed.
@@ -491,7 +491,7 @@ if model is not None:
                     row["Type"] = u.unit_type
                     row.update(u.properties)
                     unit_data.append(row)
-                st.dataframe(pd.DataFrame(unit_data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(unit_data), width='stretch', hide_index=True)
             else:
                 st.info("No unit operations found.")
 
@@ -509,7 +509,7 @@ if model is not None:
                     row["P (bara)"] = f"{s.pressure_bara:.2f}" if s.pressure_bara is not None else "—"
                     row["Flow (kg/hr)"] = f"{s.flow_rate_kg_hr:.1f}" if s.flow_rate_kg_hr is not None else "—"
                     stream_data.append(row)
-                st.dataframe(pd.DataFrame(stream_data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(stream_data), width='stretch', hide_index=True)
             else:
                 st.info("No streams found.")
 elif builder_mode:
@@ -559,7 +559,7 @@ if st.session_state.get("dexpi_xml"):
                         "Nozzles": len(eq.nozzles),
                         "Attributes": "; ".join(_attrs) if _attrs else "—",
                     })
-                st.dataframe(pd.DataFrame(_eq_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(_eq_rows), width='stretch', hide_index=True)
 
             # Piping table
             if _dexpi_pid.piping:
@@ -574,7 +574,7 @@ if st.session_state.get("dexpi_xml"):
                         "Segments": p.segments,
                         "Valves": len(p.valves),
                     })
-                st.dataframe(pd.DataFrame(_pip_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(_pip_rows), width='stretch', hide_index=True)
 
             # Connectivity graph (from piping connections)
             if _dexpi_pid.piping:
@@ -599,7 +599,7 @@ if st.session_state.get("dexpi_xml"):
                         "Class": inst.component_class,
                         "Type": inst.function_type or "—",
                     })
-                st.dataframe(pd.DataFrame(_inst_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(_inst_rows), width='stretch', hide_index=True)
 
             # Raw XML viewer
             with st.expander("📄 View raw XML", expanded=False):
@@ -639,10 +639,10 @@ if model is not None:
                 tab_names.insert(0, "🗂️ Combined")
                 tabs = st.tabs(tab_names)
                 with tabs[0]:
-                    st.graphviz_chart(combined_dot, use_container_width=True)
+                    st.graphviz_chart(combined_dot, width='stretch')
                 for i, (ps_name, dot_src) in enumerate(dot_pairs):
                     with tabs[i + 1]:
-                        st.graphviz_chart(dot_src, use_container_width=True)
+                        st.graphviz_chart(dot_src, width='stretch')
             else:
                 # Single ProcessSystem
                 dot_source = model.get_diagram_dot(
@@ -650,7 +650,7 @@ if model is not None:
                     detail_level=pfd_detail,
                     show_stream_values=show_values,
                 )
-                st.graphviz_chart(dot_source, use_container_width=True)
+                st.graphviz_chart(dot_source, width='stretch')
         except Exception as e:
             st.warning(f"Could not render process flow diagram: {e}")
 
@@ -693,7 +693,7 @@ def _show_comparison(comparison):
         
         display_df = summary_df[summary_df.apply(is_display_worthy, axis=1)].copy()
         if not display_df.empty:
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            st.dataframe(display_df, width='stretch', hide_index=True)
         else:
             st.info("No significant KPI changes detected.")
     
@@ -742,7 +742,7 @@ def _show_optimization(opt_result):
                 "Constraint": u.constraint_name,
                 "Detail": u.detail,
             })
-        st.dataframe(pd.DataFrame(util_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(util_data), width='stretch', hide_index=True)
 
     # Search iteration chart
     if opt_result.iterations and len(opt_result.iterations) > 1:
@@ -756,7 +756,7 @@ def _show_optimization(opt_result):
                     "Feasible": "✓" if it.feasible else "✗",
                     "Bottleneck": it.bottleneck,
                 })
-            st.dataframe(pd.DataFrame(iter_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(iter_data), width='stretch', hide_index=True)
 
     st.markdown(f"**Algorithm:** {opt_result.search_algorithm}")
     if not opt_result.converged:
@@ -808,7 +808,7 @@ def _show_risk_analysis(risk_result):
                 "Failure Rate (/yr)": round(ri.failure_rate_per_year, 2),
                 "Production Loss %": round(ri.production_loss_pct, 1),
             })
-        st.dataframe(pd.DataFrame(risk_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(risk_data), width='stretch', hide_index=True)
 
     # Equipment criticality
     trip_impacts = [fi for fi in risk_result.failure_impacts if fi.failure_type == "TRIP"]
@@ -823,7 +823,7 @@ def _show_risk_analysis(risk_result):
                     "Criticality Index": round(fi.criticality_index, 2),
                     "Failed Flow (kg/hr)": round(fi.failed_production_kg_hr, 0),
                 })
-            st.dataframe(pd.DataFrame(crit_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(crit_data), width='stretch', hide_index=True)
 
     # Degraded impacts
     deg_impacts = [fi for fi in risk_result.failure_impacts if fi.failure_type == "DEGRADED"]
@@ -837,7 +837,7 @@ def _show_risk_analysis(risk_result):
                     "Production Loss %": round(fi.production_loss_pct, 1),
                     "Failed Flow (kg/hr)": round(fi.failed_production_kg_hr, 0),
                 })
-            st.dataframe(pd.DataFrame(deg_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(deg_data), width='stretch', hide_index=True)
 
     # Equipment reliability
     if risk_result.equipment_reliability:
@@ -852,7 +852,7 @@ def _show_risk_analysis(risk_result):
                     "Failure Rate (/yr)": round(r.failure_rate_per_year, 2),
                     "Availability %": round(r.availability * 100, 2),
                 })
-            st.dataframe(pd.DataFrame(rel_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rel_data), width='stretch', hide_index=True)
 
     # Monte Carlo details
     mc = risk_result.monte_carlo
@@ -880,7 +880,7 @@ def _show_risk_analysis(risk_result):
                     if pct > 0.1:
                         dt_data.append({"Equipment": name, "Contribution %": round(pct, 1)})
                 if dt_data:
-                    st.dataframe(pd.DataFrame(dt_data), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(dt_data), width='stretch', hide_index=True)
 
 
 def _show_compressor_chart(chart_result):
@@ -948,7 +948,7 @@ def _show_compressor_chart(chart_result):
             hovermode="closest",
             showlegend=True,
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"comp_chart_{chart_data.compressor_name}_{_uuid.uuid4().hex[:8]}")
+        st.plotly_chart(fig, width='stretch', key=f"comp_chart_{chart_data.compressor_name}_{_uuid.uuid4().hex[:8]}")
 
         # Operating point details
         if op:
@@ -1008,7 +1008,7 @@ def _show_auto_size(autosize_result):
                 "Constraint": u.constraint_name,
                 "Detail": u.detail,
             })
-        st.dataframe(pd.DataFrame(util_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(util_data), width='stretch', hide_index=True)
 
     # Sizing details
     sized_items = [s for s in autosize_result.equipment_sized if s.auto_sized and s.sizing_data]
@@ -1019,7 +1019,7 @@ def _show_auto_size(autosize_result):
                 sizing_display = {k: v for k, v in si.sizing_data.items() if k != "sizing_report"}
                 if sizing_display:
                     sizing_df = pd.DataFrame([sizing_display])
-                    st.dataframe(sizing_df, use_container_width=True, hide_index=True)
+                    st.dataframe(sizing_df, width='stretch', hide_index=True)
                 # JSON report
                 if "sizing_report" in si.sizing_data:
                     with st.expander(f"Full sizing report — {si.name}", expanded=False):
@@ -1053,7 +1053,7 @@ def _show_emissions(emissions_result):
                 "CH₄ (kg/hr)": round(s.ch4_kg_hr, 4),
                 "CO₂e (kg/hr)": round(s.co2e_kg_hr, 2),
             })
-        st.dataframe(pd.DataFrame(src_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(src_data), width='stretch', hide_index=True)
 
     if getattr(emissions_result, "message", ""):
         st.info(emissions_result.message)
@@ -1120,7 +1120,7 @@ def _show_dynamic(dynamic_result):
                     "Change %": round(pct, 1),
                     "Unit": unit,
                 })
-            st.dataframe(pd.DataFrame(delta_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(delta_rows), width='stretch', hide_index=True)
 
     # --- Variable selector ---
     # Group variables by equipment/category for better UX
@@ -1173,7 +1173,7 @@ def _show_dynamic(dynamic_result):
             hovermode="x unified",
             height=500,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     else:
         # Multi-axis: subplots stacked vertically, one per unit group
         group_keys = list(unit_groups.keys())[:3]
@@ -1203,7 +1203,7 @@ def _show_dynamic(dynamic_result):
             height=300 * len(group_keys),
             showlegend=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # --- Data table ---
     with st.expander("📋 Time-Series Data", expanded=False):
@@ -1216,7 +1216,7 @@ def _show_dynamic(dynamic_result):
                 col_name = f"{label} ({unit})" if unit else label
                 row[col_name] = round(p.values.get(v, 0), 4)
             table_rows.append(row)
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
 
     if getattr(dynamic_result, "message", ""):
         st.info(dynamic_result.message)
@@ -1262,7 +1262,7 @@ def _show_sensitivity(sensitivity_result):
                 xaxis_title=kpi_label or "KPI",
                 barmode="overlay",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             # Data table
             tornado_data = []
@@ -1276,7 +1276,7 @@ def _show_sensitivity(sensitivity_result):
                     "KPI at High": round(b.kpi_at_high, 4),
                     "Swing": round(_swing(b), 4),
                 })
-            st.dataframe(pd.DataFrame(tornado_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(tornado_data), width='stretch', hide_index=True)
 
     elif sensitivity_result.analysis_type == "two_variable":
         if sensitivity_result.sweep_points:
@@ -1306,7 +1306,7 @@ def _show_sensitivity(sensitivity_result):
                         xaxis_title=key_names[0],
                         yaxis_title=key_names[1],
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
     else:  # single_sweep
         if sensitivity_result.sweep_points:
@@ -1369,7 +1369,7 @@ def _show_sensitivity(sensitivity_result):
                             xaxis_title=var_name,
                             yaxis_title=resp_kpi,
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
 
                     # Show remaining (unmatched) KPIs if any
                     remaining = {k: ys for k, ys in filtered.items() if k not in used_keys}
@@ -1385,13 +1385,13 @@ def _show_sensitivity(sensitivity_result):
                             xaxis_title=var_name,
                             yaxis_title="Value",
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
 
                     # Data table
                     table_data = {var_name: x_data}
                     for k, ys in filtered.items():
                         table_data[k] = [round(v, 4) for v in ys]
-                    st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(table_data), width='stretch', hide_index=True)
 
 
 def _show_pvt(pvt_result):
@@ -1431,7 +1431,7 @@ def _show_pvt(pvt_result):
                 xaxis_title="Pressure (bara)",
                 yaxis_title="Relative Volume",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         elif exp_upper == "CVD":
             # Two-axis plot: liquid dropout + cumulative gas produced
@@ -1453,7 +1453,7 @@ def _show_pvt(pvt_result):
             fig.update_xaxes(title_text="Pressure (bara)")
             fig.update_yaxes(title_text="Liquid Dropout (%)", secondary_y=False)
             fig.update_yaxes(title_text="Cum. Gas Produced (mol%)", secondary_y=True)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             # Second chart: gas Z-factor
             fig2 = go.Figure()
@@ -1468,7 +1468,7 @@ def _show_pvt(pvt_result):
                 xaxis_title="Pressure (bara)",
                 yaxis_title="Z",
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width='stretch')
 
         elif exp_upper == "SEPARATORTEST":
             fig = go.Figure()
@@ -1483,7 +1483,7 @@ def _show_pvt(pvt_result):
                 xaxis_title="Stage",
                 yaxis_title="GOR (Sm³/Sm³)",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         else:
             # Generic fallback: plot the first numeric value column found
@@ -1505,7 +1505,7 @@ def _show_pvt(pvt_result):
                     title=exp_name,
                     xaxis_title="Pressure (bara)",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
         # --- Generic data table using column_names or all available keys ---
         col_names = getattr(pvt_result, "column_names", None)
@@ -1525,7 +1525,7 @@ def _show_pvt(pvt_result):
                         label = f"{label} ({unit})"
                     row[label] = round(v, 4) if isinstance(v, float) else v
             pvt_data.append(row)
-        st.dataframe(pd.DataFrame(pvt_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(pvt_data), width='stretch', hide_index=True)
 
 
 def _show_safety(safety_result):
@@ -1559,7 +1559,7 @@ def _show_safety(safety_result):
                 "Orifice": s.api_orifice_letter,
                 "Phase": s.fluid_phase,
             })
-        st.dataframe(pd.DataFrame(scen_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(scen_data), width='stretch', hide_index=True)
 
 
 def _show_flow_assurance(fa_result):
@@ -1585,7 +1585,7 @@ def _show_flow_assurance(fa_result):
                 "Inhibitor": h.inhibitor_type or "—",
                 "Inhibitor Rate (kg/hr)": round(h.inhibitor_rate_kg_hr, 1) if h.inhibitor_rate_kg_hr else "—",
             })
-        st.dataframe(pd.DataFrame(hyd_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(hyd_data), width='stretch', hide_index=True)
 
     # Corrosion risks
     if fa_result.corrosion_risks:
@@ -1599,7 +1599,7 @@ def _show_flow_assurance(fa_result):
                 "Corr. Rate (mm/yr)": round(c.corrosion_rate_mm_yr, 2) if c.corrosion_rate_mm_yr else "—",
                 "Mechanism": c.mechanism or "—",
             })
-        st.dataframe(pd.DataFrame(cor_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(cor_data), width='stretch', hide_index=True)
 
     # Wax risks
     if fa_result.wax_risks:
@@ -1614,7 +1614,7 @@ def _show_flow_assurance(fa_result):
                 "Stream T (°C)": round(w.operating_T_C, 1),
                 "Margin (°C)": round(w.margin_C, 1),
             })
-        st.dataframe(pd.DataFrame(wax_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(wax_data), width='stretch', hide_index=True)
 
     if fa_result.recommendations:
         with st.expander("💡 Recommendations", expanded=False):
@@ -1660,7 +1660,7 @@ def _show_energy_integration(ei_result):
             xaxis_title="Duty (kW)",
             yaxis_title="Temperature (°C)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Heat streams table
     if ei_result.hot_streams or ei_result.cold_streams:
@@ -1680,7 +1680,7 @@ def _show_energy_integration(ei_result):
                     "Tout (°C)": round(c.t_out_C, 1),
                     "Duty (kW)": round(c.duty_kW, 0),
                 })
-            st.dataframe(pd.DataFrame(all_streams), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(all_streams), width='stretch', hide_index=True)
 
     # Suggestions
     if ei_result.suggestions:
@@ -1726,7 +1726,7 @@ def _show_turndown(td_result):
             xaxis_title="Flow (% of design)",
             yaxis_title="Max Equipment Utilization",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         # Data table
         with st.expander("📊 Envelope Data", expanded=False):
@@ -1737,7 +1737,7 @@ def _show_turndown(td_result):
                 "Max Util": round(p.max_utilization, 3),
                 "Limiting Equipment": p.limiting_equipment,
             } for p in td_result.envelope]
-            st.dataframe(pd.DataFrame(env_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(env_data), width='stretch', hide_index=True)
 
 
 def _show_performance_monitor(pm_result):
@@ -1765,7 +1765,7 @@ def _show_performance_monitor(pm_result):
                 "Residual": round(a.residual, 2),
                 "Diagnosis": a.diagnosis,
             })
-        st.dataframe(pd.DataFrame(alert_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(alert_data), width='stretch', hide_index=True)
 
     # Details
     if pm_result.measurements:
@@ -1778,7 +1778,7 @@ def _show_performance_monitor(pm_result):
                 "Unit": m.unit,
                 "Status": m.status,
             } for m in pm_result.measurements]
-            st.dataframe(pd.DataFrame(m_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(m_data), width='stretch', hide_index=True)
 
 
 def _show_debottleneck(db_result):
@@ -1802,7 +1802,7 @@ def _show_debottleneck(db_result):
             "Utilization": f"{b.utilization_pct:.0f}%",
             "Limiting Parameter": b.limiting_parameter,
         } for b in db_result.bottlenecks]
-        st.dataframe(pd.DataFrame(bn_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(bn_data), width='stretch', hide_index=True)
 
     # Upgrade options
     if db_result.upgrade_options:
@@ -1815,7 +1815,7 @@ def _show_debottleneck(db_result):
             "Extra Flow (kg/hr)": f"{u.extra_throughput_kg_hr:,.0f}",
             "Cost-Eff (t/yr/$MM)": f"{u.cost_effectiveness:,.0f}",
         } for u in db_result.upgrade_options]
-        st.dataframe(pd.DataFrame(up_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(up_data), width='stretch', hide_index=True)
 
 
 def _show_training(tr_result):
@@ -1839,7 +1839,7 @@ def _show_training(tr_result):
                     "After": round(i.upset_value, 2),
                     "Change (%)": round(i.change_pct, 1),
                 } for i in scenario.impacts]
-                st.dataframe(pd.DataFrame(imp_data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(imp_data), width='stretch', hide_index=True)
 
             if scenario.recovery_actions:
                 st.markdown("**Recovery Actions:**")
@@ -1878,7 +1878,7 @@ def _show_energy_audit(ea_result):
                 hole=0.3,
             )])
             fig.update_layout(title="Power Consumption Breakdown")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     # Benchmarks
     if ea_result.benchmarks:
@@ -1890,7 +1890,7 @@ def _show_energy_audit(ea_result):
             "Unit": b.unit,
             "Status": {"GOOD": "🟢 Good", "NORMAL": "🟡 Normal", "POOR": "🔴 Poor"}.get(b.status, b.status),
         } for b in ea_result.benchmarks]
-        st.dataframe(pd.DataFrame(bm_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(bm_data), width='stretch', hide_index=True)
 
     # Suggestions
     if ea_result.suggestions:
@@ -1923,7 +1923,7 @@ def _show_flare_analysis(fl_result):
             "CO₂e (t/yr)": round(s.co2_equiv_tonnes_yr, 0),
             "Detail": s.detail,
         } for s in fl_result.sources]
-        st.dataframe(pd.DataFrame(src_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(src_data), width='stretch', hide_index=True)
 
     # Recovery options
     if fl_result.recovery_options:
@@ -1936,7 +1936,7 @@ def _show_flare_analysis(fl_result):
             "Payback (yr)": round(o.payback_years, 1),
             "CO₂ Reduction (t/yr)": round(o.co2_reduction_tonnes_yr, 0),
         } for o in fl_result.recovery_options]
-        st.dataframe(pd.DataFrame(opt_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(opt_data), width='stretch', hide_index=True)
 
     if fl_result.best_option:
         st.success(f"**Recommended:** {fl_result.best_option}")
@@ -1969,7 +1969,7 @@ def _show_multi_period(mp_result):
                    y=[s.production_tonnes_period for s in mp_result.scenarios]),
         ])
         fig.update_layout(title="Production by Scenario")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         # Data table
         sc_data = [{
@@ -1980,7 +1980,7 @@ def _show_multi_period(mp_result):
             "Spec. Energy (kWh/t)": round(s.specific_energy_kWh_tonne, 1),
             "CO₂ (t/yr)": round(s.co2_equiv_tonnes_yr, 0),
         } for s in mp_result.scenarios]
-        st.dataframe(pd.DataFrame(sc_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(sc_data), width='stretch', hide_index=True)
 
         # Warnings
         for s in mp_result.scenarios:
@@ -2029,7 +2029,7 @@ def _show_weather(wx_result):
                           annotation_text="Design Basis")
         fig.update_layout(title="7-Day Temperature Forecast",
                           xaxis_title="Date", yaxis_title="Temperature (°C)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Recommendations
     if wx_result.recommendations:
@@ -2092,7 +2092,7 @@ def _show_lab_import(lab_result):
 
     # Composition table
     if lab_result.composition_df is not None and not lab_result.composition_df.empty:
-        st.dataframe(lab_result.composition_df, use_container_width=True, hide_index=True)
+        st.dataframe(lab_result.composition_df, width='stretch', hide_index=True)
 
     # Warnings
     for w in lab_result.warnings:
@@ -2147,7 +2147,7 @@ def _show_dexpi(dexpi_result):
                 "Type": eq.component_class,
                 "Nozzles": len(eq.nozzles),
             })
-        st.dataframe(pd.DataFrame(eq_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(eq_data), width='stretch', hide_index=True)
 
     # Equipment type counts
     if dexpi_result.equipment_type_counts:
@@ -2168,7 +2168,7 @@ def _show_dexpi(dexpi_result):
                 "Segments": p.segments,
                 "Valves": len(p.valves),
             })
-        st.dataframe(pd.DataFrame(pip_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(pip_data), width='stretch', hide_index=True)
 
     # Instrumentation
     if pid.instruments:
@@ -2180,7 +2180,7 @@ def _show_dexpi(dexpi_result):
                     "Class": inst.component_class,
                     "Type": inst.function_type or "—",
                 })
-            st.dataframe(pd.DataFrame(inst_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(inst_data), width='stretch', hide_index=True)
 
     # NeqSim import status
     if dexpi_result.neqsim_model_loaded:
@@ -2236,7 +2236,7 @@ def _show_neqsim_code(code_result):
         df = tbl.get("dataframe")
         if df is not None:
             st.markdown(f"**{name}**")
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width='stretch')
         else:
             csv = tbl.get("csv", "")
             if csv:
@@ -2249,9 +2249,9 @@ def _show_neqsim_code(code_result):
         fig = fig_info.get("figure")
         fig_type = fig_info.get("type", "")
         if fig_type == "plotly" and fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         elif fig_type == "matplotlib" and fig is not None:
-            st.pyplot(fig, use_container_width=True)
+            st.pyplot(fig, width='stretch')
 
     # Download button for the code
     if code:
@@ -2273,21 +2273,21 @@ def _show_model_built(model_result):
     with col1:
         st.markdown("**Unit Operations**")
         if model_result.units:
-            st.dataframe(pd.DataFrame(model_result.units), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(model_result.units), width='stretch', hide_index=True)
         else:
             st.info("No unit operations found.")
 
     with col2:
         st.markdown("**Streams**")
         if model_result.streams:
-            st.dataframe(pd.DataFrame(model_result.streams), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(model_result.streams), width='stretch', hide_index=True)
         else:
             st.info("No streams found.")
 
     if model_result.pfd_dot:
         st.markdown("**Process Flow Diagram**")
         try:
-            st.graphviz_chart(model_result.pfd_dot, use_container_width=True)
+            st.graphviz_chart(model_result.pfd_dot, width='stretch')
         except Exception:
             pass
 

@@ -352,18 +352,12 @@ class NeqSimProcessModel:
         errors_seen: list = []  # collect errors for diagnostics
 
         if ext in (".neqsim", ".zip") or ext not in (".xml",):
-            # Try the library's Java-based ZIP reader first
-            try:
-                loaded = neqsim.open_neqsim(filepath)
-            except Exception as e:
-                errors_seen.append(f"open_neqsim: {e}")
-                loaded = None
-
-            # Fallback: extract XML from ZIP in Python (avoids Java stream issues)
-            if loaded is None and is_zip:
+            # Try our own ZIP XML extraction first — it uses
+            # ignoreUnknownElements() so version-mismatched fields
+            # (like tagName) are silently skipped without noisy Java logs.
+            if is_zip:
                 try:
                     with zipfile.ZipFile(filepath, "r") as zf:
-                        # Look for process.xml or any .xml inside
                         xml_name = None
                         for name in zf.namelist():
                             if name.lower().endswith(".xml"):
@@ -376,6 +370,14 @@ class NeqSimProcessModel:
                             errors_seen.append("ZIP contains no .xml file")
                 except Exception as e:
                     errors_seen.append(f"ZIP XML deserialization: {e}")
+                    loaded = None
+
+            # Fallback: the library's Java-based ZIP reader
+            if loaded is None:
+                try:
+                    loaded = neqsim.open_neqsim(filepath)
+                except Exception as e:
+                    errors_seen.append(f"open_neqsim: {e}")
                     loaded = None
 
         # Plain XML fallback — only makes sense for non-ZIP files

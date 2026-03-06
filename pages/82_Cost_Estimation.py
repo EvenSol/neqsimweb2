@@ -255,7 +255,7 @@ edited_eq = st.data_editor(
         "Quantity": st.column_config.NumberColumn("Qty", min_value=1, max_value=50, default=1),
     },
     num_rows="dynamic",
-    use_container_width=True,
+    width='stretch',
 )
 
 # Show capacity parameter units
@@ -269,7 +269,7 @@ with st.expander("📏 Capacity Parameter Reference"):
             "Max A": corr["A_max"],
             "Description": corr["description"],
         })
-    st.dataframe(pd.DataFrame(ref_data), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(ref_data), width='stretch', hide_index=True)
 
 st.divider()
 
@@ -343,7 +343,7 @@ if st.button("💰 Calculate Costs", type="primary"):
             # Results Display
             # =============================================================================
             st.subheader("📊 Equipment Cost Breakdown")
-            st.dataframe(results_df, use_container_width=True, hide_index=True)
+            st.dataframe(results_df, width='stretch', hide_index=True)
 
             # Summary metrics
             st.divider()
@@ -381,7 +381,7 @@ if st.button("💰 Calculate Costs", type="primary"):
                     yaxis_title=f"Cost ({currency})",
                     height=400,
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, width='stretch')
 
             with col_chart2:
                 fig_pie = go.Figure(data=[
@@ -392,7 +392,7 @@ if st.button("💰 Calculate Costs", type="primary"):
                     )
                 ])
                 fig_pie.update_layout(title="Cost Distribution", height=400)
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, width='stretch')
 
             # =============================================================================
             # OPEX Breakdown
@@ -406,7 +406,7 @@ if st.button("💰 Calculate Costs", type="primary"):
                     round(annual_opex_power, 0),
                 ],
             }
-            st.dataframe(pd.DataFrame(opex_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(opex_data), width='stretch', hide_index=True)
 
             # =============================================================================
             # Financial Metrics
@@ -459,6 +459,6 @@ if st.button("💰 Calculate Costs", type="primary"):
                 yaxis_title=f"Cumulative DCF (M {currency})",
                 height=400,
             )
-            st.plotly_chart(fig_cf, use_container_width=True)
+            st.plotly_chart(fig_cf, width='stretch')
 
         st.success("Cost estimation complete!")
