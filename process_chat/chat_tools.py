@@ -46,7 +46,7 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
-from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult
+from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml
 
 
 # ---------------------------------------------------------------------------
@@ -4467,9 +4467,38 @@ class ProcessChatSession:
     # -- DEXPI handling -----------------------------------------------------
 
     def set_dexpi_xml(self, xml_bytes: bytes, filename: str = "dexpi_pid.xml"):
-        """Store DEXPI XML bytes for later analysis by the chat tool."""
+        """Store DEXPI XML bytes for later analysis by the chat tool.
+
+        On first call (empty history), parses the P&ID and injects a summary
+        into the system context so the LLM already knows the P&ID content.
+        """
+        is_new = (self._dexpi_xml is None)
         self._dexpi_xml = xml_bytes
         self._dexpi_filename = filename
+
+        # Auto-inject P&ID context on first load when history is empty
+        if is_new and not self.history:
+            try:
+                pid_summary = parse_dexpi_xml(xml_bytes)
+                eq_list = ", ".join(
+                    f"{eq.tag_name} ({eq.component_class})"
+                    for eq in pid_summary.equipment
+                ) or "none"
+                pipe_list = ", ".join(
+                    f"{p.line_number} ({p.fluid_code})"
+                    for p in pid_summary.piping
+                ) or "none"
+                context = (
+                    f"[SYSTEM: A DEXPI P&ID file '{filename}' has been loaded. "
+                    f"Title: {pid_summary.title or 'N/A'}. "
+                    f"Equipment: {eq_list}. "
+                    f"Piping: {pipe_list}. "
+                    f"Instruments: {len(pid_summary.instruments)}. "
+                    f"Use the dexpi tool to run full analysis when asked.]"
+                )
+                self.history.append({"role": "user", "content": context})
+            except Exception:
+                pass
 
     def _handle_dexpi(self, assistant_text: str, dexpi_spec: dict, client, types) -> str:
         """Run DEXPI P&ID analysis and feed results back to LLM."""
@@ -4601,6 +4630,7 @@ class ProcessChatSession:
         self._last_production_scenario = None
         self._last_report = None
         self._last_dexpi = None
+        self._dexpi_xml = None
+        self._dexpi_filename = ""
         self._signal_tracker = SignalTracker()
         self._builder = None
-

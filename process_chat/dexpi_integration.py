@@ -14,7 +14,6 @@ Reference DEXPI example PIDs: https://gitlab.com/dexpi/TrainingTestCases
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -66,6 +65,7 @@ class DexpiPIDSummary:
     revision: str = ""
     application: str = ""
     schema_version: str = ""
+    drawings: List[Dict[str, str]] = field(default_factory=list)
     equipment: List[DexpiEquipmentInfo] = field(default_factory=list)
     piping: List[DexpiPipingInfo] = field(default_factory=list)
     instruments: List[DexpiInstrumentInfo] = field(default_factory=list)
@@ -291,6 +291,17 @@ def parse_dexpi_xml(xml_bytes: bytes) -> DexpiPIDSummary:
     # --- Actuating systems count ---
     summary.actuating_systems = len(list(root.iter("ActuatingSystem")))
 
+    # --- Drawing sheets ---
+    for drawing in root.iter("Drawing"):
+        d_info: Dict[str, str] = {"id": drawing.get("ID", "")}
+        d_title = _get_generic_attr(drawing, "DrawingTitle") or _get_generic_attr(drawing, "Title")
+        d_number = _get_generic_attr(drawing, "DrawingNumber") or _get_generic_attr(drawing, "SheetNumber")
+        if d_title:
+            d_info["title"] = d_title
+        if d_number:
+            d_info["number"] = d_number
+        summary.drawings.append(d_info)
+
     return summary
 
 
@@ -366,9 +377,10 @@ def load_dexpi_to_neqsim(
             tmp_path = tmp.name
 
         try:
-            # Use NeqSim's DexpiXmlReader
-            reader = jneqsim.processSimulation.processSystem.dexpi.DexpiXmlReader()
-            process_system = reader.read(tmp_path, template_stream)
+            # Use NeqSim's DexpiXmlReader (static method)
+            DexpiXmlReader = jneqsim.process.processmodel.dexpi.DexpiXmlReader
+            java_file = jneqsim.java.io.File(tmp_path)
+            process_system = DexpiXmlReader.read(java_file, template_stream)
 
             if process_system is not None:
                 model = NeqSimProcessModel.from_process_system(process_system)
@@ -384,6 +396,69 @@ def load_dexpi_to_neqsim(
 
 
 # ---------------------------------------------------------------------------
+# Fluid code → composition mapping
+# ---------------------------------------------------------------------------
+
+# Default compositions keyed by DEXPI FluidCode.
+FLUID_CODE_COMPOSITIONS: Dict[str, List[Dict[str, Any]]] = {
+    "NG": [  # Natural Gas
+        {"ComponentName": "methane", "MolarComposition[-]": 0.80},
+        {"ComponentName": "ethane", "MolarComposition[-]": 0.06},
+        {"ComponentName": "propane", "MolarComposition[-]": 0.03},
+        {"ComponentName": "i-butane", "MolarComposition[-]": 0.01},
+        {"ComponentName": "n-butane", "MolarComposition[-]": 0.01},
+        {"ComponentName": "CO2", "MolarComposition[-]": 0.025},
+        {"ComponentName": "nitrogen", "MolarComposition[-]": 0.035},
+        {"ComponentName": "water", "MolarComposition[-]": 0.01},
+        {"ComponentName": "n-pentane", "MolarComposition[-]": 0.005},
+        {"ComponentName": "n-hexane", "MolarComposition[-]": 0.005},
+    ],
+    "HC": [  # Hydrocarbon condensate
+        {"ComponentName": "n-pentane", "MolarComposition[-]": 0.20},
+        {"ComponentName": "n-hexane", "MolarComposition[-]": 0.25},
+        {"ComponentName": "n-heptane", "MolarComposition[-]": 0.25},
+        {"ComponentName": "n-octane", "MolarComposition[-]": 0.15},
+        {"ComponentName": "propane", "MolarComposition[-]": 0.05},
+        {"ComponentName": "n-butane", "MolarComposition[-]": 0.10},
+    ],
+    "CW": [  # Cooling water
+        {"ComponentName": "water", "MolarComposition[-]": 1.0},
+    ],
+}
+
+
+def get_fluid_rows_for_code(fluid_code: str) -> List[Dict[str, Any]]:
+    """Return composition rows for a given DEXPI FluidCode.
+
+    Falls back to natural gas (NG) for unknown codes.
+    """
+    return FLUID_CODE_COMPOSITIONS.get(fluid_code.upper(), FLUID_CODE_COMPOSITIONS["NG"])
+
+
+# ---------------------------------------------------------------------------
+# Helper: extract numeric design data from equipment attributes
+# ---------------------------------------------------------------------------
+
+def _get_design_value(attrs: Dict[str, str], *keys: str) -> Optional[float]:
+    """Extract a numeric value from equipment attributes by key name.
+
+    Tries each key in order and returns the first parseable float, stripping
+    any trailing unit strings (e.g. "85 barg" → 85.0).
+    """
+    for key in keys:
+        val = attrs.get(key, "")
+        if not val:
+            continue
+        # Take the first whitespace-separated token as the number
+        num_str = val.split()[0]
+        try:
+            return float(num_str)
+        except ValueError:
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Fallback: Build a NeqSim process from parsed DEXPI topology
 # ---------------------------------------------------------------------------
 
@@ -393,10 +468,10 @@ def create_neqsim_process_from_dexpi(
 ) -> Optional[Any]:
     """Build a NeqSim ProcessSystem programmatically from DEXPI P&ID topology.
 
-    Creates a feed stream with a default natural gas composition and adds
-    process equipment (separators, heat exchangers, compressors, pumps)
-    inferred from the P&ID equipment list.  This is the fallback when the
-    Java DexpiXmlReader is not available.
+    Uses piping connectivity (FromID/ToID on nozzles) to determine equipment
+    ordering.  Follows the main process gas path from INLET through the
+    equipment chain.  Falls back to alphabetical tag order if connectivity
+    cannot be resolved.
 
     Returns a NeqSimProcessModel or None.
     """
@@ -415,39 +490,105 @@ def create_neqsim_process_from_dexpi(
                 for name, frac in comp_data.items()
             ]
         else:
-            rows = [
-                {"ComponentName": "methane", "MolarComposition[-]": 0.80},
-                {"ComponentName": "ethane", "MolarComposition[-]": 0.06},
-                {"ComponentName": "propane", "MolarComposition[-]": 0.03},
-                {"ComponentName": "i-butane", "MolarComposition[-]": 0.01},
-                {"ComponentName": "n-butane", "MolarComposition[-]": 0.01},
-                {"ComponentName": "CO2", "MolarComposition[-]": 0.025},
-                {"ComponentName": "nitrogen", "MolarComposition[-]": 0.035},
-                {"ComponentName": "water", "MolarComposition[-]": 0.01},
-                {"ComponentName": "n-pentane", "MolarComposition[-]": 0.005},
-                {"ComponentName": "n-hexane", "MolarComposition[-]": 0.005},
-            ]
+            # Determine primary fluid code from piping networks
+            primary_code = "NG"
+            if pid_summary.piping:
+                code_counts: Dict[str, int] = {}
+                for p in pid_summary.piping:
+                    if p.fluid_code:
+                        code_counts[p.fluid_code] = code_counts.get(p.fluid_code, 0) + 1
+                if code_counts:
+                    primary_code = max(code_counts, key=code_counts.get)
+            rows = get_fluid_rows_for_code(primary_code)
         df = pd.DataFrame(rows)
         fluid = fluid_df(df, lastIsPlusFraction=False, add_all_components=False)
         fluid.setTemperature(30.0, "C")
         fluid.setPressure(65.0, "bara")
         fluid.setTotalFlowRate(10.0, "MSm3/day")
 
-        # --- Build process ---
+        # --- Build connectivity graph ---
+        # Map nozzle ID → equipment ID
+        nozzle_to_eq: Dict[str, str] = {}
+        eq_by_id: Dict[str, DexpiEquipmentInfo] = {}
+        for eq in pid_summary.equipment:
+            eq_id = eq.id
+            eq_by_id[eq_id] = eq
+            for nz in eq.nozzles:
+                nozzle_to_eq[nz] = eq_id
+
+        # Build directed edges: (from_eq, to_eq) from piping connections
+        # Only follow the primary fluid code path for the main process chain
+        primary_code = "NG"
+        if pid_summary.piping:
+            code_counts: Dict[str, int] = {}
+            for p in pid_summary.piping:
+                if p.fluid_code:
+                    code_counts[p.fluid_code] = code_counts.get(p.fluid_code, 0) + 1
+            if code_counts:
+                primary_code = max(code_counts, key=code_counts.get)
+
+        # adjacency: from_eq_id → list of to_eq_id (on the primary fluid path)
+        adjacency: Dict[str, List[str]] = {}
+        inlet_equipment: Optional[str] = None  # first equipment receiving from INLET
+
+        for p in pid_summary.piping:
+            # Only follow primary fluid code for the main chain
+            if p.fluid_code and p.fluid_code != primary_code:
+                continue
+            for conn in p.connections:
+                from_nz = conn.get("from", "")
+                to_nz = conn.get("to", "")
+                from_eq = nozzle_to_eq.get(from_nz)
+                to_eq = nozzle_to_eq.get(to_nz)
+
+                # Detect INLET → first equipment
+                if from_nz.upper() == "INLET" and to_eq:
+                    inlet_equipment = to_eq
+                    continue
+
+                if from_eq and to_eq and from_eq != to_eq:
+                    adjacency.setdefault(from_eq, []).append(to_eq)
+
+        # Walk the graph from inlet to build a topological ordering
+        ordered_eq_ids: List[str] = []
+        visited: set = set()
+
+        def _walk(eq_id: str):
+            if eq_id in visited:
+                return
+            visited.add(eq_id)
+            ordered_eq_ids.append(eq_id)
+            for next_eq in adjacency.get(eq_id, []):
+                _walk(next_eq)
+
+        if inlet_equipment:
+            _walk(inlet_equipment)
+
+        # Add any remaining equipment not reached by the walk
+        for eq in pid_summary.equipment:
+            if eq.id not in visited:
+                ordered_eq_ids.append(eq.id)
+
+        # If connectivity resolution is empty, fall back to tag sort
+        if not ordered_eq_ids:
+            ordered_eq_ids = [eq.id for eq in sorted(
+                pid_summary.equipment, key=lambda e: e.tag_name or e.id
+            )]
+
+        # --- Build NeqSim process ---
         ProcessSystem = jneqsim.process.processmodel.ProcessSystem
         proc = ProcessSystem()
 
-        # Feed stream
         Stream = jneqsim.process.equipment.stream.Stream
         feed = Stream("feed gas", fluid)
         proc.add(feed)
 
         prev_stream = feed
 
-        # Sort equipment by tag for repeatable ordering
-        sorted_eq = sorted(pid_summary.equipment, key=lambda e: e.tag_name or e.id)
-
-        for eq in sorted_eq:
+        for eq_id in ordered_eq_ids:
+            eq = eq_by_id.get(eq_id)
+            if eq is None:
+                continue
             cls = eq.component_class.lower()
             tag = eq.tag_name or eq.id
 
@@ -455,7 +596,6 @@ def create_neqsim_process_from_dexpi(
                 Sep = jneqsim.process.equipment.separator.Separator
                 sep = Sep(tag, prev_stream)
                 proc.add(sep)
-                # Gas outlet feeds the next unit
                 gas_out = Stream(f"{tag}-gas out", sep.getGasOutStream())
                 proc.add(gas_out)
                 prev_stream = gas_out
@@ -463,7 +603,9 @@ def create_neqsim_process_from_dexpi(
             elif "heatexchanger" in cls or "cooler" in cls:
                 Cooler = jneqsim.process.equipment.heatexchanger.Cooler
                 cooler = Cooler(tag, prev_stream)
-                cooler.setOutTemperature(273.15 + 25.0)
+                design_temp = _get_design_value(eq.attributes, "DesignTemperature")
+                out_temp = design_temp if design_temp is not None else 25.0
+                cooler.setOutTemperature(273.15 + out_temp)
                 proc.add(cooler)
                 out = Stream(f"{tag}-out", cooler.getOutletStream())
                 proc.add(out)
@@ -472,7 +614,8 @@ def create_neqsim_process_from_dexpi(
             elif "compressor" in cls:
                 Comp = jneqsim.process.equipment.compressor.Compressor
                 comp = Comp(tag, prev_stream)
-                comp.setOutletPressure(100.0)
+                design_p = _get_design_value(eq.attributes, "DesignPressure")
+                comp.setOutletPressure(design_p if design_p is not None else 100.0)
                 proc.add(comp)
                 out = Stream(f"{tag}-out", comp.getOutletStream())
                 proc.add(out)
@@ -481,16 +624,26 @@ def create_neqsim_process_from_dexpi(
             elif "pump" in cls:
                 Pump = jneqsim.process.equipment.pump.Pump
                 pump = Pump(tag, prev_stream)
-                pump.setOutletPressure(80.0)
+                design_p = _get_design_value(eq.attributes, "DesignPressure")
+                pump.setOutletPressure(design_p if design_p is not None else 80.0)
                 proc.add(pump)
                 out = Stream(f"{tag}-out", pump.getOutletStream())
                 proc.add(out)
                 prev_stream = out
 
+            elif "tank" in cls:
+                Sep = jneqsim.process.equipment.separator.Separator
+                tank = Sep(tag, prev_stream)
+                proc.add(tank)
+                liq_out = Stream(f"{tag}-liq out", tank.getLiquidOutStream())
+                proc.add(liq_out)
+                prev_stream = liq_out
+
             elif "valve" in cls:
                 Valve = jneqsim.process.equipment.valve.ThrottlingValve
                 valve = Valve(tag, prev_stream)
-                valve.setOutletPressure(50.0)
+                design_p = _get_design_value(eq.attributes, "DesignPressure")
+                valve.setOutletPressure(design_p if design_p is not None else 50.0)
                 proc.add(valve)
                 out = Stream(f"{tag}-out", valve.getOutletStream())
                 proc.add(out)
@@ -633,6 +786,12 @@ def format_dexpi_result(result: DexpiAnalysisResult) -> str:
         lines.append(f"Drawing: {pid.drawing_number}  Rev: {pid.revision}")
     if pid.schema_version:
         lines.append(f"Schema: DEXPI / Proteus v{pid.schema_version}")
+
+    if pid.drawings:
+        lines.append(f"Drawing sheets: {len(pid.drawings)}")
+        for d in pid.drawings:
+            d_label = d.get("title") or d.get("number") or d.get("id", "")
+            lines.append(f"  - {d_label}")
 
     lines.append("")
     lines.append("--- Equipment ---")

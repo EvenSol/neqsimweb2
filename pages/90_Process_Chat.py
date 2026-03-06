@@ -105,6 +105,8 @@ with st.sidebar:
         st.session_state.pop("process_model_bytes", None)
         st.session_state.pop("process_model_name", None)
         st.session_state.pop("_loaded_file_key", None)
+        st.session_state.pop("dexpi_xml", None)
+        st.session_state.pop("dexpi_filename", None)
         st.session_state.pop("chat_session", None)
         st.session_state["chat_messages"] = []
         st.session_state["_builder_mode"] = True
