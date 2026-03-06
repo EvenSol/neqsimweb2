@@ -446,6 +446,94 @@ if st.session_state.get("dexpi_xml"):
     _dexpi_info += '  —  Ask *"analyze the P&ID"* to run full analysis.'
     st.info(_dexpi_info)
 
+    # ─────────────────────────────────────────────
+    # DEXPI P&ID Viewer
+    # ─────────────────────────────────────────────
+    with st.expander("📐 DEXPI P&ID Viewer", expanded=False):
+        try:
+            from process_chat.dexpi_integration import parse_dexpi_xml
+            _dexpi_pid = parse_dexpi_xml(st.session_state["dexpi_xml"])
+
+            _title = _dexpi_pid.title or _dexpi_pid.drawing_number or _dexpi_fname
+            st.markdown(f"**{_title}**")
+            if _dexpi_pid.drawing_number or _dexpi_pid.revision:
+                st.caption(f"Drawing: {_dexpi_pid.drawing_number}  Rev: {_dexpi_pid.revision}  Schema: {_dexpi_pid.schema_version}")
+
+            # Summary metrics
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Equipment", len(_dexpi_pid.equipment))
+            c2.metric("Piping Lines", len(_dexpi_pid.piping))
+            c3.metric("Instruments", len(_dexpi_pid.instruments))
+            c4.metric("Connections", _dexpi_pid.connection_count)
+
+            # Equipment table
+            if _dexpi_pid.equipment:
+                st.markdown("**Equipment:**")
+                _eq_rows = []
+                for eq in _dexpi_pid.equipment:
+                    _attrs = []
+                    for k, v in list(eq.attributes.items())[:3]:
+                        if v:
+                            _attrs.append(f"{k}: {v}")
+                    _eq_rows.append({
+                        "Tag": eq.tag_name,
+                        "Type": eq.component_class,
+                        "Nozzles": len(eq.nozzles),
+                        "Attributes": "; ".join(_attrs) if _attrs else "—",
+                    })
+                st.dataframe(pd.DataFrame(_eq_rows), use_container_width=True, hide_index=True)
+
+            # Piping table
+            if _dexpi_pid.piping:
+                st.markdown("**Piping Networks:**")
+                _pip_rows = []
+                for p in _dexpi_pid.piping:
+                    _pip_rows.append({
+                        "Line": p.line_number,
+                        "Fluid": p.fluid_code,
+                        "Diameter": p.nominal_diameter,
+                        "Class": p.piping_class,
+                        "Segments": p.segments,
+                        "Valves": len(p.valves),
+                    })
+                st.dataframe(pd.DataFrame(_pip_rows), use_container_width=True, hide_index=True)
+
+            # Connectivity graph (from piping connections)
+            if _dexpi_pid.piping:
+                _connections = []
+                for p in _dexpi_pid.piping:
+                    for conn in p.connections:
+                        _from = conn.get("from", "")
+                        _to = conn.get("to", "")
+                        if _from or _to:
+                            _connections.append(f"  {_from or '?'} → **{p.line_number}** ({p.fluid_code}) → {_to or '?'}")
+                if _connections:
+                    st.markdown("**Connectivity:**")
+                    st.markdown("\n".join(_connections))
+
+            # Instrumentation
+            if _dexpi_pid.instruments:
+                st.markdown("**Instrumentation:**")
+                _inst_rows = []
+                for inst in _dexpi_pid.instruments:
+                    _inst_rows.append({
+                        "Tag": inst.tag,
+                        "Class": inst.component_class,
+                        "Type": inst.function_type or "—",
+                    })
+                st.dataframe(pd.DataFrame(_inst_rows), use_container_width=True, hide_index=True)
+
+            # Raw XML viewer
+            with st.expander("📄 View raw XML", expanded=False):
+                _xml_text = st.session_state["dexpi_xml"].decode("utf-8", errors="replace")
+                st.code(_xml_text[:50000], language="xml")
+
+        except Exception as e:
+            st.warning(f"Could not parse DEXPI for preview: {e}")
+            # Fall back to raw XML
+            _xml_text = st.session_state["dexpi_xml"].decode("utf-8", errors="replace")
+            st.code(_xml_text[:50000], language="xml")
+
 # ─────────────────────────────────────────────
 # Process Flow Diagram (PFD)
 # ─────────────────────────────────────────────
@@ -2027,6 +2115,78 @@ def _show_dexpi(dexpi_result):
         st.warning(w)
 
 
+def _show_neqsim_code(code_result):
+    """Display NeqSim code execution results inline."""
+    import plotly.graph_objects as go
+
+    st.markdown("---")
+    st.markdown("**🐍 NeqSim Code Execution**")
+
+    # Show the code
+    code = code_result.get("code", "")
+    if code:
+        with st.expander("View executed code", expanded=False):
+            st.code(code, language="python")
+
+    # Show retry info
+    attempts = code_result.get("attempts", [])
+    if len(attempts) > 1:
+        successes = [a for a in attempts if not a.get("error")]
+        failures = [a for a in attempts if a.get("error")]
+        if successes:
+            st.info(f"✅ Succeeded on attempt {successes[0].get('attempt', '?')}/{len(attempts)} "
+                     f"({len(failures)} auto-fix retries)")
+        with st.expander(f"Retry history ({len(attempts)} attempts)", expanded=False):
+            for a in attempts:
+                attempt_num = a.get("attempt", "?")
+                if a.get("error"):
+                    st.error(f"Attempt {attempt_num}: {a['error']}")
+                else:
+                    st.success(f"Attempt {attempt_num}: Success")
+
+    # Show error if final result failed
+    if code_result.get("error"):
+        st.error(f"Execution error: {code_result['error']}")
+
+    # Show stdout
+    stdout = code_result.get("stdout", "")
+    if stdout:
+        st.text(stdout[:10000])
+
+    # Show tables (DataFrames)
+    tables = code_result.get("tables", [])
+    for tbl in tables:
+        name = tbl.get("name", "Result")
+        df = tbl.get("dataframe")
+        if df is not None:
+            st.markdown(f"**{name}**")
+            st.dataframe(df, use_container_width=True)
+        else:
+            csv = tbl.get("csv", "")
+            if csv:
+                st.markdown(f"**{name}**")
+                st.text(csv[:5000])
+
+    # Show figures
+    figures = code_result.get("figures", [])
+    for fig_info in figures:
+        fig = fig_info.get("figure")
+        fig_type = fig_info.get("type", "")
+        if fig_type == "plotly" and fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+        elif fig_type == "matplotlib" and fig is not None:
+            st.pyplot(fig, use_container_width=True)
+
+    # Download button for the code
+    if code:
+        st.download_button(
+            "📥 Download Python script",
+            data=code,
+            file_name="neqsim_script.py",
+            mime="text/x-python",
+        )
+
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -2064,6 +2224,7 @@ for msg in st.session_state["chat_messages"]:
             ("lab_import", _show_lab_import),
             ("report", _show_report),
             ("dexpi", _show_dexpi),
+            ("neqsim_code", _show_neqsim_code),
         ]
         for key, renderer in _RESULT_RENDERERS:
             data = msg.get(key)
@@ -2154,6 +2315,7 @@ if user_input:
                 lab_import = session.get_last_lab_import()
                 report = session.get_last_report()
                 dexpi = session.get_last_dexpi()
+                neqsim_code = session.get_last_neqsim_code()
 
                 # --- Sync model from session back to session_state ---
                 if session.model is not None:
@@ -2217,6 +2379,7 @@ if user_input:
                     ("lab_import", lab_import, _show_lab_import),
                     ("report", report, _show_report),
                     ("dexpi", dexpi, _show_dexpi),
+                    ("neqsim_code", neqsim_code, _show_neqsim_code),
                 ]
                 for key, result_obj, renderer in _result_pairs:
                     if result_obj is not None:

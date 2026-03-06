@@ -512,7 +512,37 @@ When the user asks to save/download the process, output:
 ```build
 {{"action": "save"}}
 ```
-Do NOT write Python scripts yourself — ALWAYS use the show_script action so the system generates the correct script.
+
+NEQSIM CODE EXECUTION (for custom calculations, standalone simulations, plots):
+When the user asks for a CUSTOM calculation, property lookup, phase diagram, or any
+standalone thermodynamic simulation, write executable NeqSim Python code in a
+```neqsim_code``` block. The code is executed automatically and results (print output,
+DataFrames, plots) are captured and displayed. If the code fails, the error is shown
+to you and you fix the code — this repeats automatically up to 5 times.
+
+```neqsim_code
+from neqsim.thermo import fluid, TPflash, dataFrame
+
+thermosystem = fluid('srk')
+thermosystem.addComponent('methane', 0.85)
+thermosystem.addComponent('ethane', 0.07)
+thermosystem.addComponent('propane', 0.03)
+thermosystem.setMixingRule(2)
+thermosystem.setPressure(50.0, 'bara')
+thermosystem.setTemperature(25.0, 'C')
+TPflash(thermosystem)
+results = dataFrame(thermosystem)
+print(results.to_string())
+```
+
+RULES FOR neqsim_code:
+- Use: from neqsim.thermo import fluid, TPflash, dataFrame, phaseenvelope, fluid_df
+- For Java API: from neqsim import jneqsim
+- Allowed: neqsim, numpy, pandas, matplotlib, plotly, math, json
+- Print results, create DataFrames and plotly/matplotlib figures — all captured automatically
+- Do NOT use os, subprocess, sys, open(), file I/O or network calls
+Use for: "calculate dewpoint", "flash this composition", "plot phase envelope",
+"what is the density", "compare EOS models", "gas hydrate temperature", any custom calc.
 
 IMPORTANT — AVOID UNNECESSARY REBUILDS:
 Compressor charts, mechanical design, and auto-sizing data are expensive to compute and
@@ -1450,10 +1480,71 @@ DESIGN GUIDELINES (use these defaults unless the user specifies otherwise):
 When the user describes a process, design it with appropriate engineering defaults and explain your choices.
 After the process is built, explain the key results (power, duty, temperatures, pressures).
 
-IMPORTANT: Do NOT write Python scripts yourself. ALWAYS use ```build {"action": "show_script"}``` so
-the system generates the correct script with proper NeqSim Java API imports.
-Do NOT use "from neqsim.process import ..." or "from neqsim.thermo.system import ..." — these are WRONG.
-The correct imports are handled automatically by the show_script action.
+SCRIPT GENERATION:
+When the user asks to "see the Python script" or "generate the code" for the BUILT PROCESS,
+use ```build {"action": "show_script"}``` — the system will generate the correct Java-interop script.
+
+NEQSIM CODE EXECUTION (for custom simulations, calculations, plots):
+When the user asks for a CUSTOM simulation, thermodynamic calculation, property lookup,
+phase diagram, or anything that doesn't fit the standard build/scenario tools, write
+executable NeqSim Python code in a ```neqsim_code``` block. The system will execute it
+automatically, capture results (stdout, DataFrames, plots), and display them.
+If the code fails, the system will show you the error and ask you to fix it — this
+repeats automatically up to 5 times until the code succeeds.
+
+Example — TP flash calculation:
+```neqsim_code
+from neqsim.thermo import fluid, TPflash, dataFrame
+
+thermosystem = fluid('srk')
+thermosystem.addComponent('methane', 0.85)
+thermosystem.addComponent('ethane', 0.07)
+thermosystem.addComponent('propane', 0.03)
+thermosystem.addComponent('CO2', 0.02)
+thermosystem.addComponent('nitrogen', 0.03)
+thermosystem.setMixingRule(2)
+
+thermosystem.setPressure(50.0, 'bara')
+thermosystem.setTemperature(25.0, 'C')
+TPflash(thermosystem)
+results = dataFrame(thermosystem)
+print(results.to_string())
+```
+
+Example — phase envelope:
+```neqsim_code
+from neqsim.thermo import fluid, phaseenvelope
+import plotly.graph_objects as go
+
+thermosystem = fluid('srk')
+thermosystem.addComponent('methane', 0.90)
+thermosystem.addComponent('ethane', 0.05)
+thermosystem.addComponent('propane', 0.03)
+thermosystem.addComponent('n-butane', 0.02)
+thermosystem.setMixingRule(2)
+thermosystem.setTemperature(25.0, 'C')
+thermosystem.setPressure(50.0, 'bara')
+
+result = phaseenvelope(thermosystem, True)
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=result.get('dewT', []), y=result.get('dewP', []), name='Dew point'))
+fig.add_trace(go.Scatter(x=result.get('bubT', []), y=result.get('bubP', []), name='Bubble point'))
+fig.update_layout(title='Phase Envelope', xaxis_title='Temperature [K]', yaxis_title='Pressure [bara]')
+```
+
+RULES FOR neqsim_code:
+- Use neqsim Python API: `from neqsim.thermo import fluid, TPflash, dataFrame, phaseenvelope, fluid_df`
+- For Java API access: `from neqsim import jneqsim`
+- Allowed imports: neqsim, numpy (np), pandas (pd), matplotlib (plt), plotly (go, px), math, json
+- Print results with `print()` — output is captured and shown to the user
+- Create DataFrames — they are automatically collected and displayed as tables
+- Create plotly or matplotlib figures — they are automatically displayed
+- Do NOT use os, subprocess, sys, open(), file I/O or network calls
+- Always include all necessary imports within the code block
+
+Use neqsim_code for: "calculate dewpoint", "flash this composition", "plot phase envelope",
+"what is the density of...", "compare EOS models", "calculate water content",
+"gas hydrate temperature", "show me properties of...", any custom NeqSim calculation.
 
 PROCESS OPTIMIZATION (after a process has been built):
 When the user asks to optimize, find maximum production, or maximize throughput, output:
@@ -1705,7 +1796,189 @@ When the user provides lab data or wants to update feed composition, output:
 }
 ```
 Use this for: "lab results", "new composition", "update feed", "LIMS data".
+
+NEQSIM CODE EXECUTION (for custom simulations outside the build system):
+See the NEQSIM CODE EXECUTION section above for the ```neqsim_code``` tool.
+Use it whenever the user asks for a standalone calculation, property lookup, phase diagram,
+or any thermodynamic simulation that doesn't need the full process builder.
 """
+
+
+# ---------------------------------------------------------------------------
+# NeqSim code execution sandbox
+# ---------------------------------------------------------------------------
+
+# Allowed module names for import within neqsim_code blocks
+_NEQSIM_CODE_ALLOWED_MODULES = frozenset({
+    "neqsim", "neqsim.thermo", "neqsim.process", "neqsim.standards",
+    "jneqsim",
+    "numpy", "np",
+    "pandas", "pd",
+    "matplotlib", "matplotlib.pyplot", "plt",
+    "plotly", "plotly.graph_objects", "plotly.express", "plotly.subplots",
+    "math", "json", "io", "dataclasses", "collections",
+})
+
+
+def _execute_neqsim_code(code: str) -> dict:
+    """Execute NeqSim Python code in a restricted namespace.
+
+    Returns a dict with:
+      - code: the original source code
+      - stdout: captured print output
+      - error: error message if execution failed, else None
+      - tables: list of {name, csv, dataframe} for any pandas DataFrames
+      - figures: list of {name, figure} for any matplotlib/plotly figures
+    """
+    import io as _io
+    import sys as _sys
+    import contextlib
+
+    result = {
+        "code": code,
+        "stdout": "",
+        "error": None,
+        "tables": [],
+        "figures": [],
+    }
+
+    # Capture stdout
+    stdout_buf = _io.StringIO()
+
+    # Prepare namespace with safe builtins and allowed imports
+    import builtins as _builtins
+    safe_builtins = {
+        k: getattr(_builtins, k) for k in [
+            "abs", "all", "any", "bool", "chr", "dict", "dir",
+            "divmod", "enumerate", "filter", "float", "format",
+            "frozenset", "getattr", "hasattr", "hash", "hex",
+            "id", "int", "isinstance", "issubclass", "iter",
+            "len", "list", "map", "max", "min", "next", "oct",
+            "ord", "pow", "print", "property", "range", "repr",
+            "reversed", "round", "set", "slice", "sorted", "str",
+            "sum", "super", "tuple", "type", "vars", "zip",
+            "True", "False", "None",
+            "Exception", "ValueError", "TypeError", "KeyError",
+            "IndexError", "AttributeError", "RuntimeError",
+            "StopIteration", "ZeroDivisionError",
+        ] if hasattr(_builtins, k)
+    }
+
+    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        """Import guard: only allow whitelisted modules."""
+        top = name.split(".")[0]
+        if top not in {"neqsim", "jneqsim", "numpy", "pandas",
+                        "matplotlib", "plotly", "math", "json",
+                        "io", "dataclasses", "collections", "np", "pd", "plt"}:
+            raise ImportError(
+                f"Import of '{name}' is not allowed. "
+                f"Only neqsim, numpy, pandas, matplotlib, plotly, math, json are permitted."
+            )
+        return __builtins__["__import__"](name, globals, locals, fromlist, level) if isinstance(__builtins__, dict) else _builtins.__import__(name, globals, locals, fromlist, level)
+
+    safe_builtins["__import__"] = _safe_import
+    safe_builtins["__build_class__"] = _builtins.__build_class__
+
+    # Pre-import common modules into namespace
+    import numpy as _np
+    import pandas as _pd
+
+    namespace = {
+        "__builtins__": safe_builtins,
+        "np": _np,
+        "numpy": _np,
+        "pd": _pd,
+        "pandas": _pd,
+    }
+
+    # Pre-import neqsim
+    try:
+        from neqsim.thermo import fluid_df, TPflash, phaseenvelope, dataFrame, fluid
+        from neqsim import jneqsim
+        namespace.update({
+            "fluid_df": fluid_df,
+            "TPflash": TPflash,
+            "phaseenvelope": phaseenvelope,
+            "dataFrame": dataFrame,
+            "fluid": fluid,
+            "jneqsim": jneqsim,
+        })
+    except Exception:
+        pass  # neqsim not available — code will fail with a clear import error
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as _plt
+        namespace["matplotlib"] = matplotlib
+        namespace["plt"] = _plt
+    except ImportError:
+        pass
+
+    try:
+        import plotly.graph_objects as _go
+        import plotly.express as _px
+        namespace["plotly"] = __import__("plotly")
+        namespace["go"] = _go
+        namespace["px"] = _px
+    except ImportError:
+        pass
+
+    # Execute the code
+    try:
+        with contextlib.redirect_stdout(stdout_buf):
+            exec(compile(code, "<neqsim_code>", "exec"), namespace)
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        result["stdout"] = stdout_buf.getvalue()
+        return result
+
+    result["stdout"] = stdout_buf.getvalue()
+
+    # Collect DataFrames from namespace
+    for var_name, var_val in namespace.items():
+        if var_name.startswith("_"):
+            continue
+        if isinstance(var_val, _pd.DataFrame) and not var_val.empty:
+            csv_str = var_val.to_csv(index=True)
+            # Limit CSV size
+            if len(csv_str) > 50000:
+                csv_str = csv_str[:50000] + "\n... (truncated)"
+            result["tables"].append({
+                "name": var_name,
+                "csv": csv_str,
+                "dataframe": var_val,
+            })
+
+    # Collect matplotlib figures
+    try:
+        import matplotlib.pyplot as _plt2
+        figs = [_plt2.figure(num) for num in _plt2.get_fignums()]
+        for i, fig in enumerate(figs):
+            result["figures"].append({
+                "name": f"Figure {i+1}",
+                "figure": fig,
+                "type": "matplotlib",
+            })
+    except Exception:
+        pass
+
+    # Collect plotly figures from namespace
+    try:
+        import plotly.graph_objects as _go2
+        for var_name, var_val in namespace.items():
+            if var_name.startswith("_"):
+                continue
+            if isinstance(var_val, _go2.Figure):
+                result["figures"].append({
+                    "name": var_name,
+                    "figure": var_val,
+                    "type": "plotly",
+                })
+    except Exception:
+        pass
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1824,6 +2097,7 @@ _TOOL_BLOCK_TYPES = (
     "weather",
     "lab_import",
     "dexpi",
+    "neqsim_code",
 )
 
 def _strip_tool_blocks(text: str) -> str:
@@ -2218,6 +2492,19 @@ def extract_dexpi_spec(text: str) -> Optional[dict]:
     return None
 
 
+def extract_neqsim_code(text: str) -> Optional[str]:
+    """Extract a neqsim_code block from LLM output.
+
+    Returns the raw Python code string (not JSON).
+    """
+    import re
+    pattern = r'```neqsim_code\s*\n(.*?)\n\s*```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        return matches[0].strip()
+    return None
+
+
 def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
@@ -2454,6 +2741,7 @@ class ProcessChatSession:
         self._last_production_scenario = None
         self._last_report = None
         self._last_dexpi = None
+        self._last_neqsim_code = None
         self._signal_tracker = SignalTracker()
         self._builder = None       # ProcessBuilder instance (when building)
         self._last_script = None   # Last generated Python script
@@ -2508,6 +2796,7 @@ class ProcessChatSession:
         self._last_production_scenario = None
         self._last_report = None
         self._last_dexpi = None
+        self._last_neqsim_code = None
 
         client = genai.Client(api_key=self.api_key)
 
@@ -2666,6 +2955,11 @@ class ProcessChatSession:
         dexpi_spec = extract_dexpi_spec(assistant_text)
         if dexpi_spec and self._dexpi_xml:
             return self._handle_dexpi(assistant_text, dexpi_spec, client, types)
+
+        # --- Check for neqsim_code spec ---
+        neqsim_code = extract_neqsim_code(assistant_text)
+        if neqsim_code:
+            return self._handle_neqsim_code(assistant_text, neqsim_code, client, types)
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
@@ -4550,6 +4844,105 @@ class ProcessChatSession:
         """Get the last DEXPI analysis result (for UI display)."""
         return getattr(self, "_last_dexpi", None)
 
+    # -- NeqSim code execution -----------------------------------------------
+
+    _NEQSIM_CODE_MAX_RETRIES = 5
+
+    def _handle_neqsim_code(self, assistant_text: str, code: str, client, types) -> str:
+        """Execute a NeqSim Python code block with automatic error-fix retry loop.
+
+        If execution fails, the error is fed back to the LLM which generates
+        a corrected ``neqsim_code`` block.  This repeats up to
+        ``_NEQSIM_CODE_MAX_RETRIES`` times.  All intermediate attempts are
+        recorded so the user can see the progression.
+        """
+        attempts: List[dict] = []
+
+        current_code = code
+        current_assistant = assistant_text
+        self.history.append({"role": "assistant", "content": current_assistant})
+
+        for attempt in range(1, self._NEQSIM_CODE_MAX_RETRIES + 1):
+            result = _execute_neqsim_code(current_code)
+            result["attempt"] = attempt
+            attempts.append(result)
+
+            if not result["error"]:
+                # Success — store result with full attempt history and explain
+                result["attempts"] = attempts
+                self._last_neqsim_code = result
+
+                parts = []
+                if result["stdout"]:
+                    parts.append(f"Standard output:\n{result['stdout']}")
+                if result["tables"]:
+                    for i, tbl in enumerate(result["tables"]):
+                        parts.append(f"Table {i+1} ({tbl['name']}):\n{tbl['csv']}")
+                if result["figures"]:
+                    parts.append(f"{len(result['figures'])} figure(s) were generated and will be displayed.")
+                if not parts:
+                    parts.append("Code executed successfully with no output.")
+
+                retries_note = ""
+                if attempt > 1:
+                    retries_note = f" (succeeded on attempt {attempt}/{self._NEQSIM_CODE_MAX_RETRIES})"
+
+                results_text = "\n\n".join(parts)
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM: NeqSim code executed successfully{retries_note}. "
+                        f"Explain the results to the engineer. "
+                        f"Highlight key findings and any important values.]\n\n"
+                        f"{results_text}"
+                    )
+                })
+
+                final_text = self._llm_followup(client, types)
+                return final_text
+
+            # Execution failed — ask LLM to fix the code
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM: NeqSim code execution failed (attempt {attempt}/{self._NEQSIM_CODE_MAX_RETRIES}). "
+                    f"Fix the code and output a corrected ```neqsim_code``` block. "
+                    f"Do NOT explain — just output the fixed code block.]\n\n"
+                    f"Error:\n{result['error']}\n\n"
+                    f"Failed code:\n```python\n{current_code}\n```"
+                )
+            })
+
+            # Get LLM fix
+            fix_response = self._llm_followup(client, types)
+            fixed_code = extract_neqsim_code(fix_response)
+
+            if not fixed_code:
+                # LLM didn't produce a code block — give up, return the explanation
+                result["attempts"] = attempts
+                self._last_neqsim_code = result
+                return fix_response
+
+            current_code = fixed_code
+            current_assistant = fix_response
+
+        # All retries exhausted
+        result["attempts"] = attempts
+        self._last_neqsim_code = result
+        self.history.append({
+            "role": "user",
+            "content": (
+                f"[SYSTEM: NeqSim code failed after {self._NEQSIM_CODE_MAX_RETRIES} attempts. "
+                f"Inform the engineer about the persistent error and suggest manual investigation.]\n\n"
+                f"Last error:\n{result['error']}"
+            )
+        })
+        return self._llm_followup(client, types)
+
+    def get_last_neqsim_code(self) -> Optional[dict]:
+        """Get the last neqsim_code execution result (for UI display)."""
+        return getattr(self, "_last_neqsim_code", None)
+
     def get_last_report(self) -> Optional[dict]:
         """Get the last JSON report (for UI display)."""
         return getattr(self, "_last_report", None)
@@ -4630,6 +5023,7 @@ class ProcessChatSession:
         self._last_production_scenario = None
         self._last_report = None
         self._last_dexpi = None
+        self._last_neqsim_code = None
         self._dexpi_xml = None
         self._dexpi_filename = ""
         self._signal_tracker = SignalTracker()
