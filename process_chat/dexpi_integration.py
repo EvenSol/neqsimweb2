@@ -859,3 +859,45 @@ def format_dexpi_result(result: DexpiAnalysisResult) -> str:
             lines.append(f"  ⚠ {w}")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# DEXPI export: NeqSim ProcessSystem → DEXPI XML
+# ---------------------------------------------------------------------------
+
+def export_to_dexpi(process_model) -> Optional[bytes]:
+    """Export a NeqSim ProcessSystem to DEXPI XML bytes.
+
+    Uses NeqSim's Java DexpiXmlWriter.  Only works for ProcessSystems
+    built from DEXPI imports (DexpiProcessUnit/DexpiStream objects).
+    Standard NeqSim equipment that was not imported from DEXPI will be
+    silently skipped.
+
+    Returns XML bytes or None if export fails.
+    """
+    try:
+        from neqsim import jneqsim
+
+        proc = process_model.process if hasattr(process_model, "process") else process_model
+
+        suffix = ".xml"
+        with tempfile.NamedTemporaryFile(
+            suffix=suffix, delete=False, mode="wb"
+        ) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            DexpiXmlWriter = jneqsim.process.processmodel.dexpi.DexpiXmlWriter
+            java_file = jneqsim.java.io.File(tmp_path)
+            DexpiXmlWriter.write(proc, java_file)
+
+            with open(tmp_path, "rb") as f:
+                return f.read()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    except Exception:
+        return None
