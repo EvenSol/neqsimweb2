@@ -2619,7 +2619,7 @@ def extract_report_spec(text: str) -> Optional[dict]:
 def extract_dexpi_spec(text: str) -> Optional[dict]:
     """Extract a DEXPI analysis specification from LLM output."""
     import re
-    pattern = r'```dexpi\s*\n(.*?)\n\s*```'
+    pattern = r'```dexpi\s*\n(.*?)\n?\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
     for match in matches:
         try:
@@ -4940,8 +4940,8 @@ class ProcessChatSession:
         self._dexpi_xml = xml_bytes
         self._dexpi_filename = filename
 
-        # Auto-inject P&ID context on first load when history is empty
-        if is_new and not self.history:
+        # Auto-inject P&ID context on first load (or late load)
+        if is_new:
             try:
                 pid_summary = parse_dexpi_xml(xml_bytes)
                 eq_list = ", ".join(
@@ -4990,6 +4990,8 @@ class ProcessChatSession:
             # re-import replaces the current model with the DEXPI-derived one)
             if result.neqsim_model is not None:
                 self.model = result.neqsim_model
+                # Clear builder state when importing DEXPI model
+                self._builder = None
                 # Switch to full model system prompt so ALL tools become available
                 self._system_prompt = build_system_prompt(self.model)
                 # Build inline model overview for chat display

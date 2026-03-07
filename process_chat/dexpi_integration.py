@@ -13,11 +13,19 @@ Reference DEXPI example PIDs: https://gitlab.com/dexpi/TrainingTestCases
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+try:
+    import defusedxml.ElementTree as _SafeET
+except ImportError:
+    _SafeET = None
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +121,8 @@ def _get_tag_name(element: ET.Element) -> str:
     seq = _get_generic_attr(element, "TagNameSequenceNumber")
     suffix = _get_generic_attr(element, "TagNameSuffix")
     if prefix or seq:
-        return f"{prefix}{seq}{suffix}".strip()
+        composed = f"{prefix}{seq}{suffix}".strip()
+        return composed if composed else element.get("ID", "")
     return element.get("ID", "")
 
 
@@ -129,7 +138,7 @@ def parse_dexpi_xml(xml_bytes: bytes) -> DexpiPIDSummary:
     schema used by DEXPI v1.3.  The pyDEXPI library is available for
     programmatic model building and graph export.
     """
-    root = ET.fromstring(xml_bytes)
+    root = _SafeET.fromstring(xml_bytes) if _SafeET else ET.fromstring(xml_bytes)
     summary = DexpiPIDSummary()
 
     # --- Plant information ---
@@ -158,6 +167,8 @@ def parse_dexpi_xml(xml_bytes: bytes) -> DexpiPIDSummary:
         "Reactor", "StirredReactor",
         "Filter", "Dryer", "Mixer", "Separator",
         "Stripper", "Absorber", "Distillation",
+        "Valve", "ThrottlingValve", "ControlValve",
+        "Expander", "TurbineExpander",
     }
 
     _SKIP_SUB_EQUIPMENT = {"Chamber", "TubeBundle", "Displacer", "Impeller", "Equipment"}
@@ -389,9 +400,11 @@ def load_dexpi_to_neqsim(
         finally:
             os.unlink(tmp_path)
 
-    except Exception:
+    except (AttributeError, ImportError, TypeError):
         # DexpiXmlReader may not be available in all NeqSim versions
         pass
+    except Exception as e:
+        _logger.warning("load_dexpi_to_neqsim failed: %s", e)
 
     return None
 
@@ -440,6 +453,15 @@ def get_fluid_rows_for_code(fluid_code: str) -> List[Dict[str, Any]]:
 # Helper: extract numeric design data from equipment attributes
 # ---------------------------------------------------------------------------
 
+def _get_primary_fluid_code(pid_summary: DexpiPIDSummary) -> str:
+    """Return the most common FluidCode from piping networks, default 'NG'."""
+    counts: Dict[str, int] = {}
+    for p in pid_summary.piping:
+        if p.fluid_code:
+            counts[p.fluid_code] = counts.get(p.fluid_code, 0) + 1
+    return max(counts, key=counts.get) if counts else "NG"
+
+
 def _get_design_value(attrs: Dict[str, str], *keys: str) -> Optional[float]:
     """Extract a numeric value from equipment attributes by key name.
 
@@ -484,14 +506,7 @@ def create_neqsim_process_from_dexpi(
         import pandas as pd
 
         # Determine primary fluid code from piping networks
-        primary_code = "NG"
-        if pid_summary.piping:
-            _fc: Dict[str, int] = {}
-            for _p in pid_summary.piping:
-                if _p.fluid_code:
-                    _fc[_p.fluid_code] = _fc.get(_p.fluid_code, 0) + 1
-            if _fc:
-                primary_code = max(_fc, key=_fc.get)
+        primary_code = _get_primary_fluid_code(pid_summary)
 
         # --- Create default fluid ---
         if fluid_spec and "components" in fluid_spec:
@@ -781,17 +796,11 @@ def run_dexpi_analysis(
     # Step 5: Auto-detect fluid from piping fluid codes if not specified
     effective_fluid_spec = fluid_spec
     if effective_fluid_spec is None and fluid_codes:
-        # Pick the primary (most common) fluid code and use its default composition
-        code_counts: Dict[str, int] = {}
-        for p in pid_summary.piping:
-            if p.fluid_code:
-                code_counts[p.fluid_code] = code_counts.get(p.fluid_code, 0) + 1
-        if code_counts:
-            primary_code = max(code_counts, key=code_counts.get)
-            rows = get_fluid_rows_for_code(primary_code)
-            effective_fluid_spec = {
-                "components": {r["ComponentName"]: r["MolarComposition[-]"] for r in rows}
-            }
+        primary_code = _get_primary_fluid_code(pid_summary)
+        rows = get_fluid_rows_for_code(primary_code)
+        effective_fluid_spec = {
+            "components": {r["ComponentName"]: r["MolarComposition[-]"] for r in rows}
+        }
 
     # Step 6: Attempt NeqSim import
     neqsim_model = None
@@ -801,8 +810,8 @@ def run_dexpi_analysis(
         # Try Java DexpiXmlReader first
         try:
             neqsim_model = load_dexpi_to_neqsim(xml_bytes, filename, effective_fluid_spec)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug("DexpiXmlReader import failed: %s", e)
 
         # Fallback: build process from parsed topology
         if neqsim_model is None and pid_summary.equipment:
@@ -817,8 +826,8 @@ def run_dexpi_analysis(
                 streams = neqsim_model.list_streams()
                 neqsim_units = len(units)
                 neqsim_streams = len(streams)
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug("Error counting units/streams: %s", e)
         else:
             warnings.append("NeqSim process model could not be created from P&ID")
 
@@ -967,8 +976,8 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("Java DexpiXmlWriter export failed: %s", e)
 
     # --- Try pyDEXPI model building (validates structure) ---
     _export_to_dexpi_pydexpi(process_model)
@@ -1110,7 +1119,8 @@ def _export_to_dexpi_pydexpi(process_model) -> Optional[bytes]:
         # pyDEXPI ProteusSerializer.save() is not yet implemented,
         # so return None to fall through to the XML generator below.
         return None
-    except Exception:
+    except Exception as e:
+        _logger.debug("pyDEXPI model building failed: %s", e)
         return None
 
 
@@ -1259,7 +1269,8 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
         tree.write(buf, encoding="utf-8", xml_declaration=True)
         return buf.getvalue()
 
-    except Exception:
+    except Exception as e:
+        _logger.warning("DEXPI XML export failed: %s", e)
         return None
 
 
@@ -1303,7 +1314,8 @@ def dexpi_to_networkx(process_model) -> Optional[Any]:
         gl = MLGraphLoader(plant_model=dexpi_model)
         gl.dexpi_to_graph()
         return gl.graph
-    except Exception:
+    except Exception as e:
+        _logger.debug("dexpi_to_networkx failed: %s", e)
         return None
 
 
@@ -1326,5 +1338,6 @@ def parse_dexpi_with_pydexpi(xml_bytes: bytes, filename: str = "pid.xml"):
             return ser.load(tmpdir, filename)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
-    except Exception:
+    except Exception as e:
+        _logger.debug("parse_dexpi_with_pydexpi failed: %s", e)
         return None

@@ -91,10 +91,11 @@ with st.sidebar:
                             st.session_state["_builder_mode"] = True
                         st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
                         st.info("Could not auto-build NeqSim model — ask in chat to analyze and import.")
-                except Exception:
-                    if st.session_state.get("process_model") is None:
-                        st.session_state["_builder_mode"] = True
-                    st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+except Exception as e:
+                if st.session_state.get("process_model") is None:
+                    st.session_state["_builder_mode"] = True
+                st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+                st.warning(f"Auto-build failed: {e}")
 
                 st.session_state["_pending_question"] = (
                     "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
@@ -228,7 +229,7 @@ with st.sidebar:
                 else:
                     if st.session_state.get("process_model") is None:
                         st.session_state["_builder_mode"] = True
-            except Exception:
+            except Exception as e:
                 if st.session_state.get("process_model") is None:
                     st.session_state["_builder_mode"] = True
             st.session_state["_pending_question"] = (
@@ -2541,6 +2542,8 @@ with col2:
         st.session_state.pop("_loaded_file_key", None)
         st.session_state.pop("_builder_mode", None)
         st.session_state.pop("chat_session", None)
+        st.session_state.pop("dexpi_xml", None)
+        st.session_state.pop("dexpi_filename", None)
         st.session_state["chat_messages"] = []
         st.rerun()
 with col3:
