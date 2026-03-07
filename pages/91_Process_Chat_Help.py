@@ -31,7 +31,7 @@ with st.sidebar:
 - [Building a Process](#building-a-process)
 - [What-If Scenarios](#what-if-scenarios)
 - [Analysis Tools (28)](#analysis-tools)
-- [Equipment Types (37)](#equipment-types)
+- [Equipment Types (36)](#equipment-types)
 - [EOS Models (8)](#equation-of-state-models)
 - [Sensitivity Analysis](#sensitivity-analysis)
 - [PVT Simulation](#pvt-simulation)
@@ -223,7 +223,7 @@ st.divider()
 #  EQUIPMENT TYPES
 # ═══════════════════════════════════════════════
 st.header("Equipment Types", anchor="equipment-types")
-st.markdown("**37 equipment types** are available for process building and scenario patching.")
+st.markdown("**36 equipment types** are available for process building and scenario patching.")
 
 equip_col1, equip_col2 = st.columns(2)
 
@@ -237,18 +237,17 @@ with equip_col1:
 | `air_cooler` | Air-cooled (fin-fan) | outlet_temperature_C |
 | `water_cooler` | Water-cooled | outlet_temperature_C |
 | `heat_exchanger` | Shell & tube (2 streams) | UA_value |
-| `multi_stream_heat_exchanger` | Multi-stream | UA_value |
     """)
 
     st.subheader("Rotating Equipment")
     st.markdown("""
 | Type | Description | Key Parameters |
 |------|-------------|----------------|
-| `compressor` | Centrifugal/reciprocating | outlet_pressure_bara, isentropicEfficiency |
-| `expander` | Gas expander | outlet_pressure_bara, efficiency |
-| `turbo_expander_compressor` | Combined unit | outlet_pressure_bara |
+| `compressor` | Centrifugal/reciprocating | outlet_pressure_bara, isentropic_efficiency |
+| `expander` | Gas expander | outlet_pressure_bara, isentropic_efficiency |
 | `pump` | Liquid pump | outlet_pressure_bara, efficiency |
-| `esp_pump` | Electric submersible | outlet_pressure_bara |
+| `esp_pump` | Electric submersible pump | outlet_pressure_bara |
+| `gas_turbine` | Gas turbine driver | efficiency |
     """)
 
     st.subheader("Separation")
@@ -256,9 +255,10 @@ with equip_col1:
 | Type | Description | Key Parameters |
 |------|-------------|----------------|
 | `separator` | 2-phase gas/liquid | *(auto-sized)* |
+| `two_phase_separator` | Explicit 2-phase separator | *(auto-sized)* |
 | `three_phase_separator` | 3-phase G/O/W | *(auto-sized)* |
 | `gas_scrubber` | Knock-out drum | *(auto-sized)* |
-| `hydrocyclone` | Hydrocyclone | *(auto-sized)* |
+| `membrane_separator` | Gas membrane separator | *(auto-sized)* |
     """)
 
     st.subheader("Valves")
@@ -266,8 +266,7 @@ with equip_col1:
 | Type | Description | Key Parameters |
 |------|-------------|----------------|
 | `valve` | Throttling valve (JT) | outlet_pressure_bara |
-| `control_valve` | Automated valve | outlet_pressure_bara, Cv |
-| `check_valve` | One-way valve | — |
+| `control_valve` | Automated control valve | outlet_pressure_bara, Cv |
     """)
 
 with equip_col2:
@@ -277,8 +276,8 @@ with equip_col2:
 |------|-------------|----------------|
 | `simple_absorber` | Absorption column | number_of_stages |
 | `simple_teg_absorber` | TEG dehydration | number_of_stages |
-| `water_stripper_column` | Water stripper | — |
-| `distillation_column` | Distillation | number_of_stages |
+| `distillation_column` | Distillation column | number_of_stages |
+| `adsorber` | Molecular sieve / activated carbon | — |
     """)
 
     st.subheader("Piping & Flow")
@@ -287,7 +286,6 @@ with equip_col2:
 |------|-------------|----------------|
 | `pipeline` | Pipeline with friction | length_m, diameter_m, roughness |
 | `adiabatic_pipe` | Adiabatic pipe | length_m, diameter_m |
-| `adiabatic_two_phase_pipe` | Two-phase pipe | length_m, diameter_m |
 | `well_flow` | Well tubing (Beggs & Brills) | wellhead_pressure_bara |
     """)
 
@@ -304,15 +302,12 @@ with equip_col2:
     st.markdown("""
 | Type | Description | Key Parameters |
 |------|-------------|----------------|
-| `gibbs_reactor` | Gibbs reactor | — |
+| `gibbs_reactor` | Gibbs equilibrium reactor | — |
 | `ejector` | Gas ejector | — |
 | `flare` | Flare stack | — |
 | `filter` | Inline filter | — |
 | `tank` | Storage tank | pressure_bara |
-| `adsorber` | Molecular sieve / activated carbon | — |
-| `membrane_separator` | Gas membrane | — |
 | `electrolyzer` | Water electrolyzer (H₂) | — |
-| `gas_turbine` | Gas turbine | efficiency |
     """)
 
     st.subheader("Control & Convergence")
@@ -551,28 +546,32 @@ st.divider()
 st.header("Compressor Performance Charts", anchor="compressor-performance-charts")
 st.markdown("""
 Generate detailed compressor performance maps with surge and stonewall limits.
+Each chart shows head-vs-flow curves at multiple speeds, with surge line, stonewall,
+and the current operating point.
 
-**12 chart templates available:**
+**13 compressor templates available:**
 
 | Template | Description |
 |----------|-------------|
-| `head_vs_flow` | Polytropic head vs actual volumetric flow |
-| `efficiency_vs_flow` | Polytropic efficiency vs flow |
-| `power_vs_flow` | Shaft power vs flow |
-| `pressure_ratio_vs_flow` | Compression ratio vs flow |
-| `head_vs_flow_multi_speed` | Head curves at multiple speeds |
-| `efficiency_vs_flow_multi_speed` | Efficiency at multiple speeds |
-| `power_vs_flow_multi_speed` | Power at multiple speeds |
-| `combined_performance` | Head + efficiency + power combined |
-| `surge_line` | Surge limit line |
-| `operating_envelope` | Full operating envelope with surge & stonewall |
-| `fan_law_scaling` | Affinity law (fan law) scaling curves |
-| `mollier_diagram` | h-s diagram for compression path |
+| `CENTRIFUGAL_STANDARD` | General purpose centrifugal (~78% eff) — **default** |
+| `CENTRIFUGAL_HIGH_FLOW` | High throughput, low pressure ratio (~78% eff) |
+| `CENTRIFUGAL_HIGH_HEAD` | High pressure ratio, narrow range (~78% eff) |
+| `PIPELINE` | Gas transmission, flat curves, wide turndown (82–85% eff) |
+| `EXPORT` | Offshore gas export, high pressure (~80% eff) |
+| `INJECTION` | Gas injection/EOR, very high pressure ratio (~77% eff) |
+| `GAS_LIFT` | Artificial lift, wide surge margin (~75% eff) |
+| `REFRIGERATION` | LNG/process cooling, wide range (~78% eff) |
+| `BOOSTER` | Process plant, moderate pressure ratio (~76% eff) |
+| `SINGLE_STAGE` | Simple, wide flow range (~75% eff) |
+| `MULTISTAGE_INLINE` | Barrel type, 4–8 stages (~78% eff) |
+| `INTEGRALLY_GEARED` | Multiple pinions, highest efficiency (82% eff) |
+| `OVERHUNG` | Cantilever, simple maintenance (~74% eff) |
 
 **Example prompts:**
+- *"Generate compressor chart for the 1st stage compressor"*
 - *"Show compressor performance map with surge line"*
-- *"Plot head vs flow at 3 different speeds"*
-- *"Show the operating envelope for the 1st stage compressor"*
+- *"Generate chart using PIPELINE template"*
+- *"Show the operating envelope for the export compressor"*
 """)
 
 st.divider()
