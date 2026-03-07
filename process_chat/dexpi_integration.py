@@ -124,9 +124,10 @@ def _get_tag_name(element: ET.Element) -> str:
 def parse_dexpi_xml(xml_bytes: bytes) -> DexpiPIDSummary:
     """Parse a DEXPI Proteus XML file and return a structured P&ID summary.
 
-    This uses pure Python XML parsing (no Java or pyDEXPI dependency) to
-    extract equipment, piping, instrumentation, and connectivity from the
-    standard Proteus XML schema used by DEXPI v1.3.
+    Uses pure Python XML parsing to extract equipment, piping,
+    instrumentation, and connectivity from the standard Proteus XML
+    schema used by DEXPI v1.3.  The pyDEXPI library is available for
+    programmatic model building and graph export.
     """
     root = ET.fromstring(xml_bytes)
     summary = DexpiPIDSummary()
@@ -363,7 +364,7 @@ def load_dexpi_to_neqsim(
         template_fluid.setPressure(50.0, "bara")
 
         # Create a NeqSim stream as template
-        template_stream = jneqsim.processSimulation.processEquipment.stream.Stream(
+        template_stream = jneqsim.process.equipment.stream.Stream(
             "template stream", template_fluid
         )
         template_stream.setFlowRate(100.0, "kg/hr")
@@ -964,6 +965,9 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
     except Exception:
         pass
 
+    # --- Try pyDEXPI model building (validates structure) ---
+    _export_to_dexpi_pydexpi(process_model)
+
     # --- Fallback: Python-based DEXPI XML generation ---
     return _export_to_dexpi_python(process_model)
 
@@ -992,6 +996,117 @@ _NEQSIM_TO_DEXPI_CLASS: Dict[str, str] = {
     "Tank": "Tank",
     "Flare": "Tank",
 }
+
+# pyDEXPI equipment class name → importer
+# Maps DEXPI class strings to callables that create pyDEXPI equipment objects.
+_PYDEXPI_EQUIPMENT_MAP: Dict[str, Any] = {}
+
+
+def _ensure_pydexpi_equipment_map():
+    """Lazily populate _PYDEXPI_EQUIPMENT_MAP on first use."""
+    if _PYDEXPI_EQUIPMENT_MAP:
+        return
+    try:
+        from pydexpi.dexpi_classes import equipment as eq
+        _PYDEXPI_EQUIPMENT_MAP.update({
+            "Separator": eq.Separator,
+            "Compressor": eq.Compressor,
+            "CentrifugalCompressor": eq.CentrifugalCompressor,
+            "ReciprocatingCompressor": eq.ReciprocatingCompressor,
+            "PlateHeatExchanger": eq.PlateHeatExchanger,
+            "TubularHeatExchanger": eq.TubularHeatExchanger,
+            "AirCooledHeatExchanger": getattr(eq, "AirCoolingSystem", eq.HeatExchanger),
+            "HeatExchanger": eq.HeatExchanger,
+            "CentrifugalPump": eq.CentrifugalPump,
+            "Pump": eq.Pump,
+            "Tank": eq.Tank,
+            "PressureVessel": eq.PressureVessel,
+            "Mixer": eq.Mixer,
+            "Flare": eq.Flare,
+            "Filter": eq.Filter,
+            "ProcessColumn": eq.ProcessColumn,
+            "Reactor": getattr(eq, "Reactor", eq.PressureVessel),
+            "Valve": getattr(eq, "CustomEquipment", eq.PressureVessel),
+        })
+    except ImportError:
+        pass
+
+
+def _export_to_dexpi_pydexpi(process_model) -> Optional[bytes]:
+    """Export NeqSim model to DEXPI XML via pyDEXPI Pydantic model.
+
+    Builds a validated pyDEXPI DexpiModel from the NeqSim process,
+    then serializes to JSON (Proteus XML export is not yet supported
+    by pyDEXPI).  Falls back to None so the XML generator is used.
+    """
+    try:
+        from .process_model import NeqSimProcessModel
+        if not isinstance(process_model, NeqSimProcessModel):
+            return None
+
+        from pydexpi.dexpi_classes.dexpiModel import DexpiModel, ConceptualModel
+        from pydexpi.dexpi_classes.equipment import Nozzle
+        from pydexpi.dexpi_classes.piping import (
+            PipingNetworkSystem as PyPNS,
+            PipingNetworkSegment as PySeg,
+            PipingNode,
+        )
+
+        ConceptualModel.model_rebuild()
+        DexpiModel.model_rebuild()
+        _ensure_pydexpi_equipment_map()
+
+        units = process_model.list_units()
+        streams = process_model.list_streams()
+        if not units:
+            return None
+
+        tagged_items = []
+        nozzle_map: Dict[str, tuple] = {}  # unit_name → (in_node, out_node)
+
+        for u in units:
+            tag = u.name
+            u_type = u.unit_type
+            dexpi_class = _NEQSIM_TO_DEXPI_CLASS.get(u_type, "PressureVessel")
+            if dexpi_class == "PipingNetworkSystem":
+                continue
+
+            cls = _PYDEXPI_EQUIPMENT_MAP.get(dexpi_class)
+            if cls is None:
+                continue
+
+            in_node = PipingNode()
+            out_node = PipingNode()
+            nz_in = Nozzle(nodes=[in_node], subTagName="inlet")
+            nz_out = Nozzle(nodes=[out_node], subTagName="outlet")
+
+            equip = cls(tagName=tag, nozzles=[nz_in, nz_out])
+            tagged_items.append(equip)
+            nozzle_map[tag] = (in_node, out_node)
+
+        piping_systems = []
+        for i, s in enumerate(streams):
+            s_name = s.name
+            pns = PyPNS(lineNumber=s_name, fluidCode="NG")
+            piping_systems.append(pns)
+
+        cm = ConceptualModel(
+            taggedPlantItems=tagged_items,
+            pipingNetworkSystems=piping_systems,
+        )
+        dexpi_model = DexpiModel(
+            conceptualModel=cm,
+            originatingSystemName="NeqSim",
+        )
+
+        # Store validated model for potential graph export later
+        process_model._pydexpi_model = dexpi_model
+
+        # pyDEXPI ProteusSerializer.save() is not yet implemented,
+        # so return None to fall through to the XML generator below.
+        return None
+    except Exception:
+        return None
 
 
 def _export_to_dexpi_python(process_model) -> Optional[bytes]:
@@ -1030,12 +1145,16 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
         equipment_nozzles: Dict[str, List[str]] = {}  # tag → [nozzle_ids]
 
         for u in units:
-            tag = u.get("name", "unit")
-            u_type = u.get("type", "")
+            tag = u.name
+            u_type = u.unit_type
             dexpi_class = _NEQSIM_TO_DEXPI_CLASS.get(u_type, "PressureVessel")
 
             # Skip pipeline-type equipment (added as piping)
             if dexpi_class == "PipingNetworkSystem":
+                continue
+
+            # Skip Stream-type units (they become piping, not equipment)
+            if u_type == "Stream":
                 continue
 
             eq_elem = ET.SubElement(eq_wrapper, dexpi_class)
@@ -1045,24 +1164,16 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
             attrs = ET.SubElement(eq_elem, "GenericAttributes")
             _add_ga(attrs, "TagNameAssignmentClass", tag)
 
-            # Extract design data from KPIs if available
-            try:
-                kpis = model.get_kpi()
-                prefix = f"units.{tag}"
-                for kpi_key, kpi_val in kpis.items():
-                    if not kpi_key.startswith(prefix):
-                        continue
-                    prop = kpi_key[len(prefix) + 1:]
-                    if "pressure" in prop.lower():
-                        _add_ga(attrs, "DesignPressure", str(round(kpi_val, 2)), "bara")
-                    elif "temperature" in prop.lower() and "outlet" in prop.lower():
-                        _add_ga(attrs, "DesignTemperature", str(round(kpi_val, 2)), "degC")
-                    elif "power" in prop.lower():
-                        _add_ga(attrs, "Power", str(round(kpi_val, 2)), "kW")
-                    elif "duty" in prop.lower():
-                        _add_ga(attrs, "Duty", str(round(kpi_val, 2)), "kW")
-            except Exception:
-                pass
+            # Add design data from unit properties
+            for prop_name, prop_val in u.properties.items():
+                if "pressure" in prop_name.lower():
+                    _add_ga(attrs, "DesignPressure", str(round(prop_val, 2)), "bara")
+                elif "temperature" in prop_name.lower():
+                    _add_ga(attrs, "DesignTemperature", str(round(prop_val, 2)), "degC")
+                elif "power" in prop_name.lower():
+                    _add_ga(attrs, "Power", str(round(prop_val, 2)), "kW")
+                elif "duty" in prop_name.lower():
+                    _add_ga(attrs, "Duty", str(round(prop_val, 2)), "kW")
 
             # Add nozzles (inlet + outlet)
             tag_nozzles = []
@@ -1080,12 +1191,20 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
 
         # Add piping connections (one PipingNetworkSystem per stream)
         for i, s in enumerate(streams):
-            s_name = s.get("name", f"stream-{i}")
+            s_name = s.name
             pns = ET.SubElement(root, "PipingNetworkSystem")
             pns.set("ID", f"PNS-{_sanitize_id(s_name)}")
             pns_attrs = ET.SubElement(pns, "GenericAttributes")
             _add_ga(pns_attrs, "FluidCode", "NG")
             _add_ga(pns_attrs, "LineNumber", s_name)
+
+            # Add stream conditions as attributes
+            if s.temperature_C is not None:
+                _add_ga(pns_attrs, "OperatingTemperature", str(round(s.temperature_C, 1)), "degC")
+            if s.pressure_bara is not None:
+                _add_ga(pns_attrs, "OperatingPressure", str(round(s.pressure_bara, 2)), "bara")
+            if s.flow_rate_kg_hr is not None:
+                _add_ga(pns_attrs, "FlowRate", str(round(s.flow_rate_kg_hr, 1)), "kg/hr")
 
             seg = ET.SubElement(pns, "PipingNetworkSegment")
             seg.set("ID", f"SEG-{_sanitize_id(s_name)}")
@@ -1113,3 +1232,55 @@ def _add_ga(parent: ET.Element, name: str, value: str, units: str = ""):
     ga.set("Value", value)
     if units:
         ga.set("Units", units)
+
+
+# ---------------------------------------------------------------------------
+# pyDEXPI graph export: DEXPI model → NetworkX graph
+# ---------------------------------------------------------------------------
+
+def dexpi_to_networkx(process_model) -> Optional[Any]:
+    """Export a NeqSim process model to a NetworkX graph via pyDEXPI.
+
+    If a pyDEXPI model was already built during export, reuses it.
+    Otherwise builds one from the process model.
+
+    Returns a NetworkX DiGraph or None.
+    """
+    try:
+        from pydexpi.loaders.ml_graph_loader import MLGraphLoader
+
+        dexpi_model = getattr(process_model, "_pydexpi_model", None)
+        if dexpi_model is None:
+            _export_to_dexpi_pydexpi(process_model)
+            dexpi_model = getattr(process_model, "_pydexpi_model", None)
+        if dexpi_model is None:
+            return None
+
+        gl = MLGraphLoader(plant_model=dexpi_model)
+        gl.dexpi_to_graph()
+        return gl.graph
+    except Exception:
+        return None
+
+
+def parse_dexpi_with_pydexpi(xml_bytes: bytes, filename: str = "pid.xml"):
+    """Parse a DEXPI XML file using pyDEXPI's ProteusSerializer.
+
+    Returns a pyDEXPI DexpiModel instance, or None if pyDEXPI
+    is not available or parsing fails.
+    """
+    try:
+        from pydexpi.loaders import ProteusSerializer
+        import tempfile, shutil
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            fpath = os.path.join(tmpdir, filename)
+            with open(fpath, "wb") as f:
+                f.write(xml_bytes)
+            ser = ProteusSerializer()
+            return ser.load(tmpdir, filename)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    except Exception:
+        return None

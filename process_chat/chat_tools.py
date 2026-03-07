@@ -46,7 +46,7 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
-from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi
+from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi, dexpi_to_networkx, parse_dexpi_with_pydexpi
 
 from dataclasses import dataclass, field as dc_field
 
