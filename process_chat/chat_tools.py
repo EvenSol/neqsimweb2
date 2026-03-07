@@ -2964,6 +2964,55 @@ class ProcessChatSession:
             # LLM didn't emit a build block — check if the user pasted
             # a JSON build spec directly in their message.
             build_spec = extract_build_spec(user_message)
+        if not build_spec and self.model is None and not self._builder:
+            # Builder mode with no existing process: the LLM sometimes
+            # describes the build in natural language instead of emitting a
+            # ```build``` JSON block.  Detect build-intent keywords and
+            # nudge the LLM to produce the required spec.
+            import re as _re
+            _build_kw = _re.search(
+                r'\b(build|create|make|design|set\s*up|construct|simulate|model)\b.*'
+                r'\b(process|compression|separation|train|plant|dehydration|system|pipeline|cooler|compressor|separator)\b',
+                user_message, _re.IGNORECASE,
+            )
+            if not _build_kw:
+                # Also check reverse order
+                _build_kw = _re.search(
+                    r'\b(process|compression|separation|train|plant|dehydration|system|pipeline)\b.*'
+                    r'\b(build|create|make|design|set\s*up|construct)\b',
+                    user_message, _re.IGNORECASE,
+                )
+            if _build_kw:
+                # Nudge the LLM to produce the actual JSON spec
+                self.history.append({"role": "assistant", "content": assistant_text})
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        "[SYSTEM: You described the process but did NOT output the "
+                        "required ```build``` JSON block. Please output ONLY a "
+                        "```build { ... }``` code block with the full process "
+                        "specification JSON now. Do not repeat the description.]"
+                    ),
+                })
+                retry_contents = self._build_contents()
+                retry_response = client.models.generate_content(
+                    model=self.ai_model,
+                    contents=retry_contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._system_prompt,
+                        temperature=0.2,
+                    ),
+                )
+                retry_text = retry_response.text or ""
+                build_spec = extract_build_spec(retry_text)
+                # Remove the nudge messages from history so the user
+                # doesn't see them
+                self.history.pop()  # remove system nudge
+                self.history.pop()  # remove assistant's description
+                if build_spec:
+                    # Combine the original description with the spec
+                    combined_text = assistant_text + "\n\n" + retry_text
+                    return self._handle_build(combined_text, build_spec, client, types)
         if build_spec:
             return self._handle_build(assistant_text, build_spec, client, types)
 
@@ -3119,7 +3168,15 @@ class ProcessChatSession:
 
         # --- Pure Q&A ---
         cleaned = _strip_tool_blocks(assistant_text)
-        if not cleaned:
+        if not cleaned and self.model is None:
+            # Builder mode with empty response — guide the user
+            cleaned = (
+                "I can help you build a process from scratch. Try describing what you want, for example:\n\n"
+                "- *\"Build a gas compression process with methane and ethane at 50 bara\"*\n"
+                "- *\"Create a 3-stage compression train with intercooling\"*\n"
+                "- *\"Build a separation and dehydration process\"*"
+            )
+        elif not cleaned:
             cleaned = "I'm here to help with process engineering questions. Could you please rephrase your request?"
         self.history.append({"role": "assistant", "content": cleaned})
         self._last_comparison = None
