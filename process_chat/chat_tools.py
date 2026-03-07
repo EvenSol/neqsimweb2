@@ -2223,6 +2223,102 @@ def extract_property_query(text: str) -> Optional[dict]:
 # Tool-block stripping (safety net for followup LLM calls)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Build-spec conversion: dedicated LLM call to extract JSON from description
+# ---------------------------------------------------------------------------
+
+_BUILD_CONVERSION_PROMPT = """\
+Convert the following process description into a JSON build specification.
+Output ONLY a raw JSON object — no markdown fences, no explanation, no preamble.
+
+User request: {user_message}
+Assistant analysis: {assistant_text}
+
+Required JSON format (adapt values to match the description):
+{{
+  "name": "Short Process Name",
+  "fluid": {{
+    "eos_model": "srk",
+    "components": {{"methane": 0.85, "ethane": 0.07, "propane": 0.03, "CO2": 0.02, "nitrogen": 0.03}},
+    "temperature_C": 25.0,
+    "pressure_bara": 50.0,
+    "total_flow": 10000,
+    "flow_unit": "kg/hr"
+  }},
+  "process": [
+    {{"name": "feed gas", "type": "stream"}},
+    {{"name": "inlet separator", "type": "separator"}},
+    {{"name": "compressor 1", "type": "compressor", "params": {{"outlet_pressure_bara": 100.0, "isentropic_efficiency": 0.75}}}},
+    {{"name": "cooler 1", "type": "cooler", "params": {{"outlet_temperature_C": 35.0}}}},
+    {{"name": "export scrubber", "type": "gas_scrubber"}}
+  ]
+}}
+
+Rules:
+- First process entry must be a stream (the feed).
+- Valid types: stream, separator, gas_scrubber, compressor, cooler, heater, valve, pump, mixer, expander, pipeline
+- Compressor params: outlet_pressure_bara, isentropic_efficiency (0-1)
+- Cooler/heater params: outlet_temperature_C, pressure_drop_bar
+- EOS models: srk, pr, cpa, umr-pru, gerg2008
+- Component names: methane, ethane, propane, i-butane, n-butane, CO2, H2S, nitrogen, water, MEG
+- Use engineering defaults if values are not specified.
+
+Output ONLY the JSON object:"""
+
+
+def _convert_description_to_build_spec(
+    user_message: str,
+    assistant_text: str,
+    client,
+    ai_model: str,
+) -> Optional[dict]:
+    """Use a focused LLM call to convert a process description into a build spec.
+
+    This is called when the main LLM call produced a natural-language
+    description instead of a ```build``` JSON block.  The dedicated
+    conversion prompt is short and explicit, yielding much better JSON
+    compliance than nudging within the full conversation context.
+    """
+    from google.genai import types as _types
+
+    prompt = _BUILD_CONVERSION_PROMPT.format(
+        user_message=user_message,
+        assistant_text=assistant_text[:2000],  # limit context size
+    )
+
+    try:
+        resp = client.models.generate_content(
+            model=ai_model,
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            config=_types.GenerateContentConfig(
+                temperature=0.1,
+            ),
+        )
+        raw = (resp.text or "").strip()
+
+        # Try direct JSON parse first (no code fences expected)
+        spec = extract_build_spec(raw)
+        if spec:
+            return spec
+
+        # LLM might still wrap in code fences despite instructions
+        # Try stripping common wrappers
+        import re
+        cleaned = re.sub(r'^```(?:json|build)?\s*\n?', '', raw)
+        cleaned = re.sub(r'\n?\s*```\s*$', '', cleaned).strip()
+        if cleaned:
+            try:
+                data = json.loads(_normalise_json(cleaned))
+                if isinstance(data, dict) and _is_build_spec(data):
+                    return data
+            except (json.JSONDecodeError, ValueError):
+                pass
+    except Exception:
+        pass
+
+    return None
+
+
 # All tool block types that the LLM might accidentally emit in a followup
 _TOOL_BLOCK_TYPES = (
     "json", "chart", "autosize", "optimize", "risk", "emissions",
@@ -2964,11 +3060,10 @@ class ProcessChatSession:
             # LLM didn't emit a build block — check if the user pasted
             # a JSON build spec directly in their message.
             build_spec = extract_build_spec(user_message)
-        if not build_spec and self.model is None and not self._builder:
-            # Builder mode with no existing process: the LLM sometimes
-            # describes the build in natural language instead of emitting a
-            # ```build``` JSON block.  Detect build-intent keywords and
-            # nudge the LLM to produce the required spec.
+        if not build_spec and self.model is None:
+            # Builder mode: the LLM sometimes describes the build in
+            # natural language instead of emitting a ```build``` JSON
+            # block.  Use a dedicated conversion call to extract a spec.
             import re as _re
             _build_kw = _re.search(
                 r'\b(build|create|make|design|set\s*up|construct|simulate|model)\b.*'
@@ -2976,43 +3071,15 @@ class ProcessChatSession:
                 user_message, _re.IGNORECASE,
             )
             if not _build_kw:
-                # Also check reverse order
                 _build_kw = _re.search(
                     r'\b(process|compression|separation|train|plant|dehydration|system|pipeline)\b.*'
                     r'\b(build|create|make|design|set\s*up|construct)\b',
                     user_message, _re.IGNORECASE,
                 )
             if _build_kw:
-                # Nudge the LLM to produce the actual JSON spec
-                self.history.append({"role": "assistant", "content": assistant_text})
-                self.history.append({
-                    "role": "user",
-                    "content": (
-                        "[SYSTEM: You described the process but did NOT output the "
-                        "required ```build``` JSON block. Please output ONLY a "
-                        "```build { ... }``` code block with the full process "
-                        "specification JSON now. Do not repeat the description.]"
-                    ),
-                })
-                retry_contents = self._build_contents()
-                retry_response = client.models.generate_content(
-                    model=self.ai_model,
-                    contents=retry_contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self._system_prompt,
-                        temperature=0.2,
-                    ),
+                build_spec = _convert_description_to_build_spec(
+                    user_message, assistant_text, client, self.ai_model,
                 )
-                retry_text = retry_response.text or ""
-                build_spec = extract_build_spec(retry_text)
-                # Remove the nudge messages from history so the user
-                # doesn't see them
-                self.history.pop()  # remove system nudge
-                self.history.pop()  # remove assistant's description
-                if build_spec:
-                    # Combine the original description with the spec
-                    combined_text = assistant_text + "\n\n" + retry_text
-                    return self._handle_build(combined_text, build_spec, client, types)
         if build_spec:
             return self._handle_build(assistant_text, build_spec, client, types)
 
