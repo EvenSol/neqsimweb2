@@ -1341,7 +1341,15 @@ Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
 "list all instruments", "what valves are in the P&ID?",
 "export to DEXPI", "download as DEXPI XML", "convert to DEXPI",
 "create DEXPI", "generate DEXPI", "create DEXPI from model",
-"make DEXPI file", "DEXPI export", "save as DEXPI"
+"make DEXPI file", "DEXPI export", "save as DEXPI",
+"make neqsim process model", "build model from P&ID", "create model from DEXPI",
+"make neqsim model from DEXPI", "import P&ID", "load P&ID into NeqSim",
+"build process from P&ID", "create process from DEXPI", "convert P&ID to model"
+
+IMPORTANT: When a DEXPI P&ID has been loaded and the user asks to "make a model",
+"create a neqsim model", "build process", or similar, you MUST output a ```dexpi```
+block with action "analyze" and try_neqsim_import true. Do NOT just describe what
+you would do — output the code block so the system can execute it.
 
 NOTES:
 - After a DEXPI file is imported into NeqSim, ALL process analysis tools become available.
@@ -1911,7 +1919,15 @@ Parameters:
 Use this for: "analyze this P&ID", "what equipment is on the DEXPI file?",
 "import DEXPI into NeqSim", "export to DEXPI", "download as DEXPI XML",
 "create DEXPI", "generate DEXPI", "create DEXPI from model",
-"make DEXPI file", "DEXPI export", "save as DEXPI"
+"make DEXPI file", "DEXPI export", "save as DEXPI",
+"make neqsim process model", "build model from P&ID", "create model from DEXPI",
+"make neqsim model from DEXPI", "import P&ID", "load P&ID into NeqSim",
+"build process from P&ID", "create process from DEXPI", "convert P&ID to model"
+
+IMPORTANT: When a DEXPI P&ID has been loaded and the user asks to "make a model",
+"create a neqsim model", "build process", or similar, you MUST output a ```dexpi```
+block with action "analyze" and try_neqsim_import true. Do NOT just describe what
+you would do — output the code block so the system can execute it.
 
 NOTES:
 - After DEXPI import, ALL process analysis tools become available.

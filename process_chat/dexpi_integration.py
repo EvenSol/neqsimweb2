@@ -483,6 +483,16 @@ def create_neqsim_process_from_dexpi(
         from neqsim import jneqsim
         import pandas as pd
 
+        # Determine primary fluid code from piping networks
+        primary_code = "NG"
+        if pid_summary.piping:
+            _fc: Dict[str, int] = {}
+            for _p in pid_summary.piping:
+                if _p.fluid_code:
+                    _fc[_p.fluid_code] = _fc.get(_p.fluid_code, 0) + 1
+            if _fc:
+                primary_code = max(_fc, key=_fc.get)
+
         # --- Create default fluid ---
         if fluid_spec and "components" in fluid_spec:
             comp_data = fluid_spec["components"]
@@ -491,15 +501,6 @@ def create_neqsim_process_from_dexpi(
                 for name, frac in comp_data.items()
             ]
         else:
-            # Determine primary fluid code from piping networks
-            primary_code = "NG"
-            if pid_summary.piping:
-                code_counts: Dict[str, int] = {}
-                for p in pid_summary.piping:
-                    if p.fluid_code:
-                        code_counts[p.fluid_code] = code_counts.get(p.fluid_code, 0) + 1
-                if code_counts:
-                    primary_code = max(code_counts, key=code_counts.get)
             rows = get_fluid_rows_for_code(primary_code)
         df = pd.DataFrame(rows)
         fluid = fluid_df(df, lastIsPlusFraction=False, add_all_components=False)
@@ -702,7 +703,11 @@ def create_neqsim_process_from_dexpi(
         model = NeqSimProcessModel.from_process_system(proc)
         return model
 
-    except Exception:
+    except Exception as _exc:
+        import logging
+        logging.getLogger(__name__).debug(
+            "create_neqsim_process_from_dexpi failed: %s", _exc, exc_info=True
+        )
         return None
 
 
@@ -1189,6 +1194,38 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
 
             equipment_nozzles[tag] = tag_nozzles
 
+        # Build connectivity: walk the unit list in process order.
+        # Pattern: Equipment → Stream → Equipment means the stream connects them.
+        # We track the last equipment's outlet nozzle and wire it to the next
+        # equipment's inlet nozzle via a Connection element on the stream's segment.
+        all_unit_list = units  # already in process order
+        stream_connections: Dict[str, tuple] = {}  # stream_name → (from_nozzle, to_nozzle)
+
+        last_equip_tag = None  # tag of the previous equipment unit
+        pending_stream_name = None  # stream we're passing through
+
+        for u in all_unit_list:
+            if u.unit_type == "Stream":
+                # This stream links the previous equipment's outlet to the next
+                if last_equip_tag is not None:
+                    pending_stream_name = u.name
+            else:
+                # Equipment unit
+                tag = u.name
+                if tag not in equipment_nozzles:
+                    continue
+                if pending_stream_name is not None and last_equip_tag is not None:
+                    from_nozzles = equipment_nozzles.get(last_equip_tag, [])
+                    to_nozzles = equipment_nozzles.get(tag, [])
+                    if len(from_nozzles) >= 2 and len(to_nozzles) >= 1:
+                        # outlet nozzle of previous → inlet nozzle of current
+                        stream_connections[pending_stream_name] = (
+                            from_nozzles[1],  # outlet (N2)
+                            to_nozzles[0],    # inlet (N1)
+                        )
+                    pending_stream_name = None
+                last_equip_tag = tag
+
         # Add piping connections (one PipingNetworkSystem per stream)
         for i, s in enumerate(streams):
             s_name = s.name
@@ -1208,6 +1245,13 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
 
             seg = ET.SubElement(pns, "PipingNetworkSegment")
             seg.set("ID", f"SEG-{_sanitize_id(s_name)}")
+
+            # Wire nozzle connections if known
+            conn_info = stream_connections.get(s_name)
+            if conn_info:
+                conn_elem = ET.SubElement(seg, "Connection")
+                conn_elem.set("FromID", conn_info[0])
+                conn_elem.set("ToID", conn_info[1])
 
         tree = ET.ElementTree(root)
         import io
