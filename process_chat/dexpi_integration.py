@@ -1341,3 +1341,160 @@ def parse_dexpi_with_pydexpi(xml_bytes: bytes, filename: str = "pid.xml"):
     except Exception as e:
         _logger.debug("parse_dexpi_with_pydexpi failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Graphical P&ID rendering via Plotly
+# ---------------------------------------------------------------------------
+
+def render_dexpi_plotly(pid_summary: DexpiPIDSummary) -> Any:
+    """Render a DEXPI P&ID topology as an interactive Plotly network graph.
+
+    Builds a NetworkX DiGraph from parsed equipment, piping, and
+    instrumentation, then renders it as a Plotly Figure with colour-coded
+    nodes (green=equipment, red=piping, blue=instruments) and edge labels.
+
+    Returns a ``plotly.graph_objects.Figure`` or *None* on failure.
+    """
+    try:
+        import networkx as nx
+        import plotly.graph_objects as go
+
+        G = nx.DiGraph()
+
+        # --- Build nozzle → equipment-tag map for connectivity ---
+        nozzle_to_eq: Dict[str, str] = {}
+        for eq in pid_summary.equipment:
+            for nz in eq.nozzles:
+                nozzle_to_eq[nz] = eq.tag_name or eq.id
+
+        # --- Add equipment nodes ---
+        for eq in pid_summary.equipment:
+            label = eq.tag_name or eq.id
+            G.add_node(label, dexpi_class=eq.component_class,
+                       node_type="equipment")
+
+        # --- Add piping nodes and edges ---
+        for p in pid_summary.piping:
+            pipe_label = p.line_number or p.id
+            G.add_node(pipe_label, dexpi_class="Piping",
+                       node_type="piping", fluid_code=p.fluid_code)
+
+            for conn in p.connections:
+                from_nz = conn.get("from", "")
+                to_nz = conn.get("to", "")
+                from_eq = nozzle_to_eq.get(from_nz, from_nz)
+                to_eq = nozzle_to_eq.get(to_nz, to_nz)
+
+                if from_eq and from_eq != pipe_label:
+                    G.add_edge(from_eq, pipe_label,
+                               dexpi_class="Connection")
+                if to_eq and to_eq != pipe_label:
+                    G.add_edge(pipe_label, to_eq,
+                               dexpi_class="Connection")
+
+        # --- Add instrument nodes ---
+        for inst in pid_summary.instruments:
+            label = inst.tag or inst.id
+            G.add_node(label, dexpi_class=inst.component_class or "Instrument",
+                       node_type="instrument")
+
+        if not G.nodes:
+            return None
+
+        # --- Layout ---
+        try:
+            from Flowsheet_Class.utils_visualization import _add_positions
+            G = _add_positions(G, len(G.nodes))
+            pos = nx.get_node_attributes(G, "pos")
+        except Exception:
+            pos = nx.spring_layout(G, seed=42, k=2.0)
+
+        # --- Colour mapping ---
+        _COLOUR = {"equipment": "green", "piping": "red",
+                    "instrument": "blue"}
+
+        # --- Edge traces ---
+        edge_x: List[Optional[float]] = []
+        edge_y: List[Optional[float]] = []
+        for u, v in G.edges:
+            if u in pos and v in pos:
+                x0, y0 = pos[u]
+                x1, y1 = pos[v]
+                edge_x.extend([x0, x1, None])
+                edge_y.extend([y0, y1, None])
+
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1.5, color="#888"),
+            hoverinfo="none",
+            mode="lines",
+        )
+
+        # --- Node traces ---
+        node_x, node_y = [], []
+        node_colour, node_text, node_hover = [], [], []
+        for node in G.nodes:
+            if node not in pos:
+                continue
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            ntype = G.nodes[node].get("node_type", "other")
+            node_colour.append(_COLOUR.get(ntype, "black"))
+            dclass = G.nodes[node].get("dexpi_class", "")
+            node_text.append(str(node))
+            fluid = G.nodes[node].get("fluid_code", "")
+            hover = f"<b>{node}</b><br>Type: {dclass}"
+            if fluid:
+                hover += f"<br>Fluid: {fluid}"
+            node_hover.append(hover)
+
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode="markers+text",
+            text=node_text,
+            textposition="top center",
+            textfont=dict(size=10),
+            hovertext=node_hover,
+            hoverinfo="text",
+            marker=dict(
+                size=18,
+                color=node_colour,
+                line=dict(width=2, color="white"),
+            ),
+        )
+
+        # --- Arrow annotations for directed edges ---
+        annotations = []
+        for u, v in G.edges:
+            if u in pos and v in pos:
+                x0, y0 = pos[u]
+                x1, y1 = pos[v]
+                annotations.append(dict(
+                    ax=x0, ay=y0, x=x1, y=y1,
+                    xref="x", yref="y", axref="x", ayref="y",
+                    showarrow=True, arrowhead=3, arrowsize=1.2,
+                    arrowwidth=1.5, arrowcolor="#888",
+                ))
+
+        fig = go.Figure(
+            data=[edge_trace, node_trace],
+            layout=go.Layout(
+                title=dict(text="P&ID Topology", font=dict(size=16)),
+                showlegend=False,
+                hovermode="closest",
+                xaxis=dict(showgrid=False, zeroline=False,
+                           showticklabels=False),
+                yaxis=dict(showgrid=False, zeroline=False,
+                           showticklabels=False),
+                annotations=annotations,
+                margin=dict(l=20, r=20, t=40, b=20),
+                plot_bgcolor="white",
+            ),
+        )
+        return fig
+
+    except Exception as e:
+        _logger.warning("render_dexpi_plotly failed: %s", e)
+        return None

@@ -530,7 +530,7 @@ if st.session_state.get("dexpi_xml"):
     # ─────────────────────────────────────────────
     with st.expander("📐 DEXPI P&ID Viewer", expanded=False):
         try:
-            from process_chat.dexpi_integration import parse_dexpi_xml
+            from process_chat.dexpi_integration import parse_dexpi_xml, render_dexpi_plotly
             _dexpi_pid = parse_dexpi_xml(st.session_state["dexpi_xml"])
 
             _title = _dexpi_pid.title or _dexpi_pid.drawing_number or _dexpi_fname
@@ -544,6 +544,12 @@ if st.session_state.get("dexpi_xml"):
             c2.metric("Piping Lines", len(_dexpi_pid.piping))
             c3.metric("Instruments", len(_dexpi_pid.instruments))
             c4.metric("Connections", _dexpi_pid.connection_count)
+
+            # Interactive P&ID topology graph
+            _pid_fig = render_dexpi_plotly(_dexpi_pid)
+            if _pid_fig is not None:
+                st.plotly_chart(_pid_fig, use_container_width=True)
+                st.caption("🟢 Equipment  🔴 Piping  🔵 Instruments — hover for details")
 
             # Equipment table
             if _dexpi_pid.equipment:
