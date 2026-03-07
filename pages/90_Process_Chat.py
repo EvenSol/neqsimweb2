@@ -91,11 +91,11 @@ with st.sidebar:
                             st.session_state["_builder_mode"] = True
                         st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
                         st.info("Could not auto-build NeqSim model — ask in chat to analyze and import.")
-except Exception as e:
-                if st.session_state.get("process_model") is None:
-                    st.session_state["_builder_mode"] = True
-                st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
-                st.warning(f"Auto-build failed: {e}")
+                except Exception as e:
+                    if st.session_state.get("process_model") is None:
+                        st.session_state["_builder_mode"] = True
+                    st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
+                    st.warning(f"Auto-build failed: {e}")
 
                 st.session_state["_pending_question"] = (
                     "Analyze the DEXPI P&ID and summarize the equipment, piping, and instrumentation."
