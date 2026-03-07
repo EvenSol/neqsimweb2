@@ -4961,8 +4961,9 @@ class ProcessChatSession:
                     f"Use the dexpi tool to run full analysis when asked.]"
                 )
                 self.history.append({"role": "user", "content": context})
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug("set_dexpi_xml context injection failed: %s", e)
 
     def _handle_dexpi(self, assistant_text: str, dexpi_spec: dict, client, types) -> str:
         """Run DEXPI P&ID analysis or export, and feed results back to LLM."""

@@ -719,8 +719,7 @@ def create_neqsim_process_from_dexpi(
         return model
 
     except Exception as _exc:
-        import logging
-        logging.getLogger(__name__).debug(
+        _logger.debug(
             "create_neqsim_process_from_dexpi failed: %s", _exc, exc_info=True
         )
         return None
@@ -980,7 +979,9 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
         _logger.debug("Java DexpiXmlWriter export failed: %s", e)
 
     # --- Try pyDEXPI model building (validates structure) ---
-    _export_to_dexpi_pydexpi(process_model)
+    pydexpi_result = _export_to_dexpi_pydexpi(process_model)
+    if pydexpi_result is not None:
+        return pydexpi_result
 
     # --- Fallback: Python-based DEXPI XML generation ---
     return _export_to_dexpi_python(process_model)

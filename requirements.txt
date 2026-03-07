@@ -9,4 +9,5 @@ plotly>=5.0.0
 numpy
 scipy
 openpyxl
-pyDEXPI\ndefusedxml
+pyDEXPI
+defusedxml
