@@ -694,7 +694,7 @@ Plus fractions: "C7", "C8", "C9", "C10", … (need MolarMass + RelativeDensity)
 - setTotalFlowRate(value, "kg/hr") to set total flow rate
 - validateSetup() checks for common errors (components, mixing rule, T/P ranges)
 
-### 12. IMPORTANT: Output Format
+### 13. IMPORTANT: Output Format
 Your code MUST end by building a `results` dict containing all computed values:
 ```python
 results = {
@@ -1310,9 +1310,17 @@ Guidelines:
 Simulation results:
 ```json
 {json.dumps(all_results, indent=2, default=str)}
-```
+```"""
 
-Write the engineering report now."""
+    if all_code:
+        user_msg += f"""
+
+Python code used for simulation:
+```python
+{all_code[:6000]}
+```"""
+
+    user_msg += "\n\nWrite the engineering report now."
 
     return _call_llm(
         api_key=api_key,
@@ -1327,11 +1335,24 @@ def _generate_html_report(title: str, report_md: str, spec: dict,
     """Wrap the markdown report in a styled HTML document with tables, equations, and charts."""
     import html as html_mod
 
+    def _escape_preserving_latex(text: str) -> str:
+        """HTML-escape text while preserving LaTeX $...$ and $$...$$ blocks."""
+        parts = re.split(r'(\$\$.*?\$\$|\$[^$]+?\$)', text, flags=re.DOTALL)
+        result = []
+        for i, part in enumerate(parts):
+            if i % 2 == 1:
+                # LaTeX block — keep raw
+                result.append(part)
+            else:
+                result.append(html_mod.escape(part))
+        return "".join(result)
+
     # --- Convert markdown to HTML ---
     lines = report_md.split("\n")
     html_lines = []
     in_table = False
     in_code_block = False
+    in_list = False
     table_rows = []
 
     def _flush_table():
@@ -1356,6 +1377,9 @@ def _generate_html_report(title: str, report_md: str, spec: dict,
 
         # Code blocks
         if stripped.startswith("```"):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
             if in_table:
                 html_lines.append(_flush_table())
             if in_code_block:
@@ -1371,6 +1395,9 @@ def _generate_html_report(title: str, report_md: str, spec: dict,
 
         # Table rows (lines containing |)
         if "|" in stripped and stripped.startswith("|"):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
             if not in_table:
                 in_table = True
                 table_rows = []
@@ -1379,27 +1406,39 @@ def _generate_html_report(title: str, report_md: str, spec: dict,
         elif in_table:
             html_lines.append(_flush_table())
 
+        # List items — need to check if we're entering/leaving a list
+        is_list_item = stripped.startswith("- ") or stripped.startswith("* ")
+
+        if not is_list_item and in_list:
+            html_lines.append("</ul>")
+            in_list = False
+
         # Headers
         if stripped.startswith("#### "):
-            html_lines.append(f"<h4>{html_mod.escape(stripped[5:])}</h4>")
+            html_lines.append(f"<h4>{_escape_preserving_latex(stripped[5:])}</h4>")
         elif stripped.startswith("### "):
-            html_lines.append(f"<h3>{html_mod.escape(stripped[4:])}</h3>")
+            html_lines.append(f"<h3>{_escape_preserving_latex(stripped[4:])}</h3>")
         elif stripped.startswith("## "):
-            html_lines.append(f"<h2>{html_mod.escape(stripped[3:])}</h2>")
+            html_lines.append(f"<h2>{_escape_preserving_latex(stripped[3:])}</h2>")
         elif stripped.startswith("# "):
-            html_lines.append(f"<h1>{html_mod.escape(stripped[2:])}</h1>")
-        elif stripped.startswith("- ") or stripped.startswith("* "):
-            content = html_mod.escape(stripped[2:])
+            html_lines.append(f"<h1>{_escape_preserving_latex(stripped[2:])}</h1>")
+        elif is_list_item:
+            if not in_list:
+                html_lines.append("<ul>")
+                in_list = True
+            content = _escape_preserving_latex(stripped[2:])
             content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
             html_lines.append(f"<li>{content}</li>")
         elif stripped == "":
             html_lines.append("<br>")
         else:
-            content = html_mod.escape(stripped)
+            content = _escape_preserving_latex(stripped)
             content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
             content = re.sub(r'`(.+?)`', r'<code>\1</code>', content)
             html_lines.append(f"<p>{content}</p>")
 
+    if in_list:
+        html_lines.append("</ul>")
     if in_table:
         html_lines.append(_flush_table())
 
@@ -1458,6 +1497,7 @@ def run_task(
     user_request: str,
     user_composition: Optional[dict] = None,
     user_conditions: Optional[dict] = None,
+    uploaded_docs: Optional[str] = None,
     report_level: str = "standard",
     ai_model: str = "gemini-2.0-flash",
     progress_cb: Optional[ProgressCallback] = None,
@@ -1479,6 +1519,8 @@ def run_task(
         Fluid composition {component: mole_fraction}.
     user_conditions : dict, optional
         Override conditions {temperature_C, pressure_bara, ...}.
+    uploaded_docs : str, optional
+        Concatenated text from uploaded reference documents.
     report_level : str
         "quick" | "standard" | "comprehensive"
     ai_model : str
@@ -1511,6 +1553,7 @@ def run_task(
             api_key=api_key,
             user_request=user_request + extra_ctx,
             user_composition=user_composition,
+            uploaded_docs=uploaded_docs,
             ai_model=ai_model,
         )
     except Exception as e:

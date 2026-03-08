@@ -13,7 +13,6 @@ import streamlit as st
 import pandas as pd
 import json
 import time
-import threading
 import os
 import sys
 
@@ -247,8 +246,6 @@ if run_clicked:
         st.warning("Please describe your engineering task.")
         st.stop()
 
-    from process_chat.task_solver import run_task, TaskResult
-
     user_comp = _get_composition()
     user_cond = _get_conditions()
     uploaded_text = _get_uploaded_text()
@@ -407,6 +404,7 @@ if run_clicked:
                 api_key=api_key,
                 spec=spec,
                 all_results=all_results,
+                all_code=all_generated_code,
                 ai_model="gemini-2.0-flash",
             )
             report_html = _generate_html_report(
