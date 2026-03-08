@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import re
 import time
 import traceback
@@ -24,6 +25,102 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
+
+# ---------------------------------------------------------------------------
+# Error memory — learn from past mistakes across tasks
+# ---------------------------------------------------------------------------
+_ERROR_MEMORY_FILE = os.path.join(os.path.dirname(__file__), ".error_memory.json")
+_MAX_MEMORY_ENTRIES = 30
+
+
+def _load_error_memory() -> List[dict]:
+    """Load persisted error→fix lessons."""
+    try:
+        with open(_ERROR_MEMORY_FILE, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        if isinstance(entries, list):
+            return entries[-_MAX_MEMORY_ENTRIES:]
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def _save_error_memory(entries: List[dict]):
+    """Persist error→fix lessons (keeps last N)."""
+    entries = entries[-_MAX_MEMORY_ENTRIES:]
+    try:
+        with open(_ERROR_MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2, default=str)
+    except OSError:
+        pass  # non-critical, skip silently
+
+
+def _record_fix(error_snippet: str, failed_code_snippet: str, fixed_code_snippet: str,
+                task_type: str = ""):
+    """Record a successful fix so future tasks can learn from it."""
+    # Extract the core error line (last line of traceback or most specific)
+    error_lines = error_snippet.strip().splitlines()
+    core_error = error_lines[-1] if error_lines else error_snippet[:200]
+
+    # Don't store very long snippets — just enough context
+    entry = {
+        "error": core_error[:300],
+        "error_type": core_error.split(":")[0].strip() if ":" in core_error else core_error[:50],
+        "task_type": task_type,
+        "fix_hint": _diff_summary(failed_code_snippet, fixed_code_snippet),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+    }
+
+    entries = _load_error_memory()
+
+    # Deduplicate: if same error_type already exists, update it
+    for i, existing in enumerate(entries):
+        if existing.get("error_type") == entry["error_type"] and \
+           existing.get("error")[:100] == entry["error"][:100]:
+            entries[i] = entry
+            _save_error_memory(entries)
+            return
+
+    entries.append(entry)
+    _save_error_memory(entries)
+
+
+def _diff_summary(failed: str, fixed: str) -> str:
+    """Generate a short summary of what changed between failed and fixed code."""
+    failed_lines = set(failed.strip().splitlines())
+    fixed_lines = set(fixed.strip().splitlines())
+
+    added = fixed_lines - failed_lines
+    removed = failed_lines - fixed_lines
+
+    parts = []
+    if removed:
+        # Show at most 3 key removed lines
+        for line in list(removed)[:3]:
+            line = line.strip()
+            if line and not line.startswith("#") and len(line) > 5:
+                parts.append(f"- Removed: {line[:120]}")
+    if added:
+        for line in list(added)[:3]:
+            line = line.strip()
+            if line and not line.startswith("#") and len(line) > 5:
+                parts.append(f"+ Added: {line[:120]}")
+
+    return "\n".join(parts) if parts else "Code was restructured to fix the error."
+
+
+def _format_memory_for_prompt() -> str:
+    """Format stored error lessons as text for injection into system prompt."""
+    entries = _load_error_memory()
+    if not entries:
+        return ""
+
+    lines = ["\n\nLEARNED FROM PREVIOUS ERRORS (apply these lessons):"]
+    for i, e in enumerate(entries[-15:], 1):  # inject last 15 at most
+        lines.append(f"{i}. Error: {e['error'][:200]}")
+        if e.get("fix_hint"):
+            lines.append(f"   Fix: {e['fix_hint'][:200]}")
+    return "\n".join(lines) + "\n"
 
 # ---------------------------------------------------------------------------
 # Task types matching the Task Solving Guide (A–G)
@@ -540,12 +637,31 @@ for p in pressures:
     z = fl.getZ()
 ```
 
-### 10. Component Names (use standard NeqSim names)
-Common: "methane", "ethane", "propane", "i-butane", "n-butane",
-  "i-pentane", "n-pentane", "n-hexane", "nitrogen", "CO2", "H2S",
-  "water", "MEG", "TEG", "methanol", "oxygen", "hydrogen", "helium"
+### 10. Component Names (use EXACT names from NeqSim COMP.csv database)
+Full reference: https://github.com/equinor/neqsim/blob/master/src/main/resources/data/COMP.csv
+IMPORTANT: Component names are case-sensitive and must match exactly.
+
+**Hydrocarbons**: "methane", "ethane", "propane", "n-butane", "i-butane", "n-pentane",
+  "i-pentane", "n-hexane", "benzene", "toluene", "n-heptane", "n-octane", "n-nonane",
+  "nC10", "nC11", "nC12", "nC13", "nC14", "nC15", "nC16", "nC17", "nC18", "nC19", "nC20",
+  "nC21"-"nC30", "nC34", "nC39", "c-C4", "c-C5", "c-hexane", "c-C7", "c-C8", "cy-C9",
+  "22-dim-C3", "22-dim-C4", "23-dim-C4", "2-m-C5", "3-m-C5", "M-cy-C5", "M-cy-C6",
+  "ethylbenzene", "m-Xylene", "p-Xylene", "o-Xylene", "ethylcyclohexane", "naphthalene",
+  "propylbenzene", "c-propane", "ethylene", "propene", "cis-butene", "trans-butene", "iso-butene"
+**Inerts/gases**: "CO2", "nitrogen", "oxygen", "H2S", "helium", "neon", "argon", "CO", "COS",
+  "SF6", "R12", "R134a", "N2O4"
+**Special hydrogen**: "hydrogen", "para-hydrogen", "ortho-hydrogen"
+**Water & ice**: "water", "ice"
+**Glycols**: "MEG", "TEG", "DEG", "PG", "glycerol"
+**Amines**: "MDEA", "MEA", "DEA", "Piperazine"
+**Alcohols**: "methanol", "ethanol", "1-propanol", "i-propanol"
+**Acids**: "acetic acid", "formic acid", "hydrochloric acid", "sulfuric acid", "nitric acid"
+**Ions**: "Na+", "Cl-", "K+", "Ca++", "Mg++", "Ba++", "Sr++", "Fe++", "Li+", "I-", "OH-",
+  "HCO3-", "CO3--", "SO4--", "Br-", "F-", "Pb++", "Hg++", "NO3-", "HS-", "S--",
+  "NH4+", "H3O+", "H+"
+**Other**: "ammonia", "acetone", "S8", "mercury", "SO2", "SO3", "NO", "NO2", "N2O", "N2O3",
+  "N2O5", "H2O2", "HCN", "CS2", "CH2O", "NaCl", "CaCl2", "NaHSO4", "asphaltene"
 Plus fractions: "C7", "C8", "C9", "C10", … (need MolarMass + RelativeDensity)
-Ions: "Na+", "Cl-", "K+", "Ca++", "Mg++", "Ba++", "Sr++", "Fe++", "SO4--", "HCO3-"
 
 ### 11. Key Rules — Units
 - Temperature constructor args are in KELVIN: 273.15 + T_celsius
@@ -764,7 +880,19 @@ _CODE_GEN_SYSTEM_PROMPT = (
     "2. Your code MUST define a `results` dict at the end containing all computed values.\n"
     "3. Use print() to show intermediate results so the user can follow progress.\n"
     "4. Use try/except around individual operations to be robust.\n"
-    "5. Do NOT use matplotlib or any GUI. No plotting. Just compute and store numbers.\n"
+    "5. Do NOT use matplotlib or any GUI. Store chart data in the results dict instead.\n"
+    "   When results contain data suitable for a chart (curves, sweeps, profiles),\n"
+    "   add a '_charts' key to results with a list of chart specs:\n"
+    "   results['_charts'] = [\n"
+    "       {'title': 'Phase Envelope', 'x': temp_list, 'y': pres_list,\n"
+    "        'xlabel': 'Temperature (°C)', 'ylabel': 'Pressure (bara)',\n"
+    "        'series': 'Dew Point'},\n"
+    "       {'title': 'Phase Envelope', 'x': bub_temp, 'y': bub_pres,\n"
+    "        'xlabel': 'Temperature (°C)', 'ylabel': 'Pressure (bara)',\n"
+    "        'series': 'Bubble Point'},\n"
+    "   ]\n"
+    "   Multiple series on the same chart share the same 'title'. Each entry is one trace.\n"
+    "   Always include xlabel, ylabel with units. The system will render charts automatically.\n"
     "6. Return the code inside a ```python ... ``` block.\n"
     "7. If you need to iterate over many conditions, do so in a loop.\n"
     "8. For process simulation: always set flow rate on streams.\n"
@@ -791,6 +919,12 @@ _CODE_GEN_SYSTEM_PROMPT = (
     "    Convert: [t - 273.15 for t in list(op.get('dewT'))]\n"
     "16. Hydrate/dew/bubble point: after the flash, getTemperature() returns KELVIN.\n"
     "    Always use getTemperature('C') to get Celsius.\n"
+    "17. COMPONENT NAMES: Use EXACT names from section 10 of the API reference.\n"
+    "    Names are case-sensitive. Common mistakes: 'Methane' (wrong) → 'methane' (right),\n"
+    "    'co2' (wrong) → 'CO2' (right), 'h2s' (wrong) → 'H2S' (right),\n"
+    "    'iC4' (wrong) → 'i-butane' (right), 'nC4' (wrong) → 'n-butane' (right),\n"
+    "    'nC5' (wrong) → 'n-pentane' (right), 'iC5' (wrong) → 'i-pentane' (right).\n"
+    "    Full list: https://github.com/equinor/neqsim/blob/master/src/main/resources/data/COMP.csv\n"
     "\n"
     + NEQSIM_API_REFERENCE
 )
@@ -823,6 +957,9 @@ def generate_and_run_code(
         if progress_cb:
             progress_cb(step_number, step_title, msg)
 
+    # Inject lessons from past errors into system prompt
+    system_prompt = _CODE_GEN_SYSTEM_PROMPT + _format_memory_for_prompt()
+
     # Build the initial prompt
     user_msg = (
         f"Task: {spec.get('description', '')}\n\n"
@@ -843,6 +980,8 @@ def generate_and_run_code(
 
     t_start = time.time()
     error_text = "No code was generated in any attempt."
+    last_failed_code = ""
+    last_error = ""
 
     for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
         task_step.attempts = attempt
@@ -851,7 +990,7 @@ def generate_and_run_code(
         # Get code from LLM
         llm_response = _call_llm_multi(
             api_key=api_key,
-            system_prompt=_CODE_GEN_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             messages=conversation,
             ai_model=ai_model,
         )
@@ -884,6 +1023,18 @@ def generate_and_run_code(
             task_step.result_data = exec_result["results"]
             task_step.elapsed_seconds = time.time() - t_start
 
+            # Record the fix for future learning (only when it took retries)
+            if attempt > 1 and last_failed_code and last_error:
+                try:
+                    _record_fix(
+                        error_snippet=last_error,
+                        failed_code_snippet=last_failed_code,
+                        fixed_code_snippet=code,
+                        task_type=spec.get("task_type", ""),
+                    )
+                except Exception:
+                    pass  # non-critical
+
             # Build summary text
             output = exec_result["output"]
             if output:
@@ -898,6 +1049,8 @@ def generate_and_run_code(
         # Code failed — send error to LLM for fixing
         error_text = exec_result["error"]
         output_text = exec_result["output"]
+        last_failed_code = code
+        last_error = error_text
 
         _progress(f"Code failed (attempt {attempt}), sending error to LLM for fixing…")
 
@@ -943,8 +1096,170 @@ def generate_and_run_code(
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Report generation
+# Step 3: Report generation — charts, HTML, markdown
 # ---------------------------------------------------------------------------
+
+def _build_plotly_charts(all_results: dict) -> list:
+    """Build plotly Figure objects from result data.
+
+    Looks for:
+      1. Explicit '_charts' key in any result step (list of chart specs)
+      2. Auto-detected plottable patterns (parallel arrays, curves, sweeps)
+
+    Returns list of plotly Figure objects.
+    """
+    import plotly.graph_objects as go
+
+    figures = []
+
+    # --- Collect explicit chart specs ---
+    chart_specs = []
+    for _step_key, data in all_results.items():
+        if not isinstance(data, dict):
+            continue
+        if "_charts" in data:
+            specs = data["_charts"]
+            if isinstance(specs, list):
+                chart_specs.extend(specs)
+
+    # Group by title → multi-series charts
+    if chart_specs:
+        by_title = {}
+        for cs in chart_specs:
+            t = cs.get("title", "Chart")
+            by_title.setdefault(t, []).append(cs)
+
+        for chart_title, series_list in by_title.items():
+            fig = go.Figure()
+            xlabel = series_list[0].get("xlabel", "")
+            ylabel = series_list[0].get("ylabel", "")
+            for s in series_list:
+                x = s.get("x", [])
+                y = s.get("y", [])
+                name = s.get("series", s.get("name", ""))
+                mode = s.get("mode", "lines")
+                if x and y:
+                    fig.add_trace(go.Scatter(x=x, y=y, mode=mode, name=name))
+            fig.update_layout(
+                title=chart_title, xaxis_title=xlabel, yaxis_title=ylabel,
+                template="plotly_white", height=480,
+            )
+            figures.append(fig)
+
+    # --- Auto-detect plottable patterns ---
+    for _step_key, data in all_results.items():
+        if not isinstance(data, dict):
+            continue
+
+        # Phase envelope
+        if "dew_point_curve" in data:
+            dew = data["dew_point_curve"]
+            bub = data.get("bubble_point_curve", {})
+            if isinstance(dew, dict) and dew.get("temperature_C") and dew.get("pressure_bara"):
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=dew["temperature_C"], y=dew["pressure_bara"],
+                    mode="lines", name="Dew Point", line=dict(color="blue", width=2),
+                ))
+                if isinstance(bub, dict) and bub.get("temperature_C"):
+                    fig.add_trace(go.Scatter(
+                        x=bub["temperature_C"], y=bub["pressure_bara"],
+                        mode="lines", name="Bubble Point", line=dict(color="red", width=2),
+                    ))
+                if "cricondenbar_bara" in data:
+                    fig.add_trace(go.Scatter(
+                        x=[data.get("cricondenbar_T_C")], y=[data["cricondenbar_bara"]],
+                        mode="markers+text", name=f"Cricondenbar ({data['cricondenbar_bara']:.1f} bara)",
+                        marker=dict(size=10, color="green"),
+                        text=[f"Cricondenbar\n{data['cricondenbar_bara']:.1f} bara"],
+                        textposition="top right",
+                    ))
+                if "cricondentherm_C" in data:
+                    fig.add_trace(go.Scatter(
+                        x=[data["cricondentherm_C"]], y=[data.get("cricondentherm_P_bara")],
+                        mode="markers+text", name=f"Cricondentherm ({data['cricondentherm_C']:.1f} °C)",
+                        marker=dict(size=10, color="orange"),
+                        text=[f"Cricondentherm\n{data['cricondentherm_C']:.1f} °C"],
+                        textposition="top left",
+                    ))
+                fig.update_layout(
+                    title="Phase Envelope", xaxis_title="Temperature (°C)",
+                    yaxis_title="Pressure (bara)", template="plotly_white", height=480,
+                )
+                figures.append(fig)
+
+        # Hydrate curve
+        if "hydrate_curve" in data:
+            curve = data["hydrate_curve"]
+            if isinstance(curve, list) and curve:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=[p.get("temperature_C", p.get("T_C")) for p in curve],
+                    y=[p.get("pressure_bara", p.get("P_bara")) for p in curve],
+                    mode="lines+markers", name="Hydrate Formation",
+                    line=dict(color="cyan", width=2),
+                ))
+                if "hydrate_formation_temperature_C" in data:
+                    fig.add_trace(go.Scatter(
+                        x=[data["hydrate_formation_temperature_C"]],
+                        y=[data.get("pressure_bara", 100)],
+                        mode="markers+text",
+                        name=f"At {data.get('pressure_bara', 100)} bara",
+                        marker=dict(size=12, color="red"),
+                        text=[f"{data['hydrate_formation_temperature_C']:.1f} °C"],
+                        textposition="top right",
+                    ))
+                fig.update_layout(
+                    title="Hydrate Formation Temperature vs Pressure",
+                    xaxis_title="Temperature (°C)", yaxis_title="Pressure (bara)",
+                    template="plotly_white", height=450,
+                )
+                figures.append(fig)
+
+        # Generic x/y array pairs: detect parallel lists with matching keys
+        # e.g. pressure_bara: [...] and temperature_C: [...]
+        list_keys = {k: v for k, v in data.items()
+                     if isinstance(v, list) and len(v) >= 3
+                     and all(isinstance(x, (int, float)) for x in v)
+                     and k != "_charts" and k not in ("dew_point_curve", "bubble_point_curve", "hydrate_curve")}
+        if len(list_keys) >= 2:
+            keys = list(list_keys.keys())
+            # Use first key as x, plot remaining as y — only if same length
+            x_key = keys[0]
+            x_vals = list_keys[x_key]
+            plotted = False
+            fig = go.Figure()
+            for y_key in keys[1:]:
+                y_vals = list_keys[y_key]
+                if len(y_vals) == len(x_vals):
+                    fig.add_trace(go.Scatter(
+                        x=x_vals, y=y_vals, mode="lines+markers", name=y_key,
+                    ))
+                    plotted = True
+            if plotted:
+                fig.update_layout(
+                    title="Property Sweep",
+                    xaxis_title=x_key.replace("_", " "),
+                    yaxis_title="Value",
+                    template="plotly_white", height=450,
+                )
+                figures.append(fig)
+
+    return figures
+
+
+def _generate_charts_html(all_results: dict) -> str:
+    """Generate HTML fragments for all charts found in results."""
+    figures = _build_plotly_charts(all_results)
+    if not figures:
+        return ""
+
+    parts = ['<h2>Charts</h2>']
+    for fig in figures:
+        parts.append('<div class="chart-container">')
+        parts.append(fig.to_html(full_html=False, include_plotlyjs="cdn"))
+        parts.append('</div>')
+    return "\n".join(parts)
 
 def _generate_report_text(api_key: str, spec: dict, all_results: dict,
                           all_code: str = "",
@@ -955,8 +1270,14 @@ def _generate_report_text(api_key: str, spec: dict, all_results: dict,
 Write a clear, professional report with these sections:
 1. **Executive Summary** — 2-3 sentence overview of key findings
 2. **Problem Description** — what was asked
-3. **Approach** — method, EOS model, assumptions
-4. **Results** — present ALL key findings with numbers and units. Use markdown tables.
+3. **Approach** — method, EOS model, assumptions. Include key equations using LaTeX:
+   e.g., $PV = ZnRT$, fugacity conditions, EOS form used, etc.
+4. **Results** — present ALL key findings with numbers and units.
+   ALWAYS use markdown tables for numerical results. Example:
+   | Property | Value | Unit |
+   |----------|-------|------|
+   | Temperature | 25.0 | °C |
+   | Pressure | 100.0 | bara |
 5. **Validation Notes** — physics checks, reasonableness observations
 6. **Conclusions** — key takeaways and recommendations
 
@@ -1003,33 +1324,114 @@ Write the engineering report now."""
 
 def _generate_html_report(title: str, report_md: str, spec: dict,
                            all_results: dict) -> str:
-    """Wrap the markdown report in a styled HTML document."""
+    """Wrap the markdown report in a styled HTML document with tables, equations, and charts."""
     import html as html_mod
 
-    body_html = html_mod.escape(report_md)
-    body_html = body_html.replace("\n", "<br>\n")
-    body_html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', body_html)
-    body_html = re.sub(r'#{3}\s*(.+?)(?:<br>)', r'<h3>\1</h3>', body_html)
-    body_html = re.sub(r'#{2}\s*(.+?)(?:<br>)', r'<h2>\1</h2>', body_html)
-    body_html = re.sub(r'#{1}\s*(.+?)(?:<br>)', r'<h1>\1</h1>', body_html)
+    # --- Convert markdown to HTML ---
+    lines = report_md.split("\n")
+    html_lines = []
+    in_table = False
+    in_code_block = False
+    table_rows = []
+
+    def _flush_table():
+        nonlocal table_rows, in_table
+        if not table_rows:
+            return ""
+        out = '<table>\n'
+        for i, row in enumerate(table_rows):
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            # Skip separator rows (---|---|---)
+            if all(set(c.strip()) <= {'-', ':', ' '} for c in cells):
+                continue
+            tag = "th" if i == 0 else "td"
+            out += "  <tr>" + "".join(f"<{tag}>{html_mod.escape(c)}</{tag}>" for c in cells) + "</tr>\n"
+        out += '</table>\n'
+        table_rows = []
+        in_table = False
+        return out
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Code blocks
+        if stripped.startswith("```"):
+            if in_table:
+                html_lines.append(_flush_table())
+            if in_code_block:
+                html_lines.append("</code></pre>")
+                in_code_block = False
+            else:
+                in_code_block = True
+                html_lines.append("<pre><code>")
+            continue
+        if in_code_block:
+            html_lines.append(html_mod.escape(line))
+            continue
+
+        # Table rows (lines containing |)
+        if "|" in stripped and stripped.startswith("|"):
+            if not in_table:
+                in_table = True
+                table_rows = []
+            table_rows.append(stripped)
+            continue
+        elif in_table:
+            html_lines.append(_flush_table())
+
+        # Headers
+        if stripped.startswith("#### "):
+            html_lines.append(f"<h4>{html_mod.escape(stripped[5:])}</h4>")
+        elif stripped.startswith("### "):
+            html_lines.append(f"<h3>{html_mod.escape(stripped[4:])}</h3>")
+        elif stripped.startswith("## "):
+            html_lines.append(f"<h2>{html_mod.escape(stripped[3:])}</h2>")
+        elif stripped.startswith("# "):
+            html_lines.append(f"<h1>{html_mod.escape(stripped[2:])}</h1>")
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            content = html_mod.escape(stripped[2:])
+            content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
+            html_lines.append(f"<li>{content}</li>")
+        elif stripped == "":
+            html_lines.append("<br>")
+        else:
+            content = html_mod.escape(stripped)
+            content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
+            content = re.sub(r'`(.+?)`', r'<code>\1</code>', content)
+            html_lines.append(f"<p>{content}</p>")
+
+    if in_table:
+        html_lines.append(_flush_table())
+
+    body_html = "\n".join(html_lines)
+
+    # --- Generate plotly chart HTML from results ---
+    charts_html = _generate_charts_html(all_results)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>{html_mod.escape(title)}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body, {{delimiters: [{{left: '$$', right: '$$', display: true}}, {{left: '$', right: '$', display: false}}]}});"></script>
 <style>
     body {{ font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; line-height: 1.6; color: #333; }}
     h1 {{ color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 10px; }}
     h2 {{ color: #2e86c1; margin-top: 30px; }}
     h3 {{ color: #2874a6; }}
+    h4 {{ color: #1a5276; }}
     table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
     th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
     th {{ background-color: #2e86c1; color: white; }}
     tr:nth-child(even) {{ background-color: #f2f2f2; }}
+    li {{ margin: 4px 0; }}
     .meta {{ color: #888; font-size: 0.9em; }}
     pre {{ background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }}
     code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.95em; }}
+    .chart-container {{ margin: 20px 0; }}
     .footer {{ margin-top: 40px; padding-top: 10px; border-top: 1px solid #ddd; color: #888; font-size: 0.85em; }}
 </style>
 </head>
@@ -1038,6 +1440,7 @@ def _generate_html_report(title: str, report_md: str, spec: dict,
 <p class="meta">Generated by NeqSim Task Solver | Task type: {html_mod.escape(spec.get('task_type', 'N/A'))}</p>
 <hr>
 {body_html}
+{charts_html}
 <div class="footer">
     <p>Report generated by NeqSim Web Task Solver. Results are based on thermodynamic simulations
     and should be validated against experimental data for engineering decisions.</p>

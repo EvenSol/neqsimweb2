@@ -518,118 +518,44 @@ if "ts_last_result" in st.session_state:
             if step.error:
                 st.error(step.error)
 
-    # Phase envelope plot if available
-    for key, data in lr["all_results"].items():
-        if "dew_point_curve" in data:
-            st.subheader("📈 Phase Envelope")
-            import plotly.graph_objects as go
-
-            fig = go.Figure()
-            dew = data["dew_point_curve"]
-            bub = data.get("bubble_point_curve", {})
-
-            fig.add_trace(go.Scatter(
-                x=dew.get("temperature_C", []),
-                y=dew.get("pressure_bara", []),
-                mode="lines", name="Dew Point",
-                line=dict(color="blue", width=2),
-            ))
-            if bub.get("temperature_C"):
-                fig.add_trace(go.Scatter(
-                    x=bub["temperature_C"],
-                    y=bub["pressure_bara"],
-                    mode="lines", name="Bubble Point",
-                    line=dict(color="red", width=2),
-                ))
-
-            # Mark cricondenbar / cricondentherm
-            if "cricondenbar_bara" in data:
-                fig.add_trace(go.Scatter(
-                    x=[data["cricondenbar_T_C"]],
-                    y=[data["cricondenbar_bara"]],
-                    mode="markers+text",
-                    name=f"Cricondenbar ({data['cricondenbar_bara']:.1f} bara)",
-                    marker=dict(size=10, color="green"),
-                    text=[f"Cricondenbar\n{data['cricondenbar_bara']:.1f} bara"],
-                    textposition="top right",
-                ))
-            if "cricondentherm_C" in data:
-                fig.add_trace(go.Scatter(
-                    x=[data["cricondentherm_C"]],
-                    y=[data["cricondentherm_P_bara"]],
-                    mode="markers+text",
-                    name=f"Cricondentherm ({data['cricondentherm_C']:.1f} °C)",
-                    marker=dict(size=10, color="orange"),
-                    text=[f"Cricondentherm\n{data['cricondentherm_C']:.1f} °C"],
-                    textposition="top left",
-                ))
-
-            fig.update_layout(
-                title="Phase Envelope",
-                xaxis_title="Temperature (°C)",
-                yaxis_title="Pressure (bara)",
-                template="plotly_white",
-                height=500,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    # Hydrate curve plot if available
-    for key, data in lr["all_results"].items():
-        if "hydrate_curve" in data:
-            st.subheader("🧊 Hydrate Formation Curve")
-            import plotly.graph_objects as go
-
-            curve = data["hydrate_curve"]
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=[p["temperature_C"] for p in curve],
-                y=[p["pressure_bara"] for p in curve],
-                mode="lines+markers",
-                name="Hydrate Formation",
-                line=dict(color="cyan", width=2),
-            ))
-            if "hydrate_formation_temperature_C" in data:
-                fig.add_trace(go.Scatter(
-                    x=[data["hydrate_formation_temperature_C"]],
-                    y=[data.get("pressure_bara", 100)],
-                    mode="markers+text",
-                    name=f"At {data.get('pressure_bara', 100)} bara",
-                    marker=dict(size=12, color="red"),
-                    text=[f"{data['hydrate_formation_temperature_C']:.1f} °C"],
-                    textposition="top right",
-                ))
-
-            fig.update_layout(
-                title="Hydrate Formation Temperature vs Pressure",
-                xaxis_title="Temperature (°C)",
-                yaxis_title="Pressure (bara)",
-                template="plotly_white",
-                height=450,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    # ── Charts (auto-detected + explicit) ─────────────────────────────────
+    try:
+        from process_chat.task_solver import _build_plotly_charts
+        figures = _build_plotly_charts(lr["all_results"])
+        if figures:
+            st.subheader("📈 Charts")
+            for fig in figures:
+                st.plotly_chart(fig, use_container_width=True)
+    except Exception:
+        pass  # chart rendering is optional, don't block page
 
     # Properties table if available
     for key, data in lr["all_results"].items():
+        if not isinstance(data, dict):
+            continue
         if any(k.startswith("density") or k.startswith("z_factor") or k.startswith("Cp")
                for k in data.keys()):
             st.subheader("📊 Fluid Properties")
             props = {
                 k: v for k, v in data.items()
                 if isinstance(v, (int, float)) and k not in ("number_of_phases",)
+                and not k.startswith("_")
             }
             if props:
                 prop_df = pd.DataFrame(
-                    [{"Property": k, "Value": v} for k, v in props.items()]
+                    [{"Property": k.replace("_", " "), "Value": v} for k, v in props.items()]
                 )
                 st.dataframe(prop_df, hide_index=True, use_container_width=True)
             break  # only show once
 
     # Standards results if available
     for key, data in lr["all_results"].items():
+        if not isinstance(data, dict):
+            continue
         if "GCV_MJ_Sm3" in data or "Wobbe_index_MJ_Sm3" in data:
             st.subheader("📐 Gas Quality / Standards")
             std_df = pd.DataFrame([
-                {"Parameter": k, "Value": v}
+                {"Parameter": k.replace("_", " "), "Value": v}
                 for k, v in data.items()
                 if isinstance(v, (int, float))
             ])
