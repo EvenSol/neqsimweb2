@@ -102,8 +102,9 @@ for i, tmpl in enumerate(TASK_TEMPLATES):
             help=tmpl["description"],
             use_container_width=True,
         ):
-            st.session_state["ts_task_input"] = tmpl["example"]
+            st.session_state["ts_task_text"] = tmpl["example"]
             st.session_state["ts_selected_template"] = i
+            st.rerun()
 
 st.divider()
 
@@ -112,7 +113,6 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────────────────
 task_input = st.text_area(
     "Describe your engineering task",
-    value=st.session_state.get("ts_task_input", ""),
     height=120,
     placeholder=(
         "Example: Calculate the JT cooling for a rich gas expanding from 200 to 50 bara.\n"
@@ -162,6 +162,19 @@ with st.expander("🌡️ Override Conditions (optional)", expanded=False):
         cond_pres = st.number_input("Pressure (bara)", value=100.0, min_value=0.01, max_value=10000.0, key="ts_pres")
     use_conditions = st.checkbox("Apply these conditions", key="ts_use_conditions")
 
+# Optional: upload reference documents
+with st.expander("📎 Upload Reference Documents (optional)", expanded=False):
+    st.markdown(
+        "Upload literature, data sheets, specs, or task descriptions. "
+        "Supported: `.txt`, `.md`, `.csv`, `.json`, `.xlsx`, `.pdf`"
+    )
+    uploaded_files = st.file_uploader(
+        "Upload files",
+        type=["txt", "md", "csv", "json", "xlsx", "xls", "pdf", "log"],
+        accept_multiple_files=True,
+        key="ts_uploads",
+    )
+
 st.divider()
 
 
@@ -200,6 +213,20 @@ def _get_conditions() -> dict | None:
     return None
 
 
+def _get_uploaded_text() -> str | None:
+    """Extract text from all uploaded files."""
+    files = st.session_state.get("ts_uploads")
+    if not files:
+        return None
+    from process_chat.task_solver import extract_text_from_upload
+    parts = []
+    for f in files:
+        f.seek(0)
+        parts.append(extract_text_from_upload(f))
+    combined = "\n\n---\n\n".join(parts)
+    return combined if combined.strip() else None
+
+
 # Run button
 run_col1, run_col2 = st.columns([1, 3])
 with run_col1:
@@ -224,6 +251,7 @@ if run_clicked:
 
     user_comp = _get_composition()
     user_cond = _get_conditions()
+    uploaded_text = _get_uploaded_text()
 
     # ── Live progress execution ───────────────────────────────────────────
     # Create status containers upfront — one for the overall workflow
@@ -245,6 +273,8 @@ if run_clicked:
         st.markdown(f"**Report level:** {report_level}")
         if user_comp:
             st.markdown(f"**Custom composition:** {len(user_comp)} components")
+        if uploaded_text:
+            st.markdown(f"**Uploaded documents:** {len(st.session_state.get('ts_uploads', []))} file(s)")
         st.divider()
 
         # Step 1: Scope
@@ -263,6 +293,7 @@ if run_clicked:
                 api_key=api_key,
                 user_request=task_input.strip() + extra_ctx,
                 user_composition=user_comp,
+                uploaded_docs=uploaded_text,
                 ai_model="gemini-2.0-flash",
             )
 
@@ -609,5 +640,116 @@ if "ts_last_result" in st.session_state:
     # Clear button
     if st.button("🗑️ Clear Results"):
         st.session_state.pop("ts_last_result", None)
-        st.session_state.pop("ts_task_input", None)
+        st.session_state.pop("ts_task_text", None)
+        st.session_state.pop("ts_iteration_count", None)
+        st.rerun()
+
+    # ─────────────────────────────────────────────────────────────────────
+    #  Follow-up / iterate on the report
+    # ─────────────────────────────────────────────────────────────────────
+    st.divider()
+    iteration_n = st.session_state.get("ts_iteration_count", 0)
+    st.subheader(f"🔄 Continue / Refine Report" + (f" (iteration {iteration_n})" if iteration_n else ""))
+    st.markdown(
+        "Ask for more detail, additional calculations, or different conditions. "
+        "You can also upload reference documents below."
+    )
+
+    followup_input = st.text_area(
+        "What would you like to add or change?",
+        height=100,
+        placeholder=(
+            "Example: Also calculate properties at 200 bara.\n"
+            "Example: Add MEG inhibition analysis for the hydrate case.\n"
+            "Example: Compare with Peng-Robinson EOS.\n"
+            "Example: Include the data from the uploaded PDF in the report."
+        ),
+        key="ts_followup_text",
+    )
+
+    # Upload docs for follow-up
+    followup_files = st.file_uploader(
+        "Upload additional reference documents (optional)",
+        type=["txt", "md", "csv", "json", "xlsx", "xls", "pdf", "log"],
+        accept_multiple_files=True,
+        key="ts_followup_uploads",
+    )
+
+    followup_clicked = st.button(
+        "🔄 Continue Analysis",
+        type="primary",
+        disabled=not followup_input.strip(),
+    )
+
+    if followup_clicked:
+        api_key = _get_api_key()
+        if not api_key:
+            st.error("No Gemini API key found.")
+            st.stop()
+
+        from process_chat.task_solver import follow_up_task, extract_text_from_upload
+
+        # Extract text from follow-up uploads
+        followup_doc_text = None
+        if followup_files:
+            parts = []
+            for f in followup_files:
+                f.seek(0)
+                parts.append(extract_text_from_upload(f))
+            followup_doc_text = "\n\n---\n\n".join(parts)
+            if not followup_doc_text.strip():
+                followup_doc_text = None
+
+        # Also include any docs from the initial upload
+        initial_doc_text = _get_uploaded_text()
+        if initial_doc_text and followup_doc_text:
+            combined_docs = initial_doc_text + "\n\n---\n\n" + followup_doc_text
+        else:
+            combined_docs = followup_doc_text or initial_doc_text
+
+        st.subheader("📊 Follow-up Execution")
+        fu_progress = st.progress(0, text="Starting follow-up…")
+        fu_status = st.status("Running follow-up…", expanded=True)
+
+        with fu_status:
+            st.markdown(f"**Follow-up:** {followup_input.strip()}")
+            if combined_docs:
+                st.markdown(f"**Reference documents:** included")
+            st.divider()
+
+            fu_step_ph = st.empty()
+            fu_step_ph.info("⏳ Planning follow-up steps…")
+
+            def fu_progress_cb(step_num, step_title, status_msg):
+                fu_step_ph.info(f"⏳ **Step {step_num}: {step_title}** — {status_msg}")
+
+            fu_result = follow_up_task(
+                api_key=api_key,
+                follow_up_request=followup_input.strip(),
+                previous_result=lr,
+                uploaded_docs=combined_docs,
+                ai_model="gemini-2.0-flash",
+                progress_cb=fu_progress_cb,
+            )
+
+            if fu_result.success:
+                fu_step_ph.success("✅ Follow-up complete!")
+                fu_progress.progress(100, text="Follow-up complete!")
+                fu_status.update(label="Follow-up completed!", state="complete", expanded=False)
+            else:
+                fu_step_ph.warning("⚠️ Follow-up completed with some errors")
+                fu_progress.progress(100, text="Follow-up done (with errors)")
+                fu_status.update(label="Follow-up completed with errors", state="error", expanded=False)
+
+        # Merge into session state — replace with updated results
+        st.session_state["ts_last_result"] = {
+            "spec": lr["spec"],
+            "all_results": fu_result.results_json,
+            "report_text": fu_result.report_text or lr["report_text"],
+            "report_html": fu_result.report_html or lr["report_html"],
+            "steps": lr["steps"] + [s for s in fu_result.steps],
+            "task_input": lr["task_input"],
+            "all_code": fu_result.all_code or lr.get("all_code", ""),
+        }
+        st.session_state["ts_iteration_count"] = iteration_n + 1
         st.rerun()

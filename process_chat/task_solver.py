@@ -133,7 +133,7 @@ class TaskResult:
 ProgressCallback = Callable[[int, str, str], None]
 
 # Maximum retries when code fails
-MAX_FIX_ATTEMPTS = 4
+MAX_FIX_ATTEMPTS = 25
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +220,10 @@ def _extract_python_block(text: str) -> Optional[str]:
 NEQSIM_API_REFERENCE = r"""
 ## NeqSim Python API Reference
 
+Full JavaDoc: https://equinor.github.io/neqsimhome/javadoc/site/apidocs/index.html
+Java source:  https://github.com/equinor/neqsim
+Python wrapper: https://github.com/equinor/neqsim-python
+
 ### Imports
 ```python
 from neqsim.thermo import fluid_df, TPflash, phaseenvelope, dataFrame, fluid
@@ -260,6 +264,34 @@ neqsim_fluid.setMixingRule("classic")
 neqsim_fluid.setMultiPhaseCheck(True)  # REQUIRED for water/heavy systems
 ```
 
+#### Available EOS classes (jneqsim.thermo.system.*)
+- SystemSrkEos — SRK (Soave-Redlich-Kwong), general purpose
+- SystemPrEos — Peng-Robinson, general purpose
+- SystemPrEos1978 — PR 1978 variant
+- SystemSrkCPAstatoil — CPA-SRK for polar (water, MEG, methanol, TEG)
+- SystemPrCPA — CPA-PR
+- SystemUMRPRUMCEos — UMR-PRU-MC for accurate phase envelopes
+- SystemUMRPRUEos — UMR-PRU
+- SystemGERG2008Eos — GERG-2008 reference equation (natural gas)
+- SystemEOSCGEos — EOS-CG for CO2-rich systems
+- SystemSpanWagnerEos — Span-Wagner reference for CO2
+- SystemLeachmanEos — Leachman reference for hydrogen
+- SystemPCSAFT / SystemPCSAFTa — PC-SAFT (+ association)
+- SystemElectrolyteCPA / SystemElectrolyteCPAstatoil — electrolyte systems
+- SystemSoreideWhitson — Søreide-Whitson for produced water
+- SystemIdealGas — ideal gas law
+- SystemWaterIF97 — IAPWS-IF97 for steam/water
+
+#### Mixing rules (setMixingRule)
+- 1: classic, all kij = 0
+- 2: classic + kij from NeqSim database (RECOMMENDED for SRK/PR)
+- 3: classic + temperature-dependent kij
+- 4: Huron-Vidal with database parameters
+- 7: classic CPA kij from database
+- 9: CPA temperature-dependent kij
+- 10: CPA temperature + composition dependent kij (RECOMMENDED for CPA)
+- "classic": classic mixing rule (string form)
+
 #### Setting model by name
 ```python
 neqsim_fluid.setModel("UMR-PRU-EoS")  # or "SRK-EoS", "PrEos", "CPAs-SRK-EOS"
@@ -292,32 +324,58 @@ thermoOps.hydrateFormationTemperature()        # hydrate formation T
 # Always call initProperties() after flash if you need transport properties
 neqsim_fluid.initProperties()
 
+# Density: units "kg/m3", "mol/m3"
 neqsim_fluid.getDensity("kg/m3")
-neqsim_fluid.getMolarMass("kg/mol")
-neqsim_fluid.getZ()                          # compressibility factor
-neqsim_fluid.getEnthalpy("J/mol")            # or "kJ/kg"
-neqsim_fluid.getEntropy("J/molK")
-neqsim_fluid.getCp("J/molK")                 # or "kJ/kgK"
+neqsim_fluid.getMolarMass("kg/mol")           # or "gr/mol"
+neqsim_fluid.getZ()                           # compressibility factor (PV=ZnRT)
+neqsim_fluid.getEnthalpy("J/mol")             # units: "J", "J/mol", "kJ/kmol", "J/kg", "kJ/kg"
+neqsim_fluid.getEntropy("J/molK")             # units: "J/K", "J/molK", "J/kgK", "kJ/kgK"
+neqsim_fluid.getCp("J/molK")                  # units: "J/K", "J/molK", "J/kgK", "kJ/kgK"
 neqsim_fluid.getCv("J/molK")
-neqsim_fluid.getSoundSpeed("m/s")
-neqsim_fluid.getViscosity("kg/msec")         # dynamic viscosity Pa·s
-neqsim_fluid.getThermalConductivity("W/mK")
-neqsim_fluid.getTemperature("C")             # returns Celsius
-neqsim_fluid.getPressure("bara")
+neqsim_fluid.getSoundSpeed("m/s")             # or "km/h"
+neqsim_fluid.getViscosity("kg/msec")          # or "cP", "Pas"
+neqsim_fluid.getKinematicViscosity("m2/sec")
+neqsim_fluid.getThermalConductivity("W/mK")   # or "W/cmK"
+neqsim_fluid.getJouleThomsonCoefficient("C/bar")  # or "K/bar"
+neqsim_fluid.getTemperature("C")              # or "K", "R"
+neqsim_fluid.getPressure("bara")              # or "barg", "Pa", "MPa", "psi"
 neqsim_fluid.getNumberOfPhases()
-neqsim_fluid.getVolume("m3")
+neqsim_fluid.getVolume("m3")                  # or "litre", "m3/kg", "m3/mol"
+neqsim_fluid.getMolarVolume("m3/mol")
+neqsim_fluid.getGamma()                       # heat capacity ratio Cp/Cv
+neqsim_fluid.getInternalEnergy("J/mol")        # or "J/kg", "kJ/kg"
+neqsim_fluid.getExergy(288.15, "J/mol")        # T_surroundings in K
+neqsim_fluid.getFlowRate("kg/hr")             # "kg/sec","m3/hr","Sm3/hr","Sm3/day","MSm3/day","mole/sec"
+neqsim_fluid.getMass("kg")                     # or "gr", "tons"
+neqsim_fluid.getInterfacialTension("gas", "oil")  # returns N/m, by phase name
+neqsim_fluid.getInterfacialTension(0, 1)       # by phase index
 
 # Phase-level access
-gas_phase = neqsim_fluid.getPhase("gas")     # or getPhase(0)
-liq_phase = neqsim_fluid.getPhase("oil")     # or getPhase(1)
-aq_phase  = neqsim_fluid.getPhase("aqueous") # if present
+neqsim_fluid.hasPhaseType("gas")              # returns boolean
+neqsim_fluid.hasComponent("methane")          # returns boolean
+neqsim_fluid.getPhaseOfType("gas")            # returns phase or null if absent
+gas_phase = neqsim_fluid.getPhase("gas")      # or getPhase(0)
+liq_phase = neqsim_fluid.getPhase("oil")      # or getPhase(1)
+aq_phase  = neqsim_fluid.getPhase("aqueous")  # if present
 phase.getDensity("kg/m3")
 phase.getViscosity("kg/msec")
 phase.getZ()
-phase.getBeta()                              # phase fraction (mole basis)
+phase.getBeta()                               # phase fraction (mole basis)
+neqsim_fluid.getPhaseFraction("gas", "mole")  # or "volume", "weight"
 
 # Get full results as DataFrame
-results_df = dataFrame(neqsim_fluid)         # returns pandas DataFrame
+results_df = dataFrame(neqsim_fluid)          # returns pandas DataFrame
+
+# Utility
+neqsim_fluid.toJson()                         # JSON string of fluid state
+neqsim_fluid.prettyPrint()                    # print readable summary
+neqsim_fluid.getModelName()                   # returns EOS model name
+neqsim_fluid.getMolarComposition()            # returns double[] of mole fractions
+neqsim_fluid.getCompNames()                   # returns String[] of component names
+neqsim_fluid.getNumberOfComponents()          # int
+neqsim_fluid.setTotalFlowRate(100.0, "kg/hr") # set flow rate
+neqsim_fluid.setMolarComposition([0.8, 0.1, 0.1])  # normalize and set
+neqsim_fluid.validateSetup()                  # check for common setup errors
 ```
 
 ### 5. Phase Envelope
@@ -498,6 +556,16 @@ Ions: "Na+", "Cl-", "K+", "Ca++", "Mg++", "Ba++", "Sr++", "Fe++", "SO4--", "HCO3
 - Call initProperties() after flash before reading transport properties (viscosity, conductivity)
 - Set flow rate on streams before running process
 - Use fluid.clone() when you need independent copies (e.g., parameter sweeps)
+- Use setHydrateCheck(True) before hydrate calculations
+- Use setEnhancedMultiPhaseCheck(True) for complex systems (sour gas, CO2, liquid-liquid)
+- Use hasPhaseType("gas") to safely check if a phase exists before accessing it
+- Use getPhaseOfType("gas") — returns null (None in Python) if the phase does not exist
+- Mixing rule 2 is recommended for SRK/PR; mixing rule 10 for CPA systems
+- addTBPfraction(name, moles, molarMass_kg_mol, density_g_cm3) for TBP pseudo-components
+- addPlusFraction(name, moles, molarMass, density) for plus fractions
+- addComponent(name, value, "kg/hr") adds component by mass flow rate
+- setTotalFlowRate(value, "kg/hr") to set total flow rate
+- validateSetup() checks for common errors (components, mixing rule, T/P ranges)
 
 ### 12. IMPORTANT: Output Format
 Your code MUST end by building a `results` dict containing all computed values:
@@ -564,7 +632,7 @@ def _execute_code(code: str, timeout_seconds: int = 300) -> dict:
 
 
 def _to_serializable(obj, depth=0):
-    """Convert an object to a JSON-serializable form (handles DataFrames, Java objects, etc.)."""
+    """Convert an object to a JSON-serializable form (handles DataFrames, Java objects, numpy, etc.)."""
     if depth > 10:
         return str(obj)
     if obj is None:
@@ -577,6 +645,17 @@ def _to_serializable(obj, depth=0):
         return [_to_serializable(v, depth + 1) for v in obj]
     if isinstance(obj, pd.DataFrame):
         return obj.to_dict(orient="records")
+    # Handle numpy types
+    try:
+        import numpy as np
+        if isinstance(obj, np.ndarray):
+            return [_to_serializable(v, depth + 1) for v in obj.tolist()]
+        if isinstance(obj, (np.integer, np.bool_)):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+    except ImportError:
+        pass
     try:
         return float(obj)
     except (TypeError, ValueError):
@@ -622,11 +701,14 @@ Rules:
 
 def classify_and_scope(api_key: str, user_request: str,
                        user_composition: Optional[dict] = None,
+                       uploaded_docs: Optional[str] = None,
                        ai_model: str = "gemini-2.0-flash") -> dict:
     """Step 1: Use LLM to classify the task and create a scope/spec."""
     extra = ""
     if user_composition:
         extra = f"\n\nUser-provided composition: {json.dumps(user_composition)}"
+    if uploaded_docs:
+        extra += f"\n\nUser-uploaded reference documents:\n{uploaded_docs[:8000]}"
 
     response = _call_llm(
         api_key=api_key,
@@ -665,6 +747,7 @@ def classify_and_scope(api_key: str, user_request: str,
 _CODE_GEN_SYSTEM_PROMPT = (
     "You are a NeqSim simulation engineer. You write Python code that uses the "
     "NeqSim Python library to solve thermodynamic and process engineering tasks.\n\n"
+    "Full JavaDoc reference: https://equinor.github.io/neqsimhome/javadoc/site/apidocs/index.html\n\n"
     "CRITICAL RULES:\n"
     "1. Write COMPLETE, RUNNABLE Python code — all imports at the top.\n"
     "2. Your code MUST define a `results` dict at the end containing all computed values.\n"
@@ -676,6 +759,10 @@ _CODE_GEN_SYSTEM_PROMPT = (
     "8. For process simulation: always set flow rate on streams.\n"
     "9. Always call initProperties() after flash before reading transport props.\n"
     "10. When fixing code: show the COMPLETE fixed code, not just the changed part.\n"
+    "11. When building DataFrames from multiple arrays, ALWAYS verify they have the\n"
+    "    same length first. Use min(len(a), len(b)) to truncate, or store in a dict/list instead.\n"
+    "12. Phase envelope arrays (dewT, dewP, bubT, bubP) often have DIFFERENT lengths.\n"
+    "    Store them as separate lists in the results dict, NOT in a single DataFrame.\n"
     "\n"
     + NEQSIM_API_REFERENCE
 )
@@ -688,6 +775,7 @@ def generate_and_run_code(
     step_number: int,
     ai_model: str = "gemini-2.0-flash",
     progress_cb: Optional[ProgressCallback] = None,
+    prior_context: Optional[str] = None,
 ) -> TaskStep:
     """Generate Python code for a step, execute it, and fix errors if needed.
 
@@ -720,9 +808,13 @@ def generate_and_run_code(
         f"The code must define a `results` dict at the end."
     )
 
+    if prior_context:
+        user_msg += f"\n\nContext from previous analysis:\n{prior_context[:4000]}"
+
     conversation = [{"role": "user", "content": user_msg}]
 
     t_start = time.time()
+    error_text = "No code was generated in any attempt."
 
     for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
         task_step.attempts = attempt
@@ -800,6 +892,9 @@ def generate_and_run_code(
             "- Missing setMultiPhaseCheck(True) for water systems\n"
             "- Use getTemperature('C') not getTemperature() for Celsius\n"
             "- For CPA: use setMixingRule(10)\n"
+            "- DataFrame 'All arrays must be of the same length': do NOT put arrays of different\n"
+            "  lengths into a DataFrame. Use separate lists in the results dict, or truncate to min length.\n"
+            "  Phase envelope arrays (dewT, dewP, bubT, bubP) often have different lengths!\n"
             "\n"
             "Return the COMPLETE fixed Python code in a ```python block."
         )
@@ -1080,3 +1175,285 @@ def run_task(
     result.success = all(s.status == "done" for s in result.steps)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Follow-up / iteration on existing results
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_SCOPE_PROMPT = """You are a thermodynamic / process engineering task planner for NeqSim.
+
+The user has already completed an analysis and wants to EXTEND or REFINE it.
+You are given the original task specification, its results, and the user's follow-up request.
+
+Produce a JSON specification for the ADDITIONAL steps only (not the steps already done).
+Use the same format as before:
+
+{
+  "title": "short title for the follow-up",
+  "description": "what the user wants NOW",
+  "steps": [
+    {"title": "step title", "description": "detailed description"},
+    ...
+  ],
+  "deliverables": ["list of expected outputs"],
+  "update_report": true
+}
+
+Rules:
+- Keep the same composition and EOS model from the original task.
+- Only add NEW steps — do not repeat what was already done.
+- If the user wants more detail on something already calculated, create a step
+  that dives deeper (e.g. wider pressure range, more properties, sensitivity).
+- If the user uploaded reference documents, incorporate their data and requirements.
+- Return ONLY the JSON in a ```json block.
+"""
+
+
+def follow_up_task(
+    api_key: str,
+    follow_up_request: str,
+    previous_result: dict,
+    uploaded_docs: Optional[str] = None,
+    ai_model: str = "gemini-2.0-flash",
+    progress_cb: Optional[ProgressCallback] = None,
+) -> TaskResult:
+    """
+    Continue iterating on a previous task result.
+
+    Takes the previous spec + results + follow-up request, plans new steps,
+    executes them, and produces an updated report combining old and new results.
+
+    Parameters
+    ----------
+    api_key : str
+        Gemini API key.
+    follow_up_request : str
+        What the user wants to add/change.
+    previous_result : dict
+        The ts_last_result dict from session state.
+    uploaded_docs : str, optional
+        Concatenated text from uploaded files.
+    ai_model : str
+        Gemini model name.
+    progress_cb : callable, optional
+        Called with (step_number, step_title, status_message).
+
+    Returns
+    -------
+    TaskResult
+    """
+    result = TaskResult(task_description=follow_up_request)
+    t_start = time.time()
+
+    prev_spec = previous_result.get("spec", {})
+    prev_results = previous_result.get("all_results", {})
+    prev_report = previous_result.get("report_text", "")
+    prev_steps = previous_result.get("steps", [])
+    prev_code = previous_result.get("all_code", "")
+    prev_task = previous_result.get("task_input", "")
+
+    def _progress(step_num: int, title: str, msg: str):
+        if progress_cb:
+            progress_cb(step_num, title, msg)
+
+    # ── Plan follow-up steps ──────────────────────────────────────────────
+    _progress(0, "Plan Follow-up", "Analyzing follow-up request…")
+
+    scope_msg = (
+        f"Original task: {prev_task}\n\n"
+        f"Original specification:\n```json\n{json.dumps(prev_spec, indent=2, default=str)[:3000]}\n```\n\n"
+        f"Results from original analysis:\n```json\n{json.dumps(prev_results, indent=2, default=str)[:4000]}\n```\n\n"
+        f"User's follow-up request: {follow_up_request}"
+    )
+    if uploaded_docs:
+        scope_msg += f"\n\nUser-uploaded reference documents:\n{uploaded_docs[:6000]}"
+
+    try:
+        response = _call_llm(
+            api_key=api_key,
+            system_prompt=_FOLLOWUP_SCOPE_PROMPT,
+            user_message=scope_msg,
+            ai_model=ai_model,
+        )
+        followup_spec = _extract_json_block(response)
+        if followup_spec is None:
+            followup_spec = {
+                "title": follow_up_request[:80],
+                "description": follow_up_request,
+                "steps": [{"title": "Additional analysis", "description": follow_up_request}],
+                "deliverables": ["Updated results"],
+                "update_report": True,
+            }
+    except Exception as e:
+        result.steps.append(TaskStep(
+            number=0, title="Plan Follow-up",
+            description="Plan additional steps", status="error",
+            error=f"Failed to plan follow-up: {e}",
+        ))
+        result.total_elapsed = time.time() - t_start
+        return result
+
+    scope_step = TaskStep(
+        number=0, title="Plan Follow-up",
+        description=followup_spec.get("description", follow_up_request),
+        status="done",
+        result_text=f"Planned **{len(followup_spec.get('steps', []))}** additional steps.",
+    )
+    result.steps.append(scope_step)
+    _progress(0, "Plan Follow-up", "✓ Follow-up planned")
+
+    # Use the original spec's composition, conditions, EOS
+    merged_spec = {
+        **prev_spec,
+        "title": followup_spec.get("title", prev_spec.get("title", "")),
+        "description": followup_spec.get("description", follow_up_request),
+        "steps": followup_spec.get("steps", []),
+    }
+
+    result.task_type = prev_spec.get("task_type", "G")
+    result.task_spec = json.dumps(merged_spec, indent=2, default=str)
+
+    # ── Execute new steps ─────────────────────────────────────────────────
+    new_steps = followup_spec.get("steps", [])
+    new_results = {}
+    new_code_parts = []
+
+    # Build a prior-context summary for the code generator
+    prior_context = (
+        f"Previous results (available for reference):\n"
+        f"{json.dumps(prev_results, indent=2, default=str)[:3000]}"
+    )
+    if uploaded_docs:
+        prior_context += f"\n\nReference documents:\n{uploaded_docs[:3000]}"
+
+    # Numbering continues from previous steps
+    prev_step_count = len([s for s in prev_steps if hasattr(s, 'number') and s.number > 0])
+    if prev_step_count == 0:
+        prev_step_count = len(prev_results)
+
+    for i, step_info in enumerate(new_steps):
+        step_num = prev_step_count + i + 1
+
+        task_step = generate_and_run_code(
+            api_key=api_key,
+            spec=merged_spec,
+            step_info=step_info,
+            step_number=step_num,
+            ai_model=ai_model,
+            progress_cb=progress_cb,
+            prior_context=prior_context,
+        )
+
+        result.steps.append(task_step)
+
+        if task_step.result_data:
+            new_results[f"step_{step_num}"] = task_step.result_data
+
+        if task_step.code:
+            new_code_parts.append(
+                f"# === Follow-up Step {step_num}: {task_step.title} ===\n"
+                f"# Attempts: {task_step.attempts}, Status: {task_step.status}\n\n"
+                f"{task_step.code}\n"
+            )
+
+    # Merge old + new results
+    combined_results = {**prev_results, **new_results}
+    combined_code = prev_code
+    if new_code_parts:
+        combined_code += "\n\n# " + "=" * 60 + "\n# FOLLOW-UP STEPS\n# " + "=" * 60 + "\n\n"
+        combined_code += "\n\n".join(new_code_parts)
+
+    result.results_json = combined_results
+    result.all_code = combined_code
+
+    # ── Regenerate report with combined data ──────────────────────────────
+    report_step_num = prev_step_count + len(new_steps) + 1
+    _progress(report_step_num, "Update Report", "Regenerating report with all results…")
+
+    combined_spec = {
+        **prev_spec,
+        "follow_up": followup_spec.get("description", follow_up_request),
+    }
+
+    try:
+        report_text = _generate_report_text(
+            api_key=api_key,
+            spec=combined_spec,
+            all_results=combined_results,
+            all_code=combined_code,
+            ai_model=ai_model,
+        )
+        result.report_text = report_text
+        result.report_html = _generate_html_report(
+            title=prev_spec.get("title", "Follow-up Analysis"),
+            report_md=report_text,
+            spec=combined_spec,
+            all_results=combined_results,
+        )
+
+        report_step = TaskStep(
+            number=report_step_num,
+            title="Update Report",
+            description="Regenerate report with all results (original + follow-up)",
+            status="done",
+            result_text="Updated report generated successfully.",
+        )
+        result.steps.append(report_step)
+        _progress(report_step_num, "Update Report", "✓ Updated report ready")
+
+    except Exception as e:
+        report_step = TaskStep(
+            number=report_step_num,
+            title="Update Report",
+            description="Regenerate report",
+            status="error",
+            error=str(e),
+        )
+        result.steps.append(report_step)
+
+    result.total_elapsed = time.time() - t_start
+    result.success = all(s.status == "done" for s in result.steps)
+
+    return result
+
+
+def extract_text_from_upload(uploaded_file) -> str:
+    """Extract text content from an uploaded file (txt, csv, md, json, pdf)."""
+    name = uploaded_file.name.lower()
+    raw = uploaded_file.read()
+
+    if name.endswith((".txt", ".md", ".csv", ".log")):
+        return raw.decode("utf-8", errors="replace")
+
+    if name.endswith(".json"):
+        return raw.decode("utf-8", errors="replace")
+
+    if name.endswith((".xlsx", ".xls")):
+        try:
+            df = pd.read_excel(io.BytesIO(raw))
+            return f"Excel file '{uploaded_file.name}':\n{df.to_string()}"
+        except Exception as e:
+            return f"[Could not parse Excel file: {e}]"
+
+    if name.endswith(".pdf"):
+        # Best-effort PDF text extraction
+        try:
+            import PyPDF2
+            reader = PyPDF2.PdfReader(io.BytesIO(raw))
+            pages = []
+            for page in reader.pages[:30]:  # limit to 30 pages
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            return f"PDF '{uploaded_file.name}' ({len(reader.pages)} pages):\n" + "\n---\n".join(pages)
+        except ImportError:
+            return f"[PDF uploaded: {uploaded_file.name} — install PyPDF2 for text extraction]"
+        except Exception as e:
+            return f"[Could not parse PDF: {e}]"
+
+    # Fallback: try as text
+    try:
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return f"[Binary file: {uploaded_file.name}, {len(raw)} bytes]"
