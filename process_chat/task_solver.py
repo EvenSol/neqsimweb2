@@ -547,9 +547,20 @@ Common: "methane", "ethane", "propane", "i-butane", "n-butane",
 Plus fractions: "C7", "C8", "C9", "C10", … (need MolarMass + RelativeDensity)
 Ions: "Na+", "Cl-", "K+", "Ca++", "Mg++", "Ba++", "Sr++", "Fe++", "SO4--", "HCO3-"
 
-### 11. Key Rules
+### 11. Key Rules — Units
 - Temperature constructor args are in KELVIN: 273.15 + T_celsius
-- getTemperature() returns KELVIN unless you pass "C"
+- getTemperature() returns KELVIN unless you pass "C" — ALWAYS use getTemperature("C") for results
+- getPressure() defaults to bara — use getPressure("bara") to be explicit
+- getEnthalpy() returns J (total) — use getEnthalpy("J/mol") or getEnthalpy("kJ/kg") for specific
+- getEntropy() returns J/K (total) — use getEntropy("J/molK") or getEntropy("kJ/kgK") for specific
+- getViscosity() returns kg/(m·s) — use getViscosity("cP") for centipoise
+- getCp()/getCv() return J/K (total) — use getCp("J/molK") or getCp("kJ/kgK")
+- Phase envelope T arrays (dewT, bubT) are in KELVIN — subtract 273.15 for Celsius
+- After hydrateFormationTemperature(), dewPointTemperatureFlash(), bubblePointPressureFlash():
+  the fluid's temperature/pressure are updated — use getTemperature("C") to read in Celsius
+- Always include units in result keys: 'temperature_C', 'pressure_bara', 'density_kg_m3'
+
+### 12. Key Rules — General
 - Always call setMixingRule() after adding all components
 - Call setMultiPhaseCheck(True) for systems with water or multiple liquid phases
 - For CPA EOS (water, MEG, methanol): use setMixingRule(10) or setMixingRule("cpa_mix")
@@ -763,6 +774,23 @@ _CODE_GEN_SYSTEM_PROMPT = (
     "    same length first. Use min(len(a), len(b)) to truncate, or store in a dict/list instead.\n"
     "12. Phase envelope arrays (dewT, dewP, bubT, bubP) often have DIFFERENT lengths.\n"
     "    Store them as separate lists in the results dict, NOT in a single DataFrame.\n"
+    "13. UNITS — ALWAYS pass explicit unit strings to ALL getter methods. Defaults return\n"
+    "    SI/internal units (Kelvin, Pa, J, etc.) which are NOT what users expect:\n"
+    "    - getTemperature('C') not getTemperature()  (default is KELVIN)\n"
+    "    - getPressure('bara') not getPressure()  (default is bara, but be explicit)\n"
+    "    - getDensity('kg/m3'), getEnthalpy('J/mol' or 'kJ/kg'), getEntropy('J/molK')\n"
+    "    - getViscosity('cP' or 'kg/msec'), getCp('J/molK' or 'kJ/kgK')\n"
+    "    - getThermalConductivity('W/mK'), getSoundSpeed('m/s')\n"
+    "    - getFlowRate('kg/hr'), getVolume('m3'), getMolarMass('kg/mol')\n"
+    "    - getJouleThomsonCoefficient('C/bar')\n"
+    "14. In the results dict, ALWAYS include the unit in the key name, e.g.:\n"
+    "    results['temperature_C'] not results['temperature'],\n"
+    "    results['density_kg_m3'] not results['density'],\n"
+    "    results['viscosity_cP'] not results['viscosity'].\n"
+    "15. Phase envelope temperatures from op.get('dewT')/op.get('bubT') are in KELVIN.\n"
+    "    Convert: [t - 273.15 for t in list(op.get('dewT'))]\n"
+    "16. Hydrate/dew/bubble point: after the flash, getTemperature() returns KELVIN.\n"
+    "    Always use getTemperature('C') to get Celsius.\n"
     "\n"
     + NEQSIM_API_REFERENCE
 )
@@ -890,7 +918,12 @@ def generate_and_run_code(
             "- Temperature in Kelvin for constructors: 273.15 + T_celsius\n"
             "- Missing initProperties() before transport property access\n"
             "- Missing setMultiPhaseCheck(True) for water systems\n"
-            "- Use getTemperature('C') not getTemperature() for Celsius\n"
+            "- UNITS: ALWAYS pass explicit unit strings to getter methods:\n"
+            "  getTemperature('C'), getPressure('bara'), getDensity('kg/m3'),\n"
+            "  getEnthalpy('kJ/kg'), getViscosity('cP'), getCp('kJ/kgK'), etc.\n"
+            "  Without unit args, values are in SI (Kelvin, Pa, J, kg/ms) — NOT user-friendly.\n"
+            "- Phase envelope temps (dewT, bubT) are in KELVIN — subtract 273.15 for Celsius.\n"
+            "- Include units in result dict keys: 'temperature_C', 'density_kg_m3', etc.\n"
             "- For CPA: use setMixingRule(10)\n"
             "- DataFrame 'All arrays must be of the same length': do NOT put arrays of different\n"
             "  lengths into a DataFrame. Use separate lists in the results dict, or truncate to min length.\n"
@@ -928,7 +961,18 @@ Write a clear, professional report with these sections:
 6. **Conclusions** — key takeaways and recommendations
 
 Guidelines:
-- Use proper engineering units (bara, °C, kg/m³, kJ/kg, etc.)
+- Use proper engineering units (bara, °C, kg/m³, kJ/kg, cP, W/(m·K), etc.)
+- CRITICAL UNIT CHECKS — verify every value before reporting:
+  - If a temperature value is above 200 or below -100, it is likely in Kelvin — convert to °C
+    by subtracting 273.15. Typical values: hydrate T = -20 to 30°C, process T = -50 to 200°C.
+    Values like 293, 313, 255 are almost certainly Kelvin.
+  - If viscosity is very small (e.g. 1e-5 to 1e-3), it is in Pa·s — multiply by 1000 for cP.
+    Gas: 0.005-0.05 cP, Liquid: 0.1-10 cP.
+  - If Cp/Cv is very large (e.g. 1500-4200), it is in J/(kg·K) — divide by 1000 for kJ/(kg·K).
+  - If enthalpy is very large (e.g. thousands), check if J/mol vs kJ/kg.
+  - If density seems off: gas 0.5-200 kg/m³, liquid 400-1200 kg/m³.
+  - Thermal conductivity: gas 0.01-0.1, liquid 0.1-0.7 W/(m·K).
+- Check result dict key names for embedded units (e.g. '_C', '_K', '_cP', '_kg_m3')
 - Flag any unusual or unexpected results
 - Note key assumptions
 - Keep it concise but complete — include ALL numerical results
