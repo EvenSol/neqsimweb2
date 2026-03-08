@@ -3343,47 +3343,93 @@ class ProcessChatSession:
                         client, types,
                     )
 
-            # ── Full rebuild (new process or fundamental change) ─────
-            try:
-                builder = ProcessBuilder()
-                model = builder.build_from_spec(build_spec)
+            # ── Full rebuild with AI self-correction retry loop ────
+            current_spec = build_spec
+            self.history.append({"role": "assistant", "content": assistant_text})
 
-                self._builder = builder
-                self.model = model
-                # Rebuild system prompt now that we have a model
-                self._system_prompt = build_system_prompt(model)
+            for attempt in range(1, self._BUILD_MAX_RETRIES + 1):
+                try:
+                    builder = ProcessBuilder()
+                    model = builder.build_from_spec(current_spec)
 
-                # Build inline model overview for chat display
-                self._last_model_built = _build_model_built_result(model)
+                    self._builder = builder
+                    self.model = model
+                    self._system_prompt = build_system_prompt(model)
+                    self._last_model_built = _build_model_built_result(model)
 
-                # Prepare summary for LLM
-                summary = model.get_model_summary()
-                build_log = "\n".join(builder.build_log)
+                    summary = model.get_model_summary()
+                    build_log = "\n".join(builder.build_log)
 
-                self.history.append({"role": "assistant", "content": assistant_text})
-                self.history.append({
-                    "role": "user",
-                    "content": (
-                        f"[SYSTEM: Process built successfully! Build log:\n{build_log}\n\n"
-                        f"Model summary:\n{summary}\n\n"
-                        "Explain the built process and key results to the engineer. "
-                        "Mention the equipment, key temperatures/pressures, power consumption, and duties. "
-                        "Tell them they can now ask what-if questions, request the Python script, or save the .neqsim file.]"
+                    retries_note = ""
+                    if attempt > 1:
+                        retries_note = f" (succeeded on attempt {attempt}/{self._BUILD_MAX_RETRIES})"
+
+                    self.history.append({
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM: Process built successfully{retries_note}! Build log:\n{build_log}\n\n"
+                            f"Model summary:\n{summary}\n\n"
+                            "Explain the built process and key results to the engineer. "
+                            "Mention the equipment, key temperatures/pressures, power consumption, and duties. "
+                            "Tell them they can now ask what-if questions, request the Python script, or save the .neqsim file.]"
+                        )
+                    })
+                    return self._llm_followup(client, types)
+
+                except Exception as e:
+                    error_detail = f"{str(e)}\n{traceback.format_exc()}"
+
+                    if attempt >= self._BUILD_MAX_RETRIES:
+                        # All retries exhausted — inform the engineer
+                        self.history.append({
+                            "role": "user",
+                            "content": (
+                                f"[SYSTEM: Process build FAILED after {self._BUILD_MAX_RETRIES} attempts. "
+                                f"Last error: {str(e)}\n{traceback.format_exc()}\n"
+                                "Inform the engineer about the persistent error and suggest manual corrections.]"
+                            )
+                        })
+                        return self._llm_followup(client, types)
+
+                    # Ask LLM to fix the build spec
+                    import json as _json
+                    self.history.append({
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM: Process build FAILED (attempt {attempt}/{self._BUILD_MAX_RETRIES}). "
+                            f"Analyze the error and output a corrected ```build``` JSON block. "
+                            f"Do NOT explain — just output the fixed build block.]\n\n"
+                            f"Error:\n{error_detail}\n\n"
+                            f"Failed build spec:\n```json\n{_json.dumps(current_spec, indent=2)}\n```"
+                        )
+                    })
+
+                    # Get LLM fix
+                    contents = self._build_contents()
+                    fix_resp = client.models.generate_content(
+                        model=self.ai_model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=self._system_prompt,
+                            temperature=0.3,
+                        ),
                     )
-                })
-                return self._llm_followup(client, types)
+                    fix_text = fix_resp.text or ""
+                    self.history.append({"role": "assistant", "content": fix_text})
 
-            except Exception as e:
-                self.history.append({"role": "assistant", "content": assistant_text})
-                self.history.append({
-                    "role": "user",
-                    "content": (
-                        f"[SYSTEM: Process build FAILED: {str(e)}\n"
-                        f"{traceback.format_exc()}\n"
-                        "Inform the engineer and suggest corrections.]"
-                    )
-                })
-                return self._llm_followup(client, types)
+                    fixed_spec = extract_build_spec(fix_text)
+                    if not fixed_spec or "fluid" not in fixed_spec or "process" not in fixed_spec:
+                        # LLM didn't produce a valid build block — give up
+                        self.history.append({
+                            "role": "user",
+                            "content": (
+                                f"[SYSTEM: Could not extract a corrected build spec from LLM response. "
+                                f"Original error: {str(e)}. Inform the engineer and suggest corrections.]"
+                            )
+                        })
+                        return self._llm_followup(client, types)
+
+                    current_spec = fixed_spec
 
         # --- Incremental additions ---
         if "add" in build_spec and self.model:
@@ -3682,7 +3728,8 @@ class ProcessChatSession:
 
     # -- Scenario handling --------------------------------------------------
 
-    def _handle_scenario(self, assistant_text: str, scenario_data: dict, client, types) -> str:
+    def _handle_scenario(self, assistant_text: str, scenario_data: dict, client, types,
+                         _retry_depth: int = 0) -> str:
         """Execute scenario JSON and feed results back to LLM.
 
         If the scenario contains structural additions (add_units, add_streams,
@@ -3694,6 +3741,19 @@ class ProcessChatSession:
 
             from .scenario_engine import run_scenarios
             comparison = run_scenarios(self.model, scenarios)
+
+            # Check if ALL scenario cases failed — trigger AI self-correction
+            all_failed = (
+                comparison.cases
+                and all(not c.success for c in comparison.cases)
+            )
+            if all_failed:
+                errors = "; ".join(
+                    f"{c.scenario.name}: {c.error}" for c in comparison.cases if c.error
+                )
+                raise RuntimeError(
+                    f"All scenario cases failed: {errors}"
+                )
 
             results_text = format_comparison_for_llm(comparison)
 
@@ -3818,12 +3878,75 @@ class ProcessChatSession:
             return final_text
 
         except Exception as e:
+            # --- AI self-correction retry for scenario failures ---
+            # Only retry at the top level to avoid exponential nested retries.
+            if _retry_depth > 0:
+                raise
+
+            import json as _json
+            current_scenario_data = scenario_data
+            last_error = e
+
             self.history.append({"role": "assistant", "content": assistant_text})
-            self.history.append({
-                "role": "user",
-                "content": f"[SYSTEM: Simulation failed with error: {str(e)}. Please inform the engineer and suggest corrections.]"
-            })
-            return self._llm_followup(client, types)
+
+            for attempt in range(1, self._SCENARIO_MAX_RETRIES + 1):
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM: Simulation failed (attempt {attempt}/{self._SCENARIO_MAX_RETRIES}). "
+                        f"Error: {str(last_error)}\n\n"
+                        f"Analyze the error and output a corrected ```scenario``` JSON block. "
+                        f"Common fixes: check patch key names match model units/streams, "
+                        f"verify parameter names (e.g. outletPressure_bara, outTemperature_C), "
+                        f"ensure referenced equipment exists. "
+                        f"Do NOT explain — just output the fixed scenario block.]\n\n"
+                        f"Failed scenario:\n```json\n{_json.dumps(current_scenario_data, indent=2)}\n```"
+                    )
+                })
+
+                contents = self._build_contents()
+                fix_resp = client.models.generate_content(
+                    model=self.ai_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._system_prompt,
+                        temperature=0.3,
+                    ),
+                )
+                fix_text = fix_resp.text or ""
+                self.history.append({"role": "assistant", "content": fix_text})
+
+                fixed_scenario = extract_scenario_json(fix_text)
+                if not fixed_scenario:
+                    # LLM didn't produce a scenario block — give up
+                    self.history.append({
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM: Could not extract a corrected scenario from LLM response. "
+                            f"Original error: {str(last_error)}. Inform the engineer and suggest corrections.]"
+                        )
+                    })
+                    return self._llm_followup(client, types)
+
+                current_scenario_data = fixed_scenario
+                try:
+                    # Retry with corrected scenario (depth=1 prevents further nesting)
+                    return self._handle_scenario(
+                        fix_text, current_scenario_data, client, types,
+                        _retry_depth=1,
+                    )
+                except Exception as retry_e:
+                    last_error = retry_e
+                    if attempt >= self._SCENARIO_MAX_RETRIES:
+                        self.history.append({
+                            "role": "user",
+                            "content": (
+                                f"[SYSTEM: Simulation failed after {self._SCENARIO_MAX_RETRIES + 1} attempts. "
+                                f"Last error: {str(retry_e)}. "
+                                f"Inform the engineer about the persistent error and suggest manual corrections.]"
+                            )
+                        })
+                        return self._llm_followup(client, types)
 
     # -- Property query handling --------------------------------------------
 
@@ -5210,6 +5333,11 @@ class ProcessChatSession:
     def get_last_dexpi_export(self) -> Optional[bytes]:
         """Get the last DEXPI XML export bytes (for download button)."""
         return getattr(self, "_last_dexpi_export", None)
+
+    # -- Retry constants for AI self-correction --------------------------------
+
+    _BUILD_MAX_RETRIES = 3
+    _SCENARIO_MAX_RETRIES = 3
 
     # -- NeqSim code execution -----------------------------------------------
 
