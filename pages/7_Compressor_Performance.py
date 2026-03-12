@@ -3216,7 +3216,8 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
             eos_unc_defaults = {
                 'GERG-2008': 0.1,
                 'Peng-Robinson': 4.9,
-                'Soave-Redlich-Kwong': 2.0
+                'Soave-Redlich-Kwong': 2.0,
+                'BWRS': 0.5
             }
             default_eos_unc = eos_unc_defaults.get(eos_model, 1.0)
             
