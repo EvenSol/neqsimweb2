@@ -711,8 +711,8 @@ def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
 
 def is_gerg_model():
-    """Return True if the selected EoS model is GERG-2008."""
-    return get_selected_eos_model() == "gerg-2008"
+    """Return True if the selected EoS model is GERG-2008 or BWRS (no multiphase check)."""
+    return get_selected_eos_model() in ("gerg-2008", "BWRS")
 
 
 def parse_design_data_format(loaded_data):
