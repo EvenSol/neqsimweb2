@@ -52,6 +52,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     - GERG-2008 (default) - Most accurate for natural gas applications
     - Peng-Robinson (PR) - General purpose cubic EoS
     - Soave-Redlich-Kwong (SRK) - General purpose cubic EoS
+    - BWRS - Benedict-Webb-Rubin-Starling EoS
     
     ---
     
@@ -375,7 +376,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     ## 11. Tips & Best Practices
     
-    1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons
+    1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons, BWRS for dense-phase applications
     2. **Use Detailed method** for high pressure ratios (>3:1) or near-critical conditions
     3. **Verify input data:** Ensure pressures are absolute (not gauge)
     4. **Check temperature units:** Confirm whether input is °C or K
@@ -489,7 +490,7 @@ Expand the **Documentation** section above for detailed method descriptions, equ
 
 st.divider()
 
-# Supported components (compatible with GERG-2008, PR, and SRK)
+# Supported components (compatible with GERG-2008, PR, SRK, and BWRS)
 gerg2008_components = [
     "nitrogen", "CO2", "methane", "ethane", "propane", 
     "i-butane", "n-butane", "i-pentane", "n-pentane", "n-hexane",
@@ -627,7 +628,8 @@ if 'mc_composition_uncertainty' not in st.session_state:
 eos_model_options = {
     "GERG-2008": "gerg-2008",
     "Peng-Robinson": "pr",
-    "Soave-Redlich-Kwong": "srk"
+    "Soave-Redlich-Kwong": "srk",
+    "BWRS": "BWRS"
 }
 
 # Sidebar for fluid selection
@@ -655,7 +657,7 @@ with st.sidebar:
         "Equation of State Model",
         options=list(eos_model_options.keys()),
         index=list(eos_model_options.keys()).index(st.session_state['eos_model']),
-        help="GERG-2008: High accuracy for natural gas. PR: Peng-Robinson cubic EoS. SRK: Soave-Redlich-Kwong cubic EoS."
+        help="GERG-2008: High accuracy for natural gas. PR: Peng-Robinson cubic EoS. SRK: Soave-Redlich-Kwong cubic EoS. BWRS: Benedict-Webb-Rubin-Starling EoS."
     )
     st.session_state['eos_model'] = selected_eos
     if selected_eos == "GERG-2008":
