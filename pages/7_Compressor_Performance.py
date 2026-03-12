@@ -948,12 +948,20 @@ with st.expander("📋 Fluid Composition", expanded=True):
         try:
             jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
             display_fluid = fluid(get_selected_eos_model())
-            for comp_name, comp_moles in fluid_composition.items():
+            display_comp_items = list(fluid_composition.items())
+            if get_selected_eos_model() == 'BWRS':
+                display_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+            for comp_name, comp_moles in display_comp_items:
                 display_fluid.addComponent(comp_name, float(comp_moles))
             display_fluid.setMixingRule('classic')
             display_fluid.setMultiPhaseCheck(not is_gerg_model())
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
+            if get_selected_eos_model() == 'BWRS':
+                display_fluid.setNumberOfPhases(1)
+                display_fluid.setMaxNumberOfPhases(1)
+                display_fluid.setForcePhaseTypes(True)
+                display_fluid.setPhaseType(0, 'GAS')
             TPflash(display_fluid)
             display_fluid.initThermoProperties()
             
@@ -1453,12 +1461,20 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     # Create new fluid and calculate properties
                     jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
                     new_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in new_fluid_composition.items():
+                    new_comp_items = list(new_fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        new_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in new_comp_items:
                         new_fluid.addComponent(comp_name, float(comp_moles))
                     new_fluid.setMixingRule('classic')
                     new_fluid.setMultiPhaseCheck(not is_gerg_model())
                     new_fluid.setPressure(ref_pressure, 'bara')
                     new_fluid.setTemperature(ref_temp, 'C')
+                    if get_selected_eos_model() == 'BWRS':
+                        new_fluid.setNumberOfPhases(1)
+                        new_fluid.setMaxNumberOfPhases(1)
+                        new_fluid.setForcePhaseTypes(True)
+                        new_fluid.setPhaseType(0, 'GAS')
                     TPflash(new_fluid)
                     new_fluid.initProperties()
                     
@@ -2150,13 +2166,21 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     
                     # Create inlet fluid
                     inlet_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in fluid_composition.items():
+                    inlet_comp_items = list(fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        inlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in inlet_comp_items:
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
                     inlet_fluid.setMixingRule('classic')
                     inlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                     
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
+                    if get_selected_eos_model() == 'BWRS':
+                        inlet_fluid.setNumberOfPhases(1)
+                        inlet_fluid.setMaxNumberOfPhases(1)
+                        inlet_fluid.setForcePhaseTypes(True)
+                        inlet_fluid.setPhaseType(0, 'GAS')
                     TPflash(inlet_fluid)
                     inlet_fluid.initProperties()
                     
@@ -2187,12 +2211,20 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     elif flow_unit == "MSm3/day":
                         # Standard conditions: 15C, 1.01325 bara
                         std_fluid = fluid(get_selected_eos_model())
-                        for comp_name, comp_moles in fluid_composition.items():
+                        std_comp_items = list(fluid_composition.items())
+                        if get_selected_eos_model() == 'BWRS':
+                            std_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                        for comp_name, comp_moles in std_comp_items:
                             std_fluid.addComponent(comp_name, float(comp_moles))
                         std_fluid.setMixingRule('classic')
                         std_fluid.setMultiPhaseCheck(not is_gerg_model())
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
+                        if get_selected_eos_model() == 'BWRS':
+                            std_fluid.setNumberOfPhases(1)
+                            std_fluid.setMaxNumberOfPhases(1)
+                            std_fluid.setForcePhaseTypes(True)
+                            std_fluid.setPhaseType(0, 'GAS')
                         TPflash(std_fluid)
                         std_fluid.initProperties()
                         rho_std = std_fluid.getDensity('kg/m3')  # kg/m3 at std conditions
@@ -2203,12 +2235,20 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     
                     # Create outlet fluid at actual conditions
                     outlet_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in fluid_composition.items():
+                    outlet_comp_items = list(fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        outlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in outlet_comp_items:
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
                     outlet_fluid.setMixingRule('classic')
                     outlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                     outlet_fluid.setPressure(float(p_out), 'bara')
                     outlet_fluid.setTemperature(float(t_out), 'C')
+                    if get_selected_eos_model() == 'BWRS':
+                        outlet_fluid.setNumberOfPhases(1)
+                        outlet_fluid.setMaxNumberOfPhases(1)
+                        outlet_fluid.setForcePhaseTypes(True)
+                        outlet_fluid.setPhaseType(0, 'GAS')
                     TPflash(outlet_fluid)
                     outlet_fluid.initProperties()
                     
@@ -2243,13 +2283,23 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Use NeqSim process compressor with detailed polytropic method
                     # Create a stream for the compressor inlet
                     process_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in fluid_composition.items():
+                    # BWRS requires methane (or a hydrocarbon) as the first component
+                    # to avoid NaN in departure function calculations
+                    comp_items = list(fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in comp_items:
                         process_fluid.addComponent(comp_name, float(comp_moles))
                     process_fluid.setMixingRule('classic')
                     process_fluid.setMultiPhaseCheck(not is_gerg_model())
                     process_fluid.setPressure(float(p_in), 'bara')
                     process_fluid.setTemperature(float(t_in), 'C')
                     process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
+                    if get_selected_eos_model() == 'BWRS':
+                        process_fluid.setNumberOfPhases(1)
+                        process_fluid.setMaxNumberOfPhases(1)
+                        process_fluid.setForcePhaseTypes(True)
+                        process_fluid.setPhaseType(0, 'GAS')
                     TPflash(process_fluid)
                     process_fluid.initProperties()
                     
@@ -3337,12 +3387,20 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             
                             # Create inlet fluid
                             inlet_fluid = fluid(get_selected_eos_model())
-                            for comp_name, comp_moles in pert_composition.items():
+                            mc_inlet_comp_items = list(pert_composition.items())
+                            if get_selected_eos_model() == 'BWRS':
+                                mc_inlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                            for comp_name, comp_moles in mc_inlet_comp_items:
                                 inlet_fluid.addComponent(comp_name, float(comp_moles))
                             inlet_fluid.setMixingRule('classic')
                             inlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                             inlet_fluid.setPressure(float(p_in_pert), 'bara')
                             inlet_fluid.setTemperature(float(t_in_pert), 'C')
+                            if get_selected_eos_model() == 'BWRS':
+                                inlet_fluid.setNumberOfPhases(1)
+                                inlet_fluid.setMaxNumberOfPhases(1)
+                                inlet_fluid.setForcePhaseTypes(True)
+                                inlet_fluid.setPhaseType(0, 'GAS')
                             TPflash(inlet_fluid)
                             inlet_fluid.initProperties()
                             
@@ -3359,12 +3417,20 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             
                             # Create outlet fluid
                             outlet_fluid = fluid(get_selected_eos_model())
-                            for comp_name, comp_moles in pert_composition.items():
+                            mc_outlet_comp_items = list(pert_composition.items())
+                            if get_selected_eos_model() == 'BWRS':
+                                mc_outlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                            for comp_name, comp_moles in mc_outlet_comp_items:
                                 outlet_fluid.addComponent(comp_name, float(comp_moles))
                             outlet_fluid.setMixingRule('classic')
                             outlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                             outlet_fluid.setPressure(float(p_out_pert), 'bara')
                             outlet_fluid.setTemperature(float(t_out_pert), 'C')
+                            if get_selected_eos_model() == 'BWRS':
+                                outlet_fluid.setNumberOfPhases(1)
+                                outlet_fluid.setMaxNumberOfPhases(1)
+                                outlet_fluid.setForcePhaseTypes(True)
+                                outlet_fluid.setPhaseType(0, 'GAS')
                             TPflash(outlet_fluid)
                             outlet_fluid.initProperties()
                             
@@ -3379,13 +3445,21 @@ with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_
                             
                             # Create process fluid for compressor calculation
                             process_fluid = fluid(get_selected_eos_model())
-                            for comp_name, comp_moles in pert_composition.items():
+                            pert_comp_items = list(pert_composition.items())
+                            if get_selected_eos_model() == 'BWRS':
+                                pert_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                            for comp_name, comp_moles in pert_comp_items:
                                 process_fluid.addComponent(comp_name, float(comp_moles))
                             process_fluid.setMixingRule('classic')
                             process_fluid.setMultiPhaseCheck(not is_gerg_model())
                             process_fluid.setPressure(float(p_in_pert), 'bara')
                             process_fluid.setTemperature(float(t_in_pert), 'C')
                             process_fluid.setTotalFlowRate(float(mass_flow_pert), 'kg/sec')
+                            if get_selected_eos_model() == 'BWRS':
+                                process_fluid.setNumberOfPhases(1)
+                                process_fluid.setMaxNumberOfPhases(1)
+                                process_fluid.setForcePhaseTypes(True)
+                                process_fluid.setPhaseType(0, 'GAS')
                             TPflash(process_fluid)
                             process_fluid.initProperties()
                             
