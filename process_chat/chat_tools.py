@@ -49,6 +49,94 @@ from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tra
 from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi, dexpi_to_networkx, parse_dexpi_with_pydexpi
 
 from dataclasses import dataclass, field as dc_field
+import pathlib as _pathlib
+
+
+# ---------------------------------------------------------------------------
+# Cross-session learning: log code errors & fixes, extract patterns
+# ---------------------------------------------------------------------------
+
+_CODE_FIX_LOG_PATH = _pathlib.Path(__file__).parent / "code_fix_log.jsonl"
+_MAX_LEARNED_RULES = 10
+_MIN_OCCURRENCES = 2  # pattern must appear at least twice to become a rule
+
+
+def _log_code_fix(bad_code: str, error: str, fixed_code: str) -> None:
+    """Append a failed→fixed code pair to the persistent log."""
+    import re
+    entry = {
+        "ts": __import__("datetime").datetime.utcnow().isoformat(),
+        "error_type": error.split(":")[0].strip() if ":" in error else error[:80],
+        "error": error[:500],
+        "bad_snippet": bad_code[:500],
+        "fix_snippet": fixed_code[:500],
+    }
+    # Extract a short signature: "ErrorType: key phrase"
+    m = re.match(r"(\w+Error):\s*(.{0,120})", error)
+    if m:
+        entry["signature"] = f"{m.group(1)}: {m.group(2).strip()}"
+    else:
+        entry["signature"] = entry["error_type"]
+    try:
+        with open(str(_CODE_FIX_LOG_PATH), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # non-critical — don't break the app if write fails
+
+
+def _load_learned_rules() -> str:
+    """Read the fix log, extract recurring patterns, return prompt text.
+
+    Returns an empty string if no patterns meet the threshold.
+    """
+    if not _CODE_FIX_LOG_PATH.exists():
+        return ""
+    try:
+        entries = []
+        with open(str(_CODE_FIX_LOG_PATH), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+    if not entries:
+        return ""
+
+    # Count signatures
+    from collections import Counter
+    sig_counter = Counter(e.get("signature", "") for e in entries)
+    frequent = [(sig, cnt) for sig, cnt in sig_counter.most_common(_MAX_LEARNED_RULES)
+                if cnt >= _MIN_OCCURRENCES and sig]
+
+    if not frequent:
+        return ""
+
+    # For each frequent signature, find the most recent fix example
+    sig_to_latest = {}
+    for e in entries:
+        sig = e.get("signature", "")
+        if sig in dict(frequent):
+            sig_to_latest[sig] = e
+
+    rules = []
+    for sig, count in frequent:
+        e = sig_to_latest.get(sig)
+        if e:
+            rules.append(
+                f"- KNOWN ISSUE (seen {count}x): {e['error'][:200]}\n"
+                f"  FIX: Use pattern like: {e['fix_snippet'][:200]}"
+            )
+
+    if not rules:
+        return ""
+
+    return (
+        "\n\nKNOWN PITFALLS (auto-learned from past errors — avoid these mistakes):\n"
+        + "\n".join(rules)
+        + "\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +234,7 @@ INTENT CLASSIFICATION:
   → Use this data to answer questions about specific unit temperatures, pressures, flows, duties, etc.
 
 - PROPERTY QUERY: Questions about detailed fluid/stream properties OR equipment utilization/sizing
-  OR mechanical design (wall thickness, weights, dimensions, materials, design standards) 
+  OR mechanical design (wall thickness, weights, dimensions, materials, design standards)
   OR cost estimation (equipment cost, total process cost, CAPEX)
   OR space/footprint (plot area, module dimensions, equipment height)
   ("What is the TVP?", "What is the density?", "What is the viscosity?", "Show me the RVP of the feed gas",
@@ -168,7 +256,7 @@ INTENT CLASSIFICATION:
     - Sizing: "compressor sizing", "separator sizing"
     - Report properties: "report feed gas composition", "report compressor power"
     - Phase-specific: "feed gas gas_phase_fraction", "feed gas oil_density"
-  
+
   Available property types per stream:
     Basic: pressure_bara, temperature_C, flow_kg_hr
     Transport: viscosity_Pa_s, kinematic_viscosity_m2_s, thermal_conductivity_W_mK
@@ -195,7 +283,7 @@ INTENT CLASSIFICATION:
     Splitter: splitStream0_flow_kg_hr, splitStream1_flow_kg_hr, ...
     Recycle: errorTemperature, errorPressure, errorFlow, errorComposition, iterations
     All units: sizing.* (from detailed sizing report JSON)
-    
+
     Mechanical design (prefix with "unit_name.mechDesign."):
       wallThickness_mm, innerDiameter_m, outerDiameter_m, tantanLength_m
       weightTotal_kg, weightVesselShell_kg, weightInternals_kg, weightPiping_kg,
@@ -207,10 +295,10 @@ INTENT CLASSIFICATION:
       material (construction material name)
       json.designStandard, json.equipmentType, json.equipmentClass, json.casingType
       json.* (additional fields from full mechanical design JSON)
-    
+
     Cost estimation (prefix with "unit_name.cost."):
       totalCost_USD — equipment purchase cost in USD
-    
+
     System-level / process totals (prefix with "system."):
       totalWeight_kg — total weight of all equipment
       totalVolume_m3 — total equipment volume
@@ -224,7 +312,7 @@ INTENT CLASSIFICATION:
       weightByDiscipline.<discipline>_kg — weight by discipline
       equipmentCount.<type> — equipment count by type
       totalCost_USD — total estimated equipment cost
-    
+
     Query examples for mechanical design, cost, and space:
       "separator mechDesign" → wall thickness, weights, dimensions for all separators
       "compressor weight" → compressor weights
@@ -236,16 +324,16 @@ INTENT CLASSIFICATION:
       "system weightByType" → weight breakdown by equipment type
       "mechDesign designStandard" → design standards applied
 
-    From JSON report (prefix with "report.unit_name."): 
+    From JSON report (prefix with "report.unit_name."):
       Compressor: power, polytropicHead, polytropicEfficiency, suctionTemperature, dischargeTemperature, etc.
       Separator: gasLoadFactor, feed/gas stream properties and compositions
       Stream: properties (density, Cp, Cv, entropy, enthalpy, molar mass, relative density, GCV, WI, flow rate)
       Stream: conditions (temperature, pressure, mass flow, molar flow, fluid model)
       Stream: composition per phase (mole fractions of each component)
-  
+
 - WHAT-IF: Questions about changes ("What if we increase pressure to X?", "What happens if...")
   → Produce a scenario JSON. The system will run it and give you results to explain.
-  
+
 - PLANNING: Questions about installing/modifying equipment ("Install a cooler", "Add a compressor stage", "Add an intercooler after the compressor")
   → Produce a scenario JSON with "add_units" to insert new equipment. Include appropriate parameters.
   → IMPORTANT: The process is FULLY CONNECTED. When you add a unit (e.g., a cooler) between two existing units,
@@ -255,7 +343,7 @@ INTENT CLASSIFICATION:
     compressor power, discharge temperature, and everything downstream.
 
 - CONNECTIVITY: Questions like "Is the process connected?", "What feeds the compressor?", "Where does the separator outlet go?"
-  → Answer from the topology. Units are listed in process order [0], [1], [2]... 
+  → Answer from the topology. Units are listed in process order [0], [1], [2]...
   → Each unit shows its inlet stream (IN:) and outlet stream (OUT:) with conditions.
   → The outlet of unit [N] typically feeds the inlet of unit [N+1].
 
@@ -447,7 +535,7 @@ Use the "add_components" array inside "patch" to add chemical substances to a st
   }}
 }}
 Component names must match NeqSim database naming (case-sensitive, lowercase):
-  Alkanes: methane, ethane, propane, i-butane, n-butane, i-pentane, n-pentane, 
+  Alkanes: methane, ethane, propane, i-butane, n-butane, i-pentane, n-pentane,
            n-hexane, n-heptane, n-octane, n-nonane, nC10, nC11, nC12
   Aromatics: benzene, toluene
   Gases: nitrogen, CO2, H2S, oxygen, hydrogen, helium
@@ -457,8 +545,8 @@ Component names must match NeqSim database naming (case-sensitive, lowercase):
 IMPORTANT: Use "nC10" NOT "n-decane", use "water" NOT "Water", use "benzene" NOT "Benzene".
 
 ITERATIVE TARGET-SEEKING (for "add X until Y = Z" questions):
-When the user wants to achieve a specific output value by adjusting inputs, use "targets" combined 
-with "add_components" (or "changes"). The system will automatically iterate (bisection method) to 
+When the user wants to achieve a specific output value by adjusting inputs, use "targets" combined
+with "add_components" (or "changes"). The system will automatically iterate (bisection method) to
 converge on the target.
 {{
   "patch": {{
@@ -484,7 +572,7 @@ converge on the target.
   }}
 }}
 The solver scales ALL component flow rates by the same factor until the target KPI converges.
-For the target_kpi, use qualified stream names like "unitName.streamName.property" 
+For the target_kpi, use qualified stream names like "unitName.streamName.property"
 (e.g., "inlet separator.liquidOutStream.flow_kg_hr").
 Available KPI suffixes: .flow_kg_hr, .temperature_C, .pressure_bara, .power_kW, .duty_kW
 
@@ -597,6 +685,67 @@ RULES FOR neqsim_code:
 - Do NOT use os, subprocess, sys, open(), file I/O or network calls
 Use for: "calculate dewpoint", "flash this composition", "plot phase envelope",
 "what is the density", "compare EOS models", "gas hydrate temperature", any custom calc.
+
+MCP RUNNER TOOLS (structured JSON-in/JSON-out thermodynamic calculations via neqsim_code):
+NeqSim provides pre-built "runner" classes that accept JSON input and return JSON output.
+These are the PREFERRED way to do flash calculations, process simulations, component
+lookups, and input validation — they handle unit conversion, error messages with
+remediation hints, and return structured results automatically.
+
+Access them via jneqsim in a neqsim_code block:
+
+```neqsim_code
+from neqsim import jneqsim
+import json
+
+FlashRunner = jneqsim.mcp.runners.FlashRunner
+result = json.loads(str(FlashRunner.run(json.dumps({{
+    "model": "SRK",
+    "temperature": {{"value": 25.0, "unit": "C"}},
+    "pressure": {{"value": 50.0, "unit": "bara"}},
+    "flashType": "TP",
+    "components": {{"methane": 0.85, "ethane": 0.10, "propane": 0.05}},
+    "mixingRule": "classic"
+}}))))
+print(json.dumps(result, indent=2))
+```
+
+Available runners:
+
+1. FlashRunner.run(jsonString) — Flash calculation (TP, PH, PS, TV, dewPointT, dewPointP,
+   bubblePointT, bubblePointP, hydrateTP). Models: SRK, PR, CPA, GERG2008, PCSAFT, UMRPRU.
+   Input: {{"model", "temperature", "pressure", "flashType", "components", "mixingRule"}}.
+   Temperature/pressure accept {{"value": 25.0, "unit": "C"}} or bare numbers (K / bara).
+   Returns: {{"status", "flash": {{"numberOfPhases", "phases"}}, "fluid": {{phase properties}}, "warnings"}}.
+
+2. ProcessRunner.run(jsonString) — Build and run a complete process simulation.
+   Input: {{"fluid": {{"model", "components", ...}}, "process": [{{"type": "Stream", "name": "feed", ...}}, ...]}}.
+   Equipment types: Stream, Separator, ThreePhaseSeparator, Compressor, Expander,
+   Heater, Cooler, HeatExchanger, ThrottlingValve, Mixer, Splitter, Recycle, AdiabaticPipe.
+   Inlet wiring: "inlet": "equipmentName" or "inlet": "equipmentName.gasOut".
+   ProcessRunner.validateAndRun(json) validates first then runs.
+   Returns: {{"status", "processSystemName", "report": {{stream/equipment results}}, "warnings"}}.
+
+3. ComponentQuery.search(query) — Fuzzy component name search. Returns matching names.
+   ComponentQuery.getInfo(name) — Component properties (MW, Tc, Pc, acentric factor).
+   ComponentQuery.isValid(name) — Check if component name is recognized.
+   ComponentQuery.closestMatch(name) — Suggest correct name for typos.
+
+4. Validator.validate(jsonString) — Pre-validate flash or process JSON before running.
+   Checks: component names, temperature/pressure ranges, composition sum, equipment types.
+   Returns: {{"valid": true/false, "issues": [{{"severity", "code", "message", "remediation"}}]}}.
+
+USE MCP RUNNERS WHEN:
+- The user asks for a flash calculation with specific conditions and composition
+- The user wants structured JSON output they can parse programmatically
+- The user asks "is this component name valid?" or "search for components like..."
+- The user wants to validate input before running a simulation
+- The user asks for a standalone process simulation from a description
+
+USE TRADITIONAL neqsim_code WHEN:
+- The user wants plotly/matplotlib charts or custom post-processing
+- The calculation requires iterative loops or parameter sweeps
+- The user needs to combine multiple flash results or do complex analysis
 
 IMPORTANT — AVOID UNNECESSARY REBUILDS:
 Compressor charts, mechanical design, and auto-sizing data are expensive to compute and
@@ -1380,6 +1529,11 @@ When you receive simulation results, ALWAYS:
     # them in its output — breaking json.loads().  Normalise to single.
     system_prompt = system_prompt.replace("{{", "{").replace("}}", "}")
 
+    # Append auto-learned rules from past code execution errors
+    learned = _load_learned_rules()
+    if learned:
+        system_prompt += learned
+
     return system_prompt
 
 
@@ -1393,7 +1547,7 @@ def build_builder_system_prompt() -> str:
     Teaches the LLM how to output a ``build`` JSON spec that the system
     will use to create a NeqSim process from scratch.
     """
-    return r"""You are a process engineering assistant for the NeqSim simulation engine.
+    prompt = r"""You are a process engineering assistant for the NeqSim simulation engine.
 No process model is currently loaded. You can help the user BUILD a new process from scratch.
 
 CRITICAL RULES:
@@ -1627,6 +1781,67 @@ RULES FOR neqsim_code:
 Use neqsim_code for: "calculate dewpoint", "flash this composition", "plot phase envelope",
 "what is the density of...", "compare EOS models", "calculate water content",
 "gas hydrate temperature", "show me properties of...", any custom NeqSim calculation.
+
+MCP RUNNER TOOLS (structured JSON-in/JSON-out thermodynamic calculations via neqsim_code):
+NeqSim provides pre-built "runner" classes that accept JSON input and return JSON output.
+These are the PREFERRED way to do flash calculations, process simulations, component
+lookups, and input validation — they handle unit conversion, error messages with
+remediation hints, and return structured results automatically.
+
+Access them via jneqsim in a neqsim_code block:
+
+```neqsim_code
+from neqsim import jneqsim
+import json
+
+FlashRunner = jneqsim.mcp.runners.FlashRunner
+result = json.loads(str(FlashRunner.run(json.dumps({
+    "model": "SRK",
+    "temperature": {"value": 25.0, "unit": "C"},
+    "pressure": {"value": 50.0, "unit": "bara"},
+    "flashType": "TP",
+    "components": {"methane": 0.85, "ethane": 0.10, "propane": 0.05},
+    "mixingRule": "classic"
+}))))
+print(json.dumps(result, indent=2))
+```
+
+Available runners:
+
+1. FlashRunner.run(jsonString) — Flash calculation (TP, PH, PS, TV, dewPointT, dewPointP,
+   bubblePointT, bubblePointP, hydrateTP). Models: SRK, PR, CPA, GERG2008, PCSAFT, UMRPRU.
+   Input: {"model", "temperature", "pressure", "flashType", "components", "mixingRule"}.
+   Temperature/pressure accept {"value": 25.0, "unit": "C"} or bare numbers (K / bara).
+   Returns: {"status", "flash": {"numberOfPhases", "phases"}, "fluid": {phase properties}, "warnings"}.
+
+2. ProcessRunner.run(jsonString) — Build and run a complete process simulation.
+   Input: {"fluid": {"model", "components", ...}, "process": [{"type": "Stream", "name": "feed", ...}, ...]}.
+   Equipment types: Stream, Separator, ThreePhaseSeparator, Compressor, Expander,
+   Heater, Cooler, HeatExchanger, ThrottlingValve, Mixer, Splitter, Recycle, AdiabaticPipe.
+   Inlet wiring: "inlet": "equipmentName" or "inlet": "equipmentName.gasOut".
+   ProcessRunner.validateAndRun(json) validates first then runs.
+   Returns: {"status", "processSystemName", "report": {stream/equipment results}, "warnings"}.
+
+3. ComponentQuery.search(query) — Fuzzy component name search. Returns matching names.
+   ComponentQuery.getInfo(name) — Component properties (MW, Tc, Pc, acentric factor).
+   ComponentQuery.isValid(name) — Check if component name is recognized.
+   ComponentQuery.closestMatch(name) — Suggest correct name for typos.
+
+4. Validator.validate(jsonString) — Pre-validate flash or process JSON before running.
+   Checks: component names, temperature/pressure ranges, composition sum, equipment types.
+   Returns: {"valid": true/false, "issues": [{"severity", "code", "message", "remediation"}]}.
+
+USE MCP RUNNERS WHEN:
+- The user asks for a flash calculation with specific conditions and composition
+- The user wants structured JSON output they can parse programmatically
+- The user asks "is this component name valid?" or "search for components like..."
+- The user wants to validate input before running a simulation
+- The user asks for a standalone process simulation from a description
+
+USE TRADITIONAL neqsim_code WHEN:
+- The user wants plotly/matplotlib charts or custom post-processing
+- The calculation requires iterative loops or parameter sweeps
+- The user needs to combine multiple flash results or do complex analysis
 
 PROCESS OPTIMIZATION (after a process has been built):
 When the user asks to optimize, find maximum production, or maximize throughput, output:
@@ -1939,6 +2154,11 @@ See the NEQSIM CODE EXECUTION section above for the ```neqsim_code``` tool.
 Use it whenever the user asks for a standalone calculation, property lookup, phase diagram,
 or any thermodynamic simulation that doesn't need the full process builder.
 """
+    # Append auto-learned rules from past code execution errors
+    learned = _load_learned_rules()
+    if learned:
+        prompt += learned
+    return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1948,6 +2168,7 @@ or any thermodynamic simulation that doesn't need the full process builder.
 # Allowed module names for import within neqsim_code blocks
 _NEQSIM_CODE_ALLOWED_MODULES = frozenset({
     "neqsim", "neqsim.thermo", "neqsim.process", "neqsim.standards",
+    "neqsim.mcp", "neqsim.mcp.runners",
     "jneqsim",
     "numpy", "np",
     "pandas", "pd",
@@ -2006,7 +2227,8 @@ def _execute_neqsim_code(code: str) -> dict:
         top = name.split(".")[0]
         if top not in {"neqsim", "jneqsim", "numpy", "pandas",
                         "matplotlib", "plotly", "math", "json",
-                        "io", "dataclasses", "collections", "np", "pd", "plt"}:
+                        "io", "dataclasses", "collections", "np", "pd", "plt",
+                        "neqsim.mcp", "neqsim.mcp.runners"}:
             raise ImportError(
                 f"Import of '{name}' is not allowed. "
                 f"Only neqsim, numpy, pandas, matplotlib, plotly, math, json are permitted."
@@ -2139,7 +2361,7 @@ def extract_scenario_json(text: str) -> Optional[dict]:
     import re
     pattern = r'```json\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
-    
+
     for match in matches:
         try:
             data = json.loads(_normalise_json(match))
@@ -2147,7 +2369,7 @@ def extract_scenario_json(text: str) -> Optional[dict]:
                 return data
         except json.JSONDecodeError:
             continue
-    
+
     # Also try the entire text as JSON
     try:
         data = json.loads(_normalise_json(text))
@@ -2167,7 +2389,7 @@ def extract_optimize_spec(text: str) -> Optional[dict]:
     import re
     pattern = r'```optimize\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
-    
+
     for match in matches:
         try:
             data = json.loads(_normalise_json(match))
@@ -2175,7 +2397,7 @@ def extract_optimize_spec(text: str) -> Optional[dict]:
                 return data
         except json.JSONDecodeError:
             continue
-    
+
     return None
 
 
@@ -2187,7 +2409,7 @@ def extract_risk_spec(text: str) -> Optional[dict]:
     import re
     pattern = r'```risk\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
-    
+
     for match in matches:
         try:
             data = json.loads(_normalise_json(match))
@@ -2195,7 +2417,7 @@ def extract_risk_spec(text: str) -> Optional[dict]:
                 return data
         except json.JSONDecodeError:
             continue
-    
+
     return None
 
 
@@ -2207,7 +2429,7 @@ def extract_property_query(text: str) -> Optional[dict]:
     import re
     pattern = r'```query\s*\n(.*?)\n\s*```'
     matches = re.findall(pattern, text, re.DOTALL)
-    
+
     for match in matches:
         try:
             data = json.loads(_normalise_json(match))
@@ -2215,7 +2437,7 @@ def extract_property_query(text: str) -> Optional[dict]:
                 return data
         except json.JSONDecodeError:
             continue
-    
+
     return None
 
 
@@ -2742,17 +2964,17 @@ def format_comparison_for_llm(comparison) -> str:
     """
     Format a scenario comparison result into text the LLM can use
     to explain results to the engineer.
-    
+
     Filters to only significant KPI changes (|delta| > 0.01 or delta_pct > 0.1%)
     to keep the text concise and avoid wasting LLM tokens.
     """
     from .scenario_engine import results_summary_table
-    
+
     lines = []
 
     # Key changes — highlight KPIs that changed significantly
     if comparison.delta_kpis:
-        sig_changes = [d for d in comparison.delta_kpis 
+        sig_changes = [d for d in comparison.delta_kpis
                        if d.get('delta') is not None and abs(d['delta']) > 0.01]
         if sig_changes:
             lines.append("=== KEY CHANGES (base → scenario) ===")
@@ -2766,15 +2988,15 @@ def format_comparison_for_llm(comparison) -> str:
             if len(sig_changes) > 50:
                 lines.append(f"  ... and {len(sig_changes) - 50} more changes")
             lines.append("")
-    
+
     # Summary table — only include KPIs that changed or are key process indicators
     summary_df = results_summary_table(comparison)
     if not summary_df.empty:
-        # Filter to important KPIs: those with changes, total_power/duty, mass_balance, 
+        # Filter to important KPIs: those with changes, total_power/duty, mass_balance,
         # equipment power/duty, and a few key stream properties
         important_prefixes = ('total_', 'mass_balance')
         important_suffixes = ('.power_kW', '.duty_kW')
-        
+
         def is_important_kpi(row):
             kpi = row.get('KPI', '')
             # Always include summary KPIs
@@ -2794,19 +3016,19 @@ def format_comparison_for_llm(comparison) -> str:
                         except (ValueError, TypeError):
                             pass
             return False
-        
+
         filtered_df = summary_df[summary_df.apply(is_important_kpi, axis=1)]
         if not filtered_df.empty:
             lines.append("=== SIMULATION RESULTS (changed KPIs) ===")
             lines.append(filtered_df.to_string(index=False))
-    
+
     # Constraint check
     if comparison.constraint_summary:
         lines.append("\n=== CONSTRAINTS ===")
         for c in comparison.constraint_summary:
             status_icon = {"OK": "✓", "WARN": "⚠", "VIOLATION": "✗"}.get(c["status"], "?")
             lines.append(f"  {status_icon} [{c['status']}] {c['constraint']}: {c['detail']}")
-    
+
     # Patch log
     if comparison.patch_log:
         lines.append("\n=== APPLIED CHANGES ===")
@@ -2832,12 +3054,12 @@ def format_comparison_for_llm(comparison) -> str:
                     lines.append(f"    (scale factor: {entry['scale_factor']})")
             else:
                 lines.append(f"  ✗ {entry['key']}: {entry.get('error', 'unknown error')}")
-    
+
     # Failed scenarios
     for case in comparison.cases:
         if not case.success:
             lines.append(f"\n⚠ Scenario '{case.scenario.name}' FAILED: {case.error}")
-    
+
     return "\n".join(lines)
 
 
@@ -2929,7 +3151,7 @@ def _classify_build_change(old_spec: dict, new_spec: dict):
 class ProcessChatSession:
     """
     Manages a chat session with a NeqSim process model.
-    
+
     Uses Gemini to interpret engineer questions and orchestrate
     simulation runs via the scenario engine.
 
@@ -2995,7 +3217,7 @@ class ProcessChatSession:
     def chat(self, user_message: str) -> str:
         """
         Process a user message and return the assistant response.
-        
+
         Handles:
           - Build specs (```build```) → build process from scratch
           - Scenario JSON (```json```) → run what-if scenarios
@@ -3042,7 +3264,7 @@ class ProcessChatSession:
 
         # First LLM call: classify intent
         contents = self._build_contents()
-        
+
         response = client.models.generate_content(
             model=self.ai_model,
             contents=contents,
@@ -5381,6 +5603,10 @@ class ProcessChatSession:
                 retries_note = ""
                 if attempt > 1:
                     retries_note = f" (succeeded on attempt {attempt}/{self._NEQSIM_CODE_MAX_RETRIES})"
+                    # Log the error→fix pair for cross-session learning
+                    first_error = attempts[0].get("error", "")
+                    first_bad = attempts[0].get("code", code)
+                    _log_code_fix(first_bad, first_error, current_code)
 
                 results_text = "\n\n".join(parts)
                 self.history.append({

@@ -705,6 +705,62 @@ results = {
 ```
 The `results` variable will be read after execution.
 Print important values with print() so they appear in the output log.
+
+### 14. MCP Runner Tools (structured JSON-in/JSON-out)
+NeqSim provides pre-built runner classes that accept JSON input and return JSON output.
+They handle unit conversion, error messages with remediation hints, and validation.
+
+```python
+from neqsim import jneqsim
+import json
+
+# Flash calculation via FlashRunner
+FlashRunner = jneqsim.mcp.runners.FlashRunner
+result = json.loads(str(FlashRunner.run(json.dumps({
+    "model": "SRK",
+    "temperature": {"value": 25.0, "unit": "C"},
+    "pressure": {"value": 50.0, "unit": "bara"},
+    "flashType": "TP",
+    "components": {"methane": 0.85, "ethane": 0.10, "propane": 0.05},
+    "mixingRule": "classic"
+}))))
+print(json.dumps(result, indent=2))
+# Returns: {"status": "success", "flash": {"numberOfPhases": ..., "phases": [...]}, "fluid": {...}}
+
+# Process simulation via ProcessRunner
+ProcessRunner = jneqsim.mcp.runners.ProcessRunner
+result = json.loads(str(ProcessRunner.run(json.dumps({
+    "fluid": {"model": "SRK", "components": {"methane": 0.85, "ethane": 0.15}, "mixingRule": "classic"},
+    "process": [
+        {"type": "Stream", "name": "feed", "properties": {"flowRate": [10000.0, "kg/hr"]}},
+        {"type": "Separator", "name": "sep", "inlet": "feed"},
+        {"type": "Compressor", "name": "comp", "inlet": "sep.gasOut",
+         "properties": {"outletPressure": [100.0, "bara"], "isentropicEfficiency": 0.75}}
+    ]
+}))))
+# Equipment types: Stream, Separator, ThreePhaseSeparator, Compressor, Expander,
+# Heater, Cooler, HeatExchanger, ThrottlingValve, Mixer, Splitter, Recycle, AdiabaticPipe
+
+# Component lookup via ComponentQuery
+ComponentQuery = jneqsim.mcp.runners.ComponentQuery
+print(str(ComponentQuery.search("prop")))     # fuzzy search -> matching names
+print(str(ComponentQuery.getInfo("methane")))  # MW, Tc, Pc, acentric factor
+print(ComponentQuery.isValid("methane"))       # True/False
+print(str(ComponentQuery.closestMatch("methan")))  # suggests "methane"
+
+# Input validation via Validator
+Validator = jneqsim.mcp.runners.Validator
+validation = json.loads(str(Validator.validate(json.dumps({
+    "model": "SRK",
+    "temperature": {"value": 25.0, "unit": "C"},
+    "components": {"methane": 0.85, "ethane": 0.15}
+}))))
+# Returns: {"valid": true/false, "issues": [{"severity", "code", "message", "remediation"}]}
+```
+
+Use MCP runners when you need structured JSON output or want built-in validation.
+Use traditional NeqSim API (sections 1-12 above) when you need iterative loops,
+parameter sweeps, or direct object manipulation.
 """
 
 
@@ -714,6 +770,7 @@ Print important values with print() so they appear in the output log.
 
 _ALLOWED_MODULES = frozenset({
     "neqsim", "neqsim.thermo", "neqsim.thermo.thermoTools",
+    "neqsim.mcp", "neqsim.mcp.runners",
     "jneqsim", "pandas", "numpy", "math", "json",
     "scipy", "scipy.optimize",
 })
