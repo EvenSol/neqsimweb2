@@ -46,7 +46,7 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
-from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi, dexpi_to_networkx, parse_dexpi_with_pydexpi
+from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi
 
 from dataclasses import dataclass, field as dc_field
 import pathlib as _pathlib
@@ -1506,6 +1506,10 @@ NOTES:
   networks is used (e.g., NG→natural gas defaults, HC→condensate defaults, CW→water).
 - Re-importing: if a model already exists, DEXPI import replaces it with the new P&ID model.
 - Export works for: DEXPI-imported models, builder-created models, uploaded models.
+- pyDEXPI integration: When a proper DEXPI Proteus XML is loaded, the system also uses
+  the pyDEXPI library for Pydantic-validated parsing, NetworkX process graph extraction
+  (equipment topology with connections), and SVG P&ID rendering with proper engineering symbols.
+  The SVG diagram and graph topology are displayed alongside the analysis results.
 
 When you produce a scenario JSON, wait for the simulation results before explaining the impact.
 Be concise but thorough in your explanations. Always mention any constraint violations.
@@ -5490,7 +5494,9 @@ class ProcessChatSession:
                     f"with tag names, piping networks with fluid codes and sizes, "
                     f"instrumentation, and connectivity. "
                     f"If NeqSim import was successful, mention the simulation model "
-                    f"and list the available analysis capabilities."
+                    f"and list the available analysis capabilities. "
+                    f"If a pyDEXPI SVG P&ID diagram was rendered, mention it is displayed below. "
+                    f"If pyDEXPI graph topology was extracted, mention the process graph structure."
                     f"{tools_msg}"
                     f"\nHighlight any notable design data (pressures, temperatures, etc.).]\n\n"
                     f"{results_text}"

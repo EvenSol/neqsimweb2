@@ -91,6 +91,14 @@ with st.sidebar:
                             st.session_state["_builder_mode"] = True
                         st.success(f"✓ DEXPI P&ID loaded: {uploaded_file.name}")
                         st.info("Could not auto-build NeqSim model — ask in chat to analyze and import.")
+                    # Store pyDEXPI SVG for P&ID rendering
+                    if _dexpi_result.pydexpi_svg:
+                        st.session_state["dexpi_pid_svg"] = _dexpi_result.pydexpi_svg
+                    # Store pyDEXPI model and graph for downstream use
+                    if _dexpi_result.pydexpi_model is not None:
+                        st.session_state["pydexpi_model"] = _dexpi_result.pydexpi_model
+                    if _dexpi_result.pydexpi_graph is not None:
+                        st.session_state["pydexpi_graph"] = _dexpi_result.pydexpi_graph
                 except Exception as e:
                     if st.session_state.get("process_model") is None:
                         st.session_state["_builder_mode"] = True
@@ -545,11 +553,22 @@ if st.session_state.get("dexpi_xml"):
             c3.metric("Instruments", len(_dexpi_pid.instruments))
             c4.metric("Connections", _dexpi_pid.connection_count)
 
-            # Interactive P&ID topology graph
-            _pid_fig = render_dexpi_plotly(_dexpi_pid)
-            if _pid_fig is not None:
-                st.plotly_chart(_pid_fig, use_container_width=True)
-                st.caption("🟢 Equipment  🔴 Piping  🔵 Instruments — hover for details")
+            # pyDEXPI SVG P&ID rendering (proper engineering diagram)
+            _pid_svg = st.session_state.get("dexpi_pid_svg")
+            if _pid_svg:
+                st.markdown("**P&ID Diagram** *(rendered via pyDEXPI)*")
+                st.html(_pid_svg)
+                st.caption("P&ID rendered from DEXPI XML using pyDEXPI SVG export")
+
+            # Interactive P&ID topology graph (Plotly fallback / supplementary)
+            _show_topology = True
+            if _pid_svg:
+                _show_topology = st.checkbox("Show topology graph", value=False, key="_dexpi_show_topo")
+            if _show_topology:
+                _pid_fig = render_dexpi_plotly(_dexpi_pid)
+                if _pid_fig is not None:
+                    st.plotly_chart(_pid_fig, use_container_width=True)
+                    st.caption("🟢 Equipment  🔴 Piping  🔵 Instruments — hover for details")
 
             # Equipment table
             if _dexpi_pid.equipment:
@@ -2192,6 +2211,24 @@ def _show_dexpi(dexpi_result):
     # NeqSim import status
     if dexpi_result.neqsim_model_loaded:
         st.success(f"✅ NeqSim model imported: {dexpi_result.neqsim_units} units, {dexpi_result.neqsim_streams} streams")
+
+    # pyDEXPI SVG P&ID diagram
+    if dexpi_result.pydexpi_svg:
+        st.markdown("**P&ID Diagram** *(pyDEXPI SVG rendering)*")
+        st.html(dexpi_result.pydexpi_svg)
+        # Store SVG in session state for the sidebar viewer
+        st.session_state["dexpi_pid_svg"] = dexpi_result.pydexpi_svg
+
+    # pyDEXPI graph topology summary
+    if dexpi_result.pydexpi_graph_summary:
+        gs = dexpi_result.pydexpi_graph_summary
+        with st.expander(f"Process Graph Topology ({gs.get('node_count', 0)} nodes, {gs.get('edge_count', 0)} edges)", expanded=False):
+            st.markdown("*Extracted via pyDEXPI graph analysis*")
+            conn_list = gs.get("connections", [])
+            if conn_list:
+                st.markdown("**Connections:**")
+                conn_rows = [{"From": c["from"], "To": c["to"], "Type": c.get("label", "")} for c in conn_list[:30]]
+                st.dataframe(pd.DataFrame(conn_rows), width='stretch', hide_index=True)
 
     # Warnings
     for w in dexpi_result.warnings:

@@ -3,13 +3,23 @@ DEXPI P&ID Integration — Import DEXPI XML files, parse P&ID topology,
 and establish NeqSim process models from DEXPI data.
 
 Supports two complementary analysis paths:
-  1. **P&ID topology analysis** — Pure Python XML parsing of the Proteus XML
-     (DEXPI v1.3) to extract equipment, piping, instrumentation, and connectivity.
-  2. **NeqSim thermodynamic model** — Uses NeqSim's Java DexpiXmlReader to
-     import DEXPI equipment into a runnable ProcessSystem (requires a template
-     fluid/stream for thermodynamic calculations).
+  1. **P&ID topology analysis** — Pure Python XML parsing of Proteus XML
+     (DEXPI v1.3) for equipment, piping, and instrumentation extraction.
+     Optionally enhanced by the pyDEXPI library for Pydantic-validated model
+     parsing, NetworkX graph topology, and SVG P&ID rendering when proper
+     Proteus XML is available.
+  2. **NeqSim process model** — Uses NeqSim's Java DEXPI package:
+     - DexpiSimulationBuilder (preferred) — topology-aware builder that
+       resolves nozzle/connection graphs via DexpiTopologyResolver,
+       instantiates NeqSim equipment with sizing attributes via
+       DexpiEquipmentFactory, and auto-instruments the process.
+     - DexpiXmlReader (fallback) — flat equipment reader without topology.
+     - DexpiXmlWriter — exports ProcessSystem back to enriched DEXPI XML
+       with simulation results, layout, shapes, and stream tables.
 
 Reference DEXPI example PIDs: https://gitlab.com/dexpi/TrainingTestCases
+NeqSim Java DEXPI: https://github.com/equinor/neqsim (neqsim.process.processmodel.dexpi)
+pyDEXPI: pip install pydexpi  (Pydantic DEXPI data model + graph/SVG export)
 """
 from __future__ import annotations
 
@@ -94,6 +104,11 @@ class DexpiAnalysisResult:
     piping_summary: Dict[str, Any] = field(default_factory=dict)
     connectivity_info: str = ""
     warnings: List[str] = field(default_factory=list)
+    # pyDEXPI-powered fields
+    pydexpi_model: Any = None  # pyDEXPI DexpiModel instance
+    pydexpi_graph: Any = None  # NetworkX process graph from pyDEXPI
+    pydexpi_svg: Optional[str] = None  # SVG rendering of the P&ID
+    pydexpi_graph_summary: Optional[Dict[str, Any]] = None  # graph topology summary
 
 
 # ---------------------------------------------------------------------------
@@ -321,12 +336,47 @@ def parse_dexpi_xml(xml_bytes: bytes) -> DexpiPIDSummary:
 # NeqSim integration: DEXPI XML → NeqSim ProcessSystem
 # ---------------------------------------------------------------------------
 
+def _create_template_fluid(fluid_spec: Optional[Dict] = None):
+    """Create a NeqSim fluid from a fluid spec dict or use a default natural gas."""
+    from neqsim.thermo import fluid_df
+    import pandas as pd
+
+    if fluid_spec and "components" in fluid_spec:
+        comp_data = fluid_spec["components"]
+        rows = [
+            {"ComponentName": name, "MolarComposition[-]": frac}
+            for name, frac in comp_data.items()
+        ]
+    else:
+        rows = [
+            {"ComponentName": "methane", "MolarComposition[-]": 0.85},
+            {"ComponentName": "ethane", "MolarComposition[-]": 0.07},
+            {"ComponentName": "propane", "MolarComposition[-]": 0.03},
+            {"ComponentName": "CO2", "MolarComposition[-]": 0.02},
+            {"ComponentName": "nitrogen", "MolarComposition[-]": 0.03},
+        ]
+    df = pd.DataFrame(rows)
+    template_fluid = fluid_df(df, lastIsPlusFraction=False, add_all_components=False)
+    template_fluid.setTemperature(25.0, "C")
+    template_fluid.setPressure(50.0, "bara")
+    return template_fluid
+
+
 def load_dexpi_to_neqsim(
     xml_bytes: bytes,
     filename: str = "dexpi_pid.xml",
     fluid_spec: Optional[Dict] = None,
 ) -> Optional[Any]:
-    """Import a DEXPI XML file into a NeqSim ProcessSystem using the Java DexpiXmlReader.
+    """Import a DEXPI XML file into a NeqSim ProcessSystem.
+
+    Tries these Java backends in order:
+
+    1. **DexpiSimulationBuilder** — topology-aware builder that resolves
+       nozzle/connection graphs, instantiates real NeqSim equipment via
+       DexpiEquipmentFactory with sizing attributes, and optionally
+       auto-instruments the process.
+    2. **DexpiXmlReader** — lower-level reader that maps DEXPI classes to
+       NeqSim equipment directly (no topology resolution).
 
     Parameters
     ----------
@@ -346,41 +396,11 @@ def load_dexpi_to_neqsim(
     from .process_model import NeqSimProcessModel
 
     try:
-        from neqsim.thermo import fluid_df
         from neqsim import jneqsim
-        import pandas as pd
 
-        # Create a template fluid for thermodynamic calculations
-        if fluid_spec and "components" in fluid_spec:
-            comp_data = fluid_spec["components"]
-            rows = [
-                {"ComponentName": name, "MolarComposition[-]": frac}
-                for name, frac in comp_data.items()
-            ]
-            df = pd.DataFrame(rows)
-            template_fluid = fluid_df(df, lastIsPlusFraction=False, add_all_components=False)
-        else:
-            # Default: simple natural gas
-            rows = [
-                {"ComponentName": "methane", "MolarComposition[-]": 0.85},
-                {"ComponentName": "ethane", "MolarComposition[-]": 0.07},
-                {"ComponentName": "propane", "MolarComposition[-]": 0.03},
-                {"ComponentName": "CO2", "MolarComposition[-]": 0.02},
-                {"ComponentName": "nitrogen", "MolarComposition[-]": 0.03},
-            ]
-            df = pd.DataFrame(rows)
-            template_fluid = fluid_df(df, lastIsPlusFraction=False, add_all_components=False)
+        template_fluid = _create_template_fluid(fluid_spec)
 
-        template_fluid.setTemperature(25.0, "C")
-        template_fluid.setPressure(50.0, "bara")
-
-        # Create a NeqSim stream as template
-        template_stream = jneqsim.process.equipment.stream.Stream(
-            "template stream", template_fluid
-        )
-        template_stream.setFlowRate(100.0, "kg/hr")
-
-        # Write XML to a temporary file for Java reader
+        # Write XML to a temporary file for Java readers
         suffix = os.path.splitext(filename)[1] or ".xml"
         with tempfile.NamedTemporaryFile(
             suffix=suffix, delete=False, mode="wb"
@@ -389,19 +409,47 @@ def load_dexpi_to_neqsim(
             tmp_path = tmp.name
 
         try:
-            # Use NeqSim's DexpiXmlReader (static method)
-            DexpiXmlReader = jneqsim.process.processmodel.dexpi.DexpiXmlReader
             java_file = jneqsim.java.io.File(tmp_path)
+
+            # --- Try DexpiSimulationBuilder first (topology-aware) ---
+            try:
+                builder = jneqsim.process.processmodel.dexpi.DexpiSimulationBuilder(
+                    java_file
+                )
+                builder.setFluidTemplate(template_fluid)
+                builder.setFeedPressure(50.0, "bara")
+                builder.setFeedTemperature(30.0, "C")
+                builder.setFeedFlowRate(1.0, "MSm3/day")
+                builder.setAutoInstrument(True)
+                process_system = builder.build()
+
+                if process_system is not None:
+                    model = NeqSimProcessModel.from_process_system(process_system)
+                    _logger.info("DEXPI loaded via DexpiSimulationBuilder")
+                    return model
+            except (AttributeError, ImportError, TypeError):
+                _logger.debug("DexpiSimulationBuilder not available")
+            except Exception as e:
+                _logger.debug("DexpiSimulationBuilder failed: %s", e)
+
+            # --- Fallback: DexpiXmlReader (flat reader, no topology) ---
+            template_stream = jneqsim.process.equipment.stream.Stream(
+                "template stream", template_fluid
+            )
+            template_stream.setFlowRate(100.0, "kg/hr")
+
+            DexpiXmlReader = jneqsim.process.processmodel.dexpi.DexpiXmlReader
             process_system = DexpiXmlReader.read(java_file, template_stream)
 
             if process_system is not None:
                 model = NeqSimProcessModel.from_process_system(process_system)
+                _logger.info("DEXPI loaded via DexpiXmlReader")
                 return model
         finally:
             os.unlink(tmp_path)
 
     except (AttributeError, ImportError, TypeError):
-        # DexpiXmlReader may not be available in all NeqSim versions
+        # DexpiXmlReader / DexpiSimulationBuilder may not be available
         pass
     except Exception as e:
         _logger.warning("load_dexpi_to_neqsim failed: %s", e)
@@ -801,16 +849,15 @@ def run_dexpi_analysis(
             "components": {r["ComponentName"]: r["MolarComposition[-]"] for r in rows}
         }
 
-    # Step 6: Attempt NeqSim import
+    # Step 6: Attempt NeqSim import (DexpiSimulationBuilder → DexpiXmlReader → Python fallback)
     neqsim_model = None
     neqsim_units = 0
     neqsim_streams = 0
     if try_neqsim_import:
-        # Try Java DexpiXmlReader first
         try:
             neqsim_model = load_dexpi_to_neqsim(xml_bytes, filename, effective_fluid_spec)
         except Exception as e:
-            _logger.debug("DexpiXmlReader import failed: %s", e)
+            _logger.debug("Java DEXPI import failed: %s", e)
 
         # Fallback: build process from parsed topology
         if neqsim_model is None and pid_summary.equipment:
@@ -830,6 +877,40 @@ def run_dexpi_analysis(
         else:
             warnings.append("NeqSim process model could not be created from P&ID")
 
+    # Step 7: pyDEXPI-powered analysis (graph + SVG)
+    pydexpi_model = None
+    pydexpi_graph = None
+    pydexpi_svg = None
+    pydexpi_graph_summary_data = None
+
+    try:
+        _model, _graph = get_pydexpi_process_graph(xml_bytes, filename)
+        if _model is not None:
+            pydexpi_model = _model
+            pydexpi_graph = _graph
+    except Exception as e:
+        _logger.debug("pyDEXPI graph analysis failed: %s", e)
+
+    try:
+        pydexpi_svg = render_dexpi_svg(
+            xml_bytes, filename, pretty=True, dexpi_model=pydexpi_model
+        )
+    except Exception as e:
+        _logger.debug("pyDEXPI SVG rendering failed: %s", e)
+
+    try:
+        pydexpi_graph_summary_data = get_pydexpi_graph_summary(
+            xml_bytes, filename, process_graph=pydexpi_graph
+        )
+    except Exception as e:
+        _logger.debug("pyDEXPI graph summary failed: %s", e)
+
+    if pydexpi_model is not None:
+        _logger.info("pyDEXPI model loaded successfully (graph nodes: %d)",
+                      pydexpi_graph.number_of_nodes() if pydexpi_graph else 0)
+    else:
+        warnings.append("pyDEXPI model could not be loaded (SVG rendering unavailable)")
+
     result = DexpiAnalysisResult(
         pid_summary=pid_summary,
         neqsim_model_loaded=neqsim_model is not None,
@@ -840,6 +921,10 @@ def run_dexpi_analysis(
         piping_summary=piping_summary,
         connectivity_info=connectivity_info,
         warnings=warnings,
+        pydexpi_model=pydexpi_model,
+        pydexpi_graph=pydexpi_graph,
+        pydexpi_svg=pydexpi_svg,
+        pydexpi_graph_summary=pydexpi_graph_summary_data,
     )
 
     return result
@@ -926,6 +1011,28 @@ def format_dexpi_result(result: DexpiAnalysisResult) -> str:
         lines.append(f"  Successfully imported into NeqSim ProcessSystem")
         lines.append(f"  Units: {result.neqsim_units}")
         lines.append(f"  Streams: {result.neqsim_streams}")
+
+    # pyDEXPI graph topology
+    if result.pydexpi_graph_summary:
+        gs = result.pydexpi_graph_summary
+        lines.append("")
+        lines.append("--- pyDEXPI Graph Topology ---")
+        lines.append(f"  Process graph: {gs.get('node_count', 0)} nodes, {gs.get('edge_count', 0)} edges")
+        eq_list = gs.get("equipment", [])
+        if eq_list:
+            lines.append(f"  Equipment nodes: {len(eq_list)}")
+            for eq in eq_list[:20]:  # Cap at 20 for LLM context
+                lines.append(f"    [{eq.get('type', '')}] {eq.get('tag', eq.get('id', ''))}")
+        conn_list = gs.get("connections", [])
+        if conn_list:
+            lines.append(f"  Connections: {len(conn_list)}")
+            for c in conn_list[:20]:
+                lines.append(f"    {c.get('from', '?')} → {c.get('to', '?')} ({c.get('label', '')})")
+
+    if result.pydexpi_svg:
+        lines.append("")
+        lines.append("--- P&ID SVG Rendering ---")
+        lines.append("  A proper P&ID SVG diagram has been rendered and is available for display.")
 
     if result.warnings:
         lines.append("")
@@ -1341,6 +1448,297 @@ def parse_dexpi_with_pydexpi(xml_bytes: bytes, filename: str = "pid.xml"):
             shutil.rmtree(tmpdir, ignore_errors=True)
     except Exception as e:
         _logger.debug("parse_dexpi_with_pydexpi failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# pyDEXPI-powered graph analysis: topology extraction via NetworkX
+# ---------------------------------------------------------------------------
+
+def get_pydexpi_process_graph(xml_bytes: bytes, filename: str = "pid.xml"):
+    """Parse a DEXPI XML and return a simplified process-level NetworkX graph.
+
+    Uses pyDEXPI's ``ProteusSerializer`` → ``GraphLoader`` → ``GraphAbstractor``
+    pipeline to produce a compact process topology where equipment items are
+    nodes and piping connections are edges.
+
+    Returns (dexpi_model, process_graph) or (None, None).
+    """
+    try:
+        from pydexpi.loaders import GraphLoader, GraphAbstractor
+
+        dexpi_model = parse_dexpi_with_pydexpi(xml_bytes, filename)
+        if dexpi_model is None:
+            return None, None
+
+        gl = GraphLoader()
+        plant_graph = gl.parse_dexpi_to_graph(dexpi_model)
+        process_graph = GraphAbstractor.build_process_graph(plant_graph)
+        return dexpi_model, process_graph
+    except Exception as e:
+        _logger.debug("get_pydexpi_process_graph failed: %s", e)
+        return None, None
+
+
+def get_pydexpi_conceptual_graph(xml_bytes: bytes, filename: str = "pid.xml"):
+    """Parse DEXPI XML and return the most abstract conceptual graph.
+
+    The conceptual graph collapses piping internals, instrumentation, and
+    nozzles into a compact topology with only equipment and high-level
+    connections.
+
+    Returns (dexpi_model, conceptual_graph) or (None, None).
+    """
+    try:
+        from pydexpi.loaders import GraphLoader, GraphAbstractor
+
+        dexpi_model = parse_dexpi_with_pydexpi(xml_bytes, filename)
+        if dexpi_model is None:
+            return None, None
+
+        gl = GraphLoader()
+        plant_graph = gl.parse_dexpi_to_graph(dexpi_model)
+        conceptual_graph = GraphAbstractor.build_conceptual_graph(plant_graph)
+        return dexpi_model, conceptual_graph
+    except Exception as e:
+        _logger.debug("get_pydexpi_conceptual_graph failed: %s", e)
+        return None, None
+
+
+def _equipment_order_from_pydexpi_graph(
+    xml_bytes: bytes,
+    filename: str = "pid.xml",
+) -> Optional[List[Dict[str, str]]]:
+    """Extract an ordered equipment list from pyDEXPI graph topology.
+
+    Uses the process graph to determine topological ordering of equipment.
+    Returns a list of dicts: [{"id": ..., "label": ..., "class": ...}, ...],
+    or None if pyDEXPI graph analysis fails.
+    """
+    try:
+        import networkx as nx
+
+        _model, proc_graph = get_pydexpi_process_graph(xml_bytes, filename)
+        if proc_graph is None:
+            return None
+
+        # Identify equipment nodes (have an equipment-related label)
+        _EQ_LABELS = {
+            "Separator", "Compressor", "CentrifugalCompressor",
+            "ReciprocatingCompressor", "Pump", "CentrifugalPump",
+            "ReciprocatingPump", "HeatExchanger", "PlateHeatExchanger",
+            "TubularHeatExchanger", "AirCooledHeatExchanger",
+            "Tank", "PressureVessel", "Column", "ProcessColumn",
+            "Reactor", "Mixer", "Filter", "Dryer",
+            "Valve", "ControlValve", "ThrottlingValve",
+            "Expander", "TurbineExpander", "Flare",
+        }
+
+        eq_nodes = []
+        for node_id, data in proc_graph.nodes(data=True):
+            label = data.get("label", "")
+            labels = data.get("labels", "")
+            # Check if any equipment label matches
+            all_labels = set()
+            if label:
+                all_labels.add(label)
+            if labels:
+                all_labels.update(labels.split(":"))
+            if all_labels & _EQ_LABELS:
+                eq_nodes.append(node_id)
+
+        if not eq_nodes:
+            return None
+
+        # Build a subgraph of equipment nodes with edges between them
+        eq_subgraph = proc_graph.subgraph(eq_nodes).copy()
+
+        # Topological sort if DAG, otherwise fall back to BFS from sources
+        try:
+            ordered_ids = list(nx.topological_sort(eq_subgraph))
+        except nx.NetworkXUnfeasible:
+            # Not a DAG (has cycles) — fall back to BFS from source nodes
+            sources = [n for n in eq_subgraph if eq_subgraph.in_degree(n) == 0]
+            if not sources:
+                sources = eq_nodes[:1]
+            ordered_ids = list(nx.bfs_tree(eq_subgraph, sources[0]))
+            # Add any unreached nodes
+            for n in eq_nodes:
+                if n not in ordered_ids:
+                    ordered_ids.append(n)
+
+        result = []
+        for nid in ordered_ids:
+            data = proc_graph.nodes[nid]
+            result.append({
+                "id": nid,
+                "label": data.get("label", ""),
+                "class": data.get("labels", "").split(":")[0] if data.get("labels") else data.get("label", ""),
+                "tagName": data.get("tagName", ""),
+            })
+        return result
+
+    except Exception as e:
+        _logger.debug("_equipment_order_from_pydexpi_graph failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# pyDEXPI SVG rendering: P&ID diagram → SVG string
+# ---------------------------------------------------------------------------
+
+def render_dexpi_svg(
+    xml_bytes: bytes,
+    filename: str = "pid.xml",
+    pretty: bool = True,
+    *,
+    dexpi_model=None,
+) -> Optional[str]:
+    """Render a DEXPI P&ID to SVG using pyDEXPI's DrawDiagram.
+
+    This produces a proper engineering P&ID diagram with standard symbols,
+    piping, instrumentation, and labels — much richer than a simple
+    network graph.
+
+    Parameters
+    ----------
+    xml_bytes : bytes
+        Raw DEXPI XML file content.
+    filename : str
+        Original filename.
+    pretty : bool
+        If True, scale to A3 and use thinner lines for cleaner rendering.
+    dexpi_model : optional
+        Pre-parsed pyDEXPI DexpiModel (avoids re-parsing the XML).
+
+    Returns
+    -------
+    str or None
+        SVG content as a string, or None if rendering fails.
+    """
+    try:
+        from pydexpi.loaders.svg_loader import DrawDiagram
+
+        if dexpi_model is None:
+            dexpi_model = parse_dexpi_with_pydexpi(xml_bytes, filename)
+        if dexpi_model is None:
+            return None
+
+        if not hasattr(dexpi_model, "diagram") or dexpi_model.diagram is None:
+            _logger.debug("DEXPI model has no diagram data for SVG rendering")
+            return None
+
+        drawer = DrawDiagram(dexpi_model.diagram, padding=5.0, pretty=pretty)
+        svg_content = drawer.draw_svg(return_element=False, background=True)
+        return svg_content
+
+    except Exception as e:
+        _logger.debug("render_dexpi_svg failed: %s", e)
+        return None
+
+
+def render_dexpi_component_svg(
+    xml_bytes: bytes,
+    component_index: int = 0,
+    filename: str = "pid.xml",
+    show_nodes: bool = False,
+) -> Optional[str]:
+    """Render a single DEXPI component to SVG with optional node position markers.
+
+    Parameters
+    ----------
+    xml_bytes : bytes
+        Raw DEXPI XML file content.
+    component_index : int
+        Index of the component's representation group in the diagram.
+    filename : str
+        Original filename.
+    show_nodes : bool
+        If True, overlay crosshair markers at nozzle/connection points.
+
+    Returns
+    -------
+    str or None
+        SVG content as a string, or None if rendering fails.
+    """
+    try:
+        from pydexpi.loaders.svg_loader import DrawRepresentationGroup
+
+        dexpi_model = parse_dexpi_with_pydexpi(xml_bytes, filename)
+        if dexpi_model is None:
+            return None
+        if not hasattr(dexpi_model, "diagram") or dexpi_model.diagram is None:
+            return None
+
+        groups = dexpi_model.diagram.groups
+        if component_index >= len(groups):
+            return None
+
+        drawer = DrawRepresentationGroup(
+            groups[component_index], padding=10.0, show_node_position=show_nodes
+        )
+        return drawer.draw_svg(return_element=False, background=True)
+
+    except Exception as e:
+        _logger.debug("render_dexpi_component_svg failed: %s", e)
+        return None
+
+
+def get_pydexpi_graph_summary(
+    xml_bytes: bytes,
+    filename: str = "pid.xml",
+    *,
+    process_graph=None,
+) -> Optional[Dict[str, Any]]:
+    """Get a structured summary of the P&ID from the pyDEXPI graph.
+
+    Extracts equipment counts, connection topology, and node attributes
+    from the conceptual graph for use in LLM analysis.
+
+    Parameters
+    ----------
+    process_graph : networkx.DiGraph, optional
+        Pre-computed process graph (avoids re-parsing the XML).
+
+    Returns a dict with keys: equipment, connections, node_count, edge_count,
+    or None if pyDEXPI analysis fails.
+    """
+    try:
+        import networkx as nx
+
+        if process_graph is None:
+            _model, process_graph = get_pydexpi_process_graph(xml_bytes, filename)
+        if process_graph is None:
+            return None
+
+        equipment = []
+        for node_id, data in process_graph.nodes(data=True):
+            label = data.get("label", "")
+            tag = data.get("tagName", "")
+            equipment.append({
+                "id": node_id,
+                "type": label,
+                "tag": tag,
+                "labels": data.get("labels", ""),
+            })
+
+        connections = []
+        for u, v, data in process_graph.edges(data=True):
+            connections.append({
+                "from": u,
+                "to": v,
+                "label": data.get("label", ""),
+            })
+
+        return {
+            "equipment": equipment,
+            "connections": connections,
+            "node_count": process_graph.number_of_nodes(),
+            "edge_count": process_graph.number_of_edges(),
+        }
+
+    except Exception as e:
+        _logger.debug("get_pydexpi_graph_summary failed: %s", e)
         return None
 
 
