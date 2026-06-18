@@ -291,7 +291,7 @@ if run_clicked:
                 user_request=task_input.strip() + extra_ctx,
                 user_composition=user_comp,
                 uploaded_docs=uploaded_text,
-                ai_model="gemini-2.0-flash",
+                ai_model="gemini-2.5-flash",
             )
 
             if user_comp:
@@ -354,7 +354,7 @@ if run_clicked:
                 spec=spec,
                 step_info=step_info,
                 step_number=step_num,
-                ai_model="gemini-2.0-flash",
+                ai_model="gemini-2.5-flash",
                 progress_cb=_step_progress,
             )
 
@@ -405,7 +405,7 @@ if run_clicked:
                 spec=spec,
                 all_results=all_results,
                 all_code=all_generated_code,
-                ai_model="gemini-2.0-flash",
+                ai_model="gemini-2.5-flash",
             )
             report_html = _generate_html_report(
                 title=spec.get("title", task_input.strip()[:80]),
@@ -652,7 +652,7 @@ if "ts_last_result" in st.session_state:
                 follow_up_request=followup_input.strip(),
                 previous_result=lr,
                 uploaded_docs=combined_docs,
-                ai_model="gemini-2.0-flash",
+                ai_model="gemini-2.5-flash",
                 progress_cb=fu_progress_cb,
             )
 

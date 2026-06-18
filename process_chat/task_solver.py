@@ -238,7 +238,7 @@ MAX_FIX_ATTEMPTS = 25
 # ---------------------------------------------------------------------------
 
 def _call_llm(api_key: str, system_prompt: str, user_message: str,
-              ai_model: str = "gemini-2.0-flash", temperature: float = 0.3) -> str:
+              ai_model: str = "gemini-2.5-flash", temperature: float = 0.3) -> str:
     """Single LLM call, returns text."""
     from google import genai
     from google.genai import types
@@ -257,7 +257,7 @@ def _call_llm(api_key: str, system_prompt: str, user_message: str,
 
 def _call_llm_multi(api_key: str, system_prompt: str,
                     messages: List[Dict[str, str]],
-                    ai_model: str = "gemini-2.0-flash",
+                    ai_model: str = "gemini-2.5-flash",
                     temperature: float = 0.3) -> str:
     """Multi-turn LLM call for the fix loop."""
     from google import genai
@@ -886,7 +886,7 @@ Rules:
 def classify_and_scope(api_key: str, user_request: str,
                        user_composition: Optional[dict] = None,
                        uploaded_docs: Optional[str] = None,
-                       ai_model: str = "gemini-2.0-flash") -> dict:
+                       ai_model: str = "gemini-2.5-flash") -> dict:
     """Step 1: Use LLM to classify the task and create a scope/spec."""
     extra = ""
     if user_composition:
@@ -992,7 +992,7 @@ def generate_and_run_code(
     spec: dict,
     step_info: dict,
     step_number: int,
-    ai_model: str = "gemini-2.0-flash",
+    ai_model: str = "gemini-2.5-flash",
     progress_cb: Optional[ProgressCallback] = None,
     prior_context: Optional[str] = None,
 ) -> TaskStep:
@@ -1320,7 +1320,7 @@ def _generate_charts_html(all_results: dict) -> str:
 
 def _generate_report_text(api_key: str, spec: dict, all_results: dict,
                           all_code: str = "",
-                          ai_model: str = "gemini-2.0-flash") -> str:
+                          ai_model: str = "gemini-2.5-flash") -> str:
     """Use LLM to generate a readable engineering report from results."""
     report_prompt = """You are writing an engineering report based on NeqSim simulation results.
 
@@ -1556,7 +1556,7 @@ def run_task(
     user_conditions: Optional[dict] = None,
     uploaded_docs: Optional[str] = None,
     report_level: str = "standard",
-    ai_model: str = "gemini-2.0-flash",
+    ai_model: str = "gemini-2.5-flash",
     progress_cb: Optional[ProgressCallback] = None,
 ) -> TaskResult:
     """
@@ -1762,7 +1762,7 @@ def follow_up_task(
     follow_up_request: str,
     previous_result: dict,
     uploaded_docs: Optional[str] = None,
-    ai_model: str = "gemini-2.0-flash",
+    ai_model: str = "gemini-2.5-flash",
     progress_cb: Optional[ProgressCallback] = None,
 ) -> TaskResult:
     """

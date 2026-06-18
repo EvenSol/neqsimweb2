@@ -2430,7 +2430,7 @@ if user_input:
                     st.session_state["chat_session"] = ProcessChatSession(
                         model=model,     # None in builder mode
                         api_key=api_key_val,
-                        ai_model="gemini-2.0-flash",
+                        ai_model="gemini-2.5-flash",
                     )
 
                 session = st.session_state["chat_session"]

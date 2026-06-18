@@ -39,7 +39,7 @@ def make_request(question_input: str):
     try:
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-2.5-flash',
             contents=question_input
         )
         return response.text
@@ -145,13 +145,13 @@ ai_enabled = st.sidebar.toggle(
     help="Enable AI-powered analysis and recommendations"
 )
 st.session_state['ai_enabled'] = ai_enabled
-st.session_state['ai_model'] = 'gemini-2.0-flash'
+st.session_state['ai_model'] = 'gemini-2.5-flash'
 
 if ai_enabled:
     try:
         if 'GEMINI_API_KEY' in st.secrets:
             st.session_state['gemini_api_key'] = st.secrets['GEMINI_API_KEY']
-            st.sidebar.success("✓ AI ready (gemini-2.0-flash)")
+            st.sidebar.success("✓ AI ready (gemini-2.5-flash)")
         else:
             st.sidebar.warning("No GEMINI_API_KEY in Streamlit secrets.")
     except Exception:

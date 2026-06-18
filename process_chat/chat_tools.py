@@ -3168,7 +3168,7 @@ class ProcessChatSession:
         self,
         model: Optional[NeqSimProcessModel] = None,
         api_key: str = "",
-        ai_model: str = "gemini-2.0-flash",
+        ai_model: str = "gemini-2.5-flash",
     ):
         self.model = model
         self.api_key = api_key

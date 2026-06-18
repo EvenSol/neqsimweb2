@@ -704,7 +704,7 @@ with st.sidebar:
     if is_ai_enabled():
         st.divider()
         st.header("🤖 AI Analysis")
-        st.success(f"✓ AI enabled ({st.session_state.get('ai_model', 'gemini-2.0-flash')})")
+        st.success(f"✓ AI enabled ({st.session_state.get('ai_model', 'gemini-2.5-flash')})")
 
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
@@ -4636,9 +4636,9 @@ if is_ai_enabled():
                     Keep the response practical for an operations/maintenance engineer. Use specific numbers and percentages where possible.
                     """
                     
-                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-2.0-flash')}..."):
+                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-2.5-flash')}..."):
                         client = genai.Client(api_key=gemini_api_key)
-                        selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
+                        selected_model = st.session_state.get('ai_model', 'gemini-2.5-flash')
                         
                         system_instruction = """You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting.
 
@@ -4683,10 +4683,10 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                             )
                             ai_analysis = response.text
                         except Exception as model_error:
-                            # Try fallback to gemini-2.0-flash if primary model fails
-                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.0-flash...")
+                            # Try fallback to gemini-2.5-flash if primary model fails
+                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.5-flash...")
                             response = client.models.generate_content(
-                                model='gemini-2.0-flash',
+                                model='gemini-2.5-flash',
                                 contents=prompt,
                                 config=types.GenerateContentConfig(
                                     system_instruction=system_instruction,
@@ -4775,7 +4775,7 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
                             client = genai.Client(api_key=gemini_api_key)
-                            selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
+                            selected_model = st.session_state.get('ai_model', 'gemini-2.5-flash')
                             try:
                                 response = client.models.generate_content(
                                     model=selected_model,
@@ -4787,9 +4787,9 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                                 )
                                 assistant_response = response.text
                             except Exception:
-                                # Fallback to gemini-2.0-flash
+                                # Fallback to gemini-2.5-flash
                                 response = client.models.generate_content(
-                                    model='gemini-2.0-flash',
+                                    model='gemini-2.5-flash',
                                     contents=context_prompt,
                                     config=types.GenerateContentConfig(
                                         max_output_tokens=1000,
