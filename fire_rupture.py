@@ -240,6 +240,12 @@ class Pipe:
         return self.fluid_density > 500.0
 
     @property
+    def release_cross_area_m2(self) -> float:
+        """Cross-sectional flow area at the rupture (uses the *nominal* ID)."""
+        id_nom_m = (self.od_mm - 2.0 * self.wall_mm) / 1000.0
+        return math.pi / 4.0 * id_nom_m ** 2
+
+    @property
     def effective_nominal_inch(self) -> float:
         if self.nominal_inch is not None:
             return self.nominal_inch

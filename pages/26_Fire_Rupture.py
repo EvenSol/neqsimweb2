@@ -32,6 +32,46 @@ st.set_page_config(
 )
 apply_theme()
 
+
+# =============================================================================
+# Builders / helpers (defined early so the sidebar can use them)
+# =============================================================================
+def _build_fires(df: pd.DataFrame):
+    fires = []
+    for _, r in df.dropna(subset=["Name"]).iterrows():
+        fires.append(fr.Fire(
+            name=str(r["Name"]),
+            fire_temp_C=float(r["FireTemp[°C]"]),
+            gas_temp_C=float(r["GasTemp[°C]"]),
+            h_conv=float(r["h_conv[W/m²K]"]),
+            fire_emissivity=float(r["FireEmiss[-]"]),
+            metal_emissivity=float(r["MetalEmiss[-]"]),
+            metal_absorptivity=float(r["MetalAbsorp[-]"]),
+        ))
+    return fires
+
+
+def _build_pipe(row) -> fr.Pipe:
+    nom = row.get("NominalDiameter[inch]")
+    return fr.Pipe(
+        name=str(row["Name"]),
+        od_mm=float(row["OD[mm]"]),
+        wall_mm=float(row["Wall[mm]"]),
+        material=str(row["Material"]),
+        corrosion_allowance_mm=float(row.get("Corrosion[mm]", 0.0) or 0.0),
+        wall_tolerance_frac=float(row.get("WallTolerance[frac]", 0.0) or 0.0),
+        weight_stress_MPa=float(row.get("WeightStress[MPa]", 0.0) or 0.0),
+        fluid_density=float(row.get("FluidDensity[kg/m³]", 23.75) or 23.75),
+        fluid_heat_capacity=float(row.get("FluidCp[J/kgK]", 2283.0) or 2283.0),
+        gas_mw=float(row.get("GasMW[g/mol]", 18.2) or 18.2),
+        nominal_inch=(float(nom) if nom is not None and not pd.isna(nom) else None),
+    )
+
+
+def _fmt(value, fmt="{:.2f}"):
+    return fmt.format(value) if value is not None else "N/A"
+
+
 st.title('🔥 Fire Rupture — Time to Rupture')
 st.markdown("""
 Calculates the **heat-up of pipes (or vessel walls) exposed to fire** and predicts
@@ -115,6 +155,30 @@ with st.sidebar:
         },
         key="fr_fires_editor",
     )
+
+    # Initial heat-flux QA outputs (cf. workbook cells AB14/AB15), evaluated at
+    # the cold surface temperature (= initial segment temperature).
+    try:
+        flux_rows = []
+        for f in _build_fires(fires_df):
+            flux_rows.append({
+                "Fire": f.name,
+                "Incident [kW/m²]": f.incident_flux(initial_temp_C),
+                "Absorbed [kW/m²]": f.absorbed_flux(initial_temp_C),
+            })
+        if flux_rows:
+            st.caption("Initial heat flux (at cold wall):")
+            st.dataframe(
+                pd.DataFrame(flux_rows),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Incident [kW/m²]": st.column_config.NumberColumn(format="%.1f"),
+                    "Absorbed [kW/m²]": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+    except Exception:
+        pass
 
 # =============================================================================
 # Pressure profile (blowdown)
@@ -215,42 +279,6 @@ st.divider()
 run = st.button("▶️ Run calculation", type="primary", use_container_width=True)
 
 
-def _build_fires(df: pd.DataFrame):
-    fires = []
-    for _, r in df.dropna(subset=["Name"]).iterrows():
-        fires.append(fr.Fire(
-            name=str(r["Name"]),
-            fire_temp_C=float(r["FireTemp[°C]"]),
-            gas_temp_C=float(r["GasTemp[°C]"]),
-            h_conv=float(r["h_conv[W/m²K]"]),
-            fire_emissivity=float(r["FireEmiss[-]"]),
-            metal_emissivity=float(r["MetalEmiss[-]"]),
-            metal_absorptivity=float(r["MetalAbsorp[-]"]),
-        ))
-    return fires
-
-
-def _build_pipe(row) -> fr.Pipe:
-    nom = row.get("NominalDiameter[inch]")
-    return fr.Pipe(
-        name=str(row["Name"]),
-        od_mm=float(row["OD[mm]"]),
-        wall_mm=float(row["Wall[mm]"]),
-        material=str(row["Material"]),
-        corrosion_allowance_mm=float(row.get("Corrosion[mm]", 0.0) or 0.0),
-        wall_tolerance_frac=float(row.get("WallTolerance[frac]", 0.0) or 0.0),
-        weight_stress_MPa=float(row.get("WeightStress[MPa]", 0.0) or 0.0),
-        fluid_density=float(row.get("FluidDensity[kg/m³]", 23.75) or 23.75),
-        fluid_heat_capacity=float(row.get("FluidCp[J/kgK]", 2283.0) or 2283.0),
-        gas_mw=float(row.get("GasMW[g/mol]", 18.2) or 18.2),
-        nominal_inch=(float(nom) if nom is not None and not pd.isna(nom) else None),
-    )
-
-
-def _fmt(value, fmt="{:.2f}"):
-    return fmt.format(value) if value is not None else "N/A"
-
-
 if run:
     prof = profile_df.dropna().sort_values("Time[min]")
     if len(prof) < 2:
@@ -305,6 +333,7 @@ if st.session_state.get("fr_results"):
                 "Ruptures": "Yes" if fres.ruptured else "No",
                 "Time to rupture [min]": fres.time_to_rupture_min,
                 "Rupture pressure [barg]": fres.rupture_pressure_barg,
+                "Release area [m²]": pr.pipe.release_cross_area_m2,
                 "Gas 2-sided [kg/s]": fres.release_gas_2sides,
                 "Gas 1-sided [kg/s]": fres.release_gas_1side,
                 "Gas short pipe [kg/s]": fres.release_gas_short,
@@ -318,6 +347,7 @@ if st.session_state.get("fr_results"):
         column_config={
             "Time to rupture [min]": st.column_config.NumberColumn(format="%.2f"),
             "Rupture pressure [barg]": st.column_config.NumberColumn(format="%.2f"),
+            "Release area [m²]": st.column_config.NumberColumn(format="%.5f"),
             "Gas 2-sided [kg/s]": st.column_config.NumberColumn(format="%.2f"),
             "Gas 1-sided [kg/s]": st.column_config.NumberColumn(format="%.2f"),
             "Gas short pipe [kg/s]": st.column_config.NumberColumn(format="%.2f"),
