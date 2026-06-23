@@ -17,6 +17,9 @@ Calculates, for up to several pipes simultaneously exposed to up to three fires:
 * the resulting gas / liquid release rate from the rupture location.
 """
 
+import inspect
+import math
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -70,6 +73,20 @@ def _build_pipe(row) -> fr.Pipe:
 
 def _fmt(value, fmt="{:.2f}"):
     return fmt.format(value) if value is not None else "N/A"
+
+
+def _stretch_width(widget):
+    if "width" in inspect.signature(widget).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
+
+
+def _release_cross_area_m2(pipe) -> float:
+    try:
+        return float(pipe.release_cross_area_m2)
+    except AttributeError:
+        id_nom_m = (float(pipe.od_mm) - 2.0 * float(pipe.wall_mm)) / 1000.0
+        return math.pi / 4.0 * id_nom_m ** 2
 
 
 st.title('🔥 Fire Rupture — Time to Rupture')
@@ -171,11 +188,11 @@ with st.sidebar:
             st.dataframe(
                 pd.DataFrame(flux_rows),
                 hide_index=True,
-                use_container_width=True,
                 column_config={
                     "Incident [kW/m²]": st.column_config.NumberColumn(format="%.1f"),
                     "Absorbed [kW/m²]": st.column_config.NumberColumn(format="%.1f"),
                 },
+                **_stretch_width(st.dataframe),
             )
     except Exception:
         pass
@@ -215,7 +232,7 @@ with col_plot:
             title="Blowdown pressure profile",
             xaxis_title="Time [min]", yaxis_title="Pressure [bara]",
             height=360, margin=dict(l=10, r=10, t=40, b=10))
-        st.plotly_chart(fig_p, use_container_width=True)
+        st.plotly_chart(fig_p, **_stretch_width(st.plotly_chart))
 
 st.divider()
 
@@ -269,14 +286,14 @@ pipes_df = st.data_editor(
 with st.expander("📚 Pipe-class database (reference dimensions)"):
     st.caption("Common pipe dimensions for convenience — copy values into the table above.")
     st.dataframe(pd.DataFrame(fr.DEFAULT_PIPE_DATABASE), hide_index=True,
-                 use_container_width=True)
+                 **_stretch_width(st.dataframe))
 
 st.divider()
 
 # =============================================================================
 # Run
 # =============================================================================
-run = st.button("▶️ Run calculation", type="primary", use_container_width=True)
+run = st.button("▶️ Run calculation", type="primary", **_stretch_width(st.button))
 
 
 if run:
@@ -333,7 +350,7 @@ if st.session_state.get("fr_results"):
                 "Ruptures": "Yes" if fres.ruptured else "No",
                 "Time to rupture [min]": fres.time_to_rupture_min,
                 "Rupture pressure [barg]": fres.rupture_pressure_barg,
-                "Release area [m²]": pr.pipe.release_cross_area_m2,
+                "Release area [m²]": _release_cross_area_m2(pr.pipe),
                 "Gas 2-sided [kg/s]": fres.release_gas_2sides,
                 "Gas 1-sided [kg/s]": fres.release_gas_1side,
                 "Gas short pipe [kg/s]": fres.release_gas_short,
@@ -343,7 +360,6 @@ if st.session_state.get("fr_results"):
     st.dataframe(
         summary_df,
         hide_index=True,
-        use_container_width=True,
         column_config={
             "Time to rupture [min]": st.column_config.NumberColumn(format="%.2f"),
             "Rupture pressure [barg]": st.column_config.NumberColumn(format="%.2f"),
@@ -353,6 +369,7 @@ if st.session_state.get("fr_results"):
             "Gas short pipe [kg/s]": st.column_config.NumberColumn(format="%.2f"),
             "Liquid [kg/s]": st.column_config.NumberColumn(format="%.2f"),
         },
+        **_stretch_width(st.dataframe),
     )
     st.caption("The **2-sided gas** rate is normally recommended as the release rate. "
                "A liquid rate is reported only when the fluid density > 500 kg/m³.")
@@ -408,4 +425,4 @@ if st.session_state.get("fr_results"):
     fig.update_xaxes(title_text="Time [min]", row=2, col=1)
     fig.update_layout(height=600, margin=dict(l=10, r=10, t=40, b=10),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **_stretch_width(st.plotly_chart))
