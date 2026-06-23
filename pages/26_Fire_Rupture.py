@@ -89,6 +89,22 @@ def _release_cross_area_m2(pipe) -> float:
         return math.pi / 4.0 * id_nom_m ** 2
 
 
+def _round_summary_df(df: pd.DataFrame) -> pd.DataFrame:
+    rounded = df.copy()
+    decimals = {
+        "Time to rupture [min]": 2,
+        "Rupture pressure [barg]": 2,
+        "Release area [m²]": 5,
+        "Gas 2-sided [kg/s]": 2,
+        "Gas 1-sided [kg/s]": 2,
+        "Gas short pipe [kg/s]": 2,
+        "Liquid [kg/s]": 2,
+    }
+    for column, places in decimals.items():
+        rounded[column] = pd.to_numeric(rounded[column], errors="coerce").round(places)
+    return rounded
+
+
 st.title('🔥 Fire Rupture — Time to Rupture')
 st.markdown("""
 Calculates the **heat-up of pipes (or vessel walls) exposed to fire** and predicts
@@ -356,7 +372,7 @@ if st.session_state.get("fr_results"):
                 "Gas short pipe [kg/s]": fres.release_gas_short,
                 "Liquid [kg/s]": fres.release_liquid,
             })
-    summary_df = pd.DataFrame(summary_rows)
+    summary_df = _round_summary_df(pd.DataFrame(summary_rows))
     st.dataframe(
         summary_df,
         hide_index=True,
