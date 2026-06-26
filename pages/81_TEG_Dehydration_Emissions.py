@@ -926,6 +926,15 @@ if run_clicked:
             except Exception:
                 process_report = None
 
+            # Builder/input JSON that can recreate the model via
+            # ProcessSystem.fromJsonAndRun(...). Serialize now while the live
+            # Java `process` object is in scope; persist as a plain string.
+            try:
+                _exporter = jneqsim.process.processmodel.JsonProcessExporter()
+                model_input_json = str(_exporter.toJson(process, True))
+            except Exception:
+                model_input_json = None
+
             blower_kw = None
             if recirculate_stripping_gas:
                 try:
@@ -969,6 +978,7 @@ if run_clicked:
         'flash': flash,
         'dot_graph': dot_graph,
         'process_report': process_report,
+        'model_input_json': model_input_json,
         'recirculate': bool(recirculate_stripping_gas),
         'recycle_blower_discharge': float(recycle_blower_discharge),
         'blower_kw': blower_kw,
@@ -1054,6 +1064,27 @@ if res:
                 "⬇️ Download full results (JSON)",
                 json.dumps(full_report, indent=2).encode('utf-8'),
                 file_name="teg_model_results.json", mime="application/json",
+            )
+
+    # Model input / builder JSON (round-trippable model definition)
+    model_input_json = res.get('model_input_json')
+    if model_input_json:
+        with st.expander("🧩 Model input (JSON — convertible to a ProcessSystem)",
+                         expanded=False):
+            st.caption("Builder JSON for the TEG plant in the NeqSim "
+                       "`JsonProcessBuilder` schema. This is the *input* definition "
+                       "of the model (equipment, streams, fluids and connections), not "
+                       "the solved results. It can be reloaded with "
+                       "`ProcessSystem.fromJsonAndRun(json)` to rebuild and re-run the "
+                       "identical process.")
+            try:
+                st.json(json.loads(model_input_json), expanded=False)
+            except Exception:
+                st.code(model_input_json, language="json")
+            st.download_button(
+                "⬇️ Download model input (JSON)",
+                model_input_json.encode('utf-8'),
+                file_name="teg_model_input.json", mime="application/json",
             )
 
     # KPIs
