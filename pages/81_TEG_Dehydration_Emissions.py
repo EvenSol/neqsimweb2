@@ -772,7 +772,7 @@ with col1:
 
 with col2:
     st.subheader("Absorber / TEG")
-    absorber_pressure = st.number_input("Absorber pressure [bara]", 10.0, 200.0, 85.0, 1.0)
+    absorber_pressure = st.number_input("Absorber pressure [bara]", 10.0, 200.0, 70.0, 1.0)
     absorber_temp = st.number_input("Gas-to-absorber temperature [°C]", 10.0, 70.0, 35.0, 0.5)
     teg_flow = st.number_input("Lean TEG circulation [kg/hr]", 500.0, 50000.0, 5500.0, 100.0)
     teg_feed_temp = st.number_input("Lean TEG feed temperature [°C]", 20.0, 80.0, 48.5, 0.5)
