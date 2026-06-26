@@ -33,6 +33,7 @@ Mixer = jneqsim.process.equipment.mixer.Mixer
 Calculator = jneqsim.process.equipment.util.Calculator
 Recycle = jneqsim.process.equipment.util.Recycle
 WaterDewPointAnalyser = jneqsim.process.measurementdevice.WaterDewPointAnalyser
+GraphvizExporter = jneqsim.process.processmodel.ProcessSystemGraphvizExporter
 
 # Gas/inert feed components (water and TEG are appended automatically and kept last)
 GAS_COMPONENTS = [
@@ -339,6 +340,39 @@ def run_plant(process, timeout_ms=300000):
     return process
 
 
+def export_process_dot(process, temp_unit='C', pressure_unit='bara', flow_unit='kg/hr'):
+    """Export the solved process topology to a Graphviz DOT string.
+
+    Each stream edge is annotated with its temperature, pressure and mass flow
+    so the connectivity (including the recycle loops) is visible. Rendered
+    client-side by ``st.graphviz_chart`` — no system Graphviz binary needed.
+    """
+    import os
+    import tempfile
+    Opts = GraphvizExporter.GraphvizExportOptions
+    options = (Opts.builder()
+               .includeStreamTemperatures(True)
+               .includeStreamPressures(True)
+               .includeStreamFlowRates(True)
+               .includeStreamPropertyTable(False)
+               .temperatureUnit(temp_unit)
+               .pressureUnit(pressure_unit)
+               .flowRateUnit(flow_unit)
+               .tablePlacement(Opts.TablePlacement.BELOW)
+               .build())
+    fd, path = tempfile.mkstemp(suffix='.dot')
+    os.close(fd)
+    try:
+        process.exportToGraphviz(path, options)
+        with open(path, 'r', encoding='utf-8') as fh:
+            return fh.read()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def comp_mass_flows_kg_hr(stream):
     fluid = stream.getFluid()
     total = stream.getFlowRate('kg/hr')
@@ -412,6 +446,37 @@ with st.expander("📖 About this model — process, parameters & methodology"):
 6. **Closed recycle** — pumps and a make-up `Calculator` return regenerated lean
    TEG to the absorber; the `Recycle` loop is solved to convergence on a worker
    thread.
+
+### Stream connectivity (how the units are wired)
+The plant is a single `ProcessSystem` solved with two (or three) tear/recycle
+loops. Following the streams from the feed:
+
+- **Gas train:** `dry feed gas` → *water saturator* (or T/P setter + saturator,
+  or direct in *specify-water* mode) → `feed to TEG absorber` → **TEG absorber**
+  → `dry gas from absorber` (→ `WaterDewPointAnalyser`).
+- **Rich-TEG let-down:** absorber bottoms `rich TEG` → **HP flash valve**
+  (→ flash-drum pressure) → *rich-TEG pre-heater* → **rich-TEG/lean-TEG HX-1**
+  → **degassing separator** → `flash gas` (to fuel) + liquid.
+- **Regeneration:** flash liquid → *TEG fine filter* → **lean/rich HX** →
+  **LP flash valve** (→ 1.2 bara) → **regeneration column** feed (tray 1).
+  The column reboiler boils water off; the overhead goes to the *regen-gas
+  cooler* (47 °C) → **regen-gas knock-out separator** → `still vent` (gas) +
+  `water to treatment` (liquid).
+- **Stripping:** column bottoms (hot lean TEG) → **TEG stripper**, contacted
+  with `stripGas`. The stripper overhead is returned to the column reboiler via
+  the **`stripping gas recirc` recycle** (tear → `gas to reboiler`).
+- **Lean-TEG return loop:** stripper bottoms → **lean/rich HX (hot side)** →
+  *TEG buffer tank* → *LP pump* → **HX-1 (hot side)** → *lean-TEG cooler* →
+  *HP pump* → `lean TEG to absorber` → make-up `Mixer` (+ make-up TEG) →
+  **`lean TEG recycle`** (priority 200, tear → absorber `TEG feed`).
+- **Stripping-gas recirculation (optional, closed loop):** when enabled, a
+  `Splitter` on the **knock-out drum overhead** (`still vent` gas) draws a slice
+  equal to the stripping-gas rate, reheats it (*stripping gas recirc heater*) and
+  returns it through the **`stripping gas makeup recycle`** (priority 150, tear →
+  `stripGas`). The split remainder becomes the **net** still vent.
+
+After a run, open **🔀 Process flow diagram** to see the auto-generated
+Graphviz flowsheet with every stream's temperature, pressure and mass flow.
 
 ### What each control does
 | Control | Effect |
@@ -647,6 +712,10 @@ if run_clicked:
             dry_gas_flow = float(S['dehydratedGas'].getFlowRate('MSm3/day'))
             still = classify_emissions(S['stillVent'])
             flash = classify_emissions(S['flashGas'])
+            try:
+                dot_graph = export_process_dot(process)
+            except Exception:
+                dot_graph = None
     except Exception as e:
         st.error(f"Calculation failed: {e}")
         st.stop()
@@ -658,6 +727,20 @@ if run_clicked:
                 "reconditioned and looped back to the stripper. The still vent below is "
                 "the **net** atmospheric emission — the remainder after the recirculated "
                 "slice is removed.")
+
+    # Interactive process flow diagram (streams annotated with T, P, flow)
+    if dot_graph:
+        with st.expander("🔀 Process flow diagram (streams with T, P, flow)", expanded=False):
+            st.caption("Auto-generated from the solved NeqSim `ProcessSystem`. Each "
+                       "arrow is a stream labelled with its temperature (°C), pressure "
+                       "(bara) and mass flow (kg/hr). Recycle loops close back on "
+                       "their feed units.")
+            st.graphviz_chart(dot_graph, use_container_width=True)
+            st.download_button(
+                "⬇️ Download flow diagram (Graphviz DOT)",
+                dot_graph.encode('utf-8'),
+                file_name="teg_flow_diagram.dot", mime="text/vnd.graphviz",
+            )
 
     # KPIs
     st.subheader("Dehydration performance")
