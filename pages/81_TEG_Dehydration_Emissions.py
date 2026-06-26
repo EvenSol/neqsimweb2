@@ -15,7 +15,7 @@ apply_theme()
 # ---------------------------------------------------------------------------
 # NeqSim classes
 # ---------------------------------------------------------------------------
-SystemSrkCPA = jneqsim.thermo.system.SystemSrkCPAStatoil
+SystemSrkCPA = jneqsim.thermo.system.SystemSrkCPAstatoil
 ProcessSystem = jneqsim.process.processmodel.ProcessSystem
 Stream = jneqsim.process.equipment.stream.Stream
 StreamSaturatorUtil = jneqsim.process.equipment.util.StreamSaturatorUtil
@@ -532,6 +532,6 @@ else:
     st.info("Set the inputs above and press **Run emission calculation**.")
 
 st.divider()
-st.caption("Model: CPA EOS (SystemSrkCPAStatoil, mixing rule 10). NMVOC = non-methane "
+st.caption("Model: CPA EOS (SystemSrkCPAstatoil, mixing rule 10). NMVOC = non-methane "
            "volatile organic compounds. The still vent is the atmospheric emission; "
            "flash gas is normally recovered to fuel.")
