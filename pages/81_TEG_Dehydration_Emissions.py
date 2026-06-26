@@ -384,6 +384,7 @@ with st.expander("📖 About this model — process, parameters & methodology"):
 | Control | Effect |
 |---|---|
 | Feed flow / T / P | Sets the gas duty and absorber loading. |
+| Feed water content | **Water-saturated** (default) saturates the gas with water at feed conditions (or at a custom T/P), or **Specify water content** sets the inlet water directly in mol-ppm. |
 | Absorber P / T, stages, stage efficiency | Higher P, lower T, more stages → drier gas. |
 | Lean TEG circulation & feed T | More/colder lean TEG → drier gas, more reboiler duty. |
 | Flash-drum pressure | **Lower → more NMVOC recovered as flash gas** instead of vented. |
