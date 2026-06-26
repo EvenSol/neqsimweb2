@@ -16,6 +16,7 @@ SimpleTEGAbsorber = jneqsim.process.equipment.absorber.SimpleTEGAbsorber
 WaterStripperColumn = jneqsim.process.equipment.absorber.WaterStripperColumn
 DistillationColumn = jneqsim.process.equipment.distillation.DistillationColumn
 Separator = jneqsim.process.equipment.separator.Separator
+Splitter = jneqsim.process.equipment.splitter.Splitter
 ThrottlingValve = jneqsim.process.equipment.valve.ThrottlingValve
 Filter = jneqsim.process.equipment.filter.Filter
 Pump = jneqsim.process.equipment.pump.Pump
@@ -37,7 +38,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                     lean_teg_purity, flash_drum_pressure_bara, reboiler_temp_C,
                     stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency,
                     water_mode='saturated', water_content_ppm_mol=None,
-                    saturation_temp_C=None, saturation_pressure_bara=None):
+                    saturation_temp_C=None, saturation_pressure_bara=None,
+                    recirculate_stripping_gas=False):
     p = ProcessSystem()
     n_comp = len(GAS_COMPONENTS) + 2
 
@@ -178,10 +180,24 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
 
     sepRegenGas = Separator('regen gas separator', coolerRegenGas.getOutletStream())
     p.add(sepRegenGas)
-    stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
-    p.add(stillVent)
     waterToTreatment = Stream('water to treatment', sepRegenGas.getLiquidOutStream())
     p.add(waterToTreatment)
+
+    if recirculate_stripping_gas:
+        recircSplit = Splitter('stripping gas recirc split',
+                               sepRegenGas.getGasOutStream())
+        recircSplit.setFlowRates([float(stripping_gas_Sm3_hr), -1.0], 'Sm3/hr')
+        p.add(recircSplit)
+        stillVent = Stream('still vent to atmosphere', recircSplit.getSplitStream(1))
+        p.add(stillVent)
+        recircHeater = Heater('stripping gas recirc heater',
+                              recircSplit.getSplitStream(0))
+        recircHeater.setOutTemperature(273.15 + 78.3)
+        p.add(recircHeater)
+    else:
+        recircHeater = None
+        stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
+        p.add(stillVent)
 
     stripper = WaterStripperColumn('TEG stripper')
     stripper.addSolventInStream(column.getLiquidOutStream())
@@ -194,6 +210,13 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     recycleStripGas.addStream(stripper.getGasOutStream())
     recycleStripGas.setOutletStream(gasToReboiler)
     p.add(recycleStripGas)
+
+    if recirculate_stripping_gas:
+        recycleStrippingMakeup = Recycle('stripping gas makeup recycle')
+        recycleStrippingMakeup.addStream(recircHeater.getOutletStream())
+        recycleStrippingMakeup.setOutletStream(strippingGas)
+        recycleStrippingMakeup.setPriority(150)
+        p.add(recycleStrippingMakeup)
 
     heatEx.setFeedStream(1, stripper.getLiquidOutStream())
 
@@ -295,23 +318,6 @@ def classify_emissions(stream):
     return out
 
 
-def classify_emissions_recirc(still_stream, recirc_stream):
-    still_flows = comp_mass_flows_kg_hr(still_stream)
-    recirc_flows = comp_mass_flows_kg_hr(recirc_stream)
-    net = {k: max(0.0, still_flows.get(k, 0.0) - recirc_flows.get(k, 0.0))
-           for k in still_flows}
-    out = {
-        'NMVOC': sum(v for k, v in net.items() if k in NMVOC),
-        'methane': sum(v for k, v in net.items() if k in GHG_CH4),
-        'CO2': net.get('CO2', 0.0),
-        'water': net.get('water', 0.0),
-        'TEG': net.get('TEG', 0.0),
-        'benzene': net.get('benzene', 0.0),
-    }
-    out['total'] = sum(net.values())
-    return out
-
-
 if __name__ == '__main__':
     kwargs = dict(
         feed_fractions=DEFAULT_FEED, feed_flow_MSm3_day=4.65, feed_temp_C=25.0,
@@ -366,16 +372,30 @@ if __name__ == '__main__':
     assert lean_teg_wt2 > 90.0, 'lean TEG should be >90 wt%'
     print('\nSMOKE TEST (specified) PASSED')
 
-    # --- Stripping-gas recirculation accounting ---
-    print('\nChecking stripping-gas recirculation accounting...')
-    still_recirc = classify_emissions_recirc(S['stillVent'], S['strippingGas'])
-    print(f'Still-vent NMVOC (vented)     : {still["NMVOC"]:8.4f} kg/hr')
-    print(f'Still-vent NMVOC (recirc net) : {still_recirc["NMVOC"]:8.4f} kg/hr')
-    print(f'Still-vent methane (vented)   : {still["methane"]:8.4f} kg/hr')
-    print(f'Still-vent methane (recirc)   : {still_recirc["methane"]:8.4f} kg/hr')
-    assert still_recirc['NMVOC'] <= still['NMVOC'] + 1e-9, \
+    # --- Stripping-gas recirculation (true closed-loop recycle) ---
+    print('\nBuilding plant (stripping gas recirculated from dried overhead)...')
+    kwargs3 = dict(kwargs, recirculate_stripping_gas=True)
+    process3, S3 = build_teg_plant(**kwargs3)
+    print('Running (worker thread)...')
+    thr3 = process3.runAsThread()
+    thr3.join(300000)
+
+    water_dew_C3 = float(S3['waterDewAnalyser'].getMeasuredValue('C'))
+    lean_teg_wt3 = teg_mass_fraction(S3['leanTEGtoAbs'])
+    still3 = classify_emissions(S3['stillVent'])
+    print(f'Water dew point          : {water_dew_C3:8.2f} C @70 bara')
+    print(f'Lean TEG purity          : {lean_teg_wt3:8.2f} wt%')
+    print(f'Still-vent NMVOC (vented): {still["NMVOC"]:8.4f} kg/hr')
+    print(f'Still-vent NMVOC (recirc): {still3["NMVOC"]:8.4f} kg/hr')
+    print(f'Still-vent methane (vent): {still["methane"]:8.4f} kg/hr')
+    print(f'Still-vent methane (rec) : {still3["methane"]:8.4f} kg/hr')
+    print(f'Still-vent water (vented): {still["water"]:8.4f} kg/hr')
+    print(f'Still-vent water (recirc): {still3["water"]:8.4f} kg/hr')
+    assert water_dew_C3 < 0.0, 'dew point should be below 0 C after dehydration'
+    assert lean_teg_wt3 > 90.0, 'lean TEG should be >90 wt%'
+    assert still3['NMVOC'] <= still['NMVOC'] + 1e-6, \
         'recirculation should not increase NMVOC emission'
-    assert still_recirc['methane'] <= still['methane'] + 1e-9, \
+    assert still3['methane'] <= still['methane'] + 1e-6, \
         'recirculation should not increase methane emission'
-    assert still_recirc['NMVOC'] >= 0.0 and still_recirc['methane'] >= 0.0
-    print('\nSMOKE TEST (recirculation accounting) PASSED')
+    assert still3['NMVOC'] >= 0.0 and still3['methane'] >= 0.0
+    print('\nSMOKE TEST (recirculation recycle) PASSED')

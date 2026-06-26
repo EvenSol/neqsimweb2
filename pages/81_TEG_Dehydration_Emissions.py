@@ -25,6 +25,7 @@ SimpleTEGAbsorber = jneqsim.process.equipment.absorber.SimpleTEGAbsorber
 WaterStripperColumn = jneqsim.process.equipment.absorber.WaterStripperColumn
 DistillationColumn = jneqsim.process.equipment.distillation.DistillationColumn
 Separator = jneqsim.process.equipment.separator.Separator
+Splitter = jneqsim.process.equipment.splitter.Splitter
 ThrottlingValve = jneqsim.process.equipment.valve.ThrottlingValve
 Filter = jneqsim.process.equipment.filter.Filter
 Pump = jneqsim.process.equipment.pump.Pump
@@ -57,7 +58,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                     stripper_stage_efficiency=1.0, condenser_temp_C=85.0,
                     hx_rich1_UA=2224.0, hx_leanrich_UA=8316.0,
                     water_mode='saturated', water_content_ppm_mol=None,
-                    saturation_temp_C=None, saturation_pressure_bara=None):
+                    saturation_temp_C=None, saturation_pressure_bara=None,
+                    recirculate_stripping_gas=False):
     """Build the TEG dehydration + regeneration plant with configurable inputs.
 
     Water content of the feed gas can be set two ways via ``water_mode``:
@@ -215,10 +217,28 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
 
     sepRegenGas = Separator('regen gas separator', coolerRegenGas.getOutletStream())
     p.add(sepRegenGas)
-    stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
-    p.add(stillVent)
     waterToTreatment = Stream('water to treatment', sepRegenGas.getLiquidOutStream())
     p.add(waterToTreatment)
+
+    if recirculate_stripping_gas:
+        # Closed-loop stripping gas: take it from the dried regenerator overhead
+        # (the gas leaving the condenser knock-out drum), recondition it and feed
+        # it back to the stripper. A fixed slice equal to the stripping-gas rate
+        # is recirculated; only the remainder leaves as the atmospheric vent.
+        recircSplit = Splitter('stripping gas recirc split',
+                               sepRegenGas.getGasOutStream())
+        recircSplit.setFlowRates([float(stripping_gas_Sm3_hr), -1.0], 'Sm3/hr')
+        p.add(recircSplit)
+        stillVent = Stream('still vent to atmosphere', recircSplit.getSplitStream(1))
+        p.add(stillVent)
+        recircHeater = Heater('stripping gas recirc heater',
+                              recircSplit.getSplitStream(0))
+        recircHeater.setOutTemperature(273.15 + stripping_gas_temp_C)
+        p.add(recircHeater)
+    else:
+        recircHeater = None
+        stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
+        p.add(stillVent)
 
     stripper = WaterStripperColumn('TEG stripper')
     stripper.addSolventInStream(column.getLiquidOutStream())
@@ -231,6 +251,15 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     recycleStripGas.addStream(stripper.getGasOutStream())
     recycleStripGas.setOutletStream(gasToReboiler)
     p.add(recycleStripGas)
+
+    if recirculate_stripping_gas:
+        # Close the stripping-gas loop: the reconditioned recirculated slice from
+        # the dried overhead becomes the stripper gas feed (tear stream).
+        recycleStrippingMakeup = Recycle('stripping gas makeup recycle')
+        recycleStrippingMakeup.addStream(recircHeater.getOutletStream())
+        recycleStrippingMakeup.setOutletStream(strippingGas)
+        recycleStrippingMakeup.setPriority(150)
+        p.add(recycleStrippingMakeup)
 
     heatEx.setFeedStream(1, stripper.getLiquidOutStream())
 
@@ -349,24 +378,6 @@ def classify_emissions(stream):
     return _classify_flows(comp_mass_flows_kg_hr(stream))
 
 
-def classify_emissions_recirc(still_stream, recirc_stream):
-    """Net still-vent emissions when the stripping gas is recirculated.
-
-    For plants that recirculate the stripping gas, the gas leaving the
-    regeneration overhead is recovered (cooled, the condensed water knocked out
-    and the dry gas recompressed) and returned as stripping gas, so its own
-    molecules form a closed loop and are *not* a net atmospheric emission. The
-    net emission is therefore what the regeneration genuinely liberated -- the
-    still vent minus the recirculated stripping gas, component by component
-    (floored at zero).
-    """
-    still_flows = comp_mass_flows_kg_hr(still_stream)
-    recirc_flows = comp_mass_flows_kg_hr(recirc_stream)
-    net = {k: max(0.0, still_flows.get(k, 0.0) - recirc_flows.get(k, 0.0))
-           for k in still_flows}
-    return _classify_flows(net)
-
-
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
@@ -412,7 +423,7 @@ with st.expander("📖 About this model — process, parameters & methodology"):
 | Flash-drum pressure | **Lower → more NMVOC recovered as flash gas** instead of vented. |
 | Reboiler temperature | Higher → higher lean TEG purity, more overhead vent. |
 | Stripping gas rate / T / stages / efficiency | Raise lean TEG purity beyond reboiler limit. |
-| Recirculate stripping gas | For plants that recover the stripping gas: the recirculated amount is subtracted from the still vent so only the **net** liberated water + hydrocarbons is counted as emission. |
+| Recirculate stripping gas | Closed-loop recycle: the stripping gas is taken from the dried regenerator overhead (after the condenser knock-out drum) and looped back to the stripper. Only the remaining liberated water + hydrocarbons leaves as the net vent. |
 | HX UA values | Higher UA → more heat recovery, lower reboiler duty. |
 | Condenser temperature | Reflux temperature at the still top. |
 
@@ -534,14 +545,14 @@ with st.expander("🌬️ Stripping column (TEG enhancement)"):
     with sc3:
         stripper_stage_eff = st.slider("Stripper stage efficiency [-]", 0.3, 1.0, 1.0, 0.05)
     recirculate_stripping_gas = st.checkbox(
-        "♻️ Recirculate stripping gas (recover, don't vent)",
+        "♻️ Recirculate stripping gas (closed loop, recover instead of vent)",
         value=False,
-        help="For plants that recirculate the stripping gas: the gas leaving the "
-             "regeneration overhead is recovered (cooled, water knocked out and "
-             "recompressed) and returned as stripping gas. Its molecules form a "
-             "closed loop, so the recirculated amount is subtracted from the still "
-             "vent and only the rest (water + hydrocarbons liberated from the TEG) "
-             "is reported as the atmospheric emission.")
+        help="For plants that recirculate the stripping gas: the gas is taken from "
+             "the dried regenerator overhead (after the condenser knock-out drum), "
+             "reconditioned and looped back to the stripper as a true closed loop. "
+             "A fixed slice equal to the stripping-gas rate is recirculated; only the "
+             "remainder (water + hydrocarbons liberated from the TEG) leaves as the "
+             "atmospheric vent. Adds a recycle loop, so convergence is a little slower.")
 
 with st.expander("⚙️ Heat exchangers & condenser"):
     st.caption(
@@ -618,6 +629,7 @@ def _build_kwargs(flash_p):
         water_content_ppm_mol=water_content_ppm,
         saturation_temp_C=sat_temp,
         saturation_pressure_bara=sat_pressure,
+        recirculate_stripping_gas=recirculate_stripping_gas,
     )
 
 
@@ -633,10 +645,7 @@ if run_clicked:
             water_dew_C = float(S['waterDewAnalyser'].getMeasuredValue('C'))
             lean_teg_wt = teg_mass_fraction(S['leanTEGtoAbs'])
             dry_gas_flow = float(S['dehydratedGas'].getFlowRate('MSm3/day'))
-            if recirculate_stripping_gas:
-                still = classify_emissions_recirc(S['stillVent'], S['strippingGas'])
-            else:
-                still = classify_emissions(S['stillVent'])
+            still = classify_emissions(S['stillVent'])
             flash = classify_emissions(S['flashGas'])
     except Exception as e:
         st.error(f"Calculation failed: {e}")
@@ -644,10 +653,11 @@ if run_clicked:
 
     st.success("Calculation complete.")
     if recirculate_stripping_gas:
-        st.info("♻️ **Stripping gas recirculated** — the recirculated stripping gas "
-                "is recovered and subtracted from the still vent; the values below are "
-                "the **net** atmospheric emission (water + hydrocarbons liberated from "
-                "the TEG).")
+        st.info("♻️ **Stripping gas recirculated** — the stripping gas is taken from "
+                "the dried regenerator overhead (after the condenser knock-out drum), "
+                "reconditioned and looped back to the stripper. The still vent below is "
+                "the **net** atmospheric emission — the remainder after the recirculated "
+                "slice is removed.")
 
     # KPIs
     st.subheader("Dehydration performance")
@@ -716,10 +726,7 @@ if run_clicked:
             for i, pf in enumerate(sweep_pressures):
                 proc, Ss = build_teg_plant(**_build_kwargs(pf))
                 run_plant(proc)
-                if recirculate_stripping_gas:
-                    st_em = classify_emissions_recirc(Ss['stillVent'], Ss['strippingGas'])
-                else:
-                    st_em = classify_emissions(Ss['stillVent'])
+                st_em = classify_emissions(Ss['stillVent'])
                 fl_em = classify_emissions(Ss['flashGas'])
                 still_nmvoc.append(st_em['NMVOC'])
                 flash_nmvoc.append(fl_em['NMVOC'])
