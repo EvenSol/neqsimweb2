@@ -1043,8 +1043,20 @@ if res:
                        "temperature, pressure, flow and overall molar composition. The "
                        "atmospheric still-vent and flash-gas emission breakdowns are "
                        "included under `emissions`.")
+            # Key the units by their name (instead of a list) so the JSON tree
+            # shows the unit-operation names instead of numeric indices.
+            _units_list = process_report.get('units', [])
+            units_by_name = {}
+            for _i, _u in enumerate(_units_list):
+                _name = _u.get('name') or f"unit {_i}"
+                _key = _name
+                _dup = 2
+                while _key in units_by_name:
+                    _key = f"{_name} ({_dup})"
+                    _dup += 1
+                units_by_name[_key] = _u
             full_report = {
-                'units': process_report.get('units', []),
+                'units': units_by_name,
                 'emissions': {
                     'still_vent_kg_hr': still,
                     'flash_gas_kg_hr': flash,
