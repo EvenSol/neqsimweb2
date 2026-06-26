@@ -26,6 +26,7 @@ WaterStripperColumn = jneqsim.process.equipment.absorber.WaterStripperColumn
 DistillationColumn = jneqsim.process.equipment.distillation.DistillationColumn
 Separator = jneqsim.process.equipment.separator.Separator
 Splitter = jneqsim.process.equipment.splitter.Splitter
+Compressor = jneqsim.process.equipment.compressor.Compressor
 ThrottlingValve = jneqsim.process.equipment.valve.ThrottlingValve
 Filter = jneqsim.process.equipment.filter.Filter
 Pump = jneqsim.process.equipment.pump.Pump
@@ -60,7 +61,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                     hx_rich1_UA=2224.0, hx_leanrich_UA=8316.0,
                     water_mode='saturated', water_content_ppm_mol=None,
                     saturation_temp_C=None, saturation_pressure_bara=None,
-                    recirculate_stripping_gas=False):
+                    recirculate_stripping_gas=False,
+                    recycle_blower_discharge_bara=1.4):
     """Build the TEG dehydration + regeneration plant with configurable inputs.
 
     Water content of the feed gas can be set two ways via ``water_mode``:
@@ -218,7 +220,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
 
     sepRegenGas = Separator('regen gas separator', coolerRegenGas.getOutletStream())
     p.add(sepRegenGas)
-    waterToTreatment = Stream('water to treatment', sepRegenGas.getLiquidOutStream())
+    waterToTreatment = Stream('water/HC to process or flare drum',
+                             sepRegenGas.getLiquidOutStream())
     p.add(waterToTreatment)
 
     if recirculate_stripping_gas:
@@ -230,15 +233,27 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                                sepRegenGas.getGasOutStream())
         recircSplit.setFlowRates([float(stripping_gas_Sm3_hr), -1.0], 'Sm3/hr')
         p.add(recircSplit)
-        stillVent = Stream('still vent to atmosphere', recircSplit.getSplitStream(1))
+        stillVent = Stream('still vent (flare/vent/recompression)',
+                           recircSplit.getSplitStream(1))
         p.add(stillVent)
+        # Recycle blower: the regenerator overhead is at low pressure (~1.2 bara),
+        # so a blower boosts the recirculated slice up to the pressure the stripper
+        # needs (regeneration pressure + line/equipment losses) before it is
+        # reconditioned and looped back as stripping gas.
+        recircBlower = Compressor('stripping gas recycle blower',
+                                  recircSplit.getSplitStream(0))
+        recircBlower.setOutletPressure(recycle_blower_discharge_bara)
+        recircBlower.setIsentropicEfficiency(0.75)
+        p.add(recircBlower)
         recircHeater = Heater('stripping gas recirc heater',
-                              recircSplit.getSplitStream(0))
+                              recircBlower.getOutletStream())
         recircHeater.setOutTemperature(273.15 + stripping_gas_temp_C)
         p.add(recircHeater)
     else:
+        recircBlower = None
         recircHeater = None
-        stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
+        stillVent = Stream('still vent (flare/vent/recompression)',
+                           sepRegenGas.getGasOutStream())
         p.add(stillVent)
 
     stripper = WaterStripperColumn('TEG stripper')
@@ -329,6 +344,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
         'waterDewAnalyser': waterDewAnalyser,
         'strippingGas': strippingGas,
         'column': column,
+        'recircBlower': recircBlower,
     }
     return p, streams
 
@@ -528,7 +544,7 @@ loops. Following the streams from the feed:
   **LP flash valve** (→ 1.2 bara) → **regeneration column** feed (tray 1).
   The column reboiler boils water off; the overhead goes to the *regen-gas
   cooler* (47 °C) → **regen-gas knock-out separator** → `still vent` (gas) +
-  `water to treatment` (liquid).
+  `water/HC to process or flare drum` (liquid).
 - **Stripping:** column bottoms (hot lean TEG) → **TEG stripper**, contacted
   with `stripGas`. The stripper overhead is returned to the column reboiler via
   the **`stripping gas recirc` recycle** (tear → `gas to reboiler`).
@@ -685,6 +701,15 @@ with st.expander("🌬️ Stripping column (TEG enhancement)"):
              "A fixed slice equal to the stripping-gas rate is recirculated; only the "
              "remainder (water + hydrocarbons liberated from the TEG) leaves as the "
              "atmospheric vent. Adds a recycle loop, so convergence is a little slower.")
+    if recirculate_stripping_gas:
+        recycle_blower_discharge = st.number_input(
+            "Recycle blower discharge pressure [bara]", 1.2, 5.0, 1.4, 0.05,
+            help="The recycle blower boosts the low-pressure regenerator-overhead gas "
+                 "(suction ≈1.2 bara) back up to the pressure the stripper needs "
+                 "(regeneration pressure plus line/equipment losses) before it is "
+                 "reconditioned and looped back to the stripper.")
+    else:
+        recycle_blower_discharge = 1.4
 
 with st.expander("⚙️ Heat exchangers & condenser"):
     st.caption(
@@ -762,6 +787,7 @@ def _build_kwargs(flash_p):
         saturation_temp_C=sat_temp,
         saturation_pressure_bara=sat_pressure,
         recirculate_stripping_gas=recirculate_stripping_gas,
+        recycle_blower_discharge_bara=recycle_blower_discharge,
     )
 
 
@@ -794,6 +820,12 @@ if run_clicked:
                 "reconditioned and looped back to the stripper. The still vent below is "
                 "the **net** atmospheric emission — the remainder after the recirculated "
                 "slice is removed.")
+        try:
+            _blower_kw = float(S['recircBlower'].getPower('kW'))
+            st.caption(f"Recycle blower duty ≈ {_blower_kw:.2f} kW "
+                       f"(suction ≈1.2 bara → {recycle_blower_discharge:.2f} bara discharge).")
+        except Exception:
+            pass
 
     # Interactive process flow diagram (streams annotated with T, P, flow)
     if dot_graph:

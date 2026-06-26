@@ -17,6 +17,7 @@ WaterStripperColumn = jneqsim.process.equipment.absorber.WaterStripperColumn
 DistillationColumn = jneqsim.process.equipment.distillation.DistillationColumn
 Separator = jneqsim.process.equipment.separator.Separator
 Splitter = jneqsim.process.equipment.splitter.Splitter
+Compressor = jneqsim.process.equipment.compressor.Compressor
 ThrottlingValve = jneqsim.process.equipment.valve.ThrottlingValve
 Filter = jneqsim.process.equipment.filter.Filter
 Pump = jneqsim.process.equipment.pump.Pump
@@ -40,7 +41,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                     stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency,
                     water_mode='saturated', water_content_ppm_mol=None,
                     saturation_temp_C=None, saturation_pressure_bara=None,
-                    recirculate_stripping_gas=False):
+                    recirculate_stripping_gas=False,
+                    recycle_blower_discharge_bara=1.4):
     p = ProcessSystem()
     n_comp = len(GAS_COMPONENTS) + 2
 
@@ -181,7 +183,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
 
     sepRegenGas = Separator('regen gas separator', coolerRegenGas.getOutletStream())
     p.add(sepRegenGas)
-    waterToTreatment = Stream('water to treatment', sepRegenGas.getLiquidOutStream())
+    waterToTreatment = Stream('water/HC to process or flare drum', sepRegenGas.getLiquidOutStream())
     p.add(waterToTreatment)
 
     if recirculate_stripping_gas:
@@ -189,15 +191,21 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                                sepRegenGas.getGasOutStream())
         recircSplit.setFlowRates([float(stripping_gas_Sm3_hr), -1.0], 'Sm3/hr')
         p.add(recircSplit)
-        stillVent = Stream('still vent to atmosphere', recircSplit.getSplitStream(1))
+        stillVent = Stream('still vent (flare/vent/recompression)', recircSplit.getSplitStream(1))
         p.add(stillVent)
+        recircBlower = Compressor('stripping gas recycle blower',
+                                  recircSplit.getSplitStream(0))
+        recircBlower.setOutletPressure(recycle_blower_discharge_bara)
+        recircBlower.setIsentropicEfficiency(0.75)
+        p.add(recircBlower)
         recircHeater = Heater('stripping gas recirc heater',
-                              recircSplit.getSplitStream(0))
+                              recircBlower.getOutletStream())
         recircHeater.setOutTemperature(273.15 + 78.3)
         p.add(recircHeater)
     else:
+        recircBlower = None
         recircHeater = None
-        stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
+        stillVent = Stream('still vent (flare/vent/recompression)', sepRegenGas.getGasOutStream())
         p.add(stillVent)
 
     stripper = WaterStripperColumn('TEG stripper')
@@ -279,7 +287,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     streams = {
         'dehydratedGas': dehydratedGas, 'flashGas': flashGas, 'stillVent': stillVent,
         'leanTEGtoAbs': leanTEGtoAbs, 'waterDewAnalyser': waterDewAnalyser,
-        'strippingGas': strippingGas,
+        'strippingGas': strippingGas, 'recircBlower': recircBlower,
     }
     return p, streams
 
@@ -384,6 +392,11 @@ if __name__ == '__main__':
     water_dew_C3 = float(S3['waterDewAnalyser'].getMeasuredValue('C'))
     lean_teg_wt3 = teg_mass_fraction(S3['leanTEGtoAbs'])
     still3 = classify_emissions(S3['stillVent'])
+    try:
+        blower_kw3 = float(S3['recircBlower'].getPower('kW'))
+        print(f'Recycle blower duty      : {blower_kw3:8.3f} kW')
+    except Exception as _e:
+        print(f'Recycle blower duty      : n/a ({_e})')
     print(f'Water dew point          : {water_dew_C3:8.2f} C @70 bara')
     print(f'Lean TEG purity          : {lean_teg_wt3:8.2f} wt%')
     print(f'Still-vent NMVOC (vented): {still["NMVOC"]:8.4f} kg/hr')
