@@ -408,12 +408,17 @@ def _enlarge_dot_fonts(dot, graph_fs=18, node_fs=15, edge_fs=13):
 
 
 def render_graphviz_interactive(dot, height=720):
-    """Render a DOT string with pan + mouse-wheel zoom via d3-graphviz.
+    """Render a DOT string with pan + mouse-wheel zoom.
 
-    Streamlit's built-in ``st.graphviz_chart`` produces a fixed SVG that is hard
-    to read on large flowsheets. This embeds an HTML component using
-    d3-graphviz (Graphviz compiled to WASM, no server binary) that supports
-    smooth zoom (scroll), pan (drag) and a reset-to-fit button.
+    Uses **viz.js** (Graphviz compiled to a self-contained asm.js bundle — no
+    separate ``.wasm`` file to fetch) to turn the DOT into an SVG, then
+    **svg-pan-zoom** for smooth scroll-zoom, drag-pan and a reset/fit button.
+
+    This is deliberately *not* d3-graphviz: d3-graphviz loads the Graphviz
+    engine from a separate ``@hpcc-js/wasm`` ``.wasm`` file, and that fetch is
+    frequently blocked inside the sandboxed Streamlit Cloud component iframe —
+    which renders the toolbar but leaves the diagram **blank**. viz.js bundles
+    the engine in the JS itself, so it works in the sandboxed iframe.
     """
     import json as _json
     dot_js = _json.dumps(dot)
@@ -426,28 +431,45 @@ def render_graphviz_interactive(dot, height=720):
             padding:2px 8px;border:1px solid #bbb;border-radius:4px;background:#fff;">
       Reset / fit
     </button>
+    <span id="status" style="margin-left:10px;color:#999;"></span>
   </div>
-  <div id="graph" style="width:100%;height:__HEIGHT__px;"></div>
+  <div id="graph" style="width:100%;height:__HEIGHT__px;overflow:hidden;"></div>
 </div>
-<script src="https://unpkg.com/@hpcc-js/wasm@2.16.2/dist/graphviz.umd.js"></script>
-<script src="https://unpkg.com/d3@7"></script>
-<script src="https://unpkg.com/d3-graphviz@5"></script>
+<script src="https://unpkg.com/viz.js@2.1.2/viz.js"></script>
+<script src="https://unpkg.com/viz.js@2.1.2/full.render.js"></script>
+<script src="https://unpkg.com/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
 <script>
   var dot = __DOT__;
-  function draw() {
-    if (!window.d3 || !d3.select("#graph").graphviz) { setTimeout(draw, 150); return; }
-    var gv = d3.select("#graph").graphviz()
-        .fit(true)
-        .zoom(true)
-        .zoomScaleExtent([0.1, 12])
-        .width(d3.select("#graph").node().clientWidth)
-        .height(__HEIGHT__)
-        .renderDot(dot);
-    document.getElementById("resetBtn").onclick = function () {
-      if (gv.resetZoom) { gv.resetZoom(); }
-    };
+  var statusEl = document.getElementById("status");
+  function render() {
+    if (typeof Viz === "undefined" || typeof svgPanZoom === "undefined") {
+      setTimeout(render, 150); return;
+    }
+    var viz = new Viz();
+    viz.renderSVGElement(dot).then(function (svg) {
+      svg.setAttribute("width", "100%");
+      svg.setAttribute("height", "100%");
+      svg.style.width = "100%";
+      svg.style.height = "100%";
+      var container = document.getElementById("graph");
+      container.innerHTML = "";
+      container.appendChild(svg);
+      var pz = svgPanZoom(svg, {
+        zoomEnabled: true, controlIconsEnabled: false, dblClickZoomEnabled: false,
+        fit: true, center: true, minZoom: 0.1, maxZoom: 20,
+        zoomScaleSensitivity: 0.3
+      });
+      document.getElementById("resetBtn").onclick = function () {
+        pz.resize(); pz.fit(); pz.center();
+      };
+      window.addEventListener("resize", function () {
+        pz.resize(); pz.fit(); pz.center();
+      });
+    }).catch(function (err) {
+      statusEl.textContent = "diagram render error: " + err;
+    });
   }
-  draw();
+  render();
 </script>
 """
     html = (html.replace('__DOT__', dot_js)
@@ -809,25 +831,77 @@ if run_clicked:
                 dot_graph = export_process_dot(process)
             except Exception:
                 dot_graph = None
+
+            blower_kw = None
+            if recirculate_stripping_gas:
+                try:
+                    blower_kw = float(S['recircBlower'].getPower('kW'))
+                except Exception:
+                    blower_kw = None
+
+            sweep_data = None
+            if do_sweep:
+                sweep_pressures = [2.0, 3.0, 4.8, 7.0, 9.0]
+                s_nmvoc, f_nmvoc = [], []
+                prog = st.progress(0.0, text="Running sweep…")
+                try:
+                    for i, pf in enumerate(sweep_pressures):
+                        proc, Ss = build_teg_plant(**_build_kwargs(pf))
+                        run_plant(proc)
+                        st_em = classify_emissions(Ss['stillVent'])
+                        fl_em = classify_emissions(Ss['flashGas'])
+                        s_nmvoc.append(st_em['NMVOC'])
+                        f_nmvoc.append(fl_em['NMVOC'])
+                        prog.progress((i + 1) / len(sweep_pressures),
+                                      text=f"Solved flash drum {pf:.1f} bara")
+                    prog.empty()
+                    sweep_data = {'pressures': sweep_pressures,
+                                  'still_nmvoc': s_nmvoc, 'flash_nmvoc': f_nmvoc}
+                except Exception as e:
+                    prog.empty()
+                    st.warning(f"Sensitivity sweep failed: {e}")
     except Exception as e:
         st.error(f"Calculation failed: {e}")
         st.stop()
 
+    # Persist results so that interacting with the diagram height / text-size
+    # widgets (which trigger a Streamlit rerun with run_clicked=False) does NOT
+    # wipe the page or blank the diagram.
+    st.session_state['teg_results'] = {
+        'water_dew_C': water_dew_C,
+        'lean_teg_wt': lean_teg_wt,
+        'dry_gas_flow': dry_gas_flow,
+        'still': still,
+        'flash': flash,
+        'dot_graph': dot_graph,
+        'recirculate': bool(recirculate_stripping_gas),
+        'recycle_blower_discharge': float(recycle_blower_discharge),
+        'blower_kw': blower_kw,
+        'flash_pressure': float(flash_pressure),
+        'feed_pressure': float(feed_pressure),
+        'sweep': sweep_data,
+    }
+
+res = st.session_state.get('teg_results')
+if res:
+    still = res['still']
+    flash = res['flash']
+    flash_pressure_r = res['flash_pressure']
+
     st.success("Calculation complete.")
-    if recirculate_stripping_gas:
+    if res['recirculate']:
         st.info("♻️ **Stripping gas recirculated** — the stripping gas is taken from "
                 "the dried regenerator overhead (after the condenser knock-out drum), "
                 "reconditioned and looped back to the stripper. The still vent below is "
                 "the **net** atmospheric emission — the remainder after the recirculated "
                 "slice is removed.")
-        try:
-            _blower_kw = float(S['recircBlower'].getPower('kW'))
-            st.caption(f"Recycle blower duty ≈ {_blower_kw:.2f} kW "
-                       f"(suction ≈1.2 bara → {recycle_blower_discharge:.2f} bara discharge).")
-        except Exception:
-            pass
+        if res['blower_kw'] is not None:
+            st.caption(f"Recycle blower duty ≈ {res['blower_kw']:.2f} kW "
+                       f"(suction ≈1.2 bara → "
+                       f"{res['recycle_blower_discharge']:.2f} bara discharge).")
 
     # Interactive process flow diagram (streams annotated with T, P, flow)
+    dot_graph = res['dot_graph']
     if dot_graph:
         with st.expander("🔀 Process flow diagram (streams with T, P, flow)", expanded=False):
             st.caption("Auto-generated from the solved NeqSim `ProcessSystem`. Each "
@@ -857,10 +931,10 @@ if run_clicked:
     # KPIs
     st.subheader("Dehydration performance")
     k1, k2, k3 = st.columns(3)
-    k1.metric("Dry-gas water dew point", f"{water_dew_C:.2f} °C",
-              help=f"At {feed_pressure:.0f} bara reference")
-    k2.metric("Lean TEG purity", f"{lean_teg_wt:.2f} wt%")
-    k3.metric("Dry gas flow", f"{dry_gas_flow:.3f} MSm³/day")
+    k1.metric("Dry-gas water dew point", f"{res['water_dew_C']:.2f} °C",
+              help=f"At {res['feed_pressure']:.0f} bara reference")
+    k2.metric("Lean TEG purity", f"{res['lean_teg_wt']:.2f} wt%")
+    k3.metric("Dry gas flow", f"{res['dry_gas_flow']:.3f} MSm³/day")
 
     # Emission KPIs (atmospheric still vent)
     st.subheader("Atmospheric emissions — still vent")
@@ -898,7 +972,7 @@ if run_clicked:
                 y=[flash[g] for g in plot_groups], marker_color='#2980b9')
     fig.update_layout(
         barmode='group', yaxis_title='Mass flow [kg/hr]',
-        title=f'TEG regeneration vent emissions (flash drum {flash_pressure:.1f} bara)',
+        title=f'TEG regeneration vent emissions (flash drum {flash_pressure_r:.1f} bara)',
         legend=dict(orientation='h', y=1.12), height=450,
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -911,48 +985,35 @@ if run_clicked:
     )
 
     # Optional sensitivity sweep
-    if do_sweep:
+    if res['sweep']:
         st.divider()
         st.subheader("Flash-drum pressure sensitivity")
-        sweep_pressures = [2.0, 3.0, 4.8, 7.0, 9.0]
-        still_nmvoc, flash_nmvoc = [], []
-        prog = st.progress(0.0, text="Running sweep…")
-        try:
-            for i, pf in enumerate(sweep_pressures):
-                proc, Ss = build_teg_plant(**_build_kwargs(pf))
-                run_plant(proc)
-                st_em = classify_emissions(Ss['stillVent'])
-                fl_em = classify_emissions(Ss['flashGas'])
-                still_nmvoc.append(st_em['NMVOC'])
-                flash_nmvoc.append(fl_em['NMVOC'])
-                prog.progress((i + 1) / len(sweep_pressures),
-                              text=f"Solved flash drum {pf:.1f} bara")
-            prog.empty()
+        sweep_pressures = res['sweep']['pressures']
+        still_nmvoc = res['sweep']['still_nmvoc']
+        flash_nmvoc = res['sweep']['flash_nmvoc']
 
-            sfig = go.Figure()
-            sfig.add_scatter(x=sweep_pressures, y=still_nmvoc, mode='lines+markers',
-                             name='Still-vent NMVOC (atmospheric)',
-                             line=dict(color='#c0392b'))
-            sfig.add_scatter(x=sweep_pressures, y=flash_nmvoc, mode='lines+markers',
-                             name='Flash-gas NMVOC (recovered to fuel)',
-                             line=dict(color='#2980b9', dash='dash'))
-            sfig.update_layout(
-                xaxis_title='Flash-drum pressure [bara]',
-                yaxis_title='NMVOC mass flow [kg/hr]',
-                title='Effect of flash-drum pressure on TEG regeneration emissions',
-                legend=dict(orientation='h', y=1.12), height=450,
-            )
-            st.plotly_chart(sfig, use_container_width=True)
+        sfig = go.Figure()
+        sfig.add_scatter(x=sweep_pressures, y=still_nmvoc, mode='lines+markers',
+                         name='Still-vent NMVOC (atmospheric)',
+                         line=dict(color='#c0392b'))
+        sfig.add_scatter(x=sweep_pressures, y=flash_nmvoc, mode='lines+markers',
+                         name='Flash-gas NMVOC (recovered to fuel)',
+                         line=dict(color='#2980b9', dash='dash'))
+        sfig.update_layout(
+            xaxis_title='Flash-drum pressure [bara]',
+            yaxis_title='NMVOC mass flow [kg/hr]',
+            title='Effect of flash-drum pressure on TEG regeneration emissions',
+            legend=dict(orientation='h', y=1.12), height=450,
+        )
+        st.plotly_chart(sfig, use_container_width=True)
 
+        if 9.0 in sweep_pressures and 2.0 in sweep_pressures:
             hi = still_nmvoc[sweep_pressures.index(9.0)]
             lo = still_nmvoc[sweep_pressures.index(2.0)]
             if hi > 0:
                 st.info(f"Lowering the flash drum from 9.0 → 2.0 bara reduces atmospheric "
                         f"still-vent NMVOC from {hi:.3f} to {lo:.3f} kg/hr "
                         f"(**{100.0*(hi-lo)/hi:.1f}% reduction**).")
-        except Exception as e:
-            prog.empty()
-            st.warning(f"Sensitivity sweep failed: {e}")
 else:
     st.info("Set the inputs above and press **Run emission calculation**.")
 
