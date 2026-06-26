@@ -35,14 +35,21 @@ GHG_CH4 = {'methane'}
 def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressure_bara,
                     absorber_pressure_bara, absorber_temp_C, teg_flow_kg_hr, teg_feed_temp_C,
                     lean_teg_purity, flash_drum_pressure_bara, reboiler_temp_C,
-                    stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency):
+                    stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency,
+                    water_mode='saturated', water_content_ppm_mol=None,
+                    saturation_temp_C=None, saturation_pressure_bara=None):
     p = ProcessSystem()
     n_comp = len(GAS_COMPONENTS) + 2
 
     feedGas = SystemSrkCPA()
+    total_gas = sum(float(f) for f in feed_fractions)
     for name, frac in zip(GAS_COMPONENTS, feed_fractions):
         feedGas.addComponent(name, float(frac))
-    feedGas.addComponent('water', 0.0)
+    if water_mode == 'specified':
+        water_moles = (float(water_content_ppm_mol or 0.0) * 1.0e-6) * total_gas
+        feedGas.addComponent('water', water_moles)
+    else:
+        feedGas.addComponent('water', 0.0)
     feedGas.addComponent('TEG', 0.0)
     feedGas.setMixingRule(10)
     feedGas.setMultiPhaseCheck(False)
@@ -54,10 +61,26 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     dryFeedGas.setPressure(feed_pressure_bara, 'bara')
     p.add(dryFeedGas)
 
-    saturator = StreamSaturatorUtil('water saturator', dryFeedGas)
-    p.add(saturator)
-    wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
-    p.add(wetFeedGas)
+    if water_mode == 'specified':
+        wetFeedGas = dryFeedGas
+    elif saturation_temp_C is not None or saturation_pressure_bara is not None:
+        sat_T = saturation_temp_C if saturation_temp_C is not None else feed_temp_C
+        sat_P = saturation_pressure_bara if saturation_pressure_bara is not None else feed_pressure_bara
+        satSetter = Heater('saturation TP setter', dryFeedGas)
+        satSetter.setOutTemperature(sat_T, 'C')
+        satSetter.setOutPressure(sat_P, 'bara')
+        p.add(satSetter)
+        gasToSat = Stream('gas at saturation conditions', satSetter.getOutletStream())
+        p.add(gasToSat)
+        saturator = StreamSaturatorUtil('water saturator', gasToSat)
+        p.add(saturator)
+        wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
+        p.add(wetFeedGas)
+    else:
+        saturator = StreamSaturatorUtil('water saturator', dryFeedGas)
+        p.add(saturator)
+        wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
+        p.add(wetFeedGas)
 
     feedTPsetter = Heater('TP of gas to absorber', wetFeedGas)
     feedTPsetter.setOutPressure(absorber_pressure_bara, 'bara')
@@ -305,4 +328,22 @@ if __name__ == '__main__':
     assert water_dew_C < 0.0, 'dew point should be below 0 C after dehydration'
     assert lean_teg_wt > 90.0, 'lean TEG should be >90 wt%'
     assert still['NMVOC'] >= 0.0 and flash['NMVOC'] >= 0.0
-    print('\nSMOKE TEST PASSED')
+    print('\nSMOKE TEST (saturated) PASSED')
+
+    # --- Specified water content mode ---
+    print('\nBuilding plant (specified water content = 1000 mol-ppm)...')
+    kwargs2 = dict(kwargs, water_mode='specified', water_content_ppm_mol=1000.0)
+    process2, S2 = build_teg_plant(**kwargs2)
+    print('Running (worker thread)...')
+    thr2 = process2.runAsThread()
+    thr2.join(300000)
+
+    water_dew_C2 = float(S2['waterDewAnalyser'].getMeasuredValue('C'))
+    lean_teg_wt2 = teg_mass_fraction(S2['leanTEGtoAbs'])
+    still2 = classify_emissions(S2['stillVent'])
+    print(f'Water dew point     : {water_dew_C2:8.2f} C @70 bara')
+    print(f'Lean TEG purity     : {lean_teg_wt2:8.2f} wt%')
+    print(f'Still-vent water    : {still2["water"]:8.4f} kg/hr')
+    assert water_dew_C2 < 0.0, 'dew point should be below 0 C after dehydration'
+    assert lean_teg_wt2 > 90.0, 'lean TEG should be >90 wt%'
+    print('\nSMOKE TEST (specified) PASSED')

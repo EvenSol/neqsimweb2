@@ -52,17 +52,38 @@ GHG_CH4 = {'methane'}
 def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressure_bara,
                     absorber_pressure_bara, absorber_temp_C, teg_flow_kg_hr, teg_feed_temp_C,
                     lean_teg_purity, flash_drum_pressure_bara, reboiler_temp_C,
-                    stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency):
-    """Build the TEG dehydration + regeneration plant with configurable inputs."""
+                    stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency,
+                    stripping_gas_temp_C=78.3, n_stripper_stages=2,
+                    stripper_stage_efficiency=1.0, condenser_temp_C=85.0,
+                    hx_rich1_UA=2224.0, hx_leanrich_UA=8316.0,
+                    water_mode='saturated', water_content_ppm_mol=None,
+                    saturation_temp_C=None, saturation_pressure_bara=None):
+    """Build the TEG dehydration + regeneration plant with configurable inputs.
+
+    Water content of the feed gas can be set two ways via ``water_mode``:
+
+    * ``'saturated'`` (default) -- the dry gas is water-saturated with
+      :class:`StreamSaturatorUtil`. By default it saturates at the feed
+      temperature/pressure; pass ``saturation_temp_C`` / ``saturation_pressure_bara``
+      to saturate at different conditions.
+    * ``'specified'`` -- the feed water content is set directly from
+      ``water_content_ppm_mol`` (mol-ppm) and no saturator is used.
+    """
     p = ProcessSystem()
 
     # Component order: gas components + water + TEG (water/TEG always last two)
     n_comp = len(GAS_COMPONENTS) + 2
 
     feedGas = SystemSrkCPA()
+    total_gas = sum(float(f) for f in feed_fractions)
     for name, frac in zip(GAS_COMPONENTS, feed_fractions):
         feedGas.addComponent(name, float(frac))
-    feedGas.addComponent('water', 0.0)
+    if water_mode == 'specified':
+        # mol-ppm of water relative to the total gas moles
+        water_moles = (float(water_content_ppm_mol or 0.0) * 1.0e-6) * total_gas
+        feedGas.addComponent('water', water_moles)
+    else:
+        feedGas.addComponent('water', 0.0)
     feedGas.addComponent('TEG', 0.0)
     feedGas.setMixingRule(10)
     feedGas.setMultiPhaseCheck(False)
@@ -74,10 +95,28 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     dryFeedGas.setPressure(feed_pressure_bara, 'bara')
     p.add(dryFeedGas)
 
-    saturator = StreamSaturatorUtil('water saturator', dryFeedGas)
-    p.add(saturator)
-    wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
-    p.add(wetFeedGas)
+    if water_mode == 'specified':
+        # Water already present in the feed composition; skip the saturator.
+        wetFeedGas = dryFeedGas
+    elif saturation_temp_C is not None or saturation_pressure_bara is not None:
+        # Saturate at user-specified conditions (default to feed T/P if one omitted).
+        sat_T = saturation_temp_C if saturation_temp_C is not None else feed_temp_C
+        sat_P = saturation_pressure_bara if saturation_pressure_bara is not None else feed_pressure_bara
+        satSetter = Heater('saturation TP setter', dryFeedGas)
+        satSetter.setOutTemperature(sat_T, 'C')
+        satSetter.setOutPressure(sat_P, 'bara')
+        p.add(satSetter)
+        gasToSat = Stream('gas at saturation conditions', satSetter.getOutletStream())
+        p.add(gasToSat)
+        saturator = StreamSaturatorUtil('water saturator', gasToSat)
+        p.add(saturator)
+        wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
+        p.add(wetFeedGas)
+    else:
+        saturator = StreamSaturatorUtil('water saturator', dryFeedGas)
+        p.add(saturator)
+        wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
+        p.add(wetFeedGas)
 
     feedTPsetter = Heater('TP of gas to absorber', wetFeedGas)
     feedTPsetter.setOutPressure(absorber_pressure_bara, 'bara')
@@ -124,7 +163,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
 
     heatEx2 = HeatExchanger('rich TEG heat exchanger 1', richPreheat.getOutletStream())
     heatEx2.setGuessOutTemperature(273.15 + 62.0)
-    heatEx2.setUAvalue(2224.0)
+    heatEx2.setUAvalue(hx_rich1_UA)
     p.add(heatEx2)
 
     flashSep = Separator('degassing separator', heatEx2.getOutStream(0))
@@ -141,7 +180,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
 
     heatEx = HeatExchanger('lean/rich TEG heat-exchanger', fineFilter.getOutletStream())
     heatEx.setGuessOutTemperature(273.15 + 130.0)
-    heatEx.setUAvalue(8316.0)
+    heatEx.setUAvalue(hx_leanrich_UA)
     p.add(heatEx)
 
     flashValve2 = ThrottlingValve('Rich TEG LP flash valve', heatEx.getOutStream(0))
@@ -151,7 +190,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     stripGas = feedGas.clone()
     strippingGas = Stream('stripGas', stripGas)
     strippingGas.setFlowRate(stripping_gas_Sm3_hr, 'Sm3/hr')
-    strippingGas.setTemperature(78.3, 'C')
+    strippingGas.setTemperature(stripping_gas_temp_C, 'C')
     strippingGas.setPressure(1.2, 'bara')
     p.add(strippingGas)
     gasToReboiler = strippingGas.clone('gas to reboiler')
@@ -163,7 +202,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     column.setEnthalpyBalanceTolerance(2.0e-1)
     column.addFeedStream(flashValve2.getOutletStream(), 1)
     column.getReboiler().setOutTemperature(273.15 + reboiler_temp_C)
-    column.getCondenser().setOutTemperature(273.15 + 85.0)
+    column.getCondenser().setOutTemperature(273.15 + condenser_temp_C)
     column.getTray(1).addStream(gasToReboiler)
     column.setTopPressure(1.2)
     column.setBottomPressure(1.2)
@@ -184,8 +223,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     stripper = WaterStripperColumn('TEG stripper')
     stripper.addSolventInStream(column.getLiquidOutStream())
     stripper.addGasInStream(strippingGas)
-    stripper.setNumberOfStages(2)
-    stripper.setStageEfficiency(1.0)
+    stripper.setNumberOfStages(int(n_stripper_stages))
+    stripper.setStageEfficiency(stripper_stage_efficiency)
     p.add(stripper)
 
     recycleStripGas = Recycle('stripping gas recirc')
@@ -318,6 +357,56 @@ regeneration vents — **NMVOC**, **methane (CH₄)**, **CO₂**, water and TEG 
 
 Adjust any input below, then press **Run emission calculation**.
 """)
+
+with st.expander("📖 About this model — process, parameters & methodology"):
+    st.markdown("""
+### Process flow
+1. **Absorber** — wet feed gas contacts lean TEG counter-currently in a
+   `SimpleTEGAbsorber`; dry gas leaves the top, water-rich (*rich*) TEG leaves
+   the bottom. Water dew point of the dry gas is measured with a
+   `WaterDewPointAnalyser`.
+2. **Flash drum** — rich TEG is let down to the *flash-drum pressure* and
+   degassed in a separator. The released **flash gas** carries most of the
+   co-absorbed hydrocarbons and is normally **recovered to fuel**.
+3. **Lean/rich heat exchangers** — the cold rich TEG is pre-heated against the
+   hot regenerated lean TEG to cut reboiler duty (`HeatExchanger`, set by *UA*).
+4. **Regeneration still** — a `DistillationColumn` with a reboiler boils the
+   water out of the TEG. The overhead **still vent** is the main **atmospheric
+   emission** (water + stripped hydrocarbons + a little TEG).
+5. **Stripping column** — hot lean TEG is contacted with a small dry
+   stripping-gas stream (`WaterStripperColumn`) to push lean TEG purity above
+   the reboiler-only limit.
+6. **Closed recycle** — pumps and a make-up `Calculator` return regenerated lean
+   TEG to the absorber; the `Recycle` loop is solved to convergence on a worker
+   thread.
+
+### What each control does
+| Control | Effect |
+|---|---|
+| Feed flow / T / P | Sets the gas duty and absorber loading. |
+| Absorber P / T, stages, stage efficiency | Higher P, lower T, more stages → drier gas. |
+| Lean TEG circulation & feed T | More/colder lean TEG → drier gas, more reboiler duty. |
+| Flash-drum pressure | **Lower → more NMVOC recovered as flash gas** instead of vented. |
+| Reboiler temperature | Higher → higher lean TEG purity, more overhead vent. |
+| Stripping gas rate / T / stages / efficiency | Raise lean TEG purity beyond reboiler limit. |
+| HX UA values | Higher UA → more heat recovery, lower reboiler duty. |
+| Condenser temperature | Reflux temperature at the still top. |
+
+### Emission accounting
+- **NMVOC** = non-methane volatile organic compounds
+  (ethane … n-hexane + benzene).
+- **GHG** reported separately as methane (CH₄) and CO₂.
+- The **still vent** is the atmospheric release; the **flash gas** is normally
+  routed to the fuel/recovery system.
+- **Lean TEG purity is a calculated result** of the regeneration train and the
+  recycle loop — not a design input (see *Advanced solver settings*).
+
+### Thermodynamics
+CPA EOS (`SystemSrkCPAstatoil`, mixing rule 10) — required for the strongly
+non-ideal water/TEG/hydrocarbon system. Water and TEG are added internally and
+kept as the last two components.
+""")
+
 st.divider()
 
 # --- Feed gas composition ---
@@ -356,6 +445,36 @@ with col1:
     feed_temp = st.number_input("Feed temperature [°C]", -20.0, 80.0, 25.0, 0.5)
     feed_pressure = st.number_input("Feed pressure [bara]", 10.0, 200.0, 70.0, 1.0)
 
+    water_mode_label = st.radio(
+        "Feed water content",
+        ["Water-saturated", "Specify water content"],
+        help="Choose whether the feed gas is water-saturated (by NeqSim) or its "
+             "water content is set directly.",
+    )
+    if water_mode_label == "Water-saturated":
+        water_mode = 'saturated'
+        water_content_ppm = None
+        custom_sat = st.checkbox(
+            "Saturate at custom T/P",
+            help="By default the gas is saturated at the feed temperature and "
+                 "pressure. Tick to saturate at different conditions.")
+        if custom_sat:
+            sat_temp = st.number_input("Saturation temperature [°C]", -20.0, 80.0,
+                                       float(feed_temp), 0.5)
+            sat_pressure = st.number_input("Saturation pressure [bara]", 10.0, 200.0,
+                                           float(feed_pressure), 1.0)
+        else:
+            sat_temp = None
+            sat_pressure = None
+    else:
+        water_mode = 'specified'
+        sat_temp = None
+        sat_pressure = None
+        water_content_ppm = st.number_input(
+            "Water content [mol-ppm]", 0.0, 5000.0, 1000.0, 10.0,
+            help="Water mole-fraction of the feed gas in parts-per-million (molar). "
+                 "Typical wet feed gas is several hundred to a few thousand mol-ppm.")
+
 with col2:
     st.subheader("Absorber / TEG")
     absorber_pressure = st.number_input("Absorber pressure [bara]", 10.0, 200.0, 85.0, 1.0)
@@ -372,6 +491,44 @@ with col3:
                                           "still vent into the recovered flash gas.")
     reboiler_temp = st.number_input("Reboiler temperature [°C]", 150.0, 210.0, 197.5, 0.5)
     stripping_gas = st.number_input("Stripping-gas rate [Sm³/hr]", 0.0, 1000.0, 180.0, 10.0)
+
+with st.expander("🌬️ Stripping column (TEG enhancement)"):
+    st.caption(
+        "The stripping column contacts hot lean TEG from the reboiler with a small dry "
+        "stripping-gas stream to drive off the last of the water, boosting lean TEG "
+        "purity above the reboiler-only limit (~98.5–99 wt%). More gas, higher "
+        "temperature and more stages all increase purity — at the cost of extra gas "
+        "use and NMVOC sent to the still vent."
+    )
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1:
+        stripping_gas_temp = st.number_input(
+            "Stripping-gas temperature [°C]", 40.0, 120.0, 78.3, 0.5,
+            help="Temperature of the dry gas fed to the stripper / reboiler.")
+    with sc2:
+        n_stripper_stages = st.number_input("Stripper stages", 1, 6, 2, 1)
+    with sc3:
+        stripper_stage_eff = st.slider("Stripper stage efficiency [-]", 0.3, 1.0, 1.0, 0.05)
+
+with st.expander("⚙️ Heat exchangers & condenser"):
+    st.caption(
+        "UA = overall heat-transfer coefficient × area [W/K]. Higher UA recovers more "
+        "heat from the hot lean TEG into the cold rich TEG, lowering reboiler duty. "
+        "The condenser (reflux) temperature sets how much water/hydrocarbon is "
+        "refluxed at the top of the regeneration column."
+    )
+    hc1, hc2, hc3 = st.columns(3)
+    with hc1:
+        hx_rich1_ua = st.number_input(
+            "Rich TEG HX-1 UA [W/K]", 100.0, 20000.0, 2224.0, 50.0,
+            help="Pre-heat of rich TEG before the degassing separator.")
+    with hc2:
+        hx_leanrich_ua = st.number_input(
+            "Lean/rich TEG HX UA [W/K]", 500.0, 40000.0, 8316.0, 100.0,
+            help="Main lean/rich cross-exchanger feeding the regeneration column.")
+    with hc3:
+        condenser_temp = st.number_input(
+            "Column condenser temperature [°C]", 60.0, 110.0, 85.0, 1.0)
 
 with st.expander("Advanced solver settings"):
     st.caption(
@@ -418,6 +575,16 @@ def _build_kwargs(flash_p):
         stripping_gas_Sm3_hr=stripping_gas,
         n_absorber_stages=n_stages,
         stage_efficiency=stage_eff,
+        stripping_gas_temp_C=stripping_gas_temp,
+        n_stripper_stages=n_stripper_stages,
+        stripper_stage_efficiency=stripper_stage_eff,
+        condenser_temp_C=condenser_temp,
+        hx_rich1_UA=hx_rich1_ua,
+        hx_leanrich_UA=hx_leanrich_ua,
+        water_mode=water_mode,
+        water_content_ppm_mol=water_content_ppm,
+        saturation_temp_C=sat_temp,
+        saturation_pressure_bara=sat_pressure,
     )
 
 
