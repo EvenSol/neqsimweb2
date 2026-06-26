@@ -1,0 +1,537 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from neqsim import jneqsim
+from theme import apply_theme
+
+st.set_page_config(
+    page_title="TEG Dehydration Emissions",
+    page_icon='images/neqsimlogocircleflat.png',
+    layout="wide",
+)
+apply_theme()
+
+# ---------------------------------------------------------------------------
+# NeqSim classes
+# ---------------------------------------------------------------------------
+SystemSrkCPA = jneqsim.thermo.system.SystemSrkCPAStatoil
+ProcessSystem = jneqsim.process.processmodel.ProcessSystem
+Stream = jneqsim.process.equipment.stream.Stream
+StreamSaturatorUtil = jneqsim.process.equipment.util.StreamSaturatorUtil
+Heater = jneqsim.process.equipment.heatexchanger.Heater
+HeatExchanger = jneqsim.process.equipment.heatexchanger.HeatExchanger
+SimpleTEGAbsorber = jneqsim.process.equipment.absorber.SimpleTEGAbsorber
+WaterStripperColumn = jneqsim.process.equipment.absorber.WaterStripperColumn
+DistillationColumn = jneqsim.process.equipment.distillation.DistillationColumn
+Separator = jneqsim.process.equipment.separator.Separator
+ThrottlingValve = jneqsim.process.equipment.valve.ThrottlingValve
+Filter = jneqsim.process.equipment.filter.Filter
+Pump = jneqsim.process.equipment.pump.Pump
+Mixer = jneqsim.process.equipment.mixer.Mixer
+Calculator = jneqsim.process.equipment.util.Calculator
+Recycle = jneqsim.process.equipment.util.Recycle
+WaterDewPointAnalyser = jneqsim.process.measurementdevice.WaterDewPointAnalyser
+
+# Gas/inert feed components (water and TEG are appended automatically and kept last)
+GAS_COMPONENTS = [
+    'nitrogen', 'CO2', 'methane', 'ethane', 'propane', 'i-butane', 'n-butane',
+    'i-pentane', 'n-pentane', 'n-hexane', 'benzene',
+]
+DEFAULT_FEED = [0.245, 3.4, 85.7, 5.981, 2.743, 0.37, 0.77, 0.142, 0.166, 0.06, 0.01]
+
+# NMVOC = non-methane volatile organic compounds (hydrocarbons incl. BTEX/benzene)
+NMVOC = {'ethane', 'propane', 'i-butane', 'n-butane', 'i-pentane',
+         'n-pentane', 'n-hexane', 'benzene'}
+GHG_CH4 = {'methane'}
+
+
+# ---------------------------------------------------------------------------
+# Plant builder (adapted from the teg_dehydration_emissions notebook)
+# ---------------------------------------------------------------------------
+def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressure_bara,
+                    absorber_pressure_bara, absorber_temp_C, teg_flow_kg_hr, teg_feed_temp_C,
+                    lean_teg_purity, flash_drum_pressure_bara, reboiler_temp_C,
+                    stripping_gas_Sm3_hr, n_absorber_stages, stage_efficiency):
+    """Build the TEG dehydration + regeneration plant with configurable inputs."""
+    p = ProcessSystem()
+
+    # Component order: gas components + water + TEG (water/TEG always last two)
+    n_comp = len(GAS_COMPONENTS) + 2
+
+    feedGas = SystemSrkCPA()
+    for name, frac in zip(GAS_COMPONENTS, feed_fractions):
+        feedGas.addComponent(name, float(frac))
+    feedGas.addComponent('water', 0.0)
+    feedGas.addComponent('TEG', 0.0)
+    feedGas.setMixingRule(10)
+    feedGas.setMultiPhaseCheck(False)
+    feedGas.init(0)
+
+    dryFeedGas = Stream('dry feed gas', feedGas)
+    dryFeedGas.setFlowRate(feed_flow_MSm3_day, 'MSm3/day')
+    dryFeedGas.setTemperature(feed_temp_C, 'C')
+    dryFeedGas.setPressure(feed_pressure_bara, 'bara')
+    p.add(dryFeedGas)
+
+    saturator = StreamSaturatorUtil('water saturator', dryFeedGas)
+    p.add(saturator)
+    wetFeedGas = Stream('water saturated feed gas', saturator.getOutletStream())
+    p.add(wetFeedGas)
+
+    feedTPsetter = Heater('TP of gas to absorber', wetFeedGas)
+    feedTPsetter.setOutPressure(absorber_pressure_bara, 'bara')
+    feedTPsetter.setOutTemperature(absorber_temp_C, 'C')
+    p.add(feedTPsetter)
+    feedToAbsorber = Stream('feed to TEG absorber', feedTPsetter.getOutletStream())
+    p.add(feedToAbsorber)
+
+    # Lean TEG feed: water = (1 - purity), TEG = purity (mole basis)
+    feedTEG = feedGas.clone()
+    leanComp = [0.0] * n_comp
+    leanComp[-2] = 1.0 - lean_teg_purity  # water
+    leanComp[-1] = lean_teg_purity        # TEG
+    feedTEG.setMolarComposition(leanComp)
+    TEGFeed = Stream('TEG feed', feedTEG)
+    TEGFeed.setFlowRate(teg_flow_kg_hr, 'kg/hr')
+    TEGFeed.setTemperature(teg_feed_temp_C, 'C')
+    TEGFeed.setPressure(absorber_pressure_bara, 'bara')
+    p.add(TEGFeed)
+
+    absorber = SimpleTEGAbsorber('TEG absorber')
+    absorber.addGasInStream(feedToAbsorber)
+    absorber.addSolventInStream(TEGFeed)
+    absorber.setNumberOfStages(int(n_absorber_stages))
+    absorber.setStageEfficiency(stage_efficiency)
+    absorber.setInternalDiameter(2.240)
+    p.add(absorber)
+
+    dehydratedGas = Stream('dry gas from absorber', absorber.getGasOutStream())
+    p.add(dehydratedGas)
+    richTEG = Stream('rich TEG from absorber', absorber.getLiquidOutStream())
+    p.add(richTEG)
+
+    waterDewAnalyser = WaterDewPointAnalyser('water dew point analyser', dehydratedGas)
+    waterDewAnalyser.setReferencePressure(feed_pressure_bara)
+    p.add(waterDewAnalyser)
+
+    flashValve = ThrottlingValve('Rich TEG HP flash valve', richTEG)
+    flashValve.setOutletPressure(flash_drum_pressure_bara)
+    p.add(flashValve)
+
+    richPreheat = Heater('rich TEG preheater', flashValve.getOutletStream())
+    p.add(richPreheat)
+
+    heatEx2 = HeatExchanger('rich TEG heat exchanger 1', richPreheat.getOutletStream())
+    heatEx2.setGuessOutTemperature(273.15 + 62.0)
+    heatEx2.setUAvalue(2224.0)
+    p.add(heatEx2)
+
+    flashSep = Separator('degassing separator', heatEx2.getOutStream(0))
+    flashSep.setInternalDiameter(1.2)
+    p.add(flashSep)
+    flashGas = Stream('gas from degassing separator', flashSep.getGasOutStream())
+    p.add(flashGas)
+    flashLiquid = Stream('liquid from degassing separator', flashSep.getLiquidOutStream())
+    p.add(flashLiquid)
+
+    fineFilter = Filter('TEG fine filter', flashLiquid)
+    fineFilter.setDeltaP(0.0, 'bara')
+    p.add(fineFilter)
+
+    heatEx = HeatExchanger('lean/rich TEG heat-exchanger', fineFilter.getOutletStream())
+    heatEx.setGuessOutTemperature(273.15 + 130.0)
+    heatEx.setUAvalue(8316.0)
+    p.add(heatEx)
+
+    flashValve2 = ThrottlingValve('Rich TEG LP flash valve', heatEx.getOutStream(0))
+    flashValve2.setOutletPressure(1.2)
+    p.add(flashValve2)
+
+    stripGas = feedGas.clone()
+    strippingGas = Stream('stripGas', stripGas)
+    strippingGas.setFlowRate(stripping_gas_Sm3_hr, 'Sm3/hr')
+    strippingGas.setTemperature(78.3, 'C')
+    strippingGas.setPressure(1.2, 'bara')
+    p.add(strippingGas)
+    gasToReboiler = strippingGas.clone('gas to reboiler')
+    p.add(gasToReboiler)
+
+    column = DistillationColumn('TEG regeneration column', 1, True, True)
+    column.setTemperatureTolerance(5.0e-2)
+    column.setMassBalanceTolerance(2.0e-1)
+    column.setEnthalpyBalanceTolerance(2.0e-1)
+    column.addFeedStream(flashValve2.getOutletStream(), 1)
+    column.getReboiler().setOutTemperature(273.15 + reboiler_temp_C)
+    column.getCondenser().setOutTemperature(273.15 + 85.0)
+    column.getTray(1).addStream(gasToReboiler)
+    column.setTopPressure(1.2)
+    column.setBottomPressure(1.2)
+    column.setInternalDiameter(0.56)
+    p.add(column)
+
+    coolerRegenGas = Heater('regen gas cooler', column.getGasOutStream())
+    coolerRegenGas.setOutTemperature(273.15 + 47.0)
+    p.add(coolerRegenGas)
+
+    sepRegenGas = Separator('regen gas separator', coolerRegenGas.getOutletStream())
+    p.add(sepRegenGas)
+    stillVent = Stream('still vent to atmosphere', sepRegenGas.getGasOutStream())
+    p.add(stillVent)
+    waterToTreatment = Stream('water to treatment', sepRegenGas.getLiquidOutStream())
+    p.add(waterToTreatment)
+
+    stripper = WaterStripperColumn('TEG stripper')
+    stripper.addSolventInStream(column.getLiquidOutStream())
+    stripper.addGasInStream(strippingGas)
+    stripper.setNumberOfStages(2)
+    stripper.setStageEfficiency(1.0)
+    p.add(stripper)
+
+    recycleStripGas = Recycle('stripping gas recirc')
+    recycleStripGas.addStream(stripper.getGasOutStream())
+    recycleStripGas.setOutletStream(gasToReboiler)
+    p.add(recycleStripGas)
+
+    heatEx.setFeedStream(1, stripper.getLiquidOutStream())
+
+    bufferTank = Heater('TEG buffer tank', heatEx.getOutStream(1))
+    bufferTank.setOutTemperature(273.15 + 90.5)
+    p.add(bufferTank)
+
+    leanPumpLP = Pump('lean TEG LP pump', bufferTank.getOutletStream())
+    leanPumpLP.setOutletPressure(3.0)
+    leanPumpLP.setIsentropicEfficiency(0.75)
+    p.add(leanPumpLP)
+
+    heatEx2.setFeedStream(1, leanPumpLP.getOutletStream())
+
+    coolerLeanTEG = Heater('lean TEG cooler', heatEx2.getOutStream(1))
+    coolerLeanTEG.setOutTemperature(273.15 + teg_feed_temp_C)
+    p.add(coolerLeanTEG)
+
+    leanPumpHP = Pump('lean TEG HP pump', coolerLeanTEG.getOutletStream())
+    leanPumpHP.setOutletPressure(absorber_pressure_bara)
+    leanPumpHP.setIsentropicEfficiency(0.75)
+    p.add(leanPumpHP)
+
+    leanTEGtoAbs = Stream('lean TEG to absorber', leanPumpHP.getOutletStream())
+    p.add(leanTEGtoAbs)
+
+    pureTEG = feedGas.clone()
+    makeupComp = [0.0] * n_comp
+    makeupComp[-1] = 1.0  # TEG
+    pureTEG.setMolarComposition(makeupComp)
+    makeupTEG = Stream('makeup TEG', pureTEG)
+    makeupTEG.setFlowRate(1e-6, 'kg/hr')
+    makeupTEG.setTemperature(teg_feed_temp_C, 'C')
+    makeupTEG.setPressure(absorber_pressure_bara, 'bara')
+    p.add(makeupTEG)
+
+    makeupCalc = Calculator('TEG makeup calculator')
+    makeupCalc.addInputVariable(dehydratedGas)
+    makeupCalc.addInputVariable(flashGas)
+    makeupCalc.addInputVariable(stillVent)
+    makeupCalc.addInputVariable(waterToTreatment)
+    makeupCalc.setOutputVariable(makeupTEG)
+    p.add(makeupCalc)
+
+    makeupMixer = Mixer('makeup mixer')
+    makeupMixer.addStream(leanTEGtoAbs)
+    makeupMixer.addStream(makeupTEG)
+    p.add(makeupMixer)
+
+    recycleLeanTEG = Recycle('lean TEG recycle')
+    recycleLeanTEG.addStream(makeupMixer.getOutletStream())
+    recycleLeanTEG.setOutletStream(TEGFeed)
+    recycleLeanTEG.setPriority(200)
+    recycleLeanTEG.setDownstreamProperty('flow rate')
+    p.add(recycleLeanTEG)
+
+    richPreheat.setEnergyStream(column.getCondenser().getEnergyStream())
+
+    streams = {
+        'dehydratedGas': dehydratedGas,
+        'richTEG': richTEG,
+        'flashGas': flashGas,
+        'stillVent': stillVent,
+        'waterToTreatment': waterToTreatment,
+        'leanTEGtoAbs': leanTEGtoAbs,
+        'waterDewAnalyser': waterDewAnalyser,
+        'column': column,
+    }
+    return p, streams
+
+
+def run_plant(process, timeout_ms=300000):
+    """Run the process on a worker thread (robust for recycle convergence)."""
+    thr = process.runAsThread()
+    thr.join(timeout_ms)
+    return process
+
+
+def comp_mass_flows_kg_hr(stream):
+    fluid = stream.getFluid()
+    total = stream.getFlowRate('kg/hr')
+    n = fluid.getNumberOfComponents()
+    zM, names = [], []
+    for i in range(n):
+        c = fluid.getComponent(i)
+        names.append(str(c.getComponentName()))
+        zM.append(c.getz() * c.getMolarMass())
+    s = sum(zM)
+    if s <= 0:
+        return {names[i]: 0.0 for i in range(n)}
+    return {names[i]: (zM[i] / s) * total for i in range(n)}
+
+
+def teg_mass_fraction(stream):
+    flows = comp_mass_flows_kg_hr(stream)
+    tot = sum(flows.values())
+    return 100.0 * flows.get('TEG', 0.0) / tot if tot > 0 else 0.0
+
+
+def classify_emissions(stream):
+    flows = comp_mass_flows_kg_hr(stream)
+    out = {
+        'NMVOC': sum(v for k, v in flows.items() if k in NMVOC),
+        'methane': sum(v for k, v in flows.items() if k in GHG_CH4),
+        'CO2': flows.get('CO2', 0.0),
+        'nitrogen': flows.get('nitrogen', 0.0),
+        'water': flows.get('water', 0.0),
+        'TEG': flows.get('TEG', 0.0),
+    }
+    out['total'] = sum(flows.values())
+    out['benzene'] = flows.get('benzene', 0.0)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+st.title("🌍 TEG Dehydration — Regeneration Emission Calculator")
+st.markdown("""
+Model a full **triethylene-glycol (TEG) dehydration plant** (absorber → flash drum →
+lean/rich exchangers → regeneration still with reboiler & stripping gas → closed TEG recycle)
+with the **CPA equation of state**, and quantify the **atmospheric emissions** from the
+regeneration vents — **NMVOC**, **methane (CH₄)**, **CO₂**, water and TEG loss.
+
+Adjust any input below, then press **Run emission calculation**.
+""")
+st.divider()
+
+# --- Feed gas composition ---
+with st.expander("📋 Feed gas composition (molar — auto-normalized)", expanded=True):
+    if 'teg_feed_df' not in st.session_state:
+        st.session_state.teg_feed_df = pd.DataFrame({
+            'Component': GAS_COMPONENTS,
+            'MolarComposition[-]': DEFAULT_FEED,
+        })
+    if st.button('Reset to default composition'):
+        st.session_state.teg_feed_df = pd.DataFrame({
+            'Component': GAS_COMPONENTS,
+            'MolarComposition[-]': DEFAULT_FEED,
+        })
+        st.rerun()
+
+    feed_df = st.data_editor(
+        st.session_state.teg_feed_df,
+        column_config={
+            'Component': st.column_config.TextColumn('Component', disabled=True),
+            'MolarComposition[-]': st.column_config.NumberColumn(
+                'Molar Composition [-]', min_value=0.0, max_value=100.0, format="%.4f"),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.session_state.teg_feed_df = feed_df
+    st.caption("💡 Water and TEG are added internally and kept as the last two components.")
+
+# --- Operating parameters ---
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("Feed gas")
+    feed_flow = st.number_input("Feed flow [MSm³/day]", 0.1, 50.0, 4.65, 0.05)
+    feed_temp = st.number_input("Feed temperature [°C]", -20.0, 80.0, 25.0, 0.5)
+    feed_pressure = st.number_input("Feed pressure [bara]", 10.0, 200.0, 70.0, 1.0)
+
+with col2:
+    st.subheader("Absorber / TEG")
+    absorber_pressure = st.number_input("Absorber pressure [bara]", 10.0, 200.0, 85.0, 1.0)
+    absorber_temp = st.number_input("Gas-to-absorber temperature [°C]", 10.0, 70.0, 35.0, 0.5)
+    teg_flow = st.number_input("Lean TEG circulation [kg/hr]", 500.0, 50000.0, 5500.0, 100.0)
+    teg_feed_temp = st.number_input("Lean TEG feed temperature [°C]", 20.0, 80.0, 48.5, 0.5)
+    lean_purity = st.slider("Lean TEG purity [mol TEG fraction]", 0.90, 0.999, 0.97, 0.001)
+    n_stages = st.number_input("Absorber stages", 2, 10, 4, 1)
+    stage_eff = st.slider("Stage efficiency [-]", 0.3, 1.0, 0.7, 0.05)
+
+with col3:
+    st.subheader("Regeneration")
+    flash_pressure = st.number_input("Flash-drum pressure [bara]", 1.5, 15.0, 4.8, 0.1,
+                                     help="Lowering this shifts NMVOC from the atmospheric "
+                                          "still vent into the recovered flash gas.")
+    reboiler_temp = st.number_input("Reboiler temperature [°C]", 150.0, 210.0, 197.5, 0.5)
+    stripping_gas = st.number_input("Stripping-gas rate [Sm³/hr]", 0.0, 1000.0, 180.0, 10.0)
+
+st.divider()
+
+run_col, sweep_col = st.columns([1, 1])
+with run_col:
+    run_clicked = st.button("▶️ Run emission calculation", type="primary",
+                            use_container_width=True)
+with sweep_col:
+    do_sweep = st.checkbox("Also run flash-drum pressure sensitivity sweep",
+                           help="Rebuilds and solves the plant at several flash-drum "
+                                "pressures (2–9 bara). Slower.")
+
+
+def _fractions():
+    return [float(v) for v in st.session_state.teg_feed_df['MolarComposition[-]'].tolist()]
+
+
+def _build_kwargs(flash_p):
+    return dict(
+        feed_fractions=_fractions(),
+        feed_flow_MSm3_day=feed_flow,
+        feed_temp_C=feed_temp,
+        feed_pressure_bara=feed_pressure,
+        absorber_pressure_bara=absorber_pressure,
+        absorber_temp_C=absorber_temp,
+        teg_flow_kg_hr=teg_flow,
+        teg_feed_temp_C=teg_feed_temp,
+        lean_teg_purity=lean_purity,
+        flash_drum_pressure_bara=flash_p,
+        reboiler_temp_C=reboiler_temp,
+        stripping_gas_Sm3_hr=stripping_gas,
+        n_absorber_stages=n_stages,
+        stage_efficiency=stage_eff,
+    )
+
+
+if run_clicked:
+    if sum(_fractions()) <= 0:
+        st.error("Feed composition sums to zero — enter at least one component.")
+        st.stop()
+    try:
+        with st.spinner("Building and solving the TEG plant (recycle convergence)…"):
+            process, S = build_teg_plant(**_build_kwargs(flash_pressure))
+            run_plant(process)
+
+            water_dew_C = float(S['waterDewAnalyser'].getMeasuredValue('C'))
+            lean_teg_wt = teg_mass_fraction(S['leanTEGtoAbs'])
+            dry_gas_flow = float(S['dehydratedGas'].getFlowRate('MSm3/day'))
+            still = classify_emissions(S['stillVent'])
+            flash = classify_emissions(S['flashGas'])
+    except Exception as e:
+        st.error(f"Calculation failed: {e}")
+        st.stop()
+
+    st.success("Calculation complete.")
+
+    # KPIs
+    st.subheader("Dehydration performance")
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Dry-gas water dew point", f"{water_dew_C:.2f} °C",
+              help=f"At {feed_pressure:.0f} bara reference")
+    k2.metric("Lean TEG purity", f"{lean_teg_wt:.2f} wt%")
+    k3.metric("Dry gas flow", f"{dry_gas_flow:.3f} MSm³/day")
+
+    # Emission KPIs (atmospheric still vent)
+    st.subheader("Atmospheric emissions — still vent")
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("NMVOC", f"{still['NMVOC']:.3f} kg/hr",
+              help=f"{still['NMVOC']*24/1000:.3f} t/day")
+    e2.metric("Methane (CH₄)", f"{still['methane']:.3f} kg/hr")
+    e3.metric("CO₂", f"{still['CO2']:.3f} kg/hr")
+    e4.metric("Benzene (BTEX)", f"{still['benzene']:.4f} kg/hr")
+
+    # Emission table
+    st.subheader("Vent emission breakdown [kg/hr]")
+    groups = ['total', 'NMVOC', 'methane', 'CO2', 'water', 'TEG', 'benzene']
+    table = pd.DataFrame({
+        'Group': groups,
+        'Still vent (atmospheric)': [still[g] for g in groups],
+        'Flash gas (to fuel)': [flash[g] for g in groups],
+    })
+    table['Still vent (t/day)'] = table['Still vent (atmospheric)'] * 24 / 1000.0
+    st.dataframe(
+        table.style.format({
+            'Still vent (atmospheric)': '{:.4f}',
+            'Flash gas (to fuel)': '{:.4f}',
+            'Still vent (t/day)': '{:.4f}',
+        }),
+        hide_index=True, use_container_width=True,
+    )
+
+    # Bar chart
+    plot_groups = ['NMVOC', 'methane', 'CO2', 'water', 'TEG']
+    fig = go.Figure()
+    fig.add_bar(name='Still vent (atmospheric)', x=plot_groups,
+                y=[still[g] for g in plot_groups], marker_color='#c0392b')
+    fig.add_bar(name='Flash gas (to fuel)', x=plot_groups,
+                y=[flash[g] for g in plot_groups], marker_color='#2980b9')
+    fig.update_layout(
+        barmode='group', yaxis_title='Mass flow [kg/hr]',
+        title=f'TEG regeneration vent emissions (flash drum {flash_pressure:.1f} bara)',
+        legend=dict(orientation='h', y=1.12), height=450,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Downloadable results
+    st.download_button(
+        "⬇️ Download emission table (CSV)",
+        table.to_csv(index=False).encode('utf-8'),
+        file_name="teg_emissions.csv", mime="text/csv",
+    )
+
+    # Optional sensitivity sweep
+    if do_sweep:
+        st.divider()
+        st.subheader("Flash-drum pressure sensitivity")
+        sweep_pressures = [2.0, 3.0, 4.8, 7.0, 9.0]
+        still_nmvoc, flash_nmvoc = [], []
+        prog = st.progress(0.0, text="Running sweep…")
+        try:
+            for i, pf in enumerate(sweep_pressures):
+                proc, Ss = build_teg_plant(**_build_kwargs(pf))
+                run_plant(proc)
+                st_em = classify_emissions(Ss['stillVent'])
+                fl_em = classify_emissions(Ss['flashGas'])
+                still_nmvoc.append(st_em['NMVOC'])
+                flash_nmvoc.append(fl_em['NMVOC'])
+                prog.progress((i + 1) / len(sweep_pressures),
+                              text=f"Solved flash drum {pf:.1f} bara")
+            prog.empty()
+
+            sfig = go.Figure()
+            sfig.add_scatter(x=sweep_pressures, y=still_nmvoc, mode='lines+markers',
+                             name='Still-vent NMVOC (atmospheric)',
+                             line=dict(color='#c0392b'))
+            sfig.add_scatter(x=sweep_pressures, y=flash_nmvoc, mode='lines+markers',
+                             name='Flash-gas NMVOC (recovered to fuel)',
+                             line=dict(color='#2980b9', dash='dash'))
+            sfig.update_layout(
+                xaxis_title='Flash-drum pressure [bara]',
+                yaxis_title='NMVOC mass flow [kg/hr]',
+                title='Effect of flash-drum pressure on TEG regeneration emissions',
+                legend=dict(orientation='h', y=1.12), height=450,
+            )
+            st.plotly_chart(sfig, use_container_width=True)
+
+            hi = still_nmvoc[sweep_pressures.index(9.0)]
+            lo = still_nmvoc[sweep_pressures.index(2.0)]
+            if hi > 0:
+                st.info(f"Lowering the flash drum from 9.0 → 2.0 bara reduces atmospheric "
+                        f"still-vent NMVOC from {hi:.3f} to {lo:.3f} kg/hr "
+                        f"(**{100.0*(hi-lo)/hi:.1f}% reduction**).")
+        except Exception as e:
+            prog.empty()
+            st.warning(f"Sensitivity sweep failed: {e}")
+else:
+    st.info("Set the inputs above and press **Run emission calculation**.")
+
+st.divider()
+st.caption("Model: CPA EOS (SystemSrkCPAStatoil, mixing rule 10). NMVOC = non-methane "
+           "volatile organic compounds. The still vent is the atmospheric emission; "
+           "flash gas is normally recovered to fuel.")
