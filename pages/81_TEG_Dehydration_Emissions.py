@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import json
 import plotly.graph_objects as go
 from neqsim import jneqsim
 from theme import apply_theme
@@ -387,6 +388,94 @@ def export_process_dot(process, temp_unit='C', pressure_unit='bara', flow_unit='
             os.remove(path)
         except OSError:
             pass
+
+
+def build_process_report(process):
+    """Build a JSON-serialisable report of every unit operation and its results.
+
+    For each unit we capture its name, class, any NeqSim ``getResultTable()``
+    rows, and (for material streams) the temperature, pressure, flow and overall
+    molar composition. Every getter is wrapped in try/except so one unsupported
+    method never breaks the whole report.
+    """
+    report = {'units': []}
+    try:
+        units = list(process.getUnitOperations())
+    except Exception:
+        units = []
+    for u in units:
+        entry = {}
+        try:
+            entry['name'] = str(u.getName())
+        except Exception:
+            entry['name'] = '(unnamed)'
+        try:
+            entry['type'] = str(u.getClass().getSimpleName())
+        except Exception:
+            entry['type'] = '?'
+
+        # Generic NeqSim result table (name / value / unit rows) where available
+        try:
+            tbl = u.getResultTable()
+            if tbl is not None:
+                rows = []
+                for row in tbl:
+                    if row is None:
+                        continue
+                    rows.append([None if c is None else str(c) for c in row])
+                if rows:
+                    entry['resultTable'] = rows
+        except Exception:
+            pass
+
+        # Material-stream conditions + overall molar composition
+        if entry.get('type') == 'Stream':
+            cond = {}
+            for key, getter, args in (
+                ('temperature_C', 'getTemperature', ('C',)),
+                ('pressure_bara', 'getPressure', ('bara',)),
+                ('flow_kg_hr', 'getFlowRate', ('kg/hr',)),
+                ('flow_MSm3_day', 'getFlowRate', ('MSm3/day',)),
+            ):
+                try:
+                    v = float(getattr(u, getter)(*args))
+                    if v == v:  # not NaN
+                        cond[key] = round(v, 6)
+                except Exception:
+                    pass
+            try:
+                fluid = u.getFluid()
+                comp = {}
+                for i in range(int(fluid.getNumberOfComponents())):
+                    c = fluid.getComponent(i)
+                    comp[str(c.getComponentName())] = round(float(c.getz()), 8)
+                if comp:
+                    cond['molar_composition'] = comp
+                cond['number_of_phases'] = int(fluid.getNumberOfPhases())
+            except Exception:
+                pass
+            if cond:
+                entry['stream'] = cond
+
+        # Common scalar results (power for rotating equipment, duty for HX/heaters)
+        scal = {}
+        try:
+            p = float(u.getPower('kW'))
+            if p == p:
+                scal['power_kW'] = round(p, 4)
+        except Exception:
+            pass
+        try:
+            d = float(u.getDuty())  # W
+            if d == d:
+                scal['duty_kW'] = round(d / 1000.0, 4)
+        except Exception:
+            pass
+        if scal:
+            entry['results'] = scal
+
+        report['units'].append(entry)
+    return report
 
 
 def _enlarge_dot_fonts(dot, graph_fs=18, node_fs=15, edge_fs=13):
@@ -832,6 +921,11 @@ if run_clicked:
             except Exception:
                 dot_graph = None
 
+            try:
+                process_report = build_process_report(process)
+            except Exception:
+                process_report = None
+
             blower_kw = None
             if recirculate_stripping_gas:
                 try:
@@ -874,6 +968,7 @@ if run_clicked:
         'still': still,
         'flash': flash,
         'dot_graph': dot_graph,
+        'process_report': process_report,
         'recirculate': bool(recirculate_stripping_gas),
         'recycle_blower_discharge': float(recycle_blower_discharge),
         'blower_kw': blower_kw,
@@ -926,6 +1021,39 @@ if res:
                 "⬇️ Download flow diagram (Graphviz DOT)",
                 dot_graph.encode('utf-8'),
                 file_name="teg_flow_diagram.dot", mime="text/vnd.graphviz",
+            )
+
+    # Full process-model results as JSON (every unit operation + emissions)
+    process_report = res.get('process_report')
+    if process_report:
+        with st.expander("🧾 Full process model results (JSON — all unit operations)",
+                         expanded=False):
+            st.caption("Complete dump of the solved NeqSim `ProcessSystem`: every "
+                       "unit operation with its result table, and each stream with its "
+                       "temperature, pressure, flow and overall molar composition. The "
+                       "atmospheric still-vent and flash-gas emission breakdowns are "
+                       "included under `emissions`.")
+            full_report = {
+                'units': process_report.get('units', []),
+                'emissions': {
+                    'still_vent_kg_hr': still,
+                    'flash_gas_kg_hr': flash,
+                },
+                'operating_point': {
+                    'flash_drum_pressure_bara': flash_pressure_r,
+                    'feed_pressure_bara': res['feed_pressure'],
+                    'stripping_gas_recirculated': res['recirculate'],
+                    'recycle_blower_kW': res['blower_kw'],
+                    'water_dew_point_C': res['water_dew_C'],
+                    'lean_teg_purity_wt_pct': res['lean_teg_wt'],
+                    'dry_gas_flow_MSm3_day': res['dry_gas_flow'],
+                },
+            }
+            st.json(full_report, expanded=False)
+            st.download_button(
+                "⬇️ Download full results (JSON)",
+                json.dumps(full_report, indent=2).encode('utf-8'),
+                file_name="teg_model_results.json", mime="application/json",
             )
 
     # KPIs
