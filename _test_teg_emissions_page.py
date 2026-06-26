@@ -6,7 +6,7 @@ and produces emission numbers with the dynamic (configurable) composition arrays
 """
 from neqsim import jneqsim
 
-SystemSrkCPA = jneqsim.thermo.system.SystemSrkCPAStatoil
+SystemSrkCPA = jneqsim.thermo.system.SystemSrkCPAstatoil
 ProcessSystem = jneqsim.process.processmodel.ProcessSystem
 Stream = jneqsim.process.equipment.stream.Stream
 StreamSaturatorUtil = jneqsim.process.equipment.util.StreamSaturatorUtil
