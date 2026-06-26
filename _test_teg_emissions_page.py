@@ -255,6 +255,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     streams = {
         'dehydratedGas': dehydratedGas, 'flashGas': flashGas, 'stillVent': stillVent,
         'leanTEGtoAbs': leanTEGtoAbs, 'waterDewAnalyser': waterDewAnalyser,
+        'strippingGas': strippingGas,
     }
     return p, streams
 
@@ -291,6 +292,23 @@ def classify_emissions(stream):
         'benzene': flows.get('benzene', 0.0),
     }
     out['total'] = sum(flows.values())
+    return out
+
+
+def classify_emissions_recirc(still_stream, recirc_stream):
+    still_flows = comp_mass_flows_kg_hr(still_stream)
+    recirc_flows = comp_mass_flows_kg_hr(recirc_stream)
+    net = {k: max(0.0, still_flows.get(k, 0.0) - recirc_flows.get(k, 0.0))
+           for k in still_flows}
+    out = {
+        'NMVOC': sum(v for k, v in net.items() if k in NMVOC),
+        'methane': sum(v for k, v in net.items() if k in GHG_CH4),
+        'CO2': net.get('CO2', 0.0),
+        'water': net.get('water', 0.0),
+        'TEG': net.get('TEG', 0.0),
+        'benzene': net.get('benzene', 0.0),
+    }
+    out['total'] = sum(net.values())
     return out
 
 
@@ -347,3 +365,17 @@ if __name__ == '__main__':
     assert water_dew_C2 < 0.0, 'dew point should be below 0 C after dehydration'
     assert lean_teg_wt2 > 90.0, 'lean TEG should be >90 wt%'
     print('\nSMOKE TEST (specified) PASSED')
+
+    # --- Stripping-gas recirculation accounting ---
+    print('\nChecking stripping-gas recirculation accounting...')
+    still_recirc = classify_emissions_recirc(S['stillVent'], S['strippingGas'])
+    print(f'Still-vent NMVOC (vented)     : {still["NMVOC"]:8.4f} kg/hr')
+    print(f'Still-vent NMVOC (recirc net) : {still_recirc["NMVOC"]:8.4f} kg/hr')
+    print(f'Still-vent methane (vented)   : {still["methane"]:8.4f} kg/hr')
+    print(f'Still-vent methane (recirc)   : {still_recirc["methane"]:8.4f} kg/hr')
+    assert still_recirc['NMVOC'] <= still['NMVOC'] + 1e-9, \
+        'recirculation should not increase NMVOC emission'
+    assert still_recirc['methane'] <= still['methane'] + 1e-9, \
+        'recirculation should not increase methane emission'
+    assert still_recirc['NMVOC'] >= 0.0 and still_recirc['methane'] >= 0.0
+    print('\nSMOKE TEST (recirculation accounting) PASSED')
