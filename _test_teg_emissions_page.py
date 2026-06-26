@@ -24,6 +24,7 @@ Mixer = jneqsim.process.equipment.mixer.Mixer
 Calculator = jneqsim.process.equipment.util.Calculator
 Recycle = jneqsim.process.equipment.util.Recycle
 WaterDewPointAnalyser = jneqsim.process.measurementdevice.WaterDewPointAnalyser
+GraphvizExporter = jneqsim.process.processmodel.ProcessSystemGraphvizExporter
 
 GAS_COMPONENTS = ['nitrogen', 'CO2', 'methane', 'ethane', 'propane', 'i-butane',
                   'n-butane', 'i-pentane', 'n-pentane', 'n-hexane', 'benzene']
@@ -398,4 +399,34 @@ if __name__ == '__main__':
     assert still3['methane'] <= still['methane'] + 1e-6, \
         'recirculation should not increase methane emission'
     assert still3['NMVOC'] >= 0.0 and still3['methane'] >= 0.0
+
+    # --- Graphviz flow-diagram export ---
+    print('\nExporting Graphviz flow diagram (streams with T, P, flow)...')
+    import os
+    import tempfile
+    Opts = GraphvizExporter.GraphvizExportOptions
+    options = (Opts.builder()
+               .includeStreamTemperatures(True)
+               .includeStreamPressures(True)
+               .includeStreamFlowRates(True)
+               .includeStreamPropertyTable(False)
+               .temperatureUnit('C')
+               .pressureUnit('bara')
+               .flowRateUnit('kg/hr')
+               .tablePlacement(Opts.TablePlacement.BELOW)
+               .build())
+    fd, dot_path = tempfile.mkstemp(suffix='.dot')
+    os.close(fd)
+    process.exportToGraphviz(dot_path, options)
+    with open(dot_path, 'r', encoding='utf-8') as fh:
+        dot_graph = fh.read()
+    os.remove(dot_path)
+    print(f'DOT length          : {len(dot_graph)} chars')
+    assert dot_graph.strip().startswith('digraph'), 'DOT should start with digraph'
+    assert 'TEG absorber' in dot_graph, 'absorber node should be present'
+    assert '->' in dot_graph, 'DOT should contain edges'
+    print('GRAPHVIZ EXPORT PASSED')
+
+    print('\nSMOKE TEST (recirculation) PASSED')
+    print('\nALL SMOKE TESTS PASSED')
     print('\nSMOKE TEST (recirculation recycle) PASSED')

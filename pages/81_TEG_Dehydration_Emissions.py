@@ -373,6 +373,73 @@ def export_process_dot(process, temp_unit='C', pressure_unit='bara', flow_unit='
             pass
 
 
+def _enlarge_dot_fonts(dot, graph_fs=18, node_fs=15, edge_fs=13):
+    """Inject larger default fonts + spacing so the flowsheet text is readable.
+
+    Adds global ``graph``/``node``/``edge`` font defaults right after the
+    ``digraph`` opening brace. Per-element attributes set by the exporter still
+    win, but most labels inherit these larger defaults.
+    """
+    idx = dot.find('{')
+    if idx == -1:
+        return dot
+    inject = (
+        '\n  graph [fontname="Helvetica", fontsize=%d, nodesep=0.4, ranksep=0.7];'
+        '\n  node [fontname="Helvetica", fontsize=%d];'
+        '\n  edge [fontname="Helvetica", fontsize=%d];' % (graph_fs, node_fs, edge_fs)
+    )
+    return dot[:idx + 1] + inject + dot[idx + 1:]
+
+
+def render_graphviz_interactive(dot, height=720):
+    """Render a DOT string with pan + mouse-wheel zoom via d3-graphviz.
+
+    Streamlit's built-in ``st.graphviz_chart`` produces a fixed SVG that is hard
+    to read on large flowsheets. This embeds an HTML component using
+    d3-graphviz (Graphviz compiled to WASM, no server binary) that supports
+    smooth zoom (scroll), pan (drag) and a reset-to-fit button.
+    """
+    import json as _json
+    dot_js = _json.dumps(dot)
+    html = """
+<div style="border:1px solid #ddd;border-radius:6px;overflow:hidden;background:#fff;">
+  <div style="padding:6px 10px;background:#f5f5f5;border-bottom:1px solid #ddd;
+              font:13px Helvetica,Arial,sans-serif;color:#333;">
+    🖱️ Scroll to zoom &nbsp;·&nbsp; drag to pan &nbsp;·&nbsp;
+    <button id="resetBtn" style="font:12px Helvetica;cursor:pointer;
+            padding:2px 8px;border:1px solid #bbb;border-radius:4px;background:#fff;">
+      Reset / fit
+    </button>
+  </div>
+  <div id="graph" style="width:100%;height:__HEIGHT__px;"></div>
+</div>
+<script src="https://unpkg.com/@hpcc-js/wasm@2.16.2/dist/graphviz.umd.js"></script>
+<script src="https://unpkg.com/d3@7"></script>
+<script src="https://unpkg.com/d3-graphviz@5"></script>
+<script>
+  var dot = __DOT__;
+  function draw() {
+    if (!window.d3 || !d3.select("#graph").graphviz) { setTimeout(draw, 150); return; }
+    var gv = d3.select("#graph").graphviz()
+        .fit(true)
+        .zoom(true)
+        .zoomScaleExtent([0.1, 12])
+        .width(d3.select("#graph").node().clientWidth)
+        .height(__HEIGHT__)
+        .renderDot(dot);
+    document.getElementById("resetBtn").onclick = function () {
+      if (gv.resetZoom) { gv.resetZoom(); }
+    };
+  }
+  draw();
+</script>
+"""
+    html = (html.replace('__DOT__', dot_js)
+                .replace('__HEIGHT__', str(int(height))))
+    import streamlit.components.v1 as components
+    components.html(html, height=height + 60, scrolling=False)
+
+
 def comp_mass_flows_kg_hr(stream):
     fluid = stream.getFluid()
     total = stream.getFlowRate('kg/hr')
@@ -734,8 +801,21 @@ if run_clicked:
             st.caption("Auto-generated from the solved NeqSim `ProcessSystem`. Each "
                        "arrow is a stream labelled with its temperature (°C), pressure "
                        "(bara) and mass flow (kg/hr). Recycle loops close back on "
-                       "their feed units.")
-            st.graphviz_chart(dot_graph, use_container_width=True)
+                       "their feed units. **Scroll to zoom, drag to pan.**")
+            c1, c2 = st.columns([3, 1])
+            diagram_height = c1.slider("Diagram height (px)", min_value=480,
+                                       max_value=1400, value=760, step=40,
+                                       key="teg_diagram_height")
+            font_scale = c2.selectbox("Text size", ["Normal", "Large", "Extra large"],
+                                      index=1, key="teg_diagram_fontscale")
+            _fs = {"Normal": (16, 13, 11), "Large": (20, 16, 14),
+                   "Extra large": (26, 22, 18)}[font_scale]
+            dot_render = _enlarge_dot_fonts(dot_graph, _fs[0], _fs[1], _fs[2])
+            try:
+                render_graphviz_interactive(dot_render, height=int(diagram_height))
+            except Exception:
+                # Fallback to the static renderer if the HTML component fails
+                st.graphviz_chart(dot_render, use_container_width=True)
             st.download_button(
                 "⬇️ Download flow diagram (Graphviz DOT)",
                 dot_graph.encode('utf-8'),
