@@ -61,7 +61,7 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                     hx_rich1_UA=2224.0, hx_leanrich_UA=8316.0,
                     water_mode='saturated', water_content_ppm_mol=None,
                     saturation_temp_C=None, saturation_pressure_bara=None,
-                    recirculate_stripping_gas=False,
+                    recirculate_stripping_gas=True,
                     recycle_blower_discharge_bara=1.4):
     """Build the TEG dehydration + regeneration plant with configurable inputs.
 
@@ -716,7 +716,7 @@ with st.expander("🌬️ Stripping column (TEG enhancement)"):
         stripper_stage_eff = st.slider("Stripper stage efficiency [-]", 0.3, 1.0, 1.0, 0.05)
     recirculate_stripping_gas = st.checkbox(
         "♻️ Recirculate stripping gas (closed loop, recover instead of vent)",
-        value=False,
+        value=True,
         help="For plants that recirculate the stripping gas: the gas is taken from "
              "the dried regenerator overhead (after the condenser knock-out drum), "
              "reconditioned and looped back to the stripper as a true closed loop. "
