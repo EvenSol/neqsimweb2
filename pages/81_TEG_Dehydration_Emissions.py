@@ -362,7 +362,6 @@ with col2:
     absorber_temp = st.number_input("Gas-to-absorber temperature [°C]", 10.0, 70.0, 35.0, 0.5)
     teg_flow = st.number_input("Lean TEG circulation [kg/hr]", 500.0, 50000.0, 5500.0, 100.0)
     teg_feed_temp = st.number_input("Lean TEG feed temperature [°C]", 20.0, 80.0, 48.5, 0.5)
-    lean_purity = st.slider("Lean TEG purity [mol TEG fraction]", 0.90, 0.999, 0.97, 0.001)
     n_stages = st.number_input("Absorber stages", 2, 10, 4, 1)
     stage_eff = st.slider("Stage efficiency [-]", 0.3, 1.0, 0.7, 0.05)
 
@@ -373,6 +372,19 @@ with col3:
                                           "still vent into the recovered flash gas.")
     reboiler_temp = st.number_input("Reboiler temperature [°C]", 150.0, 210.0, 197.5, 0.5)
     stripping_gas = st.number_input("Stripping-gas rate [Sm³/hr]", 0.0, 1000.0, 180.0, 10.0)
+
+with st.expander("Advanced solver settings"):
+    st.caption(
+        "The lean TEG purity is **calculated** by the regeneration train (reboiler "
+        "temperature, stripping gas and flash conditions) and the closed TEG recycle "
+        "loop — it is reported as a result below. The value here is only the initial "
+        "composition guess that seeds the recycle; it does not fix the result, but a "
+        "realistic seed helps the loop converge faster."
+    )
+    lean_purity = st.slider(
+        "Lean TEG purity — recycle initial guess [mol TEG fraction]",
+        0.90, 0.999, 0.97, 0.001,
+    )
 
 st.divider()
 
