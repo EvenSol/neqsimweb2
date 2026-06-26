@@ -63,7 +63,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
                     water_mode='saturated', water_content_ppm_mol=None,
                     saturation_temp_C=None, saturation_pressure_bara=None,
                     recirculate_stripping_gas=True,
-                    recycle_blower_discharge_bara=1.4):
+                    regenerator_top_pressure_bara=1.2,
+                    regenerator_bottom_pressure_bara=1.2):
     """Build the TEG dehydration + regeneration plant with configurable inputs.
 
     Water content of the feed gas can be set two ways via ``water_mode``:
@@ -190,14 +191,14 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     p.add(heatEx)
 
     flashValve2 = ThrottlingValve('Rich TEG LP flash valve', heatEx.getOutStream(0))
-    flashValve2.setOutletPressure(1.2)
+    flashValve2.setOutletPressure(regenerator_top_pressure_bara)
     p.add(flashValve2)
 
     stripGas = feedGas.clone()
     strippingGas = Stream('stripGas', stripGas)
     strippingGas.setFlowRate(stripping_gas_Sm3_hr, 'Sm3/hr')
     strippingGas.setTemperature(stripping_gas_temp_C, 'C')
-    strippingGas.setPressure(1.2, 'bara')
+    strippingGas.setPressure(regenerator_bottom_pressure_bara, 'bara')
     p.add(strippingGas)
     gasToReboiler = strippingGas.clone('gas to reboiler')
     p.add(gasToReboiler)
@@ -210,8 +211,8 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
     column.getReboiler().setOutTemperature(273.15 + reboiler_temp_C)
     column.getCondenser().setOutTemperature(273.15 + condenser_temp_C)
     column.getTray(1).addStream(gasToReboiler)
-    column.setTopPressure(1.2)
-    column.setBottomPressure(1.2)
+    column.setTopPressure(regenerator_top_pressure_bara)
+    column.setBottomPressure(regenerator_bottom_pressure_bara)
     column.setInternalDiameter(0.56)
     p.add(column)
 
@@ -237,13 +238,13 @@ def build_teg_plant(feed_fractions, feed_flow_MSm3_day, feed_temp_C, feed_pressu
         stillVent = Stream('still vent (flare/vent/recompression)',
                            recircSplit.getSplitStream(1))
         p.add(stillVent)
-        # Recycle blower: the regenerator overhead is at low pressure (~1.2 bara),
-        # so a blower boosts the recirculated slice up to the pressure the stripper
-        # needs (regeneration pressure + line/equipment losses) before it is
-        # reconditioned and looped back as stripping gas.
+        # Recycle blower: the regenerator overhead is at low pressure (the column
+        # top pressure), so a blower boosts the recirculated slice up to the
+        # regenerator bottom pressure the stripper / reboiler operate at before it
+        # is reconditioned and looped back as stripping gas.
         recircBlower = Compressor('stripping gas recycle blower',
                                   recircSplit.getSplitStream(0))
-        recircBlower.setOutletPressure(recycle_blower_discharge_bara)
+        recircBlower.setOutletPressure(regenerator_bottom_pressure_bara)
         recircBlower.setIsentropicEfficiency(0.75)
         p.add(recircBlower)
         recircHeater = Heater('stripping gas recirc heater',
@@ -785,6 +786,15 @@ with col3:
                                           "still vent into the recovered flash gas.")
     reboiler_temp = st.number_input("Reboiler temperature [°C]", 150.0, 210.0, 197.5, 0.5)
     stripping_gas = st.number_input("Stripping-gas rate [Sm³/hr]", 0.0, 1000.0, 180.0, 10.0)
+    regen_top_pressure = st.number_input(
+        "Regenerator top pressure [bara]", 1.0, 5.0, 1.2, 0.05,
+        help="Pressure at the top of the regeneration column (condenser / still "
+             "overhead). The atmospheric still vent leaves at this pressure.")
+    regen_bottom_pressure = st.number_input(
+        "Regenerator bottom pressure [bara]", 1.0, 6.0, 1.2, 0.05,
+        help="Pressure at the bottom of the regeneration column (reboiler). The "
+             "stripping gas and recycle blower discharge are set to this pressure. "
+             "Must be ≥ the top pressure.")
 
 with st.expander("🌬️ Stripping column (TEG enhancement)"):
     st.caption(
@@ -813,14 +823,11 @@ with st.expander("🌬️ Stripping column (TEG enhancement)"):
              "remainder (water + hydrocarbons liberated from the TEG) leaves as the "
              "atmospheric vent. Adds a recycle loop, so convergence is a little slower.")
     if recirculate_stripping_gas:
-        recycle_blower_discharge = st.number_input(
-            "Recycle blower discharge pressure [bara]", 1.2, 5.0, 1.4, 0.05,
-            help="The recycle blower boosts the low-pressure regenerator-overhead gas "
-                 "(suction ≈1.2 bara) back up to the pressure the stripper needs "
-                 "(regeneration pressure plus line/equipment losses) before it is "
-                 "reconditioned and looped back to the stripper.")
-    else:
-        recycle_blower_discharge = 1.4
+        st.caption(
+            f"The recycle blower boosts the low-pressure regenerator-overhead gas "
+            f"(suction ≈ {regen_top_pressure:.2f} bara top pressure) back up to the "
+            f"regenerator bottom pressure ({regen_bottom_pressure:.2f} bara) before "
+            f"it is reconditioned and looped back to the stripper.")
 
 with st.expander("⚙️ Heat exchangers & condenser"):
     st.caption(
@@ -898,14 +905,99 @@ def _build_kwargs(flash_p):
         saturation_temp_C=sat_temp,
         saturation_pressure_bara=sat_pressure,
         recirculate_stripping_gas=recirculate_stripping_gas,
-        recycle_blower_discharge_bara=recycle_blower_discharge,
+        regenerator_top_pressure_bara=regen_top_pressure,
+        regenerator_bottom_pressure_bara=regen_bottom_pressure,
     )
+
+
+def _validate_inputs():
+    """Check the operating inputs for physical / process consistency.
+
+    Returns a tuple ``(errors, warnings)`` of message lists. ``errors`` are
+    inconsistencies that would give a meaningless or non-converging model and
+    block the run; ``warnings`` are unusual-but-allowed combinations.
+    """
+    errors = []
+    warnings = []
+
+    # --- Pressure hierarchy: feed -> absorber -> flash drum -> regenerator ---
+    if regen_bottom_pressure < regen_top_pressure:
+        errors.append(
+            f"Regenerator bottom pressure ({regen_bottom_pressure:.2f} bara) must be "
+            f"≥ the top pressure ({regen_top_pressure:.2f} bara) — a column always "
+            f"has a positive top-to-bottom pressure gradient.")
+    if flash_pressure <= regen_top_pressure:
+        errors.append(
+            f"Flash-drum pressure ({flash_pressure:.2f} bara) must be above the "
+            f"regenerator top pressure ({regen_top_pressure:.2f} bara) so rich TEG "
+            f"flows from the flash drum down to the still.")
+    if flash_pressure >= absorber_pressure:
+        errors.append(
+            f"Flash-drum pressure ({flash_pressure:.2f} bara) must be below the "
+            f"absorber pressure ({absorber_pressure:.2f} bara) so rich TEG flashes "
+            f"down from the absorber to the flash drum.")
+    if absorber_pressure > feed_pressure:
+        warnings.append(
+            f"Absorber pressure ({absorber_pressure:.1f} bara) is above the feed "
+            f"pressure ({feed_pressure:.1f} bara) — the feed gas would need "
+            f"compression upstream of the contactor.")
+
+    # --- Saturation conditions (only when saturating at custom T/P) ---
+    if water_mode == 'saturated' and sat_pressure is not None:
+        if sat_pressure < absorber_pressure:
+            warnings.append(
+                f"Saturation pressure ({sat_pressure:.1f} bara) is below the absorber "
+                f"pressure ({absorber_pressure:.1f} bara); the gas is dehydrated at a "
+                f"higher pressure than it was saturated at.")
+
+    # --- Temperatures ---
+    if reboiler_temp > 204.0:
+        warnings.append(
+            f"Reboiler temperature ({reboiler_temp:.1f} °C) exceeds the ~204 °C TEG "
+            f"thermal-degradation limit — expect accelerated TEG breakdown.")
+    if condenser_temp >= reboiler_temp:
+        errors.append(
+            f"Column condenser temperature ({condenser_temp:.1f} °C) must be below "
+            f"the reboiler temperature ({reboiler_temp:.1f} °C).")
+    if teg_feed_temp < absorber_temp:
+        warnings.append(
+            f"Lean TEG feed temperature ({teg_feed_temp:.1f} °C) is below the "
+            f"gas-to-absorber temperature ({absorber_temp:.1f} °C); lean TEG is "
+            f"normally fed a few °C warmer than the gas to avoid hydrocarbon "
+            f"condensation in the contactor.")
+    elif teg_feed_temp > absorber_temp + 15.0:
+        warnings.append(
+            f"Lean TEG feed temperature ({teg_feed_temp:.1f} °C) is far above the "
+            f"gas-to-absorber temperature ({absorber_temp:.1f} °C); a large gap "
+            f"increases TEG vaporization losses to the dry gas.")
+    if stripping_gas_temp > reboiler_temp:
+        warnings.append(
+            f"Stripping-gas temperature ({stripping_gas_temp:.1f} °C) is above the "
+            f"reboiler temperature ({reboiler_temp:.1f} °C).")
+
+    # --- Stripping-gas recycle consistency ---
+    if recirculate_stripping_gas and stripping_gas <= 0.0:
+        warnings.append(
+            "Stripping-gas recirculation is enabled but the stripping-gas rate is "
+            "0 Sm³/hr — the recycle loop will carry no gas.")
+
+    return errors, warnings
 
 
 if run_clicked:
     if sum(_fractions()) <= 0:
         st.error("Feed composition sums to zero — enter at least one component.")
         st.stop()
+
+    _errors, _warnings = _validate_inputs()
+    for _w in _warnings:
+        st.warning(_w)
+    if _errors:
+        for _e in _errors:
+            st.error(_e)
+        st.error("Inputs are inconsistent — fix the errors above and run again.")
+        st.stop()
+
     try:
         with st.spinner("Building and solving the TEG plant (recycle convergence)…"):
             process, S = build_teg_plant(**_build_kwargs(flash_pressure))
@@ -980,7 +1072,8 @@ if run_clicked:
         'process_report': process_report,
         'model_input_json': model_input_json,
         'recirculate': bool(recirculate_stripping_gas),
-        'recycle_blower_discharge': float(recycle_blower_discharge),
+        'regen_top_pressure': float(regen_top_pressure),
+        'regen_bottom_pressure': float(regen_bottom_pressure),
         'blower_kw': blower_kw,
         'flash_pressure': float(flash_pressure),
         'feed_pressure': float(feed_pressure),
@@ -1002,8 +1095,9 @@ if res:
                 "slice is removed.")
         if res['blower_kw'] is not None:
             st.caption(f"Recycle blower duty ≈ {res['blower_kw']:.2f} kW "
-                       f"(suction ≈1.2 bara → "
-                       f"{res['recycle_blower_discharge']:.2f} bara discharge).")
+                       f"(suction ≈ {res.get('regen_top_pressure', 1.2):.2f} bara top "
+                       f"pressure → {res.get('regen_bottom_pressure', 1.2):.2f} bara "
+                       f"bottom pressure discharge).")
 
     # Interactive process flow diagram (streams annotated with T, P, flow)
     dot_graph = res['dot_graph']
