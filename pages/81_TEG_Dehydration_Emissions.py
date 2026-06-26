@@ -920,27 +920,38 @@ def _validate_inputs():
     errors = []
     warnings = []
 
-    # --- Pressure hierarchy: feed -> absorber -> flash drum -> regenerator ---
+    # --- Pressure hierarchy: feed >= absorber > flash drum > regenerator ---
+    if absorber_pressure > feed_pressure:
+        errors.append(
+            f"Feed pressure ({feed_pressure:.1f} bara) is lower than the absorber "
+            f"pressure ({absorber_pressure:.1f} bara). The wet feed gas cannot flow "
+            f"into a higher-pressure contactor without compression, which this model "
+            f"does not include.\n\n"
+            f"**To make it run:** lower the *Absorber pressure* to ≤ "
+            f"{feed_pressure:.1f} bara, or raise the *Feed pressure* to ≥ "
+            f"{absorber_pressure:.1f} bara.")
     if regen_bottom_pressure < regen_top_pressure:
         errors.append(
-            f"Regenerator bottom pressure ({regen_bottom_pressure:.2f} bara) must be "
-            f"≥ the top pressure ({regen_top_pressure:.2f} bara) — a column always "
-            f"has a positive top-to-bottom pressure gradient.")
+            f"Regenerator bottom pressure ({regen_bottom_pressure:.2f} bara) is below "
+            f"the top pressure ({regen_top_pressure:.2f} bara). A column always has a "
+            f"positive top-to-bottom pressure gradient.\n\n"
+            f"**To make it run:** set the *Regenerator bottom pressure* to ≥ "
+            f"{regen_top_pressure:.2f} bara (the top pressure), or lower the "
+            f"*Regenerator top pressure*.")
     if flash_pressure <= regen_top_pressure:
         errors.append(
-            f"Flash-drum pressure ({flash_pressure:.2f} bara) must be above the "
-            f"regenerator top pressure ({regen_top_pressure:.2f} bara) so rich TEG "
-            f"flows from the flash drum down to the still.")
+            f"Flash-drum pressure ({flash_pressure:.2f} bara) is not above the "
+            f"regenerator top pressure ({regen_top_pressure:.2f} bara). Rich TEG must "
+            f"flow downhill in pressure from the flash drum to the still.\n\n"
+            f"**To make it run:** raise the *Flash-drum pressure* above "
+            f"{regen_top_pressure:.2f} bara, or lower the *Regenerator top pressure*.")
     if flash_pressure >= absorber_pressure:
         errors.append(
-            f"Flash-drum pressure ({flash_pressure:.2f} bara) must be below the "
-            f"absorber pressure ({absorber_pressure:.2f} bara) so rich TEG flashes "
-            f"down from the absorber to the flash drum.")
-    if absorber_pressure > feed_pressure:
-        warnings.append(
-            f"Absorber pressure ({absorber_pressure:.1f} bara) is above the feed "
-            f"pressure ({feed_pressure:.1f} bara) — the feed gas would need "
-            f"compression upstream of the contactor.")
+            f"Flash-drum pressure ({flash_pressure:.2f} bara) is not below the "
+            f"absorber pressure ({absorber_pressure:.2f} bara). Rich TEG must flash "
+            f"down from the absorber to the lower-pressure flash drum.\n\n"
+            f"**To make it run:** lower the *Flash-drum pressure* below "
+            f"{absorber_pressure:.2f} bara, or raise the *Absorber pressure*.")
 
     # --- Saturation conditions (only when saturating at custom T/P) ---
     if water_mode == 'saturated' and sat_pressure is not None:
@@ -990,13 +1001,15 @@ if run_clicked:
         st.stop()
 
     _errors, _warnings = _validate_inputs()
+    if _errors:
+        st.error(f"⛔ Cannot run — {len(_errors)} unphysical input"
+                 f"{'s' if len(_errors) > 1 else ''} detected. Fix the following "
+                 f"and run again:")
+        for _i, _e in enumerate(_errors, 1):
+            st.error(f"**{_i}.** {_e}")
+        st.stop()
     for _w in _warnings:
         st.warning(_w)
-    if _errors:
-        for _e in _errors:
-            st.error(_e)
-        st.error("Inputs are inconsistent — fix the errors above and run again.")
-        st.stop()
 
     try:
         with st.spinner("Building and solving the TEG plant (recycle convergence)…"):
