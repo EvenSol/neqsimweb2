@@ -46,8 +46,8 @@ hydrogen_type_mapping = {
 mapped_hydrogen_type = hydrogen_type_mapping[hydrogen_type.lower()]
 
 # Initialize session state for temperature and pressure input
-if 'tp_flash_data' not in st.session_state:
-    st.session_state['tp_flash_data'] = pd.DataFrame({
+if 'h2_tp_flash_data' not in st.session_state:
+    st.session_state['h2_tp_flash_data'] = pd.DataFrame({
         'Temperature (C)': [20.0, 25.0],  # Default example temperature
         'Pressure (bara)': [1.0, 10.0]  # Default example pressure
     })
@@ -55,7 +55,7 @@ if 'tp_flash_data' not in st.session_state:
 st.divider()
 st.text("Input Pressures and Temperatures")
 st.edited_tp_data = st.data_editor(
-    st.session_state.tp_flash_data.dropna().reset_index(drop=True),
+    st.session_state.h2_tp_flash_data.dropna().reset_index(drop=True),
     num_rows='dynamic',  # Allows dynamic number of rows
     column_config={
         'Temperature (C)': st.column_config.NumberColumn(
@@ -140,4 +140,4 @@ if st.button('Run Hydrogen Property Calculations'):
         combined_results = pd.DataFrame(results_list)
         st.data_editor(combined_results)
 
-st.sidebar.file_uploader("Upload Data", key='uploaded_file', help='Upload a CSV file containing temperature and pressure values.')
+st.sidebar.file_uploader("Upload Data", key='h2_uploaded_file', help='Upload a CSV file containing temperature and pressure values.')

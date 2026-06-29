@@ -229,11 +229,8 @@ def main():
     st.text("Set fluid composition:")
 
     hidecomponents = st.checkbox('Show active components')
-    if hidecomponents:
-        st.edited_df['MolarComposition[-]'] = st.edited_df['MolarComposition[-]']
-        st.session_state.activefluid_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
 
-    if 'uploaded_file' in st.session_state and not hidecomponents:
+    if 'uploaded_file' in st.session_state and st.session_state.uploaded_file is not None and not hidecomponents:
         try:
             st.session_state.activefluid_df = pd.read_csv(st.session_state.uploaded_file)
             numeric_columns = ['MolarComposition[-]', 'MolarMass[kg/mol]', 'RelativeDensity[-]']
@@ -258,9 +255,14 @@ def main():
             ),
         },
     num_rows='dynamic')
+
+    if hidecomponents:
+        st.session_state.activefluid_df = st.edited_df[st.edited_df['MolarComposition[-]'] > 0]
+
     isplusfluid = st.checkbox('Plus Fluid')
 
     st.text("Fluid composition will be normalized before simulation")
+
     st.divider()
     
     # ----------------------------------------------------------------------------------
@@ -505,7 +507,7 @@ def main():
             # 9) Display results
             st.success("Grid calculation completed successfully!")
             st.subheader(f"Results for '{property_name}' in '{phase_name}' phase")
-            st.dataframe(results_df.style.hide(axis="index"), use_container_width=True)
+            st.dataframe(results_df.style.hide(axis="index"), width='stretch')
 
             # 10) Download option
             csv_data = results_df.to_csv(index=False)
@@ -584,7 +586,7 @@ def main():
                     title=unit
                 )
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width='stretch')
             #### Pablo ends
 
 

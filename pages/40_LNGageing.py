@@ -77,6 +77,7 @@ with st.expander("📋 Initial LNG Composition", expanded=True):
     st.session_state.lng_edited_df = st.edited_df
 
     st.caption("💡 Fluid composition will be normalized before simulation")
+
 # Add a visual divider
 st.divider()
 
@@ -109,8 +110,17 @@ if st.button('Simulate Ageing'):
     if st.edited_df['MolarComposition[-]'].sum() > 0:
         with st.spinner('Running LNG ageing simulation...'):
             try:
-                # Create fluid from user input
-                fluid = fluid_df(st.edited_df).autoSelectModel()
+                # Normalize composition to sum to exactly 100%
+                sim_df = st.edited_df.copy()
+                total = sim_df['MolarComposition[-]'].sum()
+                if abs(total - 100.0) > 0.01:
+                    sim_df['MolarComposition[-]'] = sim_df['MolarComposition[-]'] / total * 100.0
+                    st.info(f'Input composition summed to {total:.4f}. Normalized to 100% before simulation.')
+                    st.dataframe(sim_df[['ComponentName', 'MolarComposition[-]']].rename(
+                        columns={'MolarComposition[-]': 'Normalized Composition [mol%]'}))
+
+                # Create fluid from normalized input
+                fluid = fluid_df(sim_df).autoSelectModel()
                 fluid.setPressure(pressure_transport, 'bara')
                 fluid.setTemperature(-160.0, "C")  # setting a guessed initial temperature
                 

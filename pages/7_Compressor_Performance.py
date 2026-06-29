@@ -8,7 +8,8 @@ from theme import apply_theme
 import json
 import concurrent.futures
 import time
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 def get_gemini_api_key():
     """Get Gemini API key from secrets or session state."""
@@ -51,6 +52,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     - GERG-2008 (default) - Most accurate for natural gas applications
     - Peng-Robinson (PR) - General purpose cubic EoS
     - Soave-Redlich-Kwong (SRK) - General purpose cubic EoS
+    - BWRS - Benedict-Webb-Rubin-Starling EoS
     
     ---
     
@@ -374,7 +376,7 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     
     ## 11. Tips & Best Practices
     
-    1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons
+    1. **Choose the right EoS:** GERG-2008 for natural gas, PR/SRK for general hydrocarbons, BWRS for dense-phase applications
     2. **Use Detailed method** for high pressure ratios (>3:1) or near-critical conditions
     3. **Verify input data:** Ensure pressures are absolute (not gauge)
     4. **Check temperature units:** Confirm whether input is °C or K
@@ -393,6 +395,88 @@ with st.expander("📖 **Documentation - User Manual & Method Reference**", expa
     | Head deviation | Gas composition difference | Use composition correction |
     | Calculation fails | Invalid thermodynamic state | Check if conditions are in valid range |
     
+    ---
+    
+    ## 13. Uncertainty Analysis (Monte Carlo)
+    
+    The Monte Carlo uncertainty analysis feature propagates measurement uncertainties and 
+    equation of state accuracy through the compressor calculations to estimate result uncertainties.
+    
+    ### 13.1 EoS Accuracy Summary (GERG-2008)
+    
+    | Property | Normal Range | Extended Range | Extrapolated |
+    |----------|--------------|----------------|--------------|
+    | Density | ±0.05–0.1% | ±0.3–1% | Unquantified |
+    | Speed of Sound | ±0.05–0.1% | ±0.2–0.5% | Unreliable |
+    | Enthalpy | ±0.2–0.5% | ±1–2% | Unreliable |
+    | Heat Capacity | ±1–2% | ±3–5% | Poor |
+    | Dew/Bubble Point | ±0.2–0.5 K | ±1–2 K | Not recommended |
+    
+    **Normal Range:** T = 90-450 K, P < 35 MPa, typical pipeline gas compositions
+    **Extended Range:** T = 60-700 K, P < 70 MPa, high CO2/H2S content
+    
+    ### 13.2 EoS Comparison: Cubic vs GERG-2008 (DTU Study)
+    
+    Average Absolute Deviation (AAD%) in compressibility factor Z for multicomponent natural gas:
+    
+    | Equation of State | AAD% in Z vs GERG-2008 |
+    |-------------------|------------------------|
+    | SRK | ~1.99% |
+    | SRK + Volume Translation | ~1.59% |
+    | PR + Volume Translation | ~1.72% |
+    | PR (Peng-Robinson) | ~4.86% |
+    
+    **Implications for compressor calculations:**
+    - GERG-2008 is the reference standard for natural gas (highest accuracy)
+    - SRK with volume translation provides best cubic EoS accuracy (~1.6%)
+    - Standard PR shows larger deviations (~5%), particularly at high pressures
+    - For critical applications, use GERG-2008; for quick estimates, SRK is preferred over PR
+    
+    ### 13.3 Typical Measurement Uncertainties
+    
+    | Measurement | Typical Uncertainty | Good Practice |
+    |-------------|---------------------|---------------|
+    | Pressure | ±0.25–0.5% | Use calibrated transmitters |
+    | Temperature | ±0.2–0.5 K | Proper thermowell installation |
+    | Flow (orifice) | ±1–2% | Regular plate inspections |
+    | Flow (ultrasonic) | ±0.5–1% | Multiple path meters |
+    | Gas composition | ±0.5–1% (mol) | Online GC with standards |
+    
+    ### 13.4 Monte Carlo Method
+    
+    The analysis performs N iterations (default 100) where each iteration:
+    1. Perturbs input measurements (P, T, flow, composition) by random amounts within uncertainty bounds
+    2. Applies EoS uncertainty to thermodynamic properties (Z-factor, enthalpy)
+    3. Recalculates compressor performance with perturbed inputs
+    4. Applies EoS uncertainty to outputs (head, power, efficiency)
+    5. Collects results to build statistical distributions
+    
+    **Uncertainty Propagation:**
+    
+    | Parameter | Perturbation Method | Sensitivity |
+    |-----------|---------------------|-------------|
+    | Pressure | Normal distribution (±σ%) | Direct |
+    | Temperature | Normal distribution (±σ K) | Direct |
+    | Flow rate | Normal distribution (±σ%) | Direct |
+    | Composition | Normal distribution (±σ% relative) | Direct |
+    | Z-factor (EoS) | Normal distribution (±σ%) | Direct |
+    | Enthalpy (EoS) | Normal distribution (±σ%) | Direct |
+    | Polytropic Head | Scaled by EoS perturbation | 100% |
+    | Power | Scaled by EoS perturbation | 100% |
+    | Efficiency | Scaled by EoS perturbation | 30% (ratio) |
+    
+    **Output Statistics:**
+    - Mean value and standard deviation for each output
+    - 95% confidence interval (±2σ)
+    - Min/Max values observed
+    - Histograms showing result distributions
+    
+    ### 13.5 Combined Uncertainty
+    
+    The combined uncertainty in polytropic efficiency typically ranges from:
+    - ±1–2% for well-characterized test conditions
+    - ±2–5% for field measurements with multiple uncertainty sources
+    
     
     """)
 
@@ -406,7 +490,7 @@ Expand the **Documentation** section above for detailed method descriptions, equ
 
 st.divider()
 
-# Supported components (compatible with GERG-2008, PR, and SRK)
+# Supported components (compatible with GERG-2008, PR, SRK, and BWRS)
 gerg2008_components = [
     "nitrogen", "CO2", "methane", "ethane", "propane", 
     "i-butane", "n-butane", "i-pentane", "n-pentane", "n-hexane",
@@ -528,11 +612,24 @@ if 'polytropic_efficiency_input' not in st.session_state:
 if 'eos_model' not in st.session_state:
     st.session_state['eos_model'] = "GERG-2008"
 
+# Initialize session state for Monte Carlo uncertainty analysis
+if 'mc_num_iterations' not in st.session_state:
+    st.session_state['mc_num_iterations'] = 100
+if 'mc_pressure_uncertainty' not in st.session_state:
+    st.session_state['mc_pressure_uncertainty'] = 0.5  # % uncertainty in pressure
+if 'mc_temperature_uncertainty' not in st.session_state:
+    st.session_state['mc_temperature_uncertainty'] = 0.3  # K uncertainty in temperature
+if 'mc_flow_uncertainty' not in st.session_state:
+    st.session_state['mc_flow_uncertainty'] = 1.0  # % uncertainty in flow
+if 'mc_composition_uncertainty' not in st.session_state:
+    st.session_state['mc_composition_uncertainty'] = 0.5  # % uncertainty in composition
+
 # EoS model options mapping
 eos_model_options = {
     "GERG-2008": "gerg-2008",
     "Peng-Robinson": "pr",
-    "Soave-Redlich-Kwong": "srk"
+    "Soave-Redlich-Kwong": "srk",
+    "BWRS": "BWRS"
 }
 
 # Sidebar for fluid selection
@@ -560,9 +657,12 @@ with st.sidebar:
         "Equation of State Model",
         options=list(eos_model_options.keys()),
         index=list(eos_model_options.keys()).index(st.session_state['eos_model']),
-        help="GERG-2008: High accuracy for natural gas. PR: Peng-Robinson cubic EoS. SRK: Soave-Redlich-Kwong cubic EoS."
+        help="GERG-2008: High accuracy for natural gas. PR: Peng-Robinson cubic EoS. SRK: Soave-Redlich-Kwong cubic EoS. BWRS: Benedict-Webb-Rubin-Starling EoS."
     )
     st.session_state['eos_model'] = selected_eos
+    if selected_eos == "GERG-2008":
+        st.caption("ℹ️ GERG-2008 valid ranges — Normal: 90–450 K, ≤ 350 bar (±0.1%). Extended: 60–700 K, ≤ 700 bar (±0.2–0.5%).")
+    
     
     st.divider()
     st.header("Calculation Method")
@@ -604,11 +704,15 @@ with st.sidebar:
     if is_ai_enabled():
         st.divider()
         st.header("🤖 AI Analysis")
-        st.success(f"✓ AI enabled ({st.session_state.get('ai_model', 'gemini-2.0-flash')})")
+        st.success(f"✓ AI enabled ({st.session_state.get('ai_model', 'gemini-2.5-flash')})")
 
 # Helper function to get the selected EoS model code
 def get_selected_eos_model():
     return eos_model_options.get(st.session_state['eos_model'], "gerg-2008")
+
+def is_gerg_model():
+    """Return True if the selected EoS model is GERG-2008 or BWRS (no multiphase check)."""
+    return get_selected_eos_model() in ("gerg-2008", "BWRS")
 
 
 def parse_design_data_format(loaded_data):
@@ -844,12 +948,20 @@ with st.expander("📋 Fluid Composition", expanded=True):
         try:
             jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
             display_fluid = fluid(get_selected_eos_model())
-            for comp_name, comp_moles in fluid_composition.items():
+            display_comp_items = list(fluid_composition.items())
+            if get_selected_eos_model() == 'BWRS':
+                display_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+            for comp_name, comp_moles in display_comp_items:
                 display_fluid.addComponent(comp_name, float(comp_moles))
             display_fluid.setMixingRule('classic')
-            display_fluid.setMultiPhaseCheck(True)
+            display_fluid.setMultiPhaseCheck(not is_gerg_model())
             display_fluid.setPressure(50.0, 'bara')
             display_fluid.setTemperature(30.0, 'C')
+            if get_selected_eos_model() == 'BWRS':
+                display_fluid.setNumberOfPhases(1)
+                display_fluid.setMaxNumberOfPhases(1)
+                display_fluid.setForcePhaseTypes(True)
+                display_fluid.setPhaseType(0, 'GAS')
             TPflash(display_fluid)
             display_fluid.initThermoProperties()
             
@@ -1349,12 +1461,20 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                     # Create new fluid and calculate properties
                     jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
                     new_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in new_fluid_composition.items():
+                    new_comp_items = list(new_fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        new_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in new_comp_items:
                         new_fluid.addComponent(comp_name, float(comp_moles))
                     new_fluid.setMixingRule('classic')
-                    new_fluid.setMultiPhaseCheck(True)
+                    new_fluid.setMultiPhaseCheck(not is_gerg_model())
                     new_fluid.setPressure(ref_pressure, 'bara')
                     new_fluid.setTemperature(ref_temp, 'C')
+                    if get_selected_eos_model() == 'BWRS':
+                        new_fluid.setNumberOfPhases(1)
+                        new_fluid.setMaxNumberOfPhases(1)
+                        new_fluid.setForcePhaseTypes(True)
+                        new_fluid.setPhaseType(0, 'GAS')
                     TPflash(new_fluid)
                     new_fluid.initProperties()
                     
@@ -1843,7 +1963,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=450
                     )
-                    st.plotly_chart(fig_fit, use_container_width=True)
+                    st.plotly_chart(fig_fit, width='stretch')
                     
                     # Add efficiency plot
                     fig_eff = go.Figure()
@@ -1878,7 +1998,7 @@ with st.expander("📈 Compressor Manufacturer Curves (Optional)", expanded=st.s
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         height=400
                     )
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    st.plotly_chart(fig_eff, width='stretch')
                     
                     # Show curve data tables
                     with st.expander("📋 View Curve Data Tables"):
@@ -2046,13 +2166,21 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     
                     # Create inlet fluid
                     inlet_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in fluid_composition.items():
+                    inlet_comp_items = list(fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        inlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in inlet_comp_items:
                         inlet_fluid.addComponent(comp_name, float(comp_moles))
                     inlet_fluid.setMixingRule('classic')
-                    inlet_fluid.setMultiPhaseCheck(True)
+                    inlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                     
                     inlet_fluid.setPressure(float(p_in), 'bara')
                     inlet_fluid.setTemperature(float(t_in), 'C')
+                    if get_selected_eos_model() == 'BWRS':
+                        inlet_fluid.setNumberOfPhases(1)
+                        inlet_fluid.setMaxNumberOfPhases(1)
+                        inlet_fluid.setForcePhaseTypes(True)
+                        inlet_fluid.setPhaseType(0, 'GAS')
                     TPflash(inlet_fluid)
                     inlet_fluid.initProperties()
                     
@@ -2083,12 +2211,20 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     elif flow_unit == "MSm3/day":
                         # Standard conditions: 15C, 1.01325 bara
                         std_fluid = fluid(get_selected_eos_model())
-                        for comp_name, comp_moles in fluid_composition.items():
+                        std_comp_items = list(fluid_composition.items())
+                        if get_selected_eos_model() == 'BWRS':
+                            std_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                        for comp_name, comp_moles in std_comp_items:
                             std_fluid.addComponent(comp_name, float(comp_moles))
                         std_fluid.setMixingRule('classic')
-                        std_fluid.setMultiPhaseCheck(True)
+                        std_fluid.setMultiPhaseCheck(not is_gerg_model())
                         std_fluid.setPressure(1.01325, 'bara')
                         std_fluid.setTemperature(15.0, 'C')
+                        if get_selected_eos_model() == 'BWRS':
+                            std_fluid.setNumberOfPhases(1)
+                            std_fluid.setMaxNumberOfPhases(1)
+                            std_fluid.setForcePhaseTypes(True)
+                            std_fluid.setPhaseType(0, 'GAS')
                         TPflash(std_fluid)
                         std_fluid.initProperties()
                         rho_std = std_fluid.getDensity('kg/m3')  # kg/m3 at std conditions
@@ -2099,12 +2235,20 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     
                     # Create outlet fluid at actual conditions
                     outlet_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in fluid_composition.items():
+                    outlet_comp_items = list(fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        outlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in outlet_comp_items:
                         outlet_fluid.addComponent(comp_name, float(comp_moles))
                     outlet_fluid.setMixingRule('classic')
-                    outlet_fluid.setMultiPhaseCheck(True)
+                    outlet_fluid.setMultiPhaseCheck(not is_gerg_model())
                     outlet_fluid.setPressure(float(p_out), 'bara')
                     outlet_fluid.setTemperature(float(t_out), 'C')
+                    if get_selected_eos_model() == 'BWRS':
+                        outlet_fluid.setNumberOfPhases(1)
+                        outlet_fluid.setMaxNumberOfPhases(1)
+                        outlet_fluid.setForcePhaseTypes(True)
+                        outlet_fluid.setPhaseType(0, 'GAS')
                     TPflash(outlet_fluid)
                     outlet_fluid.initProperties()
                     
@@ -2139,13 +2283,23 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                     # Use NeqSim process compressor with detailed polytropic method
                     # Create a stream for the compressor inlet
                     process_fluid = fluid(get_selected_eos_model())
-                    for comp_name, comp_moles in fluid_composition.items():
+                    # BWRS requires methane (or a hydrocarbon) as the first component
+                    # to avoid NaN in departure function calculations
+                    comp_items = list(fluid_composition.items())
+                    if get_selected_eos_model() == 'BWRS':
+                        comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                    for comp_name, comp_moles in comp_items:
                         process_fluid.addComponent(comp_name, float(comp_moles))
                     process_fluid.setMixingRule('classic')
-                    process_fluid.setMultiPhaseCheck(True)
+                    process_fluid.setMultiPhaseCheck(not is_gerg_model())
                     process_fluid.setPressure(float(p_in), 'bara')
                     process_fluid.setTemperature(float(t_in), 'C')
                     process_fluid.setTotalFlowRate(float(mass_flow), 'kg/sec')
+                    if get_selected_eos_model() == 'BWRS':
+                        process_fluid.setNumberOfPhases(1)
+                        process_fluid.setMaxNumberOfPhases(1)
+                        process_fluid.setForcePhaseTypes(True)
+                        process_fluid.setPhaseType(0, 'GAS')
                     TPflash(process_fluid)
                     process_fluid.initProperties()
                     
@@ -2602,7 +2756,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    st.plotly_chart(fig_eff, width='stretch')
                 
                 with tab2:
                     fig_head = go.Figure()
@@ -2670,7 +2824,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_head, use_container_width=True)
+                    st.plotly_chart(fig_head, width='stretch')
                 
                 with tab3:
                     fig_power = go.Figure()
@@ -2695,7 +2849,7 @@ if st.button('Calculate Compressor Performance', type='primary') or trigger_calc
                         yaxis_title='Power (MW)',
                         hovermode='closest'
                     )
-                    st.plotly_chart(fig_power, use_container_width=True)
+                    st.plotly_chart(fig_power, width='stretch')
                 
                 # Download results
                 st.divider()
@@ -3041,6 +3195,1258 @@ with st.expander("📚 Theory & Equations", expanded=False):
     - Heat capacity: ±1%
     """)
 
+# Monte Carlo Uncertainty Analysis Section
+# Keep expander open only if MC results are available (user has run the simulation)
+mc_has_results = 'mc_results' in st.session_state and st.session_state['mc_results'] is not None
+with st.expander("🎲 **Uncertainty Analysis (Monte Carlo)**", expanded=mc_has_results):
+    st.markdown("""
+    Propagate measurement and EoS uncertainties through compressor calculations using Monte Carlo simulation.
+    This helps quantify the confidence interval of calculated performance metrics.
+    """)
+    
+    # Check if we have calculated results to analyze
+    if 'calculated_results' in st.session_state and st.session_state['calculated_results'] is not None:
+        results_df = st.session_state['calculated_results']
+        
+        st.subheader("📊 Uncertainty Input Parameters")
+        
+        # EoS uncertainty reference
+        st.markdown("""
+        **EoS Accuracy Reference (GERG-2008 vs Cubic EoS):**
+        
+        | EoS Model | Z-factor Deviation | Recommended Use |
+        |-----------|-------------------|-----------------|
+        | GERG-2008 | Reference (±0.1%) | High-accuracy natural gas |
+        | SRK | ~2.0% | Quick estimates |
+        | PR | ~4.9% | General hydrocarbons |
+        
+        **Uncertainty Propagation:** EoS uncertainty affects Z-factor → enthalpy → polytropic head (100% sensitivity), 
+        power (100%), and efficiency (30% - reduced since it's a ratio).
+        """)
+        
+        st.divider()
+        
+        # Uncertainty input controls
+        col_unc1, col_unc2 = st.columns(2)
+        
+        with col_unc1:
+            st.markdown("**Measurement Uncertainties:**")
+            mc_pressure_unc = st.number_input(
+                "Pressure uncertainty (%)", 
+                min_value=0.0, max_value=5.0, 
+                value=st.session_state['mc_pressure_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.25-0.5% for calibrated transmitters"
+            )
+            st.session_state['mc_pressure_uncertainty'] = mc_pressure_unc
+            
+            mc_temp_unc = st.number_input(
+                "Temperature uncertainty (K)", 
+                min_value=0.0, max_value=5.0, 
+                value=st.session_state['mc_temperature_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.2-0.5 K for proper thermowell installation"
+            )
+            st.session_state['mc_temperature_uncertainty'] = mc_temp_unc
+            
+            mc_flow_unc = st.number_input(
+                "Flow uncertainty (%)", 
+                min_value=0.0, max_value=10.0, 
+                value=st.session_state['mc_flow_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.5-2% depending on meter type"
+            )
+            st.session_state['mc_flow_uncertainty'] = mc_flow_unc
+        
+        with col_unc2:
+            st.markdown("**EoS & Composition Uncertainties:**")
+            
+            # EoS uncertainty based on selected model
+            eos_model = st.session_state.get('eos_model', 'GERG-2008')
+            eos_unc_defaults = {
+                'GERG-2008': 0.1,
+                'Peng-Robinson': 4.9,
+                'Soave-Redlich-Kwong': 2.0,
+                'BWRS': 0.5
+            }
+            default_eos_unc = eos_unc_defaults.get(eos_model, 1.0)
+            
+            mc_eos_unc = st.number_input(
+                f"EoS Z-factor uncertainty (%) [{eos_model}]", 
+                min_value=0.0, max_value=10.0, 
+                value=default_eos_unc,
+                step=0.1, format="%.2f",
+                help=f"Based on DTU study: GERG-2008=0.1%, SRK=2.0%, PR=4.9%. Affects Z, enthalpy, head (100%), power (100%), efficiency (30%)."
+            )
+            
+            mc_comp_unc = st.number_input(
+                "Composition uncertainty (% relative)", 
+                min_value=0.0, max_value=5.0, 
+                value=st.session_state['mc_composition_uncertainty'],
+                step=0.1, format="%.2f",
+                help="Typical: 0.5-1% for online GC with standards"
+            )
+            st.session_state['mc_composition_uncertainty'] = mc_comp_unc
+            
+            mc_iterations = st.number_input(
+                "Number of Monte Carlo iterations", 
+                min_value=50, max_value=1000, 
+                value=st.session_state['mc_num_iterations'],
+                step=50,
+                help="More iterations = better statistics but slower. 100-500 is typical."
+            )
+            st.session_state['mc_num_iterations'] = mc_iterations
+        
+        st.divider()
+        
+        # Select operating point to analyze
+        st.subheader("🎯 Select Operating Point")
+        
+        if len(results_df) > 1:
+            point_options = [f"Point {i+1}: {row['Vol Flow Inlet (m³/hr)']:.0f} m³/hr @ {row.get('Speed (RPM)', 0):.0f} RPM" 
+                           for i, row in results_df.iterrows()]
+            selected_point_idx = st.selectbox(
+                "Operating point to analyze",
+                range(len(results_df)),
+                format_func=lambda x: point_options[x]
+            )
+        else:
+            selected_point_idx = 0
+            st.info("Analyzing the single calculated operating point")
+        
+        selected_row = results_df.iloc[selected_point_idx]
+        
+        # Display base case values
+        col_base1, col_base2, col_base3, col_base4 = st.columns(4)
+        with col_base1:
+            st.metric("Base Efficiency", f"{selected_row['Polytropic Eff (%)']:.2f}%")
+        with col_base2:
+            st.metric("Base Head", f"{selected_row['Polytropic Head (kJ/kg)']:.2f} kJ/kg")
+        with col_base3:
+            st.metric("Base Power", f"{selected_row['Power (MW)']:.3f} MW")
+        with col_base4:
+            st.metric("Pressure Ratio", f"{selected_row['Pressure Ratio']:.3f}")
+        
+        st.divider()
+        
+        # Run Monte Carlo button
+        if st.button("🎲 Run Monte Carlo Analysis", type="primary", key="run_mc_btn"):
+            with st.spinner(f"Running {mc_iterations} Monte Carlo iterations..."):
+                try:
+                    # Get base operating conditions
+                    base_p_in = selected_row['Inlet P (bara)']
+                    base_p_out = selected_row['Outlet P (bara)']
+                    base_t_in = selected_row['Inlet T (°C)']
+                    base_t_out = selected_row['Outlet T (°C)']
+                    base_mass_flow = selected_row['Mass Flow (kg/hr)'] / 3600  # kg/s
+                    
+                    # Get fluid composition
+                    fluid_composition = get_fluid_composition()
+                    
+                    # Results storage
+                    mc_results = {
+                        'poly_eff': [],
+                        'poly_head': [],
+                        'power': [],
+                        'z_in': [],
+                        'z_out': [],
+                        'kappa_in': [],
+                        'actual_work': []
+                    }
+                    
+                    # Progress bar
+                    progress_bar = st.progress(0, text="Starting Monte Carlo simulation...")
+                    
+                    calc_method = st.session_state.get('calc_method', 'Detailed')
+                    num_steps = st.session_state.get('num_calc_steps', 10)
+                    
+                    for iteration in range(mc_iterations):
+                        try:
+                            # Update progress  
+                            if iteration % 10 == 0:
+                                progress_bar.progress((iteration + 1) / mc_iterations, 
+                                                     text=f"Iteration {iteration + 1}/{mc_iterations}")
+                            
+                            # Apply random perturbations (normal distribution)
+                            p_in_pert = base_p_in * (1 + np.random.normal(0, mc_pressure_unc/100))
+                            p_out_pert = base_p_out * (1 + np.random.normal(0, mc_pressure_unc/100))
+                            t_in_pert = base_t_in + np.random.normal(0, mc_temp_unc)
+                            t_out_pert = base_t_out + np.random.normal(0, mc_temp_unc)
+                            mass_flow_pert = base_mass_flow * (1 + np.random.normal(0, mc_flow_unc/100))
+                            
+                            # Perturb composition slightly
+                            pert_composition = {}
+                            for comp, mol_frac in fluid_composition.items():
+                                pert_composition[comp] = max(0, mol_frac * (1 + np.random.normal(0, mc_comp_unc/100)))
+                            
+                            # Normalize composition
+                            total_mol = sum(pert_composition.values())
+                            if total_mol > 0:
+                                for comp in pert_composition:
+                                    pert_composition[comp] = pert_composition[comp] / total_mol * 100
+                            
+                            # Create inlet fluid
+                            inlet_fluid = fluid(get_selected_eos_model())
+                            mc_inlet_comp_items = list(pert_composition.items())
+                            if get_selected_eos_model() == 'BWRS':
+                                mc_inlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                            for comp_name, comp_moles in mc_inlet_comp_items:
+                                inlet_fluid.addComponent(comp_name, float(comp_moles))
+                            inlet_fluid.setMixingRule('classic')
+                            inlet_fluid.setMultiPhaseCheck(not is_gerg_model())
+                            inlet_fluid.setPressure(float(p_in_pert), 'bara')
+                            inlet_fluid.setTemperature(float(t_in_pert), 'C')
+                            if get_selected_eos_model() == 'BWRS':
+                                inlet_fluid.setNumberOfPhases(1)
+                                inlet_fluid.setMaxNumberOfPhases(1)
+                                inlet_fluid.setForcePhaseTypes(True)
+                                inlet_fluid.setPhaseType(0, 'GAS')
+                            TPflash(inlet_fluid)
+                            inlet_fluid.initProperties()
+                            
+                            # Get inlet properties
+                            z_in_raw = inlet_fluid.getZ()
+                            h_in_raw = inlet_fluid.getEnthalpy("kJ/kg")
+                            kappa_in = inlet_fluid.getGamma2()
+                            
+                            # Apply EoS uncertainty to thermodynamic properties
+                            # EoS uncertainty affects Z, enthalpy, and other derived properties proportionally
+                            eos_perturbation = np.random.normal(0, mc_eos_unc/100)
+                            z_in = z_in_raw * (1 + eos_perturbation)
+                            h_in = h_in_raw * (1 + eos_perturbation)  # Enthalpy uncertainty from EoS
+                            
+                            # Create outlet fluid
+                            outlet_fluid = fluid(get_selected_eos_model())
+                            mc_outlet_comp_items = list(pert_composition.items())
+                            if get_selected_eos_model() == 'BWRS':
+                                mc_outlet_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                            for comp_name, comp_moles in mc_outlet_comp_items:
+                                outlet_fluid.addComponent(comp_name, float(comp_moles))
+                            outlet_fluid.setMixingRule('classic')
+                            outlet_fluid.setMultiPhaseCheck(not is_gerg_model())
+                            outlet_fluid.setPressure(float(p_out_pert), 'bara')
+                            outlet_fluid.setTemperature(float(t_out_pert), 'C')
+                            if get_selected_eos_model() == 'BWRS':
+                                outlet_fluid.setNumberOfPhases(1)
+                                outlet_fluid.setMaxNumberOfPhases(1)
+                                outlet_fluid.setForcePhaseTypes(True)
+                                outlet_fluid.setPhaseType(0, 'GAS')
+                            TPflash(outlet_fluid)
+                            outlet_fluid.initProperties()
+                            
+                            z_out_raw = outlet_fluid.getZ()
+                            h_out_raw = outlet_fluid.getEnthalpy("kJ/kg")
+                            
+                            # Apply EoS uncertainty (use same perturbation for consistency within iteration)
+                            z_out = z_out_raw * (1 + eos_perturbation)
+                            h_out = h_out_raw * (1 + eos_perturbation)
+                            
+                            actual_work = h_out - h_in
+                            
+                            # Create process fluid for compressor calculation
+                            process_fluid = fluid(get_selected_eos_model())
+                            pert_comp_items = list(pert_composition.items())
+                            if get_selected_eos_model() == 'BWRS':
+                                pert_comp_items.sort(key=lambda x: (0 if x[0] == 'methane' else 1))
+                            for comp_name, comp_moles in pert_comp_items:
+                                process_fluid.addComponent(comp_name, float(comp_moles))
+                            process_fluid.setMixingRule('classic')
+                            process_fluid.setMultiPhaseCheck(not is_gerg_model())
+                            process_fluid.setPressure(float(p_in_pert), 'bara')
+                            process_fluid.setTemperature(float(t_in_pert), 'C')
+                            process_fluid.setTotalFlowRate(float(mass_flow_pert), 'kg/sec')
+                            if get_selected_eos_model() == 'BWRS':
+                                process_fluid.setNumberOfPhases(1)
+                                process_fluid.setMaxNumberOfPhases(1)
+                                process_fluid.setForcePhaseTypes(True)
+                                process_fluid.setPhaseType(0, 'GAS')
+                            TPflash(process_fluid)
+                            process_fluid.initProperties()
+                            
+                            # Create stream and compressor
+                            inlet_stream = jneqsim.process.equipment.stream.Stream("inlet_mc", process_fluid)
+                            inlet_stream.run()
+                            
+                            compressor = jneqsim.process.equipment.compressor.Compressor("compressor_mc", inlet_stream)
+                            compressor.setOutletPressure(float(p_out_pert), "bara")
+                            compressor.setUsePolytropicCalc(True)
+                            
+                            if calc_method == "Detailed":
+                                compressor.setPolytropicMethod("detailed")
+                                compressor.setNumberOfCompressorCalcSteps(num_steps)
+                            else:
+                                compressor.setPolytropicMethod("schultz")
+                            
+                            t_out_K = t_out_pert + 273.15
+                            compressor.setOutTemperature(t_out_K)
+                            compressor.run()
+                            
+                            eta_poly_raw = compressor.getPolytropicEfficiency()
+                            poly_head_raw = compressor.getPolytropicFluidHead()
+                            power_kW_raw = compressor.getPower('kW')
+                            
+                            # Apply EoS uncertainty to results
+                            # Head and power are directly proportional to enthalpy (affected by EoS)
+                            # Efficiency is a ratio, so less affected but still has some sensitivity
+                            poly_head = poly_head_raw * (1 + eos_perturbation) if poly_head_raw and not np.isnan(poly_head_raw) else actual_work * eta_poly_raw
+                            power_kW = power_kW_raw * (1 + eos_perturbation) if power_kW_raw and not np.isnan(power_kW_raw) else mass_flow_pert * actual_work
+                            
+                            # Efficiency perturbation - smaller effect since it's a ratio
+                            # but still affected by Z-factor uncertainty in compressibility calculations
+                            eta_poly = eta_poly_raw * (1 + eos_perturbation * 0.3)  # 30% sensitivity factor
+                            
+                            # Store valid results
+                            if eta_poly_raw is not None and not np.isnan(eta_poly_raw) and 0 < eta_poly_raw <= 1.0:
+                                # Clamp efficiency to valid range
+                                eta_poly_clamped = max(0.01, min(1.0, eta_poly))
+                                mc_results['poly_eff'].append(eta_poly_clamped * 100)
+                                mc_results['poly_head'].append(poly_head)
+                                mc_results['power'].append(power_kW / 1000)
+                                mc_results['z_in'].append(z_in)
+                                mc_results['z_out'].append(z_out)
+                                mc_results['kappa_in'].append(kappa_in)
+                                mc_results['actual_work'].append(actual_work)
+                        
+                        except Exception as iter_error:
+                            # Skip failed iterations
+                            continue
+                    
+                    progress_bar.empty()
+                    
+                    # Calculate statistics
+                    if len(mc_results['poly_eff']) >= 10:
+                        st.success(f"✅ Completed {len(mc_results['poly_eff'])} successful iterations out of {mc_iterations}")
+                        
+                        # Store results in session state
+                        st.session_state['mc_results'] = mc_results
+                        st.session_state['mc_base_values'] = {
+                            'poly_eff': selected_row['Polytropic Eff (%)'],
+                            'poly_head': selected_row['Polytropic Head (kJ/kg)'],
+                            'power': selected_row['Power (MW)']
+                        }
+                        
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Only {len(mc_results['poly_eff'])} valid iterations. Check input parameters.")
+                
+                except Exception as e:
+                    st.error(f"Monte Carlo analysis failed: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
+        
+        # Display results if available
+        if 'mc_results' in st.session_state and st.session_state['mc_results']:
+            mc_results = st.session_state['mc_results']
+            base_values = st.session_state.get('mc_base_values', {})
+            
+            st.divider()
+            st.subheader("📈 Monte Carlo Results")
+            
+            # Calculate statistics
+            def calc_stats(data, name, unit):
+                arr = np.array(data)
+                return {
+                    'name': name,
+                    'unit': unit,
+                    'mean': np.mean(arr),
+                    'std': np.std(arr),
+                    'min': np.min(arr),
+                    'max': np.max(arr),
+                    'p5': np.percentile(arr, 5),
+                    'p95': np.percentile(arr, 95),
+                    'n': len(arr)
+                }
+            
+            stats_eff = calc_stats(mc_results['poly_eff'], 'Polytropic Efficiency', '%')
+            stats_head = calc_stats(mc_results['poly_head'], 'Polytropic Head', 'kJ/kg')
+            stats_power = calc_stats(mc_results['power'], 'Power', 'MW')
+            
+            # Summary metrics
+            st.markdown("**Uncertainty Summary (95% Confidence Interval):**")
+            
+            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            
+            with col_stat1:
+                eff_unc = stats_eff['std'] * 2
+                st.metric(
+                    "Efficiency", 
+                    f"{stats_eff['mean']:.2f} ±{eff_unc:.2f}%",
+                    delta=f"±{eff_unc/stats_eff['mean']*100:.1f}% relative" if stats_eff['mean'] > 0 else None
+                )
+                st.caption(f"Range: {stats_eff['p5']:.2f} – {stats_eff['p95']:.2f}%")
+            
+            with col_stat2:
+                head_unc = stats_head['std'] * 2
+                st.metric(
+                    "Head", 
+                    f"{stats_head['mean']:.2f} ±{head_unc:.2f} kJ/kg",
+                    delta=f"±{head_unc/stats_head['mean']*100:.1f}% relative" if stats_head['mean'] > 0 else None
+                )
+                st.caption(f"Range: {stats_head['p5']:.2f} – {stats_head['p95']:.2f} kJ/kg")
+            
+            with col_stat3:
+                power_unc = stats_power['std'] * 2
+                st.metric(
+                    "Power", 
+                    f"{stats_power['mean']:.3f} ±{power_unc:.3f} MW",
+                    delta=f"±{power_unc/stats_power['mean']*100:.1f}% relative" if stats_power['mean'] > 0 else None
+                )
+                st.caption(f"Range: {stats_power['p5']:.3f} – {stats_power['p95']:.3f} MW")
+            
+            st.divider()
+            
+            # Detailed statistics table
+            st.markdown("**Detailed Statistics:**")
+            stats_df = pd.DataFrame([
+                {
+                    'Property': 'Polytropic Efficiency',
+                    'Unit': '%',
+                    'Mean': f"{stats_eff['mean']:.3f}",
+                    'Std Dev': f"{stats_eff['std']:.3f}",
+                    '95% CI (±2σ)': f"±{stats_eff['std']*2:.3f}",
+                    'Min': f"{stats_eff['min']:.3f}",
+                    'Max': f"{stats_eff['max']:.3f}",
+                    'P5': f"{stats_eff['p5']:.3f}",
+                    'P95': f"{stats_eff['p95']:.3f}",
+                },
+                {
+                    'Property': 'Polytropic Head',
+                    'Unit': 'kJ/kg',
+                    'Mean': f"{stats_head['mean']:.3f}",
+                    'Std Dev': f"{stats_head['std']:.3f}",
+                    '95% CI (±2σ)': f"±{stats_head['std']*2:.3f}",
+                    'Min': f"{stats_head['min']:.3f}",
+                    'Max': f"{stats_head['max']:.3f}",
+                    'P5': f"{stats_head['p5']:.3f}",
+                    'P95': f"{stats_head['p95']:.3f}",
+                },
+                {
+                    'Property': 'Power',
+                    'Unit': 'MW',
+                    'Mean': f"{stats_power['mean']:.4f}",
+                    'Std Dev': f"{stats_power['std']:.4f}",
+                    '95% CI (±2σ)': f"±{stats_power['std']*2:.4f}",
+                    'Min': f"{stats_power['min']:.4f}",
+                    'Max': f"{stats_power['max']:.4f}",
+                    'P5': f"{stats_power['p5']:.4f}",
+                    'P95': f"{stats_power['p95']:.4f}",
+                }
+            ])
+            st.dataframe(stats_df, width='stretch')
+            
+            st.divider()
+            
+            # Histograms
+            st.markdown("**Result Distributions:**")
+            
+            tab_hist1, tab_hist2, tab_hist3 = st.tabs(["Efficiency Distribution", "Head Distribution", "Power Distribution"])
+            
+            with tab_hist1:
+                fig_eff_hist = go.Figure()
+                fig_eff_hist.add_trace(go.Histogram(
+                    x=mc_results['poly_eff'],
+                    nbinsx=30,
+                    name='Monte Carlo Results',
+                    marker_color='#636EFA',
+                    opacity=0.7
+                ))
+                # Add base value line
+                if base_values.get('poly_eff'):
+                    fig_eff_hist.add_vline(
+                        x=base_values['poly_eff'], 
+                        line_dash="dash", 
+                        line_color="red",
+                        annotation_text=f"Base: {base_values['poly_eff']:.2f}%"
+                    )
+                # Add mean line
+                fig_eff_hist.add_vline(
+                    x=stats_eff['mean'], 
+                    line_dash="solid", 
+                    line_color="green",
+                    annotation_text=f"Mean: {stats_eff['mean']:.2f}%"
+                )
+                fig_eff_hist.update_layout(
+                    title="Polytropic Efficiency Distribution",
+                    xaxis_title="Polytropic Efficiency (%)",
+                    yaxis_title="Frequency",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_eff_hist, width='stretch')
+            
+            with tab_hist2:
+                fig_head_hist = go.Figure()
+                fig_head_hist.add_trace(go.Histogram(
+                    x=mc_results['poly_head'],
+                    nbinsx=30,
+                    name='Monte Carlo Results',
+                    marker_color='#EF553B',
+                    opacity=0.7
+                ))
+                if base_values.get('poly_head'):
+                    fig_head_hist.add_vline(
+                        x=base_values['poly_head'], 
+                        line_dash="dash", 
+                        line_color="blue",
+                        annotation_text=f"Base: {base_values['poly_head']:.2f} kJ/kg"
+                    )
+                fig_head_hist.add_vline(
+                    x=stats_head['mean'], 
+                    line_dash="solid", 
+                    line_color="green",
+                    annotation_text=f"Mean: {stats_head['mean']:.2f} kJ/kg"
+                )
+                fig_head_hist.update_layout(
+                    title="Polytropic Head Distribution",
+                    xaxis_title="Polytropic Head (kJ/kg)",
+                    yaxis_title="Frequency",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_head_hist, width='stretch')
+            
+            with tab_hist3:
+                fig_power_hist = go.Figure()
+                fig_power_hist.add_trace(go.Histogram(
+                    x=mc_results['power'],
+                    nbinsx=30,
+                    name='Monte Carlo Results',
+                    marker_color='#00CC96',
+                    opacity=0.7
+                ))
+                if base_values.get('power'):
+                    fig_power_hist.add_vline(
+                        x=base_values['power'], 
+                        line_dash="dash", 
+                        line_color="blue",
+                        annotation_text=f"Base: {base_values['power']:.3f} MW"
+                    )
+                fig_power_hist.add_vline(
+                    x=stats_power['mean'], 
+                    line_dash="solid", 
+                    line_color="green",
+                    annotation_text=f"Mean: {stats_power['mean']:.3f} MW"
+                )
+                fig_power_hist.update_layout(
+                    title="Power Distribution",
+                    xaxis_title="Power (MW)",
+                    yaxis_title="Frequency",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_power_hist, width='stretch')
+            
+            st.divider()
+            
+            # ===== 4. PERFORMANCE GUARANTEE VERIFICATION =====
+            st.subheader("✅ Performance Guarantee Verification")
+            st.markdown("""
+            Test whether measured efficiency meets contractual guarantee with statistical confidence.
+            Based on ASME PTC 10 and ISO 5389 test acceptance methodology.
+            """)
+            
+            col_guar1, col_guar2, col_guar3 = st.columns(3)
+            with col_guar1:
+                guarantee_eff = st.number_input(
+                    "Efficiency Guarantee (%)", 
+                    min_value=50.0, max_value=95.0, 
+                    value=78.0, step=0.5,
+                    help="Contractual minimum polytropic efficiency guarantee"
+                )
+            with col_guar2:
+                confidence_level = st.selectbox(
+                    "Confidence Level",
+                    [90, 95, 99],
+                    index=1,
+                    format_func=lambda x: f"{x}%",
+                    help="Statistical confidence for test interpretation"
+                )
+            with col_guar3:
+                test_method = st.selectbox(
+                    "Test Method",
+                    ["ASME PTC 10", "Hypothesis Test"],
+                    index=0,
+                    help="ASME PTC 10: Industry standard approach. Hypothesis Test: Statistical t-test."
+                )
+            
+            # Button to run the verification
+            if st.button("🔍 Run Guarantee Verification", type="primary", key="run_guarantee_test"):
+                from scipy import stats as scipy_stats
+                
+                eff_arr = np.array(mc_results['poly_eff'])
+                n_samples = len(eff_arr)
+                mean_eff = np.mean(eff_arr)
+                std_eff = np.std(eff_arr, ddof=1)  # Sample std dev
+                
+                # Store results in session state
+                st.session_state['guarantee_test_results'] = {
+                    'mean_eff': mean_eff,
+                    'std_eff': std_eff,
+                    'n_samples': n_samples,
+                    'guarantee_eff': guarantee_eff,
+                    'confidence_level': confidence_level,
+                    'test_method': test_method
+                }
+                
+                if test_method == "ASME PTC 10":
+                    # ASME PTC 10 approach: measured value - uncertainty allowance >= guarantee
+                    # Use coverage factor k for the confidence level
+                    k_factors = {90: 1.645, 95: 1.96, 99: 2.576}
+                    k = k_factors[confidence_level]
+                    
+                    # Total uncertainty (expanded uncertainty)
+                    expanded_uncertainty = k * std_eff
+                    
+                    # Lower bound of measured efficiency
+                    lower_bound = mean_eff - expanded_uncertainty
+                    
+                    # Test result
+                    guarantee_met = lower_bound >= guarantee_eff
+                    margin = mean_eff - guarantee_eff
+                    
+                    st.session_state['guarantee_test_results'].update({
+                        'lower_bound': lower_bound,
+                        'expanded_uncertainty': expanded_uncertainty,
+                        'k': k,
+                        'guarantee_met': guarantee_met,
+                        'margin': margin,
+                        'margin_in_k': margin / std_eff if std_eff > 0 else 0
+                    })
+                else:
+                    # Hypothesis test approach
+                    # One-sample t-test: H0: mean <= guarantee, H1: mean > guarantee
+                    t_stat = (mean_eff - guarantee_eff) / (std_eff / np.sqrt(n_samples))
+                    p_value = 1 - scipy_stats.t.cdf(t_stat, df=n_samples-1)
+                    
+                    # Critical value for one-tailed test
+                    alpha = 1 - confidence_level/100
+                    t_critical = scipy_stats.t.ppf(1-alpha, df=n_samples-1)
+                    
+                    # Lower confidence bound (one-sided)
+                    lower_bound = mean_eff - t_critical * (std_eff / np.sqrt(n_samples))
+                    
+                    margin = mean_eff - guarantee_eff
+                    guarantee_met = p_value < alpha
+                    
+                    st.session_state['guarantee_test_results'].update({
+                        'lower_bound': lower_bound,
+                        't_stat': t_stat,
+                        't_critical': t_critical,
+                        'p_value': p_value,
+                        'alpha': alpha,
+                        'guarantee_met': guarantee_met,
+                        'margin': margin,
+                        'margin_in_sigma': margin / std_eff if std_eff > 0 else 0
+                    })
+            
+            # Display results if available
+            if 'guarantee_test_results' in st.session_state and st.session_state['guarantee_test_results']:
+                results = st.session_state['guarantee_test_results']
+                
+                col_res1, col_res2, col_res3 = st.columns(3)
+                
+                with col_res1:
+                    if results['guarantee_met']:
+                        st.success(f"✅ **GUARANTEE MET**")
+                    else:
+                        st.error(f"❌ **GUARANTEE NOT MET**")
+                    
+                    st.metric("Measured Efficiency", f"{results['mean_eff']:.2f}%", 
+                             delta=f"{results['margin']:+.2f}% vs guarantee")
+                
+                with col_res2:
+                    st.metric(f"{results['confidence_level']}% Lower Bound", f"{results['lower_bound']:.2f}%",
+                             delta=f"{results['lower_bound'] - results['guarantee_eff']:+.2f}% vs guarantee")
+                    st.caption(f"Confidence: {results['confidence_level']}%")
+                
+                with col_res3:
+                    if results['test_method'] == "ASME PTC 10":
+                        st.metric("Expanded Uncertainty", f"±{results['expanded_uncertainty']:.2f}%",
+                                 delta=f"k={results['k']:.2f}")
+                        st.caption("Coverage factor × std dev")
+                    else:
+                        st.metric("Margin", f"{abs(results['margin']):.2f}%", 
+                                 delta=f"{results['margin_in_sigma']:.1f}σ")
+                        st.caption(f"p-value: {results['p_value']:.4f}")
+                
+                with st.expander("📊 Test Details & Methodology"):
+                    if results['test_method'] == "ASME PTC 10":
+                        st.markdown(f"""
+                        **ASME PTC 10 / ISO 5389 Test Methodology:**
+                        
+                        Per industry standards, the test acceptance criterion is:
+                        
+                        > **η_measured - U ≥ η_guarantee**
+                        
+                        Where:
+                        - η_measured = Mean measured efficiency = {results['mean_eff']:.3f}%
+                        - U = Expanded uncertainty = k × σ = {results['k']:.2f} × {results['std_eff']:.3f} = {results['expanded_uncertainty']:.3f}%
+                        - k = Coverage factor for {results['confidence_level']}% confidence = {results['k']:.2f}
+                        - η_guarantee = Guaranteed efficiency = {results['guarantee_eff']:.1f}%
+                        
+                        **Calculation:**
+                        - Lower bound = {results['mean_eff']:.3f} - {results['expanded_uncertainty']:.3f} = {results['lower_bound']:.3f}%
+                        - Test: {results['lower_bound']:.3f}% {'≥' if results['guarantee_met'] else '<'} {results['guarantee_eff']:.1f}%
+                        - **Result: {'PASS ✅' if results['guarantee_met'] else 'FAIL ❌'}**
+                        
+                        **Reference Standards:**
+                        - ASME PTC 10-1997: Performance Test Code on Compressors and Exhausters
+                        - ISO 5389:2005: Turbocompressors - Performance test code
+                        - API 617: Axial and Centrifugal Compressors
+                        """)
+                    else:
+                        st.markdown(f"""
+                        **Statistical Hypothesis Test Results:**
+                        
+                        - Null hypothesis (H₀): True efficiency ≤ {results['guarantee_eff']:.1f}%
+                        - Alternative (H₁): True efficiency > {results['guarantee_eff']:.1f}%
+                        - Sample size: n = {results['n_samples']}
+                        - Sample mean: {results['mean_eff']:.3f}%
+                        - Sample std dev: {results['std_eff']:.3f}%
+                        - t-statistic: {results['t_stat']:.3f}
+                        - t-critical ({results['confidence_level']}%): {results['t_critical']:.3f}
+                        - p-value: {results['p_value']:.4f}
+                        - α (significance level): {results['alpha']:.2f}
+                        
+                        **Interpretation:**
+                        {"✅ Reject H₀: Sufficient evidence that efficiency exceeds guarantee." if results['guarantee_met'] else "❌ Fail to reject H₀: Cannot conclude efficiency exceeds guarantee with stated confidence."}
+                        
+                        **{results['confidence_level']}% One-Sided Confidence Interval:**
+                        Efficiency ≥ {results['lower_bound']:.2f}% with {results['confidence_level']}% confidence
+                        """)
+                    
+                    st.info("""
+                    **Which method to use?**
+                    - **ASME PTC 10**: Industry standard for compressor acceptance tests. Uses simple uncertainty bands.
+                    - **Hypothesis Test**: More rigorous statistical approach. Accounts for sample size in confidence bounds.
+                    
+                    For formal acceptance tests, the ASME PTC 10 method is typically contractually specified.
+                    """)
+            else:
+                st.info("👆 Enter guarantee value and click 'Run Guarantee Verification' to evaluate.")
+            
+            st.divider()
+            
+            # ===== 5. MEASUREMENT PRIORITY RECOMMENDATIONS =====
+            st.subheader("🎯 Measurement Priority Recommendations")
+            st.markdown("""
+            Analysis of which instrument improvements would give the biggest uncertainty reduction.
+            """)
+            
+            # Run sensitivity analysis by varying each parameter while fixing others
+            # We'll estimate sensitivity coefficients from the MC data
+            
+            # Get current uncertainties from session state
+            current_p_unc = st.session_state.get('mc_pressure_uncertainty', 0.5)
+            current_t_unc = st.session_state.get('mc_temperature_uncertainty', 0.5)
+            current_flow_unc = st.session_state.get('mc_flow_uncertainty', 2.0)
+            current_eos_unc = mc_eos_unc  # From earlier in this section
+            current_comp_unc = st.session_state.get('mc_composition_uncertainty', 1.0)
+            
+            # Theoretical sensitivity analysis based on typical compressor relationships
+            # These are approximate sensitivities for efficiency uncertainty
+            # Based on error propagation through polytropic efficiency calculation
+            sensitivity_factors = {
+                'Pressure': {
+                    'current_unc': current_p_unc,
+                    'sensitivity': 1.8,  # Efficiency is ~1.8x sensitive to pressure ratio error  
+                    'upgrade_unc': 0.1,  # Best achievable with premium transmitters
+                    'typical_cost': '$$',
+                    'description': 'Pressure transmitters (inlet/outlet)'
+                },
+                'Temperature': {
+                    'current_unc': current_t_unc,
+                    'sensitivity': 1.2,  # Lower sensitivity than pressure
+                    'upgrade_unc': 0.1,  # Best achievable with calibrated RTDs
+                    'typical_cost': '$',
+                    'description': 'Temperature sensors (inlet/outlet)'
+                },
+                'Flow': {
+                    'current_unc': current_flow_unc,
+                    'sensitivity': 0.3,  # Flow affects power but not efficiency directly
+                    'upgrade_unc': 0.5,  # Best achievable with ultrasonic
+                    'typical_cost': '$$$', 
+                    'description': 'Flow meter calibration'
+                },
+                'Composition': {
+                    'current_unc': current_comp_unc,
+                    'sensitivity': 0.8,  # Affects gas properties
+                    'upgrade_unc': 0.1,  # Premium GC with standards
+                    'typical_cost': '$$',
+                    'description': 'Gas chromatograph (GC)'
+                },
+                'EoS': {
+                    'current_unc': current_eos_unc,
+                    'sensitivity': 0.3 if 'Efficiency' in stats_eff['name'] else 1.0,  # 30% for efficiency (ratio)
+                    'upgrade_unc': 0.1,  # GERG-2008
+                    'typical_cost': '-',
+                    'description': 'Equation of State model'
+                }
+            }
+            
+            # Calculate contribution to total uncertainty and potential reduction
+            current_total_var = stats_eff['std'] ** 2
+            
+            improvement_results = []
+            for param, data in sensitivity_factors.items():
+                current_contribution = (data['current_unc'] * data['sensitivity']) ** 2
+                upgraded_contribution = (data['upgrade_unc'] * data['sensitivity']) ** 2
+                
+                # Estimate uncertainty reduction (assumes independent, additive variances)
+                variance_reduction = current_contribution - upgraded_contribution
+                
+                # Estimate new std dev
+                if current_total_var > variance_reduction:
+                    new_var = current_total_var - variance_reduction
+                    new_std = np.sqrt(new_var)
+                    pct_reduction = (1 - new_std/stats_eff['std']) * 100
+                else:
+                    pct_reduction = 100  # Would dominate
+                
+                improvement_results.append({
+                    'Parameter': param,
+                    'Description': data['description'],
+                    'Current Uncertainty': f"{data['current_unc']:.2f}{'%' if param != 'Temperature' else ' K'}",
+                    'Upgraded Uncertainty': f"{data['upgrade_unc']:.2f}{'%' if param != 'Temperature' else ' K'}",
+                    'Efficiency Unc. Reduction': f"{pct_reduction:.1f}%",
+                    'reduction_pct': pct_reduction,
+                    'Cost': data['typical_cost']
+                })
+            
+            # Sort by improvement potential
+            improvement_results.sort(key=lambda x: x['reduction_pct'], reverse=True)
+            
+            # Display recommendations
+            st.markdown("**Ranked Improvement Opportunities:**")
+            
+            for i, result in enumerate(improvement_results[:3], 1):
+                icon = "🥇" if i == 1 else "🥈" if i == 2 else "🥉"
+                st.markdown(f"""
+                {icon} **Priority {i}: {result['Parameter']}** ({result['Description']})
+                - Current: {result['Current Uncertainty']} → Upgraded: {result['Upgraded Uncertainty']}
+                - Potential efficiency uncertainty reduction: **{result['Efficiency Unc. Reduction']}**
+                - Typical cost: {result['Cost']}
+                """)
+            
+            # Summary table
+            with st.expander("📋 Full Sensitivity Analysis"):
+                priority_df = pd.DataFrame(improvement_results)
+                priority_df = priority_df.drop(columns=['reduction_pct'])
+                st.dataframe(priority_df, width='stretch', hide_index=True)
+                
+                st.info("""
+                **Cost Legend:** $ = Low (<$5k), $$ = Medium ($5k-$20k), $$$ = High (>$20k), - = Software change
+                
+                **Note:** Actual uncertainty reductions depend on specific operating conditions and 
+                measurement setup. Consider consulting instrumentation specialists for detailed assessment.
+                """)
+            
+            st.divider()
+            
+            # ===== 6. MULTI-POINT ANALYSIS =====
+            st.subheader("📊 Multi-Point Uncertainty Analysis")
+            
+            if len(results_df) > 1:
+                st.markdown("""
+                Run uncertainty analysis across all operating points to show confidence bands on performance curves.
+                Uses linearized sensitivity coefficients for speed (faster than full MC recalculation).
+                """)
+                
+                col_mp1, col_mp2 = st.columns(2)
+                with col_mp1:
+                    mp_iterations = st.number_input(
+                        "Iterations per point", 
+                        min_value=20, max_value=200, 
+                        value=50, step=10,
+                        help="Fewer iterations for speed (50 recommended for overview)"
+                    )
+                with col_mp2:
+                    st.info(f"Will analyze {len(results_df)} operating points")
+                
+                if st.button("🔄 Run Multi-Point Analysis", type="secondary", key="run_mp_analysis"):
+                    with st.spinner(f"Analyzing {len(results_df)} points × {mp_iterations} iterations..."):
+                        try:
+                            mp_results = []
+                            progress_mp = st.progress(0, text="Starting multi-point analysis...")
+                            
+                            for i, (_, row) in enumerate(results_df.iterrows()):
+                                point_results = {
+                                    'point': i + 1,
+                                    'flow': row['Vol Flow Inlet (m³/hr)'],
+                                    'speed': row.get('Speed (RPM)', 0),
+                                    'eff_samples': [],
+                                    'head_samples': [],
+                                    'power_samples': []
+                                }
+                                
+                                # Get base values for this point
+                                base_p_in = row['Inlet P (bara)']
+                                base_p_out = row['Outlet P (bara)']
+                                base_t_in = row['Inlet T (°C)']
+                                base_t_out = row['Outlet T (°C)']
+                                base_mass_flow = row['Mass Flow (kg/hr)'] / 3600
+                                base_eff = row['Polytropic Eff (%)']
+                                base_head = row['Polytropic Head (kJ/kg)']
+                                base_power = row['Power (MW)']
+                                
+                                # Simple perturbation-based approach (faster than full recalc)
+                                for _ in range(mp_iterations):
+                                    # Apply measurement + EoS uncertainties (as relative perturbations)
+                                    p_pert = np.random.normal(0, current_p_unc/100)  # e.g. 0.005 for 0.5%
+                                    t_pert = np.random.normal(0, current_t_unc)  # °C absolute
+                                    flow_pert = np.random.normal(0, current_flow_unc/100)  # relative
+                                    eos_pert = np.random.normal(0, current_eos_unc/100)  # relative
+                                    
+                                    # Convert temperature perturbation to relative (use Kelvin for proper scaling)
+                                    t_kelvin = base_t_in + 273.15
+                                    t_rel_pert = t_pert / t_kelvin if t_kelvin > 0 else 0
+                                    
+                                    # Propagate uncertainties (simplified model using sensitivity coefficients)
+                                    # Head: sensitive to EoS (100%), pressure ratio (~50% per inlet/outlet), temperature (~30%)
+                                    head_pert = base_head * (1 + eos_pert + 0.5*p_pert + 0.3*t_rel_pert)
+                                    # Efficiency: sensitive to EoS (30% - ratio), pressure (~30%), temperature (~20%)
+                                    eff_pert = base_eff * (1 + 0.3*eos_pert + 0.3*p_pert + 0.2*t_rel_pert)
+                                    # Power: sensitive to EoS (100%), pressure (~50%), flow (100%)
+                                    power_pert = base_power * (1 + eos_pert + 0.5*p_pert + flow_pert)
+                                    
+                                    point_results['eff_samples'].append(eff_pert)
+                                    point_results['head_samples'].append(head_pert)
+                                    point_results['power_samples'].append(power_pert)
+                                
+                                # Calculate stats
+                                point_results['eff_mean'] = np.mean(point_results['eff_samples'])
+                                point_results['eff_std'] = np.std(point_results['eff_samples'])
+                                point_results['eff_p5'] = np.percentile(point_results['eff_samples'], 5)
+                                point_results['eff_p95'] = np.percentile(point_results['eff_samples'], 95)
+                                
+                                point_results['head_mean'] = np.mean(point_results['head_samples'])
+                                point_results['head_std'] = np.std(point_results['head_samples'])
+                                point_results['head_p5'] = np.percentile(point_results['head_samples'], 5)
+                                point_results['head_p95'] = np.percentile(point_results['head_samples'], 95)
+                                
+                                point_results['power_mean'] = np.mean(point_results['power_samples'])
+                                point_results['power_std'] = np.std(point_results['power_samples'])
+                                
+                                mp_results.append(point_results)
+                                progress_mp.progress((i + 1) / len(results_df))
+                            
+                            progress_mp.empty()
+                            
+                            # Store results
+                            st.session_state['mp_results'] = mp_results
+                            
+                        except Exception as e:
+                            st.error(f"Multi-point analysis failed: {str(e)}")
+                
+                # Display multi-point results
+                if 'mp_results' in st.session_state and st.session_state['mp_results']:
+                    mp_results = st.session_state['mp_results']
+                    
+                    tab_mp1, tab_mp2 = st.tabs(["📈 Efficiency Curve", "📊 Head Curve"])
+                    
+                    with tab_mp1:
+                        fig_mp_eff = go.Figure()
+                        
+                        flows = [r['flow'] for r in mp_results]
+                        eff_means = [r['eff_mean'] for r in mp_results]
+                        eff_p5 = [r['eff_p5'] for r in mp_results]
+                        eff_p95 = [r['eff_p95'] for r in mp_results]
+                        
+                        # Sort by flow
+                        sorted_idx = np.argsort(flows)
+                        flows = np.array(flows)[sorted_idx]
+                        eff_means = np.array(eff_means)[sorted_idx]
+                        eff_p5 = np.array(eff_p5)[sorted_idx]
+                        eff_p95 = np.array(eff_p95)[sorted_idx]
+                        
+                        # 90% confidence band
+                        fig_mp_eff.add_trace(go.Scatter(
+                            x=np.concatenate([flows, flows[::-1]]),
+                            y=np.concatenate([eff_p95, eff_p5[::-1]]),
+                            fill='toself',
+                            fillcolor='rgba(0,100,200,0.2)',
+                            line=dict(color='rgba(255,255,255,0)'),
+                            name='90% Confidence Band'
+                        ))
+                        
+                        # Mean line
+                        fig_mp_eff.add_trace(go.Scatter(
+                            x=flows,
+                            y=eff_means,
+                            mode='lines+markers',
+                            name='Mean Efficiency',
+                            line=dict(color='blue', width=2)
+                        ))
+                        
+                        # Original data points
+                        orig_flows = [r['flow'] for r in mp_results]
+                        orig_eff = results_df['Polytropic Eff (%)'].values
+                        fig_mp_eff.add_trace(go.Scatter(
+                            x=orig_flows,
+                            y=orig_eff,
+                            mode='markers',
+                            name='Calculated Points',
+                            marker=dict(color='red', size=10, symbol='x')
+                        ))
+                        
+                        fig_mp_eff.update_layout(
+                            title="Efficiency Curve with Uncertainty Band",
+                            xaxis_title="Volume Flow (m³/hr)",
+                            yaxis_title="Polytropic Efficiency (%)",
+                            hovermode='x'
+                        )
+                        st.plotly_chart(fig_mp_eff, width='stretch')
+                    
+                    with tab_mp2:
+                        fig_mp_head = go.Figure()
+                        
+                        head_means = [r['head_mean'] for r in mp_results]
+                        head_p5 = [r['head_p5'] for r in mp_results]
+                        head_p95 = [r['head_p95'] for r in mp_results]
+                        
+                        head_means = np.array(head_means)[sorted_idx]
+                        head_p5 = np.array(head_p5)[sorted_idx]
+                        head_p95 = np.array(head_p95)[sorted_idx]
+                        
+                        # 90% confidence band
+                        fig_mp_head.add_trace(go.Scatter(
+                            x=np.concatenate([flows, flows[::-1]]),
+                            y=np.concatenate([head_p95, head_p5[::-1]]),
+                            fill='toself',
+                            fillcolor='rgba(0,200,100,0.2)',
+                            line=dict(color='rgba(255,255,255,0)'),
+                            name='90% Confidence Band'
+                        ))
+                        
+                        # Mean line
+                        fig_mp_head.add_trace(go.Scatter(
+                            x=flows,
+                            y=head_means,
+                            mode='lines+markers',
+                            name='Mean Head',
+                            line=dict(color='green', width=2)
+                        ))
+                        
+                        # Original data points
+                        orig_head = results_df['Polytropic Head (kJ/kg)'].values
+                        fig_mp_head.add_trace(go.Scatter(
+                            x=orig_flows,
+                            y=orig_head,
+                            mode='markers',
+                            name='Calculated Points',
+                            marker=dict(color='red', size=10, symbol='x')
+                        ))
+                        
+                        fig_mp_head.update_layout(
+                            title="Head Curve with Uncertainty Band",
+                            xaxis_title="Volume Flow (m³/hr)",
+                            yaxis_title="Polytropic Head (kJ/kg)",
+                            hovermode='x'
+                        )
+                        st.plotly_chart(fig_mp_head, width='stretch')
+                    
+                    # Summary table
+                    mp_summary_df = pd.DataFrame([{
+                        'Point': r['point'],
+                        'Flow (m³/hr)': f"{r['flow']:.1f}",
+                        'Eff Mean (%)': f"{r['eff_mean']:.2f}",
+                        'Eff ±2σ (%)': f"±{r['eff_std']*2:.2f}",
+                        'Head Mean (kJ/kg)': f"{r['head_mean']:.2f}",
+                        'Head ±2σ (kJ/kg)': f"±{r['head_std']*2:.2f}",
+                        'Power Mean (MW)': f"{r['power_mean']:.3f}",
+                        'Power ±2σ (MW)': f"±{r['power_std']*2:.3f}"
+                    } for r in mp_results])
+                    
+                    st.markdown("**Multi-Point Summary:**")
+                    st.dataframe(mp_summary_df, width='stretch', hide_index=True)
+            else:
+                st.info("Multi-point analysis requires multiple operating points. Currently only one point is available.")
+            
+            st.divider()
+            
+            # ===== 7. EXPORT UNCERTAINTY REPORT =====
+            st.subheader("📥 Export Uncertainty Report")
+            st.markdown("""
+            Generate a comprehensive uncertainty report for documentation, audits, and maintenance planning.
+            """)
+            
+            # Prepare report data
+            report_date = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')
+            
+            # Create Excel report in memory
+            import io
+            
+            def generate_uncertainty_report():
+                output = io.BytesIO()
+                
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Sheet 1: Summary
+                    summary_data = {
+                        'Parameter': ['Report Date', 'Analysis Type', 'Number of Iterations', 
+                                      'Selected Operating Point', 'EoS Model'],
+                        'Value': [report_date, 'Monte Carlo Uncertainty Analysis', 
+                                  st.session_state.get('mc_num_iterations', 100),
+                                  f"Point {selected_point_idx + 1}", 
+                                  st.session_state.get('eos_model', 'GERG-2008')]
+                    }
+                    pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+                    
+                    # Sheet 2: Input Uncertainties
+                    input_unc_data = {
+                        'Parameter': ['Pressure', 'Temperature', 'Flow Rate', 'Composition', 'EoS Z-factor'],
+                        'Uncertainty': [f"{current_p_unc}%", f"{current_t_unc} K", 
+                                       f"{current_flow_unc}%", f"{current_comp_unc}%", 
+                                       f"{current_eos_unc}%"],
+                        'Type': ['Measurement', 'Measurement', 'Measurement', 'Measurement', 'Model'],
+                        'Notes': ['Pressure transmitter spec', 'RTD/thermocouple spec',
+                                 'Flow meter calibration', 'GC uncertainty', 
+                                 f'{st.session_state.get("eos_model", "GERG-2008")} typical accuracy']
+                    }
+                    pd.DataFrame(input_unc_data).to_excel(writer, sheet_name='Input Uncertainties', index=False)
+                    
+                    # Sheet 3: Base Operating Conditions
+                    base_conditions = {
+                        'Parameter': ['Inlet Pressure', 'Outlet Pressure', 'Inlet Temperature', 
+                                      'Outlet Temperature', 'Mass Flow', 'Volume Flow'],
+                        'Value': [selected_row['Inlet P (bara)'], selected_row['Outlet P (bara)'],
+                                 selected_row['Inlet T (°C)'], selected_row['Outlet T (°C)'],
+                                 selected_row['Mass Flow (kg/hr)'], selected_row['Vol Flow Inlet (m³/hr)']],
+                        'Unit': ['bara', 'bara', '°C', '°C', 'kg/hr', 'm³/hr']
+                    }
+                    pd.DataFrame(base_conditions).to_excel(writer, sheet_name='Operating Conditions', index=False)
+                    
+                    # Sheet 4: Results with Uncertainty
+                    results_unc = {
+                        'Property': ['Polytropic Efficiency', 'Polytropic Head', 'Shaft Power'],
+                        'Mean': [stats_eff['mean'], stats_head['mean'], stats_power['mean']],
+                        'Std Dev': [stats_eff['std'], stats_head['std'], stats_power['std']],
+                        '95% CI (±2σ)': [stats_eff['std']*2, stats_head['std']*2, stats_power['std']*2],
+                        'Min': [stats_eff['min'], stats_head['min'], stats_power['min']],
+                        'Max': [stats_eff['max'], stats_head['max'], stats_power['max']],
+                        'P5': [stats_eff['p5'], stats_head['p5'], stats_power['p5']],
+                        'P95': [stats_eff['p95'], stats_head['p95'], stats_power['p95']],
+                        'Unit': ['%', 'kJ/kg', 'MW']
+                    }
+                    pd.DataFrame(results_unc).to_excel(writer, sheet_name='Results Uncertainty', index=False)
+                    
+                    # Sheet 5: Guarantee Test (if run)
+                    if 'guarantee_test_results' in st.session_state and st.session_state['guarantee_test_results']:
+                        gtr = st.session_state['guarantee_test_results']
+                        if gtr.get('test_method') == "ASME PTC 10":
+                            guarantee_data = {
+                                'Parameter': ['Test Method', 'Guaranteed Efficiency', 'Measured Mean', 
+                                              'Expanded Uncertainty', 'Coverage Factor (k)', 'Lower Bound',
+                                              'Confidence Level', 'Test Result'],
+                                'Value': ['ASME PTC 10', f"{gtr['guarantee_eff']}%", f"{gtr['mean_eff']:.2f}%",
+                                         f"±{gtr['expanded_uncertainty']:.2f}%", f"{gtr['k']:.2f}",
+                                         f"{gtr['lower_bound']:.2f}%", f"{gtr['confidence_level']}%", 
+                                         'PASS' if gtr['guarantee_met'] else 'FAIL']
+                            }
+                        else:
+                            guarantee_data = {
+                                'Parameter': ['Test Method', 'Guaranteed Efficiency', 'Measured Mean', 
+                                              'Lower Confidence Bound', 'Confidence Level', 
+                                              't-statistic', 'p-value', 'Test Result'],
+                                'Value': ['Hypothesis Test', f"{gtr['guarantee_eff']}%", f"{gtr['mean_eff']:.2f}%",
+                                         f"{gtr['lower_bound']:.2f}%", f"{gtr['confidence_level']}%",
+                                         f"{gtr['t_stat']:.3f}", f"{gtr['p_value']:.4f}",
+                                         'PASS' if gtr['guarantee_met'] else 'FAIL']
+                            }
+                        pd.DataFrame(guarantee_data).to_excel(writer, sheet_name='Guarantee Test', index=False)
+                    else:
+                        # No guarantee test run - create placeholder sheet
+                        pd.DataFrame({'Note': ['Guarantee test not run']}).to_excel(writer, sheet_name='Guarantee Test', index=False)
+                    
+                    # Sheet 6: Measurement Priority
+                    priority_export = pd.DataFrame(improvement_results)
+                    priority_export = priority_export.drop(columns=['reduction_pct'], errors='ignore')
+                    priority_export.to_excel(writer, sheet_name='Measurement Priority', index=False)
+                    
+                    # Sheet 7: Raw MC Data (sample)
+                    mc_raw = pd.DataFrame({
+                        'Iteration': range(1, len(mc_results['poly_eff']) + 1),
+                        'Efficiency (%)': mc_results['poly_eff'],
+                        'Head (kJ/kg)': mc_results['poly_head'],
+                        'Power (MW)': mc_results['power']
+                    })
+                    mc_raw.to_excel(writer, sheet_name='MC Raw Data', index=False)
+                    
+                    # Sheet 8: Multi-Point Results (if available)
+                    if 'mp_results' in st.session_state and st.session_state['mp_results']:
+                        mp_export = pd.DataFrame([{
+                            'Point': r['point'],
+                            'Flow (m³/hr)': r['flow'],
+                            'Eff Mean (%)': r['eff_mean'],
+                            'Eff Std (%)': r['eff_std'],
+                            'Eff P5 (%)': r['eff_p5'],
+                            'Eff P95 (%)': r['eff_p95'],
+                            'Head Mean (kJ/kg)': r['head_mean'],
+                            'Head Std (kJ/kg)': r['head_std'],
+                            'Power Mean (MW)': r['power_mean'],
+                            'Power Std (MW)': r['power_std']
+                        } for r in st.session_state['mp_results']])
+                        mp_export.to_excel(writer, sheet_name='Multi-Point Results', index=False)
+                
+                output.seek(0)
+                return output
+            
+            col_export1, col_export2 = st.columns(2)
+            
+            with col_export1:
+                report_filename = st.text_input(
+                    "Report filename",
+                    value=f"uncertainty_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                )
+            
+            with col_export2:
+                st.write("")  # Spacer
+                st.write("")
+                try:
+                    excel_data = generate_uncertainty_report()
+                    st.download_button(
+                        label="📥 Download Excel Report",
+                        data=excel_data,
+                        file_name=report_filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+                except Exception as e:
+                    st.error(f"Error generating report: {str(e)}")
+            
+            with st.expander("📋 Report Contents"):
+                st.markdown("""
+                The Excel report includes the following sheets:
+                
+                1. **Summary** - Analysis metadata and configuration
+                2. **Input Uncertainties** - All uncertainty parameters used
+                3. **Operating Conditions** - Base case operating point data
+                4. **Results Uncertainty** - Full statistical summary of outputs
+                5. **Guarantee Test** - Performance guarantee verification results
+                6. **Measurement Priority** - Instrument improvement recommendations
+                7. **MC Raw Data** - All Monte Carlo iteration results
+                8. **Multi-Point Results** - Multi-point analysis (if run)
+                
+                This report provides full documentation for:
+                - Performance acceptance tests
+                - Maintenance planning
+                - Regulatory compliance audits
+                - Engineering studies
+                """)
+            
+            st.divider()
+            
+            # Clear results button
+            if st.button("🗑️ Clear MC Results", key="clear_mc_results"):
+                st.session_state['mc_results'] = None
+                st.session_state['mc_base_values'] = None
+                st.rerun()
+    else:
+        st.info("📊 Run compressor calculations first to enable Monte Carlo uncertainty analysis.")
+        st.markdown("""
+        **Usage:**
+        1. Enter operating data and calculate compressor performance
+        2. Come back to this section to analyze uncertainty
+        3. Set measurement and EoS uncertainty values
+        4. Run Monte Carlo simulation to see result distributions
+        """)
+
 # AI Analysis Section - Only shown if AI is enabled
 if is_ai_enabled():
     gemini_api_key = get_gemini_api_key()
@@ -3230,9 +4636,9 @@ if is_ai_enabled():
                     Keep the response practical for an operations/maintenance engineer. Use specific numbers and percentages where possible.
                     """
                     
-                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-2.0-flash')}..."):
-                        genai.configure(api_key=gemini_api_key)
-                        selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
+                    with st.spinner(f"🔄 Analyzing with {st.session_state.get('ai_model', 'gemini-2.5-flash')}..."):
+                        client = genai.Client(api_key=gemini_api_key)
+                        selected_model = st.session_state.get('ai_model', 'gemini-2.5-flash')
                         
                         system_instruction = """You are an expert centrifugal compressor performance engineer with 20+ years of experience in rotating equipment analysis, performance testing, and troubleshooting.
 
@@ -3266,28 +4672,24 @@ REFERENCE BOOKS:
 Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5389 acceptance criteria when evaluating performance deviations. Cite specific standards where applicable."""
                         
                         try:
-                            model = genai.GenerativeModel(
-                                selected_model,
-                                system_instruction=system_instruction
-                            )
-                            response = model.generate_content(
-                                prompt,
-                                generation_config=genai.types.GenerationConfig(
+                            response = client.models.generate_content(
+                                model=selected_model,
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_instruction,
                                     max_output_tokens=1500,
                                     temperature=0.3
                                 )
                             )
                             ai_analysis = response.text
                         except Exception as model_error:
-                            # Try fallback to gemini-2.0-flash if primary model fails
-                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.0-flash...")
-                            model = genai.GenerativeModel(
-                                'gemini-2.0-flash',
-                                system_instruction=system_instruction
-                            )
-                            response = model.generate_content(
-                                prompt,
-                                generation_config=genai.types.GenerationConfig(
+                            # Try fallback to gemini-2.5-flash if primary model fails
+                            st.warning(f"⚠️ {selected_model} unavailable, trying gemini-2.5-flash...")
+                            response = client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_instruction,
                                     max_output_tokens=1500,
                                     temperature=0.3
                                 )
@@ -3372,24 +4774,24 @@ Reference these standards when making recommendations. Use ASME PTC 10 and ISO 5
                     # Get AI response
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
-                            genai.configure(api_key=gemini_api_key)
-                            selected_model = st.session_state.get('ai_model', 'gemini-2.0-flash')
+                            client = genai.Client(api_key=gemini_api_key)
+                            selected_model = st.session_state.get('ai_model', 'gemini-2.5-flash')
                             try:
-                                model = genai.GenerativeModel(selected_model)
-                                response = model.generate_content(
-                                    context_prompt,
-                                    generation_config=genai.types.GenerationConfig(
+                                response = client.models.generate_content(
+                                    model=selected_model,
+                                    contents=context_prompt,
+                                    config=types.GenerateContentConfig(
                                         max_output_tokens=1000,
                                         temperature=0.3
                                     )
                                 )
                                 assistant_response = response.text
                             except Exception:
-                                # Fallback to gemini-2.0-flash
-                                model = genai.GenerativeModel('gemini-2.0-flash')
-                                response = model.generate_content(
-                                    context_prompt,
-                                    generation_config=genai.types.GenerationConfig(
+                                # Fallback to gemini-2.5-flash
+                                response = client.models.generate_content(
+                                    model='gemini-2.5-flash',
+                                    contents=context_prompt,
+                                    config=types.GenerateContentConfig(
                                         max_output_tokens=1000,
                                         temperature=0.3
                                     )

@@ -96,6 +96,7 @@ with st.expander("📋 Fluid Composition", expanded=True):
     usePR = st.checkbox('Peng Robinson EoS', help='use standard Peng Robinson EoS')
 
     st.caption("💡 Fluid composition will be normalized before simulation")
+
 st.divider()
 
 # -----------------------------------------------------------------------------

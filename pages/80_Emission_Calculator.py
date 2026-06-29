@@ -28,6 +28,24 @@ def create_cpa_fluid(use_electrolyte=False):
     else:
         return jneqsim.thermo.system.SystemSrkCPAstatoil(288.15, 1.0)
 
+def create_soreide_whitson_fluid():
+    """
+    Create a Søreide-Whitson Peng-Robinson fluid for water-gas systems with salinity.
+    
+    The Søreide-Whitson model uses modified alpha functions and mixing rules
+    specifically designed for:
+    - Gas solubility in brine (saline water)
+    - CO2, H2S, and hydrocarbon solubility with salinity effects
+    - Accurate phase equilibrium for produced water systems
+    
+    This model directly accounts for salinity through modified binary interaction
+    parameters (kij) that are temperature and salinity dependent.
+    
+    Returns:
+        Søreide-Whitson Peng-Robinson EoS fluid object
+    """
+    return jneqsim.thermo.system.SystemSoreideWhitson(288.15, 1.0)
+
 st.set_page_config(
     page_title="Emission Calculator",
     page_icon='images/neqsimlogocircleflat.png',
@@ -37,7 +55,8 @@ st.set_page_config(
 st.title("🌱 Methane & CO₂ Emission Calculator")
 st.markdown("""
 Quantify greenhouse gas emissions (CO₂, CH₄, nmVOC) from offshore process streams using 
-rigorous thermodynamic modeling with the CPA equation of state.
+rigorous thermodynamic modeling with the CPA equation of state. Also supports the Søreide-Whitson 
+method for accurate gas solubility calculations in saline water systems.
 
 📚 [NeqSim Emissions Guide](https://equinor.github.io/neqsim/emissions/) | 
 🔬 Validated ±3.6% accuracy against field data
@@ -73,13 +92,19 @@ with st.expander("📖 Documentation & Help", expanded=False):
         at standard conditions (1 atm, 15°C).
         
         **Separator/Absorber Equilibrium**: Calculates dissolved gas from thermodynamic 
-        equilibrium using the CPA equation of state.
+        equilibrium using the selected equation of state.
         
-        ### Thermodynamic Model
-        Uses **CPA-SRK-EOS (Statoil)** optimized for:
-        - Water-hydrocarbon VLE
+        ### Thermodynamic Models
+        
+        **CPA-SRK-EOS (Statoil)** with Setschenow correction:
+        - Water-hydrocarbon VLE with analytical salting-out correction
+        - Good for general hydrocarbon-water systems
         - CO₂ and H₂S solubility in water
-        - North Sea reservoir fluids
+        
+        **Søreide-Whitson PR-EoS**:
+        - Peng-Robinson EoS with salinity-dependent kij parameters
+        - Specifically designed for gas-brine equilibrium
+        - Recommended for high salinity (>50,000 ppm) or CO₂/H₂S-rich systems
         """)
     
     with doc_tab3:
@@ -215,6 +240,19 @@ with st.sidebar:
         
         # Salinity
         st.subheader("🧂 Salinity Effects")
+        
+        # Thermodynamic model selection for salinity handling
+        salinity_model = st.selectbox(
+            "Thermodynamic Model",
+            ["CPA-SRK (Setschenow correction)", "Søreide-Whitson PR-EoS"],
+            index=0,
+            help="""Select the thermodynamic model for handling salinity effects:
+            
+**CPA-SRK (Setschenow correction)**: Uses CPA equation of state with an analytical Setschenow salting-out correction factor. Good for general use with hydrocarbon-water systems.
+            
+**Søreide-Whitson PR-EoS**: Uses Peng-Robinson EoS with modified alpha functions and salinity-dependent binary interaction parameters (kij). Specifically designed for gas-brine systems. Recommended for high salinity (>50,000 ppm) or when CO₂/H₂S accuracy is critical."""
+        )
+        
         salinity_ppm = st.number_input(
             "Salinity (ppm TDS)", 
             value=0, 
@@ -223,13 +261,16 @@ with st.sidebar:
             help="Total dissolved solids. Set to 0 for freshwater. Seawater ~35,000 ppm, produced water can be 100,000+ ppm. Salinity reduces gas solubility (salting-out effect)."
         )
         
-        # Calculate salting-out factor based on Setschenow equation
+        # Calculate salting-out factor based on Setschenow equation (used for CPA model)
         # Higher salinity = lower gas solubility = potentially lower emissions (less dissolved gas)
         if salinity_ppm > 0:
             cs = 0.12  # Setschenow coefficient for CH4 in NaCl (typical value)
             molality = salinity_ppm / 58440 / (1 - salinity_ppm/1e6)  # Convert ppm to molality
             salting_out_factor = 10 ** (-cs * molality)
-            st.info(f"Salting-out factor: {salting_out_factor:.3f} — Gas solubility reduced to {salting_out_factor*100:.1f}% of freshwater value")
+            if salinity_model == "CPA-SRK (Setschenow correction)":
+                st.info(f"Setschenow salting-out factor: {salting_out_factor:.3f} — Gas solubility reduced to {salting_out_factor*100:.1f}% of freshwater value")
+            else:
+                st.info(f"Søreide-Whitson model will use salinity-dependent kij parameters (molality: {molality:.2f} mol/kg)")
         else:
             salting_out_factor = 1.0
             molality = 0.0
@@ -392,7 +433,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="lab_gas_editor"
                 )
                 st.session_state.emission_gas_df = edited_df
@@ -439,7 +480,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="sep_gas_editor"
                 )
                 st.session_state.separator_gas_df = edited_df
@@ -478,7 +519,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="teg_editor"
                 )
                 st.session_state.teg_fluid_df = edited_df
@@ -509,7 +550,7 @@ with main_tab1:
                         )
                     },
                     num_rows='dynamic',
-                    use_container_width=True,
+                    width='stretch',
                     key="teg_absorber_gas_editor"
                 )
                 st.session_state.teg_absorber_gas_df = edited_df
@@ -549,7 +590,7 @@ with main_tab1:
                     )
                 },
                 num_rows='dynamic',
-                use_container_width=True,
+                width='stretch',
                 key="other_editor"
             )
             st.session_state.emission_gas_df = edited_df
@@ -584,12 +625,12 @@ with main_tab1:
                 showlegend=True,
                 height=350
             )
-            st.plotly_chart(fig_comp, use_container_width=True)
+            st.plotly_chart(fig_comp, width='stretch')
     
     st.divider()
     
     # Calculate button
-    if st.button("🔬 Calculate Emissions", type="primary", use_container_width=True):
+    if st.button("🔬 Calculate Emissions", type="primary", width='stretch'):
         
         if edited_df['MolarComposition[-]'].sum() <= 0:
             st.error("Gas composition required. Enter component mole fractions above.")
@@ -606,15 +647,16 @@ with main_tab1:
                             # =============== SEPARATOR EQUILIBRIUM METHOD ===============
                             # Create a gas-water system at separator conditions
                             # Let it equilibrate, then extract the water phase with dissolved gas
-                            # Apply salting-out correction using Setschenow equation if salinity > 0
                             
-                            # Note: We use standard CPA for equilibrium calculation and apply
-                            # Setschenow salting-out correction analytically. This is more robust
-                            # than Electrolyte-CPA which has limitations with heavier hydrocarbons.
-                            if salinity_ppm > 0:
-                                st.info(f"Using Separator Equilibrium method with **Setschenow salting-out correction** (salinity: {salinity_ppm:,} ppm, factor: {salting_out_factor:.3f})...")
+                            # Determine which thermodynamic model to use
+                            use_soreide_whitson = salinity_model == "Søreide-Whitson PR-EoS"
+                            
+                            if use_soreide_whitson:
+                                st.info(f"Using Separator Equilibrium method with **Søreide-Whitson PR-EoS** (salinity: {salinity_ppm:,} ppm, molality: {molality:.2f} mol/kg)...")
+                            elif salinity_ppm > 0:
+                                st.info(f"Using Separator Equilibrium method with **CPA-SRK + Setschenow correction** (salinity: {salinity_ppm:,} ppm, factor: {salting_out_factor:.3f})...")
                             else:
-                                st.info("Using Separator Equilibrium method: calculating dissolved gas from VLE...")
+                                st.info("Using Separator Equilibrium method with **CPA-SRK**: calculating dissolved gas from VLE...")
                             
                             # Filter valid components (non-zero, non-water)
                             valid_gas_df = edited_df[
@@ -626,15 +668,18 @@ with main_tab1:
                                 st.error("No valid gas components found. Please enter at least one gas component with non-zero mole fraction.")
                                 st.stop()
                             
-                            # Create gas-water equilibrium system using standard CPA
-                            # Salting-out effect will be applied as a correction factor
+                            # Create gas-water equilibrium system
                             gas_scale = 100.0  # Large gas excess to preserve composition
                             water_moles = 1000.0  # Consistent water amount
                             max_iterations = 10
                             
                             for iteration in range(max_iterations):
-                                # Always use standard CPA - salting-out applied analytically
-                                equilibrium_fluid = create_cpa_fluid(use_electrolyte=False)
+                                if use_soreide_whitson:
+                                    # Use Søreide-Whitson PR-EoS with salinity-dependent kij
+                                    equilibrium_fluid = create_soreide_whitson_fluid()
+                                else:
+                                    # Use standard CPA - salting-out applied analytically later
+                                    equilibrium_fluid = create_cpa_fluid(use_electrolyte=False)
                                 
                                 # Add gas components (scaled to preserve composition at equilibrium)
                                 components_added = []
@@ -645,9 +690,24 @@ with main_tab1:
                                 # Add water
                                 equilibrium_fluid.addComponent('water', water_moles)
                                 
-                                # Configure CPA model
+                                # Configure Søreide-Whitson model (requires setTotalFlowRate and addSalinity)
+                                if use_soreide_whitson:
+                                    # Set total flow rate (required for Søreide-Whitson model)
+                                    total_moles = sum(valid_gas_df['MolarComposition[-]']) * gas_scale + water_moles
+                                    equilibrium_fluid.setTotalFlowRate(total_moles, "mole/sec")
+                                    
+                                    # Add salinity (always call addSalinity for Søreide-Whitson, even if 0)
+                                    # Convert ppm to moles NaCl: molality * kg water = moles NaCl
+                                    kg_water = water_moles * 18.015 / 1000.0  # kg of water
+                                    moles_nacl = molality * kg_water  # molality is 0 if salinity_ppm is 0
+                                    equilibrium_fluid.addSalinity(moles_nacl, "mole/sec")
+                                
+                                # Configure model
                                 equilibrium_fluid.createDatabase(True)
-                                equilibrium_fluid.setMixingRule(10)
+                                if use_soreide_whitson:
+                                    equilibrium_fluid.setMixingRule(11)  # Søreide-Whitson mixing rule
+                                else:
+                                    equilibrium_fluid.setMixingRule(10)  # CPA mixing rule
                                 equilibrium_fluid.setMultiPhaseCheck(True)
                                 
                                 # Set separator conditions
@@ -675,11 +735,15 @@ with main_tab1:
                             # Extract the aqueous phase composition (water with dissolved gas)
                             aqueous_phase = equilibrium_fluid.getPhase('aqueous')
                             
-                            # Create a new CPA fluid representing just the produced water
-                            process_fluid = create_cpa_fluid(use_electrolyte=False)
+                            # Create a new fluid representing just the produced water
+                            # Use the same model type for consistency in degassing stages
+                            if use_soreide_whitson:
+                                process_fluid = create_soreide_whitson_fluid()
+                            else:
+                                process_fluid = create_cpa_fluid(use_electrolyte=False)
                             
                             # Get composition of aqueous phase
-                            # Apply salting-out correction to gas components if salinity > 0
+                            # Apply salting-out correction to gas components only for CPA model
                             dissolved_gas_info = []
                             components_in_water = 0
                             total_gas_x = 0.0  # Track total gas mole fraction for renormalization
@@ -695,14 +759,16 @@ with main_tab1:
                                     if comp_name == 'water':
                                         water_x = x_i
                                     else:
-                                        # Apply salting-out factor to gas components
-                                        x_corrected = x_i * salting_out_factor
+                                        # For Søreide-Whitson, salinity is already accounted for in kij
+                                        # For CPA, apply Setschenow salting-out factor
+                                        if use_soreide_whitson:
+                                            x_corrected = x_i  # No additional correction needed
+                                        else:
+                                            x_corrected = x_i * salting_out_factor
                                         total_gas_x += x_corrected
                                     comp_data.append((comp_name, x_i))
                             
                             # Renormalize: water + corrected gas = 1.0
-                            # water_new + gas_corrected = 1.0
-                            # We need to adjust water to compensate for reduced gas
                             water_new = 1.0 - total_gas_x
                             
                             for comp_name, x_i in comp_data:
@@ -710,7 +776,10 @@ with main_tab1:
                                     process_fluid.addComponent(comp_name, water_new)
                                     components_in_water += 1
                                 else:
-                                    x_corrected = x_i * salting_out_factor
+                                    if use_soreide_whitson:
+                                        x_corrected = x_i
+                                    else:
+                                        x_corrected = x_i * salting_out_factor
                                     process_fluid.addComponent(comp_name, x_corrected)
                                     components_in_water += 1
                                     dissolved_gas_info.append({
@@ -726,7 +795,16 @@ with main_tab1:
                             
                             # Load binary interaction parameters and set mixing rule
                             process_fluid.createDatabase(True)
-                            process_fluid.setMixingRule(10)
+                            if use_soreide_whitson:
+                                # Søreide-Whitson requires setTotalFlowRate and addSalinity before setMixingRule
+                                process_fluid.setTotalFlowRate(1.0, "mole/sec")
+                                # Always add salinity (even if 0) for Søreide-Whitson
+                                kg_water_process = water_new * 18.015 / 1000.0
+                                moles_nacl_process = molality * kg_water_process  # 0 if no salinity
+                                process_fluid.addSalinity(moles_nacl_process, "mole/sec")
+                                process_fluid.setMixingRule(11)  # Søreide-Whitson mixing rule
+                            else:
+                                process_fluid.setMixingRule(10)  # CPA mixing rule
                             process_fluid.setMultiPhaseCheck(True)  # Enable multi-phase detection
                             
                             # Display dissolved gas composition
@@ -736,7 +814,7 @@ with main_tab1:
                                 st.dataframe(dissolved_df.style.format({
                                     'Mole Fraction': '{:.2e}',
                                     'ppm (molar)': '{:.1f}'
-                                }), use_container_width=True)
+                                }), width='stretch')
                             else:
                                 st.warning("No dissolved gas detected in aqueous phase at these conditions.")
                             
@@ -898,7 +976,7 @@ with main_tab1:
                                     st.dataframe(absorbed_df.style.format({
                                         'Mole Fraction in Rich TEG': '{:.2e}',
                                         'ppm (molar)': '{:.1f}'
-                                    }), use_container_width=True)
+                                    }), width='stretch')
                                 else:
                                     st.warning("No absorbed gas detected in TEG phase at these conditions.")
                                 
@@ -1158,7 +1236,7 @@ with main_tab1:
                                     textinfo='label+percent'
                                 )])
                                 fig_pie.update_layout(title="Emission Composition (by mass)", height=300)
-                                st.plotly_chart(fig_pie, use_container_width=True)
+                                st.plotly_chart(fig_pie, width='stretch')
                     
                     with result_tab2:
                         st.subheader("Emissions by Stage")
@@ -1166,7 +1244,7 @@ with main_tab1:
                         display_df = results_df.copy()
                         display_df.columns = ['Stage', 'Pressure (bara)', 'Temperature (°C)', 'Total (kg/hr)', 'CO₂ (kg/hr)', 
                                              'CH₄ (kg/hr)', 'C₂ (kg/hr)', 'C₃ (kg/hr)', 'C₄+ (kg/hr)', 'nmVOC (kg/hr)', 'H₂S (kg/hr)']
-                        st.dataframe(display_df, use_container_width=True)
+                        st.dataframe(display_df, width='stretch')
                         
                         if len(results_df) > 0:
                             fig_bar = go.Figure()
@@ -1175,7 +1253,7 @@ with main_tab1:
                             fig_bar.add_trace(go.Bar(name='nmVOC', x=results_df['Stage'], y=results_df['nmVOC_kghr'], marker_color='#4CAF50'))
                             chart_title = "Emissions by Process Stage" if emission_source == "TEG Regeneration" else "Emissions by Degassing Stage"
                             fig_bar.update_layout(title=chart_title, xaxis_title="Stage", yaxis_title="Emission Rate (kg/hr)", barmode='group', height=400)
-                            st.plotly_chart(fig_bar, use_container_width=True)
+                            st.plotly_chart(fig_bar, width='stretch')
                         
                         # nmVOC breakdown for TEG Regeneration
                         if emission_source == "TEG Regeneration" and total_nmvoc > 0:
@@ -1201,7 +1279,7 @@ with main_tab1:
                                     'kg/hr': '{:.2f}',
                                     't/yr': '{:.2f}',
                                     '% of nmVOC': '{:.1f}%'
-                                }), use_container_width=True)
+                                }), width='stretch')
                             
                             with col2:
                                 fig_nmvoc = go.Figure(data=[go.Pie(
@@ -1212,7 +1290,7 @@ with main_tab1:
                                     textinfo='label+percent'
                                 )])
                                 fig_nmvoc.update_layout(title="nmVOC Composition", height=280)
-                                st.plotly_chart(fig_nmvoc, use_container_width=True)
+                                st.plotly_chart(fig_nmvoc, width='stretch')
                             
                             st.info("""
                             **nmVOC Definition**: Non-methane Volatile Organic Compounds include all hydrocarbons 
@@ -1258,7 +1336,7 @@ with main_tab1:
                                 st.dataframe(teg_summary.style.format({
                                     'kg/hr': '{:.2f}',
                                     't/yr': '{:.2f}'
-                                }), use_container_width=True)
+                                }), width='stretch')
                             
                             with col2:
                                 # CO2 equivalent breakdown
@@ -1274,7 +1352,7 @@ with main_tab1:
                                     textinfo='label+percent'
                                 )])
                                 fig_co2eq.update_layout(title="CO₂eq Contribution by Source", height=280)
-                                st.plotly_chart(fig_co2eq, use_container_width=True)
+                                st.plotly_chart(fig_co2eq, width='stretch')
                             
                             st.info(f"""
                             **CO₂ Equivalent Summary (GWP-100):**
@@ -1350,7 +1428,7 @@ with main_tab1:
                                         "ℹ️ Site-specific"
                                     ]
                                 })
-                                st.dataframe(benchmark_data, use_container_width=True, hide_index=True)
+                                st.dataframe(benchmark_data, width='stretch', hide_index=True)
                             
                             with col2:
                                 st.markdown("#### Key EPA Reference Values")
@@ -1484,7 +1562,7 @@ with main_tab1:
                                               f"{nmvoc_diff:+.0f}%",
                                               f"{co2eq_diff:+.0f}%"]
                             }
-                            st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
+                            st.dataframe(pd.DataFrame(comparison_data), width='stretch')
                             
                             # Calculate GWMF for comparison (only meaningful for Produced Water Degassing)
                             if emission_source == "Produced Water Degassing" and total_gas > 0 and pressure_drop_bar > 0:
@@ -1550,7 +1628,7 @@ with main_tab1:
                                 csv_summary,
                                 "emission_summary.csv",
                                 "text/csv",
-                                use_container_width=True
+                                width='stretch'
                             )
                         
                         with col2:
@@ -1560,7 +1638,7 @@ with main_tab1:
                                 csv_stages,
                                 "emission_stages.csv",
                                 "text/csv",
-                                use_container_width=True
+                                width='stretch'
                             )
                         
                         st.markdown("### Calculation Parameters")
@@ -1577,7 +1655,7 @@ with main_tab1:
                             'Value': [emission_source, method_display, f"{inlet_temp} °C", f"{inlet_pressure} bara",
                                      flow_display, gwp_standard, str(gwp_ch4), str(gwp_nmvoc), f"{salinity_ppm} ppm", eos_display]
                         })
-                        st.dataframe(params_df, use_container_width=True)
+                        st.dataframe(params_df, width='stretch')
                         
                         st.markdown("### Audit Trail")
                         st.caption("""
@@ -1623,7 +1701,7 @@ with main_tab2:
         
         num_points = st.slider("Number of Points", 5, 20, 10)
         
-        run_whatif = st.button("▶️ Run What-If Analysis", use_container_width=True)
+        run_whatif = st.button("▶️ Run What-If Analysis", width='stretch')
     
     with col2:
         if run_whatif:
@@ -1841,9 +1919,9 @@ with main_tab2:
                     fig_whatif.update_yaxes(title_text="CO₂eq (kg/hr)", row=1, col=2)
                     
                     fig_whatif.update_layout(height=400, showlegend=True)
-                    st.plotly_chart(fig_whatif, use_container_width=True)
+                    st.plotly_chart(fig_whatif, width='stretch')
                     
-                    st.dataframe(scenario_df, use_container_width=True)
+                    st.dataframe(scenario_df, width='stretch')
 
 # ===================== TAB 3: UNCERTAINTY ANALYSIS =====================
 with main_tab3:
@@ -1870,7 +1948,7 @@ with main_tab3:
         
         n_samples = st.slider("Number of Monte Carlo samples", 100, 2000, 500)
         
-        run_mc = st.button("▶️ Run Uncertainty Analysis", use_container_width=True)
+        run_mc = st.button("▶️ Run Uncertainty Analysis", width='stretch')
     
     with col2:
         if run_mc:
@@ -2084,7 +2162,7 @@ with main_tab3:
                         ]
                     }
                     
-                    st.dataframe(pd.DataFrame(stats), use_container_width=True)
+                    st.dataframe(pd.DataFrame(stats), width='stretch')
                     
                     # Histogram
                     fig_hist = make_subplots(rows=1, cols=3, subplot_titles=("CO₂ Distribution", "CH₄ Distribution", "CO₂eq Distribution"))
@@ -2097,6 +2175,6 @@ with main_tab3:
                     fig_hist.update_xaxes(title_text="kg/hr")
                     fig_hist.update_yaxes(title_text="Frequency")
                     
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width='stretch')
                     
                     st.success(f"Analysis completed: {len(mc_results)} simulations")

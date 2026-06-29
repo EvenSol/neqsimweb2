@@ -62,7 +62,8 @@ with st.expander("📋 Set Fluid Composition", expanded=True):
     isplusfluid = st.checkbox('Plus Fluid')
 
     st.caption("💡 Fluid composition will be normalized before simulation")
-with st.expander("📊 Input Pressures", expanded=True):
+
+with st.expander(" Input Pressures", expanded=True):
     st.edited_dfTP = st.data_editor(
         st.session_state.waterdew_tp_data['Pressure (bara)'].dropna().reset_index(drop=True),
         num_rows='dynamic',  # Allows dynamic number of rows

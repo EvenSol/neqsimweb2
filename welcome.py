@@ -1,8 +1,21 @@
+import os as _os
+
+# JVM module-access flags required by XStream on Java 17+.
+# Must be set before *any* import triggers jpype.startJVM().
+if "add-opens" not in _os.environ.get("JAVA_TOOL_OPTIONS", ""):
+    _os.environ["JAVA_TOOL_OPTIONS"] = (
+        "--add-opens=java.base/java.util=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
+        "--add-opens=java.base/java.io=ALL-UNNAMED"
+    )
+
 import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from theme import apply_theme, theme_toggle
 
 def get_gemini_api_key():
@@ -24,9 +37,11 @@ def make_request(question_input: str):
     if not api_key or api_key.strip() == "":
         return ""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        response = model.generate_content(question_input)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=question_input
+        )
         return response.text
     except Exception:
         return ""
@@ -117,50 +132,29 @@ This web application is open source and built with Python. To develop and extend
 - [Streamlit Documentation](https://docs.streamlit.io/)
 """
 
-# Initialize AI enabled state (default OFF)
+# AI Settings in sidebar
 if 'ai_enabled' not in st.session_state:
     st.session_state['ai_enabled'] = False
 
-# AI Settings in sidebar
 st.sidebar.divider()
 st.sidebar.subheader("🤖 AI Assistant")
 
-# Toggle to enable/disable AI
 ai_enabled = st.sidebar.toggle(
     "Enable AI Features",
     value=st.session_state['ai_enabled'],
     help="Enable AI-powered analysis and recommendations"
 )
 st.session_state['ai_enabled'] = ai_enabled
+st.session_state['ai_model'] = 'gemini-2.5-flash'
 
 if ai_enabled:
-    # Check if API key is configured in secrets
-    api_key_from_secrets = False
     try:
         if 'GEMINI_API_KEY' in st.secrets:
-            api_key_from_secrets = True
             st.session_state['gemini_api_key'] = st.secrets['GEMINI_API_KEY']
-            st.sidebar.success("✓ AI ready")
-    except Exception:
-        pass
-
-    # If no secrets, show manual input option (for local development)
-    if not api_key_from_secrets:
-        gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", 
-                                                help="Get a free key from https://aistudio.google.com/")
-        if gemini_api_key:
-            st.session_state['gemini_api_key'] = gemini_api_key
-            st.sidebar.success("✓ API key saved")
+            st.sidebar.success("✓ AI ready (gemini-2.5-flash)")
         else:
-            st.sidebar.info("Enter API key to use AI features")
-    
-    # Model selection (only shown when AI is enabled)
-    ai_model = st.sidebar.selectbox(
-        "AI Model",
-        options=["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"],
-        index=0,
-        help="Select the AI model. gemini-2.0-flash is recommended."
-    )
-    st.session_state['ai_model'] = ai_model
+            st.sidebar.warning("No GEMINI_API_KEY in Streamlit secrets.")
+    except Exception:
+        st.sidebar.warning("No GEMINI_API_KEY in Streamlit secrets.")
 
 st.make_request = make_request
