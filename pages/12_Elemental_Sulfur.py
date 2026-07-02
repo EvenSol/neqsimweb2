@@ -434,7 +434,7 @@ def _create_sulfur_fluid(composition_df, temperature_c, pressure_bara, is_plus_f
             lastIsPlusFraction=effective_plus_fraction,
             add_all_components=False,
         )
-        system = system.setModel(model_name)
+        system.setModel(model_name)
     finally:
         jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(False)
 
@@ -454,7 +454,8 @@ def _create_phase_envelope_fluid(composition_df, is_plus_fraction, model_name):
             fluid_input,
             lastIsPlusFraction=effective_plus_fraction,
             add_all_components=False,
-        ).setModel(model_name)
+        )
+        system.setModel(model_name)
     finally:
         jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(False)
     return system
@@ -801,7 +802,7 @@ def _run_solubility_grid(
 
 
 def _run_temperature_sweep(composition_df, pressure_bara, start_c, end_c, step_c, is_plus_fraction):
-    temperatures = np.arange(float(start_c), float(end_c) + 0.5 * float(step_c), float(step_c))
+    temperatures = _inclusive_sweep_values(start_c, end_c, step_c)
     rows = []
     for temperature_c in temperatures:
         rows.append(_solid_flash_result(composition_df, temperature_c, pressure_bara, is_plus_fraction))
@@ -809,11 +810,40 @@ def _run_temperature_sweep(composition_df, pressure_bara, start_c, end_c, step_c
 
 
 def _run_pressure_sweep(composition_df, temperature_c, start_bara, end_bara, step_bara, is_plus_fraction):
-    pressures = np.arange(float(start_bara), float(end_bara) + 0.5 * float(step_bara), float(step_bara))
+    pressures = _inclusive_sweep_values(start_bara, end_bara, step_bara)
     rows = []
     for pressure_bara in pressures:
         rows.append(_solid_flash_result(composition_df, temperature_c, pressure_bara, is_plus_fraction))
     return pd.DataFrame(rows)
+
+
+def _inclusive_sweep_values(start_value, end_value, step_value):
+    start = float(start_value)
+    end = float(end_value)
+    step = float(step_value)
+    if step <= 0.0:
+        raise ValueError("Sweep step must be positive.")
+    if end < start:
+        raise ValueError("Sweep end must be greater than or equal to sweep start.")
+
+    tolerance = max(1.0e-9, abs(step) * 1.0e-9, abs(end) * 1.0e-12)
+    values = []
+    current = start
+    while current <= end + tolerance:
+        values.append(current)
+        current += step
+
+    if not values:
+        values.append(start)
+    if not math.isclose(values[-1], end, rel_tol=0.0, abs_tol=tolerance):
+        if values[-1] > end:
+            values[-1] = end
+        else:
+            values.append(end)
+    else:
+        values[-1] = end
+
+    return np.array(values, dtype=float)
 
 
 def _cooling_onset_temperature(results_df):
