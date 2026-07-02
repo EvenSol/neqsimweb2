@@ -425,7 +425,7 @@ def _phase_envelope_composition(composition_df):
     return envelope_df[envelope_df["MolarComposition[-]"] > 0.0].reset_index(drop=True)
 
 
-def _create_sulfur_fluid(composition_df, temperature_c, pressure_bara, is_plus_fraction):
+def _create_sulfur_fluid(composition_df, temperature_c, pressure_bara, is_plus_fraction, model_name="srk"):
     fluid_input, effective_plus_fraction = _composition_for_fluid_df(composition_df, is_plus_fraction)
     jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(True)
     try:
@@ -434,6 +434,7 @@ def _create_sulfur_fluid(composition_df, temperature_c, pressure_bara, is_plus_f
             lastIsPlusFraction=effective_plus_fraction,
             add_all_components=False,
         )
+        system = system.setModel(model_name)
     finally:
         jneqsim.util.database.NeqSimDataBase.setCreateTemporaryTables(False)
 
@@ -664,8 +665,8 @@ def _dissolved_s8(system):
     }
 
 
-def _solid_flash_result(composition_df, temperature_c, pressure_bara, is_plus_fraction):
-    system = _create_sulfur_fluid(composition_df, temperature_c, pressure_bara, is_plus_fraction)
+def _solid_flash_result(composition_df, temperature_c, pressure_bara, is_plus_fraction, model_name="srk"):
+    system = _create_sulfur_fluid(composition_df, temperature_c, pressure_bara, is_plus_fraction, model_name)
     _run_solid_flash(system)
 
     solid_present = bool(system.hasPhaseType("solid"))
@@ -709,9 +710,16 @@ def _solid_flash_result(composition_df, temperature_c, pressure_bara, is_plus_fr
     }
 
 
-def _sulfur_solubility_at(composition_df, temperature_c, pressure_bara, is_plus_fraction, saturation_s8_ppmv):
+def _sulfur_solubility_at(
+    composition_df,
+    temperature_c,
+    pressure_bara,
+    is_plus_fraction,
+    saturation_s8_ppmv,
+    model_name="srk",
+):
     saturated_df = _set_component_value(composition_df, "S8", saturation_s8_ppmv * 1.0e-6)
-    return _solid_flash_result(saturated_df, temperature_c, pressure_bara, is_plus_fraction)
+    return _solid_flash_result(saturated_df, temperature_c, pressure_bara, is_plus_fraction, model_name)
 
 
 def _run_solubility_grid(
@@ -724,6 +732,7 @@ def _run_solubility_grid(
     pressure_points,
     is_plus_fraction,
     saturation_s8_ppmv,
+    model_name="srk",
 ):
     temperatures = np.linspace(float(temperature_start_c), float(temperature_end_c), int(temperature_points))
     pressures = np.linspace(float(pressure_start_bara), float(pressure_end_bara), int(pressure_points))
@@ -741,6 +750,7 @@ def _run_solubility_grid(
                     pressure_bara,
                     is_plus_fraction,
                     saturation_s8_ppmv,
+                    model_name,
                 )
                 solubility = result["Dissolved S8 [mg/Sm3]"]
                 solid_sulfur_present = result["Solid sulfur present"]
@@ -786,6 +796,7 @@ def _run_solubility_grid(
         "solubility": np.array(z_values),
         "table": pd.DataFrame(rows),
         "errors": errors,
+        "model": model_name,
     }
 
 
@@ -950,12 +961,19 @@ def _point_inside_polygon(point_x, point_y, polygon_x, polygon_y):
     return inside
 
 
-def _contour_segments_inside_envelope(phase_envelope, temperatures, pressures, z_values, contour_level):
-    polygon = _phase_envelope_polygon(phase_envelope)
-    if polygon is None:
+def _contour_segments_inside_envelope(
+    phase_envelope,
+    temperatures,
+    pressures,
+    z_values,
+    contour_level,
+    inside_envelope_only=True,
+):
+    polygon = _phase_envelope_polygon(phase_envelope) if inside_envelope_only else None
+    if inside_envelope_only and polygon is None:
         return None
 
-    polygon_x, polygon_y = polygon
+    polygon_x, polygon_y = polygon if polygon is not None else ([], [])
     temperatures = np.asarray(temperatures, dtype=float)
     pressures = np.asarray(pressures, dtype=float)
     z_values = np.asarray(z_values, dtype=float)
@@ -1007,7 +1025,7 @@ def _contour_segments_inside_envelope(phase_envelope, temperatures, pressures, z
                 x_second, y_second = unique_crossings[segment_index + 1]
                 midpoint_x = 0.5 * (x_first + x_second)
                 midpoint_y = 0.5 * (y_first + y_second)
-                if _point_inside_polygon(midpoint_x, midpoint_y, polygon_x, polygon_y):
+                if not inside_envelope_only or _point_inside_polygon(midpoint_x, midpoint_y, polygon_x, polygon_y):
                     segment_x.extend([x_first, x_second, None])
                     segment_y.extend([y_first, y_second, None])
 
@@ -1072,37 +1090,40 @@ def _plot_phase_envelope_with_sulfur(phase_envelope, solubility_grid, contour_le
         math.nan,
     )
 
-    if contour_levels and np.isfinite(log_solubility).any():
+    if np.isfinite(log_solubility).any():
         contour_palette = ["#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D"]
         finite_solubility = solubility_values[np.isfinite(solubility_values) & (solubility_values > 0.0)]
         min_solubility = float(np.nanmin(finite_solubility))
         max_solubility = float(np.nanmax(finite_solubility))
-        visible_levels = [level for level in contour_levels if min_solubility <= level <= max_solubility]
+        requested_levels = contour_levels
+        if not requested_levels:
+            requested_levels = np.geomspace(min_solubility, max_solubility, 7).tolist()
+        visible_levels = [level for level in requested_levels if min_solubility <= level <= max_solubility]
         inside_contour_count = 0
         for index, level in enumerate(visible_levels):
             contour_color = contour_palette[index % len(contour_palette)]
-            fig.add_trace(
-                go.Contour(
-                    x=solubility_grid["temperatures"],
-                    y=solubility_grid["pressures"],
-                    z=log_solubility,
-                    customdata=solubility_values,
-                    contours=dict(
-                        type="constraint",
-                        operation="=",
-                        value=math.log10(level),
-                        coloring="lines",
-                        showlabels=False,
-                    ),
-                    line=dict(width=2, color=contour_color),
-                    showscale=False,
-                    name=f"S8 {level:g} mg/Sm3",
-                    hovertemplate=(
-                        f"S8 contour: {level:g} mg/Sm3"
-                        "<br>T: %{x:.1f} degC<br>P: %{y:.2f} bara<extra></extra>"
-                    ),
-                )
+            full_segments = _contour_segments_inside_envelope(
+                phase_envelope,
+                solubility_grid["temperatures"],
+                solubility_grid["pressures"],
+                log_solubility,
+                math.log10(level),
+                inside_envelope_only=False,
             )
+            if full_segments is not None and full_segments[0]:
+                fig.add_trace(
+                    go.Scatter(
+                        x=full_segments[0],
+                        y=full_segments[1],
+                        mode="lines",
+                        name=f"S8 {level:g} mg/Sm3",
+                        line=dict(width=2, color=contour_color),
+                        hovertemplate=(
+                            f"S8 contour: {level:g} mg/Sm3"
+                            "<br>T: %{x:.1f} degC<br>P: %{y:.2f} bara<extra></extra>"
+                        ),
+                    )
+                )
             clipped_segments = _contour_segments_inside_envelope(
                 phase_envelope,
                 solubility_grid["temperatures"],
@@ -1157,22 +1178,6 @@ def _plot_phase_envelope_with_sulfur(phase_envelope, solubility_grid, contour_le
                         ),
                     )
                 )
-    else:
-        fig.add_trace(
-            go.Contour(
-                x=solubility_grid["temperatures"],
-                y=solubility_grid["pressures"],
-                z=log_solubility,
-                customdata=solubility_values,
-                contours=dict(coloring="lines", showlabels=False),
-                line=dict(width=2),
-                colorscale="Cividis",
-                colorbar=dict(title="log10 S8 mg/Sm3"),
-                name="S8 solubility",
-                hovertemplate="T: %{x:.1f} degC<br>P: %{y:.2f} bara<br>S8: %{customdata:.3g} mg/Sm3<extra></extra>",
-            )
-        )
-
     fig.update_layout(
         title="Hydrocarbon phase envelope with S8 solubility contours",
         xaxis_title="Temperature [degC]",
@@ -1226,10 +1231,10 @@ with st.sidebar:
     st.divider()
     st.header("Envelope map")
     phase_model_label = st.selectbox(
-        "Hydrocarbon envelope model",
+        "Envelope and S8 grid model",
         options=list(PHASE_ENVELOPE_MODEL_OPTIONS.keys()),
         index=0,
-        help="Use SRK or PR for the hydrocarbon phase-envelope calculation. S8, water, oxygen, and SO2 are excluded from the envelope feed.",
+        help="Use SRK or PR for both the hydrocarbon phase-envelope calculation and the S8 solid-flash solubility grid. S8, water, oxygen, and SO2 are excluded from the envelope feed only.",
     )
     phase_model_name = PHASE_ENVELOPE_MODEL_OPTIONS[phase_model_label]
     map_temp_start = st.number_input("Map temperature start [degC]", value=-40.0, step=5.0)
@@ -1600,8 +1605,11 @@ with tab_map:
                         map_pressure_points,
                         is_plus_fraction,
                         solubility_saturation_ppmv,
+                        phase_model_name,
                     )
                     st.session_state.sulfur_phase_map = {
+                        "requested_model_label": phase_model_label,
+                        "requested_model_name": phase_model_name,
                         "phase_envelope": phase_envelope,
                         "solubility_grid": solubility_grid,
                         "contour_levels": _parse_contour_levels(contour_level_text),
@@ -1623,6 +1631,15 @@ with tab_map:
 
     if "sulfur_phase_map" in st.session_state:
         phase_map = st.session_state.sulfur_phase_map
+        map_matches_current_model = phase_map.get("requested_model_name") == phase_model_name
+        if not map_matches_current_model:
+            st.warning(
+                "The displayed controls now select "
+                f"{phase_model_label}, but the stored map was calculated with "
+                f"{phase_map.get('requested_model_label', phase_map.get('requested_model_name', 'Unknown'))}. "
+                "Press `Run phase envelope map` to recalculate with the selected model."
+            )
+            st.stop()
         solubility_table = phase_map["solubility_grid"]["table"]
         metric_cols = st.columns(4)
         metric_cols[0].metric(
@@ -1666,19 +1683,23 @@ with tab_map:
             st.info(
                 "The calculated hydrocarbon phase envelope extends outside the requested map window, so the plot axes were expanded automatically to include the envelope."
             )
-        envelope_meta_cols = st.columns(4)
-        envelope_meta_cols[0].metric("Envelope model used", phase_map["phase_envelope"].get("model", "Unknown"))
-        envelope_meta_cols[1].metric(
+        envelope_meta_cols = st.columns(5)
+        envelope_meta_cols[0].metric("Selected model", phase_map.get("requested_model_label", "Unknown"))
+        envelope_meta_cols[1].metric("Envelope actual model", phase_map["phase_envelope"].get("model", "Unknown"))
+        envelope_meta_cols[2].metric(
             "Envelope method",
             phase_map["phase_envelope"].get("method_used", "Unknown"),
         )
-        envelope_meta_cols[2].metric(
+        envelope_meta_cols[3].metric(
             "Plus fraction in envelope",
             "Yes" if phase_map["phase_envelope"].get("plus_fraction_used", False) else "No",
         )
-        envelope_meta_cols[3].metric(
+        envelope_meta_cols[4].metric(
             "Envelope fallback",
             "Yes" if phase_map["phase_envelope"].get("fallback_used", False) else "No",
+        )
+        st.caption(
+            f"S8 solubility grid model: {phase_map['solubility_grid'].get('model', 'Unknown')}. The envelope calculation excludes S8/reactive species, while the S8 grid includes S8 and runs the solid-flash calculation."
         )
         if phase_map["phase_envelope"].get("attempt_errors"):
             with st.expander("Phase envelope fallback attempts", expanded=False):
