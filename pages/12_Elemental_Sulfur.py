@@ -1081,6 +1081,28 @@ def _plot_phase_envelope_with_sulfur(phase_envelope, solubility_grid, contour_le
         inside_contour_count = 0
         for index, level in enumerate(visible_levels):
             contour_color = contour_palette[index % len(contour_palette)]
+            fig.add_trace(
+                go.Contour(
+                    x=solubility_grid["temperatures"],
+                    y=solubility_grid["pressures"],
+                    z=log_solubility,
+                    customdata=solubility_values,
+                    contours=dict(
+                        type="constraint",
+                        operation="=",
+                        value=math.log10(level),
+                        coloring="lines",
+                        showlabels=False,
+                    ),
+                    line=dict(width=2, color=contour_color),
+                    showscale=False,
+                    name=f"S8 {level:g} mg/Sm3",
+                    hovertemplate=(
+                        f"S8 contour: {level:g} mg/Sm3"
+                        "<br>T: %{x:.1f} degC<br>P: %{y:.2f} bara<extra></extra>"
+                    ),
+                )
+            )
             clipped_segments = _contour_segments_inside_envelope(
                 phase_envelope,
                 solubility_grid["temperatures"],
@@ -1096,28 +1118,11 @@ def _plot_phase_envelope_with_sulfur(phase_envelope, solubility_grid, contour_le
                         y=clipped_segments[1],
                         mode="lines",
                         name=f"S8 {level:g} mg/Sm3 inside envelope",
-                        line=dict(width=3, color=contour_color),
-                        hovertemplate=f"S8 {level:g} mg/Sm3 inside envelope<extra></extra>",
-                    )
-                )
-            else:
-                fig.add_trace(
-                    go.Contour(
-                        x=solubility_grid["temperatures"],
-                        y=solubility_grid["pressures"],
-                        z=log_solubility,
-                        customdata=solubility_values,
-                        contours=dict(
-                            type="constraint",
-                            operation="=",
-                            value=math.log10(level),
-                            coloring="lines",
-                            showlabels=False,
+                        line=dict(width=4, color=contour_color, dash="dash"),
+                        hovertemplate=(
+                            f"S8 contour: {level:g} mg/Sm3 inside envelope"
+                            "<br>T: %{x:.1f} degC<br>P: %{y:.2f} bara<extra></extra>"
                         ),
-                        line=dict(width=3, color=contour_color),
-                        showscale=False,
-                        name=f"S8 {level:g} mg/Sm3",
-                        hovertemplate="T: %{x:.1f} degC<br>P: %{y:.2f} bara<br>S8: %{customdata:.3g} mg/Sm3<extra></extra>",
                     )
                 )
 
@@ -1146,7 +1151,10 @@ def _plot_phase_envelope_with_sulfur(phase_envelope, solubility_grid, contour_le
                             dash="dot",
                             color=contour_palette[(len(visible_levels) + auto_index) % len(contour_palette)],
                         ),
-                        hovertemplate=f"S8 {level:.2g} mg/Sm3 inside envelope<extra></extra>",
+                        hovertemplate=(
+                            f"S8 contour: {level:.2g} mg/Sm3 inside envelope"
+                            "<br>T: %{x:.1f} degC<br>P: %{y:.2f} bara<extra></extra>"
+                        ),
                     )
                 )
     else:
@@ -1682,7 +1690,7 @@ with tab_map:
             with st.expander("Failed S8 solubility grid points", expanded=False):
                 st.dataframe(pd.DataFrame(phase_map["solubility_grid"]["errors"]), use_container_width=True)
         st.caption(
-            "Contour basis: total dissolved S8 in gas plus hydrocarbon liquid/condensate. Inside the phase envelope, iso-lines may increase because condensate/oil dissolves additional S8."
+            "Contour basis: total dissolved S8 in gas plus hydrocarbon liquid/condensate. Full iso-lines are shown across the calculated map range; dashed overlays highlight the portions inside the phase envelope."
         )
         st.plotly_chart(
             _plot_phase_envelope_with_sulfur(
