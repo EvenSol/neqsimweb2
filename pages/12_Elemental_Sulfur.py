@@ -1731,6 +1731,18 @@ with tab_map:
         st.caption(
             f"S8 solubility grid model: {phase_map['solubility_grid'].get('model', 'Unknown')}. The envelope calculation excludes S8/reactive species, while the S8 grid includes S8 and runs the solid-flash calculation."
         )
+        grid_temperatures = np.asarray(phase_map["solubility_grid"]["temperatures"], dtype=float)
+        grid_pressures = np.asarray(phase_map["solubility_grid"]["pressures"], dtype=float)
+        axis_range = phase_map.get("display_range", {})
+        if axis_range and grid_temperatures.size and grid_pressures.size:
+            st.caption(
+                "Plot axes: "
+                f"T {axis_range['temperature_min']:.2f} to {axis_range['temperature_max']:.2f} degC, "
+                f"P {axis_range['pressure_min']:.2f} to {axis_range['pressure_max']:.2f} bara. "
+                "S8 grid endpoints: "
+                f"T {grid_temperatures[0]:.2f} to {grid_temperatures[-1]:.2f} degC, "
+                f"P {grid_pressures[0]:.2f} to {grid_pressures[-1]:.2f} bara."
+            )
         if phase_map["phase_envelope"].get("attempt_errors"):
             with st.expander("Phase envelope fallback attempts", expanded=False):
                 st.dataframe(pd.DataFrame(phase_map["phase_envelope"]["attempt_errors"]), use_container_width=True)
