@@ -40,7 +40,7 @@ if 'he_tp_flash_data' not in st.session_state:
 st.divider()
 st.text("Input Pressures and Temperatures")
 st.edited_tp_data = st.data_editor(
-    st.session_state.tp_flash_data.dropna().reset_index(drop=True),
+    st.session_state.he_tp_flash_data.dropna().reset_index(drop=True),
     num_rows='dynamic',
     column_config={
         'Temperature (C)': st.column_config.NumberColumn(

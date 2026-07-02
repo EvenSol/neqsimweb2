@@ -1060,7 +1060,25 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
     try:
         from neqsim import jneqsim
 
-        proc = process_model.process if hasattr(process_model, "process") else process_model
+        # Resolve the underlying jpype ProcessSystem. NeqSimProcessModel does
+        # NOT expose a `.process` attribute (that was always a no-op fallback
+        # to the wrapper object itself, which jpype cannot match against the
+        # Java method signature). It exposes `get_process_systems()` (a list —
+        # a ProcessModel can wrap several ProcessSystems; DexpiXmlWriter only
+        # accepts a single ProcessSystem, so the first/primary one is used)
+        # and `get_process()` (returns the raw ProcessSystem/ProcessModel).
+        proc = None
+        if hasattr(process_model, "get_process_systems"):
+            try:
+                systems = process_model.get_process_systems()
+                if systems:
+                    proc = systems[0]
+            except Exception:
+                proc = None
+        if proc is None and hasattr(process_model, "get_process"):
+            proc = process_model.get_process()
+        if proc is None:
+            proc = process_model
 
         suffix = ".xml"
         with tempfile.NamedTemporaryFile(
@@ -1069,9 +1087,20 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
             tmp_path = tmp.name
 
         try:
+            import jpype
+
             DexpiXmlWriter = jneqsim.process.processmodel.dexpi.DexpiXmlWriter
-            java_file = jneqsim.java.io.File(tmp_path)
-            DexpiXmlWriter.write(proc, java_file)
+            JFile = jpype.JClass("java.io.File")
+            java_file = JFile(tmp_path)
+            # Use writeForPyDexpi (namespace-free root element): NeqSim's default
+            # write() declares the DEXPI default XML namespace, but pyDEXPI's
+            # Proteus parser does unqualified tag lookups and fails to find
+            # PlantInformation when that namespace is present. writeForPyDexpi
+            # emits the same enriched content (ISO 10628 shapes, auto-layout
+            # positions, ShapeCatalogue) without the namespace, so pyDEXPI can
+            # actually render the real P&ID symbols instead of falling back to
+            # a plain topology graph.
+            DexpiXmlWriter.writeForPyDexpi(proc, java_file)
 
             with open(tmp_path, "rb") as f:
                 java_bytes = f.read()
@@ -1092,6 +1121,47 @@ def export_to_dexpi(process_model) -> Optional[bytes]:
 
     # --- Fallback: Python-based DEXPI XML generation ---
     return _export_to_dexpi_python(process_model)
+
+
+def export_and_render_dexpi(process_model, base_filename: str = "process"):
+    """Export a NeqSim process model to DEXPI XML and render it to SVG in one step.
+
+    This is the preferred entry point for the Streamlit UI: it wraps
+    :func:`export_to_dexpi` (which uses NeqSim's Java ``DexpiXmlWriter`` —
+    including ISO 10628 equipment symbols and auto-layout positions — when
+    available) and immediately renders the result with :func:`render_dexpi_svg`
+    so the real P&ID diagram is ready to display without a separate "analyze
+    the P&ID" round trip.
+
+    Parameters
+    ----------
+    process_model : NeqSimProcessModel or ProcessSystem
+        The model to export.
+    base_filename : str
+        Base name (without extension) used for the generated DEXPI filename
+        and passed through to the pyDEXPI renderer.
+
+    Returns
+    -------
+    tuple(bytes or None, str or None, str)
+        ``(dexpi_xml_bytes, pid_svg, dexpi_filename)``. Either of the first
+        two elements may be ``None`` if export or rendering failed.
+    """
+    dexpi_filename = base_filename.rsplit(".", 1)[0] + ".dexpi.xml"
+    xml_bytes = None
+    svg = None
+    try:
+        xml_bytes = export_to_dexpi(process_model)
+    except Exception as e:
+        _logger.debug("export_and_render_dexpi: export failed: %s", e)
+
+    if xml_bytes:
+        try:
+            svg = render_dexpi_svg(xml_bytes, dexpi_filename, pretty=True)
+        except Exception as e:
+            _logger.debug("export_and_render_dexpi: SVG rendering failed: %s", e)
+
+    return xml_bytes, svg, dexpi_filename
 
 
 # NeqSim equipment class → DEXPI component class mapping
