@@ -661,6 +661,7 @@ def _case_history_record(
     process = spec["process"]
     return {
         "_signature": signature,
+        "_spec": json.loads(json.dumps(spec, allow_nan=False)),
         "Case ID": signature[:8],
         "Case": spec["name"],
         "EOS": str(spec["fluid"]["eos_model"]).upper(),
@@ -748,7 +749,7 @@ def _case_comparison_dataframe(
         row = {
             key: value
             for key, value in record.items()
-            if key != "_signature"
+            if not key.startswith("_")
         }
         row["Baseline"] = (
             "Yes" if record["_signature"] == baseline["_signature"] else ""
@@ -782,6 +783,18 @@ def _case_history_label(record: dict[str, Any]) -> str:
     except ValueError:
         feed_flow_text = "unknown flow"
     return f"{case_name} · {feed_flow_text} · {signature}"
+
+
+def _load_case_history_record(
+    record: Any,
+) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
+    """Validate a retained solved-case specification for control restoration."""
+    if not isinstance(record, dict) or not isinstance(record.get("_spec"), dict):
+        raise ValueError(
+            "This retained result predates reusable case restoration. "
+            "Solve it again before restoring it."
+        )
+    return _load_case_controls(record["_spec"])
 
 
 def _template_object_label(object_name: str) -> str:
@@ -1251,13 +1264,42 @@ if results_are_current and has_stored_result:
             use_container_width=True,
             hide_index=True,
         )
-        st.download_button(
+        action_cols = st.columns(2)
+        selected_history_record = record_by_signature[baseline_signature]
+        restore_available = isinstance(
+            selected_history_record.get("_spec"),
+            dict,
+        )
+        restore_case = action_cols[0].button(
+            "Restore selected case inputs",
+            disabled=not restore_available,
+            help=(
+                "Load this solved case into the editable controls. "
+                "Run NeqSim again to rebuild its process model."
+            ),
+            use_container_width=True,
+        )
+        action_cols[1].download_button(
             "Download case comparison CSV",
             data=comparison_table.to_csv(index=False),
             file_name="process_flowsheet_case_comparison.csv",
             mime="text/csv",
             use_container_width=True,
         )
+        if restore_case:
+            try:
+                restored_controls, restored_composition, restored_warnings = (
+                    _load_case_history_record(selected_history_record)
+                )
+            except ValueError as restore_error:
+                st.error(f"Case restoration failed: {restore_error}")
+            else:
+                _apply_imported_case(
+                    restored_controls,
+                    restored_composition,
+                    restored_warnings,
+                )
+                st.rerun()
 
     diagram_tab, streams_tab, equipment_tab, validation_tab = st.tabs(
         [
