@@ -50,6 +50,15 @@ EXPECTED_TEMPLATE_TOPOLOGY = (
     ("compressor stage 2", "compressor"),
     ("export cooler", "cooler"),
 )
+TEMPLATE_OBJECTS = {
+    "feed gas": ("Feed gas", "Material stream"),
+    "inlet scrubber": ("Inlet scrubber", "Separator"),
+    "compressor stage 1": ("Compressor stage 1", "Compressor"),
+    "intercooler": ("Intercooler", "Cooler"),
+    "interstage scrubber": ("Interstage scrubber", "Separator"),
+    "compressor stage 2": ("Compressor stage 2", "Compressor"),
+    "export cooler": ("Export cooler", "Cooler"),
+}
 
 CONTROL_DEFAULTS = {
     "flowsheet_case_name": "Gas Compression Case",
@@ -99,6 +108,9 @@ def _initialize_case_controls() -> None:
     for key, value in CONTROL_DEFAULTS.items():
         if key not in st.session_state:
             st.session_state[key] = value
+        else:
+            # Preserve controls whose selected-object widget is temporarily hidden.
+            st.session_state[key] = st.session_state[key]
     if "flowsheet_composition_source" not in st.session_state:
         st.session_state["flowsheet_composition_source"] = DEFAULT_COMPOSITION.copy()
     if "flowsheet_composition_revision" not in st.session_state:
@@ -772,6 +784,95 @@ def _case_history_label(record: dict[str, Any]) -> str:
     return f"{case_name} · {feed_flow_text} · {signature}"
 
 
+def _template_object_label(object_name: str) -> str:
+    """Return a searchable palette label with the object's engineering type."""
+    display_name, object_type = TEMPLATE_OBJECTS[object_name]
+    return f"{display_name} · {object_type}"
+
+
+def _render_object_property_editor() -> None:
+    """Render supported properties for one selected template object."""
+    st.markdown("#### Selected-object properties")
+    st.caption(
+        "Search the current flowsheet, select one object, and edit its supported "
+        "steady-state properties. Units are shown on every editable value."
+    )
+    selected_object = st.selectbox(
+        "Find flowsheet object",
+        options=list(TEMPLATE_OBJECTS),
+        format_func=_template_object_label,
+        key="flowsheet_selected_object",
+        help="Type while the list is open to search by object name or type.",
+    )
+    display_name, object_type = TEMPLATE_OBJECTS[selected_object]
+    st.write(f"**Selected:** {display_name}")
+    st.caption(f"Object type: {object_type}")
+
+    if selected_object == "compressor stage 1":
+        st.number_input(
+            "Discharge pressure [bara]",
+            min_value=1.0,
+            max_value=500.0,
+            step=1.0,
+            key="flowsheet_stage_1_pressure_bara",
+        )
+        st.slider(
+            "Shared isentropic efficiency [-]",
+            min_value=0.50,
+            max_value=0.95,
+            step=0.01,
+            key="flowsheet_isentropic_efficiency",
+            help="The current template applies one efficiency to both stages.",
+        )
+    elif selected_object == "compressor stage 2":
+        st.number_input(
+            "Discharge pressure [bara]",
+            min_value=1.0,
+            max_value=500.0,
+            step=1.0,
+            key="flowsheet_stage_2_pressure_bara",
+        )
+        st.slider(
+            "Shared isentropic efficiency [-]",
+            min_value=0.50,
+            max_value=0.95,
+            step=0.01,
+            key="flowsheet_isentropic_efficiency",
+            help="The current template applies one efficiency to both stages.",
+        )
+    elif selected_object == "intercooler":
+        st.number_input(
+            "Outlet temperature [°C]",
+            min_value=-50.0,
+            max_value=150.0,
+            step=1.0,
+            key="flowsheet_intercooler_temperature_c",
+        )
+    elif selected_object == "export cooler":
+        st.number_input(
+            "Outlet temperature [°C]",
+            min_value=-50.0,
+            max_value=150.0,
+            step=1.0,
+            key="flowsheet_export_temperature_c",
+        )
+    elif selected_object == "feed gas":
+        st.info(
+            "Feed temperature, absolute pressure, mass flow, equation of state, "
+            "and molar composition are edited in the fluid basis."
+        )
+    else:
+        st.info(
+            "This separator performs an equilibrium split at its inlet conditions. "
+            "The current template has no independent separator set point."
+        )
+
+    st.caption(
+        "Property edits update the structured case specification. Run NeqSim to "
+        "solve the edited case and refresh Process Chat."
+    )
+
+
 st.set_page_config(
     page_title=PAGE_TITLE,
     page_icon="images/neqsimlogocircleflat.png",
@@ -857,7 +958,7 @@ case_name = st.text_input(
 st.caption(f"Template: {TEMPLATE_NAME}")
 
 st.markdown("#### Fluid and operating basis")
-fluid_col, process_col = st.columns(2)
+fluid_col, object_col = st.columns(2)
 
 with fluid_col:
     eos_model = st.selectbox(
@@ -889,42 +990,24 @@ with fluid_col:
         key="flowsheet_feed_flow_kg_hr",
     )
 
-with process_col:
-    stage_1_pressure_bara = st.number_input(
-        "Stage 1 discharge pressure [bara]",
-        min_value=1.0,
-        max_value=500.0,
-        step=1.0,
-        key="flowsheet_stage_1_pressure_bara",
-    )
-    stage_2_pressure_bara = st.number_input(
-        "Stage 2 discharge pressure [bara]",
-        min_value=1.0,
-        max_value=500.0,
-        step=1.0,
-        key="flowsheet_stage_2_pressure_bara",
-    )
-    isentropic_efficiency = st.slider(
-        "Compressor isentropic efficiency",
-        min_value=0.50,
-        max_value=0.95,
-        step=0.01,
-        key="flowsheet_isentropic_efficiency",
-    )
-    intercooler_temperature_c = st.number_input(
-        "Intercooler outlet temperature [°C]",
-        min_value=-50.0,
-        max_value=150.0,
-        step=1.0,
-        key="flowsheet_intercooler_temperature_c",
-    )
-    export_temperature_c = st.number_input(
-        "Export cooler outlet temperature [°C]",
-        min_value=-50.0,
-        max_value=150.0,
-        step=1.0,
-        key="flowsheet_export_temperature_c",
-    )
+with object_col:
+    _render_object_property_editor()
+
+stage_1_pressure_bara = float(
+    st.session_state["flowsheet_stage_1_pressure_bara"]
+)
+stage_2_pressure_bara = float(
+    st.session_state["flowsheet_stage_2_pressure_bara"]
+)
+isentropic_efficiency = float(
+    st.session_state["flowsheet_isentropic_efficiency"]
+)
+intercooler_temperature_c = float(
+    st.session_state["flowsheet_intercooler_temperature_c"]
+)
+export_temperature_c = float(
+    st.session_state["flowsheet_export_temperature_c"]
+)
 
 st.markdown("**Feed composition**")
 composition_table = st.data_editor(
