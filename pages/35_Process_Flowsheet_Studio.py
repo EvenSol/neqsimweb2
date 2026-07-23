@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -34,6 +35,7 @@ PAGE_TITLE = "Process Flowsheet Studio"
 TEMPLATE_NAME = "Inlet separation and two-stage gas compression"
 CASE_STATE_KEY = "flowsheet_studio_case"
 RESULT_STATE_KEY = "flowsheet_studio_result"
+FAILURE_SIGNATURE_STATE_KEY = "flowsheet_studio_failure_signature"
 CASE_SCHEMA_VERSION = 1
 MAX_CASE_FILE_BYTES = 1_000_000
 SUPPORTED_EOS_MODELS = ("srk", "pr", "cpa", "gerg2008")
@@ -347,6 +349,7 @@ def _apply_imported_case(
     st.session_state["flowsheet_composition_revision"] += 1
     st.session_state.pop(CASE_STATE_KEY, None)
     st.session_state.pop(RESULT_STATE_KEY, None)
+    st.session_state.pop(FAILURE_SIGNATURE_STATE_KEY, None)
     if st.session_state.get("process_model_name") == "process_flowsheet_studio.neqsim":
         st.session_state.pop("process_model", None)
         st.session_state.pop("process_model_name", None)
@@ -368,10 +371,10 @@ def _clean_composition(table: pd.DataFrame) -> tuple[dict[str, float], float]:
         component = str(row["component"]).strip()
         if not component or component.lower() == "nan":
             continue
-        try:
-            fraction = float(row["mole_fraction"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid mole fraction for {component}.") from exc
+        fraction = _finite_float(
+            row["mole_fraction"],
+            f"Mole fraction for {component}",
+        )
         if fraction < 0.0:
             raise ValueError(f"Mole fraction for {component} cannot be negative.")
         if fraction > 0.0:
@@ -515,6 +518,48 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     return warnings
 
 
+def _case_signature(spec: dict[str, Any], composition_total: float) -> str:
+    """Return a deterministic identity for the inputs and their normalization."""
+    signature_payload = {
+        "spec": spec,
+        "entered_composition_total": composition_total,
+    }
+    encoded_payload = json.dumps(
+        signature_payload,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded_payload).hexdigest()
+
+
+def _solver_status(
+    current_signature: str | None,
+    stored_state: Any,
+    has_result: bool,
+    failure_signature: str | None,
+) -> tuple[str, bool]:
+    """Classify solver state and whether the stored result matches the inputs."""
+    stored_signature = (
+        stored_state.get("signature") if isinstance(stored_state, dict) else None
+    )
+    has_stored_result = bool(has_result and isinstance(stored_state, dict))
+    results_are_current = bool(
+        has_stored_result
+        and current_signature is not None
+        and stored_signature == current_signature
+    )
+    if current_signature is None:
+        return "Invalid inputs", False
+    if results_are_current:
+        return "Solved", True
+    if failure_signature == current_signature:
+        return "Failed", False
+    if has_stored_result:
+        return "Needs rerun", False
+    return "Not run", False
+
+
 def _stream_dataframe(model: Any) -> pd.DataFrame:
     """Create a compact stream table without duplicate short aliases."""
     records = []
@@ -590,14 +635,12 @@ what-if studies.
 """
 )
 
-solver_status = "Solved" if st.session_state.get(RESULT_STATE_KEY) else "Not run"
 with st.sidebar:
     st.divider()
     st.subheader("🏭 Flowsheet case")
     st.caption(TEMPLATE_NAME)
     st.write("**Mode:** Steady state")
     solver_status_placeholder = st.empty()
-    solver_status_placeholder.write(f"**Solver:** {solver_status}")
     st.write("**Workspace:** Setup → Flowsheet → Workbook → Validation")
 
 with st.expander("Model scope and assumptions", expanded=False):
@@ -748,28 +791,26 @@ composition_table = st.data_editor(
     ),
 )
 
+preview_composition: dict[str, float] = {}
+preview_total = 0.0
+draft_case_spec: dict[str, Any] | None = None
+draft_warnings: list[str] = []
+current_case_signature: str | None = None
+draft_error: str | None = None
+
 try:
     preview_composition, preview_total = _clean_composition(composition_table)
+except ValueError as preview_error:
+    draft_error = str(preview_error)
+    st.warning(draft_error)
+else:
     total_col, count_col = st.columns(2)
     total_col.metric("Entered mole-fraction sum", f"{preview_total:.6f}")
     count_col.metric("Active components", len(preview_composition))
-except ValueError as preview_error:
-    preview_composition = {}
-    preview_total = 0.0
-    st.warning(str(preview_error))
-
-run_case = st.button(
-    "▶ Run NeqSim flowsheet",
-    type="primary",
-    use_container_width=True,
-)
-
-if run_case:
     try:
-        composition, composition_total = _clean_composition(composition_table)
-        case_spec = _build_case_spec(
+        draft_case_spec = _build_case_spec(
             case_name=case_name.strip() or "Gas Compression Case",
-            composition=composition,
+            composition=preview_composition,
             eos_model=eos_model,
             feed_temperature_c=feed_temperature_c,
             feed_pressure_bara=feed_pressure_bara,
@@ -780,8 +821,36 @@ if run_case:
             export_temperature_c=export_temperature_c,
             isentropic_efficiency=isentropic_efficiency,
         )
-        case_warnings = _validate_case(case_spec, composition_total)
+        draft_warnings = _validate_case(draft_case_spec, preview_total)
+        current_case_signature = _case_signature(draft_case_spec, preview_total)
+    except ValueError as validation_error:
+        draft_case_spec = None
+        draft_error = str(validation_error)
+        st.warning(draft_error)
 
+stored_state = st.session_state.get(CASE_STATE_KEY)
+solver_status, results_are_current = _solver_status(
+    current_signature=current_case_signature,
+    stored_state=stored_state,
+    has_result=bool(st.session_state.get(RESULT_STATE_KEY)),
+    failure_signature=st.session_state.get(FAILURE_SIGNATURE_STATE_KEY),
+)
+solver_status_placeholder.write(f"**Solver:** {solver_status}")
+
+run_case = st.button(
+    "▶ Run NeqSim flowsheet",
+    type="primary",
+    use_container_width=True,
+)
+
+if run_case:
+    try:
+        if draft_case_spec is None or current_case_signature is None:
+            raise ValueError(draft_error or "The current case inputs are invalid.")
+        case_spec = draft_case_spec
+        case_warnings = draft_warnings
+
+        solver_status_placeholder.write("**Solver:** Solving")
         with st.spinner("Building and solving the NeqSim process..."):
             builder = ProcessBuilder()
             model = builder.build_from_spec(case_spec)
@@ -795,9 +864,13 @@ if run_case:
             "model": model,
             "result": result,
             "model_bytes": model_bytes,
+            "signature": current_case_signature,
         }
         st.session_state[CASE_STATE_KEY] = state
         st.session_state[RESULT_STATE_KEY] = True
+        st.session_state.pop(FAILURE_SIGNATURE_STATE_KEY, None)
+        results_are_current = True
+        solver_status = "Solved"
 
         # Shared state used by the existing Process Chat page.
         st.session_state["process_model"] = model
@@ -808,13 +881,33 @@ if run_case:
         solver_status_placeholder.write("**Solver:** Solved")
         st.success("The NeqSim flowsheet solved and is ready for review.")
     except Exception as exc:
-        st.session_state.pop(RESULT_STATE_KEY, None)
+        if current_case_signature is not None:
+            st.session_state[FAILURE_SIGNATURE_STATE_KEY] = current_case_signature
+        results_are_current = False
+        solver_status = "Failed"
         solver_status_placeholder.write("**Solver:** Failed")
         st.error(f"Flowsheet calculation failed: {exc}")
         with st.expander("Technical error details", expanded=False):
             st.code(traceback.format_exc())
 
-if st.session_state.get(RESULT_STATE_KEY) and CASE_STATE_KEY in st.session_state:
+has_stored_result = bool(
+    st.session_state.get(RESULT_STATE_KEY)
+    and isinstance(st.session_state.get(CASE_STATE_KEY), dict)
+)
+if has_stored_result and not results_are_current:
+    if solver_status == "Failed":
+        stale_reason = "The current calculation failed."
+    elif solver_status == "Invalid inputs":
+        stale_reason = "The current inputs are invalid."
+    else:
+        stale_reason = "The inputs changed after the last successful calculation."
+    st.info(
+        f"{stale_reason} The last solved results are retained but hidden until "
+        "their exact inputs are restored or the current case solves successfully. "
+        "Process Chat continues to reference the last solved model."
+    )
+
+if results_are_current and has_stored_result:
     state = st.session_state[CASE_STATE_KEY]
     spec = state["spec"]
     builder = state["builder"]
