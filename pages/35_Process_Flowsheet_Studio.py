@@ -36,8 +36,10 @@ TEMPLATE_NAME = "Inlet separation and two-stage gas compression"
 CASE_STATE_KEY = "flowsheet_studio_case"
 RESULT_STATE_KEY = "flowsheet_studio_result"
 FAILURE_SIGNATURE_STATE_KEY = "flowsheet_studio_failure_signature"
+CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
 CASE_SCHEMA_VERSION = 1
 MAX_CASE_FILE_BYTES = 1_000_000
+MAX_CASE_HISTORY = 20
 SUPPORTED_EOS_MODELS = ("srk", "pr", "cpa", "gerg2008")
 EXPECTED_TEMPLATE_TOPOLOGY = (
     ("feed gas", "stream"),
@@ -101,6 +103,8 @@ def _initialize_case_controls() -> None:
         st.session_state["flowsheet_composition_source"] = DEFAULT_COMPOSITION.copy()
     if "flowsheet_composition_revision" not in st.session_state:
         st.session_state["flowsheet_composition_revision"] = 0
+    if CASE_HISTORY_STATE_KEY not in st.session_state:
+        st.session_state[CASE_HISTORY_STATE_KEY] = []
 
 
 def _finite_float(value: Any, field_name: str) -> float:
@@ -616,6 +620,158 @@ def _format_metric(value: float | None, unit: str, digits: int = 1) -> str:
     return f"{value:,.{digits}f} {unit}"
 
 
+def _case_history_record(
+    spec: dict[str, Any],
+    result: Any,
+    signature: str,
+) -> dict[str, Any]:
+    """Create a compact comparison record from one successful NeqSim solve."""
+    total_power_kw = _kpi_value(result, "total_power_kW")
+    total_duty_kw = _kpi_value(result, "total_duty_kW")
+    mass_balance_pct = _kpi_value(result, "mass_balance_pct")
+    feed_flow_kg_hr = float(spec["fluid"]["total_flow"])
+    feed_tonnes_per_hour = feed_flow_kg_hr / 1000.0
+    specific_energy_kwh_t = None
+    if total_power_kw is not None and feed_tonnes_per_hour > 0.0:
+        specific_energy_kwh_t = total_power_kw / feed_tonnes_per_hour
+
+    constraint_statuses = {
+        str(getattr(constraint, "status", "")).upper()
+        for constraint in result.constraints
+    }
+    if "VIOLATION" in constraint_statuses:
+        validation_status = "VIOLATION"
+    elif "WARN" in constraint_statuses:
+        validation_status = "WARN"
+    else:
+        validation_status = "OK"
+
+    process = spec["process"]
+    return {
+        "_signature": signature,
+        "Case ID": signature[:8],
+        "Case": spec["name"],
+        "EOS": str(spec["fluid"]["eos_model"]).upper(),
+        "Components": len(spec["fluid"]["components"]),
+        "Feed temperature [°C]": float(spec["fluid"]["temperature_C"]),
+        "Feed pressure [bara]": float(spec["fluid"]["pressure_bara"]),
+        "Feed flow [kg/hr]": feed_flow_kg_hr,
+        "Stage 1 pressure [bara]": float(
+            process[2]["params"]["outlet_pressure_bara"]
+        ),
+        "Stage 2 pressure [bara]": float(
+            process[5]["params"]["outlet_pressure_bara"]
+        ),
+        "Isentropic efficiency [-]": float(
+            process[2]["params"]["isentropic_efficiency"]
+        ),
+        "Compressor power [kW]": total_power_kw,
+        "Cooling duty magnitude [kW]": total_duty_kw,
+        "Specific energy [kWh/t]": specific_energy_kwh_t,
+        "Mass imbalance [%]": mass_balance_pct,
+        "Validation": validation_status,
+    }
+
+
+def _upsert_case_history(
+    history: Any,
+    record: dict[str, Any],
+    max_cases: int = MAX_CASE_HISTORY,
+) -> list[dict[str, Any]]:
+    """Store one unique solved case while bounding session memory."""
+    if max_cases < 1:
+        raise ValueError("max_cases must be at least one.")
+    signature = record.get("_signature")
+    if not isinstance(signature, str) or not signature:
+        raise ValueError("A solved case record must have a signature.")
+
+    history_items = history if isinstance(history, list) else []
+    cleaned_history = [
+        dict(item)
+        for item in history_items
+        if isinstance(item, dict)
+        and isinstance(item.get("_signature"), str)
+        and item.get("_signature") != signature
+    ]
+    cleaned_history.append(dict(record))
+    return cleaned_history[-max_cases:]
+
+
+def _percent_delta(value: Any, baseline: Any) -> float | None:
+    """Return a finite percentage delta, or None for an unusable baseline."""
+    if value is None or baseline is None:
+        return None
+    value_float = _finite_float(value, "Case result")
+    baseline_float = _finite_float(baseline, "Baseline result")
+    if abs(baseline_float) <= 1.0e-12:
+        return None
+    return 100.0 * (value_float - baseline_float) / abs(baseline_float)
+
+
+def _case_comparison_dataframe(
+    history: Any,
+    baseline_signature: str,
+) -> pd.DataFrame:
+    """Build a workbook-style solved-case table with baseline KPI deltas."""
+    history_items = history if isinstance(history, list) else []
+    records = [
+        dict(item)
+        for item in history_items
+        if isinstance(item, dict)
+        and isinstance(item.get("_signature"), str)
+    ]
+    if not records:
+        return pd.DataFrame()
+
+    baseline = next(
+        (
+            record
+            for record in records
+            if record["_signature"] == baseline_signature
+        ),
+        records[0],
+    )
+    comparison_rows = []
+    for record in records:
+        row = {
+            key: value
+            for key, value in record.items()
+            if key != "_signature"
+        }
+        row["Baseline"] = (
+            "Yes" if record["_signature"] == baseline["_signature"] else ""
+        )
+        row["Power Δ vs baseline [%]"] = _percent_delta(
+            record.get("Compressor power [kW]"),
+            baseline.get("Compressor power [kW]"),
+        )
+        row["Duty Δ vs baseline [%]"] = _percent_delta(
+            record.get("Cooling duty magnitude [kW]"),
+            baseline.get("Cooling duty magnitude [kW]"),
+        )
+        row["Specific energy Δ vs baseline [%]"] = _percent_delta(
+            record.get("Specific energy [kWh/t]"),
+            baseline.get("Specific energy [kWh/t]"),
+        )
+        comparison_rows.append(row)
+    return pd.DataFrame(comparison_rows)
+
+
+def _case_history_label(record: dict[str, Any]) -> str:
+    """Return a safe selector label for a retained solved case."""
+    case_name = str(record.get("Case") or "Unnamed case")
+    signature = str(record.get("_signature") or "")[:8]
+    try:
+        feed_flow = _finite_float(
+            record.get("Feed flow [kg/hr]"),
+            "Feed flow",
+        )
+        feed_flow_text = f"{feed_flow:,.0f} kg/hr"
+    except ValueError:
+        feed_flow_text = "unknown flow"
+    return f"{case_name} · {feed_flow_text} · {signature}"
+
+
 st.set_page_config(
     page_title=PAGE_TITLE,
     page_icon="images/neqsimlogocircleflat.png",
@@ -869,6 +1025,15 @@ if run_case:
         st.session_state[CASE_STATE_KEY] = state
         st.session_state[RESULT_STATE_KEY] = True
         st.session_state.pop(FAILURE_SIGNATURE_STATE_KEY, None)
+        solved_case_record = _case_history_record(
+            case_spec,
+            result,
+            current_case_signature,
+        )
+        st.session_state[CASE_HISTORY_STATE_KEY] = _upsert_case_history(
+            st.session_state.get(CASE_HISTORY_STATE_KEY),
+            solved_case_record,
+        )
         results_are_current = True
         solver_status = "Solved"
 
@@ -946,6 +1111,70 @@ if results_are_current and has_stored_result:
         "Mass imbalance",
         _format_metric(mass_balance_pct, "%", digits=3),
     )
+
+    case_history = st.session_state.get(CASE_HISTORY_STATE_KEY, [])
+    history_records = [
+        record
+        for record in case_history
+        if isinstance(record, dict)
+        and isinstance(record.get("_signature"), str)
+    ]
+    if history_records:
+        st.markdown("#### What-if case comparison")
+        st.caption(
+            "Each unique, successfully solved NeqSim case is retained in this "
+            f"session (up to {MAX_CASE_HISTORY}). Select a baseline to compare "
+            "power, cooling duty, and specific energy."
+        )
+        record_by_signature = {
+            record["_signature"]: record for record in history_records
+        }
+        history_signatures = list(record_by_signature)
+        baseline_state_key = "flowsheet_case_history_baseline"
+        if st.session_state.get(baseline_state_key) not in history_signatures:
+            st.session_state[baseline_state_key] = history_signatures[0]
+        baseline_signature = st.selectbox(
+            "Comparison baseline",
+            options=history_signatures,
+            format_func=lambda signature: _case_history_label(
+                record_by_signature[signature]
+            ),
+            key=baseline_state_key,
+        )
+        comparison_table = _case_comparison_dataframe(
+            history_records,
+            baseline_signature,
+        )
+        comparison_formats = {
+            "Feed temperature [°C]": "{:.2f}",
+            "Feed pressure [bara]": "{:.2f}",
+            "Feed flow [kg/hr]": "{:,.2f}",
+            "Stage 1 pressure [bara]": "{:.2f}",
+            "Stage 2 pressure [bara]": "{:.2f}",
+            "Isentropic efficiency [-]": "{:.3f}",
+            "Compressor power [kW]": "{:,.2f}",
+            "Cooling duty magnitude [kW]": "{:,.2f}",
+            "Specific energy [kWh/t]": "{:.3f}",
+            "Mass imbalance [%]": "{:.6f}",
+            "Power Δ vs baseline [%]": "{:+.3f}",
+            "Duty Δ vs baseline [%]": "{:+.3f}",
+            "Specific energy Δ vs baseline [%]": "{:+.3f}",
+        }
+        st.dataframe(
+            comparison_table.style.format(
+                comparison_formats,
+                na_rep="—",
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.download_button(
+            "Download case comparison CSV",
+            data=comparison_table.to_csv(index=False),
+            file_name="process_flowsheet_case_comparison.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
     diagram_tab, streams_tab, equipment_tab, validation_tab = st.tabs(
         [
