@@ -38,6 +38,9 @@ CASE_STATE_KEY = "flowsheet_studio_case"
 RESULT_STATE_KEY = "flowsheet_studio_result"
 FAILURE_SIGNATURE_STATE_KEY = "flowsheet_studio_failure_signature"
 CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
+CASE_HISTORY_BASELINE_STATE_KEY = "flowsheet_case_history_baseline"
+CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
+STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
 CASE_SCHEMA_VERSION = 1
 MAX_CASE_FILE_BYTES = 1_000_000
 MAX_CASE_HISTORY = 20
@@ -118,6 +121,53 @@ def _initialize_case_controls() -> None:
         st.session_state["flowsheet_composition_revision"] = 0
     if CASE_HISTORY_STATE_KEY not in st.session_state:
         st.session_state[CASE_HISTORY_STATE_KEY] = []
+
+
+def _clear_studio_runtime(clear_history: bool) -> None:
+    """Clear calculated Studio state without deleting an unrelated Chat model."""
+    for key in (
+        CASE_STATE_KEY,
+        RESULT_STATE_KEY,
+        FAILURE_SIGNATURE_STATE_KEY,
+    ):
+        st.session_state.pop(key, None)
+    if clear_history:
+        st.session_state[CASE_HISTORY_STATE_KEY] = []
+        st.session_state.pop(CASE_HISTORY_BASELINE_STATE_KEY, None)
+    if st.session_state.get("process_model_name") == STUDIO_PROCESS_MODEL_NAME:
+        st.session_state.pop("process_model", None)
+        st.session_state.pop("process_model_name", None)
+        st.session_state.pop("process_model_bytes", None)
+
+
+def _start_new_case() -> None:
+    """Start a clean default case after the user confirms destructive reset."""
+    current_revision = st.session_state.get(
+        "flowsheet_composition_revision",
+        0,
+    )
+    try:
+        next_revision = int(current_revision) + 1
+    except (TypeError, ValueError):
+        next_revision = 1
+
+    for key, value in CONTROL_DEFAULTS.items():
+        st.session_state[key] = value
+    st.session_state["flowsheet_composition_source"] = DEFAULT_COMPOSITION.copy()
+    st.session_state["flowsheet_composition_revision"] = next_revision
+    st.session_state["flowsheet_selected_object"] = "feed gas"
+    _clear_studio_runtime(clear_history=True)
+
+    for key in (
+        "flowsheet_case_upload",
+        "flowsheet_confirm_new_case",
+        "flowsheet_import_notice",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state[CASE_NOTICE_STATE_KEY] = (
+        "New case started from the validated gas-compression template. "
+        "Review the inputs and run the NeqSim flowsheet."
+    )
 
 
 def _finite_float(value: Any, field_name: str) -> float:
@@ -364,17 +414,11 @@ def _apply_imported_case(
         st.session_state[key] = value
     st.session_state["flowsheet_composition_source"] = composition_table
     st.session_state["flowsheet_composition_revision"] += 1
-    st.session_state.pop(CASE_STATE_KEY, None)
-    st.session_state.pop(RESULT_STATE_KEY, None)
-    st.session_state.pop(FAILURE_SIGNATURE_STATE_KEY, None)
-    if st.session_state.get("process_model_name") == "process_flowsheet_studio.neqsim":
-        st.session_state.pop("process_model", None)
-        st.session_state.pop("process_model_name", None)
-        st.session_state.pop("process_model_bytes", None)
+    _clear_studio_runtime(clear_history=False)
     notice = "Case loaded. Review the inputs and run the NeqSim flowsheet."
     if warnings:
         notice += " " + " ".join(warnings)
-    st.session_state["flowsheet_import_notice"] = notice
+    st.session_state[CASE_NOTICE_STATE_KEY] = notice
 
 
 def _clean_composition(table: pd.DataFrame) -> tuple[dict[str, float], float]:
@@ -1085,6 +1129,22 @@ with st.sidebar:
     st.write("**Mode:** Steady state")
     solver_status_placeholder = st.empty()
     st.write("**Workspace:** Setup → Flowsheet → Workbook → Validation")
+    with st.expander("Start a new case", expanded=False):
+        st.caption(
+            "Reset the editable case, solver state, retained comparisons, and "
+            "the Studio-owned Process Chat model."
+        )
+        confirm_new_case = st.checkbox(
+            "I understand that unsaved case changes and comparisons will be cleared.",
+            key="flowsheet_confirm_new_case",
+        )
+        st.button(
+            "Start new case",
+            disabled=not confirm_new_case,
+            on_click=_start_new_case,
+            use_container_width=True,
+            key="flowsheet_start_new_case",
+        )
 
 with st.expander("Model scope and assumptions", expanded=False):
     st.markdown(
@@ -1131,9 +1191,9 @@ with st.expander("Open a reusable Studio case", expanded=False):
             )
             st.rerun()
 
-import_notice = st.session_state.pop("flowsheet_import_notice", None)
-if import_notice:
-    st.success(import_notice)
+case_notice = st.session_state.pop(CASE_NOTICE_STATE_KEY, None)
+if case_notice:
+    st.success(case_notice)
 
 st.subheader("1. Case setup")
 case_name = st.text_input(
@@ -1308,7 +1368,7 @@ if run_case:
 
         # Shared state used by the existing Process Chat page.
         st.session_state["process_model"] = model
-        st.session_state["process_model_name"] = "process_flowsheet_studio.neqsim"
+        st.session_state["process_model_name"] = STUDIO_PROCESS_MODEL_NAME
         if model_bytes:
             st.session_state["process_model_bytes"] = model_bytes
 
@@ -1399,7 +1459,7 @@ if results_are_current and has_stored_result:
             record["_signature"]: record for record in history_records
         }
         history_signatures = list(record_by_signature)
-        baseline_state_key = "flowsheet_case_history_baseline"
+        baseline_state_key = CASE_HISTORY_BASELINE_STATE_KEY
         if st.session_state.get(baseline_state_key) not in history_signatures:
             st.session_state[baseline_state_key] = history_signatures[0]
         baseline_signature = st.selectbox(
