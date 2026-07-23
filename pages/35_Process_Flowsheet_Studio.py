@@ -9,6 +9,7 @@ import os
 import sys
 import traceback
 from dataclasses import asdict
+from io import BytesIO
 from typing import Any
 
 import pandas as pd
@@ -630,6 +631,178 @@ def _format_metric(value: float | None, unit: str, digits: int = 1) -> str:
     if value is None:
         return "n/a"
     return f"{value:,.{digits}f} {unit}"
+
+
+def _workbook_cell(value: Any) -> Any:
+    """Return an Excel-safe scalar while preserving ordinary numeric cells."""
+    if value is None:
+        return ""
+    if isinstance(value, (str, bool, int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return ""
+        return value
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return json.dumps(value, allow_nan=False, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _engineering_workbook_bytes(
+    spec: dict[str, Any],
+    result: Any,
+    stream_table: pd.DataFrame,
+    equipment_table: pd.DataFrame,
+    constraint_table: pd.DataFrame,
+) -> bytes:
+    """Build a review-ready Excel workbook from one solved NeqSim case."""
+    fluid = spec["fluid"]
+    process_steps = {step["name"]: step for step in spec["process"]}
+    total_power_kw = _kpi_value(result, "total_power_kW")
+    total_duty_kw = _kpi_value(result, "total_duty_kW")
+    mass_balance_pct = _kpi_value(result, "mass_balance_pct")
+    feed_tonnes_per_hour = float(fluid["total_flow"]) / 1000.0
+    specific_energy = None
+    if total_power_kw is not None and feed_tonnes_per_hour > 0.0:
+        specific_energy = total_power_kw / feed_tonnes_per_hour
+
+    case_summary = pd.DataFrame(
+        [
+            ("Case", "Name", spec["name"], ""),
+            ("Case", "Template", TEMPLATE_NAME, ""),
+            ("Case", "Simulation mode", "Steady state", ""),
+            ("Thermodynamics", "Equation of state", str(fluid["eos_model"]).upper(), ""),
+            ("Thermodynamics", "Mixing rule", fluid["mixing_rule"], "NeqSim rule"),
+            ("Fluid", "Composition basis", fluid["composition_basis"], "mole fraction"),
+            ("Feed", "Temperature", fluid["temperature_C"], "°C"),
+            ("Feed", "Pressure", fluid["pressure_bara"], "bara absolute"),
+            ("Feed", "Mass flow", fluid["total_flow"], fluid["flow_unit"]),
+            (
+                "Compressor stage 1",
+                "Discharge pressure",
+                process_steps["compressor stage 1"]["params"][
+                    "outlet_pressure_bara"
+                ],
+                "bara absolute",
+            ),
+            (
+                "Compressor stage 2",
+                "Discharge pressure",
+                process_steps["compressor stage 2"]["params"][
+                    "outlet_pressure_bara"
+                ],
+                "bara absolute",
+            ),
+            (
+                "Compressors",
+                "Isentropic efficiency",
+                process_steps["compressor stage 1"]["params"][
+                    "isentropic_efficiency"
+                ],
+                "fraction",
+            ),
+            (
+                "Intercooler",
+                "Outlet temperature",
+                process_steps["intercooler"]["params"]["outlet_temperature_C"],
+                "°C",
+            ),
+            (
+                "Export cooler",
+                "Outlet temperature",
+                process_steps["export cooler"]["params"]["outlet_temperature_C"],
+                "°C",
+            ),
+            ("Solver", "State represented by workbook", "Solved", ""),
+        ],
+        columns=["Section", "Parameter", "Value", "Unit / basis"],
+    )
+    kpi_table = pd.DataFrame(
+        [
+            ("Total compressor power", total_power_kw, "kW"),
+            ("Total cooling duty magnitude", total_duty_kw, "kW"),
+            ("Specific compression energy", specific_energy, "kWh/t feed"),
+            ("Total mass imbalance", mass_balance_pct, "%"),
+        ],
+        columns=["KPI", "Value", "Unit"],
+    )
+    composition_table = pd.DataFrame(
+        {
+            "Component": list(fluid["components"]),
+            "Mole fraction [-]": list(fluid["components"].values()),
+        }
+    )
+    assumptions = list(spec.get("assumptions", []))
+    assumptions_table = pd.DataFrame(
+        {
+            "Type": ["Assumption"] * len(assumptions) + ["Limitation"],
+            "Statement": assumptions
+            + [
+                "Results support screening and engineering studies; "
+                "they are not design certification."
+            ],
+        }
+    )
+    sheet_frames = {
+        "Case Summary": case_summary,
+        "KPIs": kpi_table,
+        "Composition": composition_table,
+        "Streams": stream_table,
+        "Equipment": equipment_table,
+        "Validation": constraint_table,
+        "Assumptions": assumptions_table,
+    }
+
+    output = BytesIO()
+    with pd.ExcelWriter(
+        output,
+        engine="xlsxwriter",
+        engine_kwargs={
+            "options": {
+                "strings_to_formulas": False,
+                "strings_to_urls": False,
+                "nan_inf_to_errors": True,
+            }
+        },
+    ) as writer:
+        workbook = writer.book
+        workbook.set_properties(
+            {
+                "title": f"{spec['name']} · NeqSim engineering workbook",
+                "subject": "Process Flowsheet Studio solved-case results",
+                "author": "NeqSim Process Flowsheet Studio",
+            }
+        )
+        header_format = workbook.add_format(
+            {
+                "bold": True,
+                "font_color": "white",
+                "bg_color": "#1F4E78",
+                "border": 1,
+            }
+        )
+        for sheet_name, source_frame in sheet_frames.items():
+            frame = source_frame.copy()
+            for column in frame.columns:
+                frame[column] = frame[column].map(_workbook_cell)
+            frame.to_excel(writer, sheet_name=sheet_name, index=False)
+            worksheet = writer.sheets[sheet_name]
+            worksheet.freeze_panes(1, 0)
+            if len(frame.columns) > 0:
+                worksheet.autofilter(0, 0, len(frame), len(frame.columns) - 1)
+            for column_index, column_name in enumerate(frame.columns):
+                worksheet.write(0, column_index, column_name, header_format)
+                values = [str(column_name)] + [
+                    str(value) for value in frame[column_name].tolist()
+                ]
+                width = min(max(len(value) for value in values) + 2, 60)
+                worksheet.set_column(column_index, column_index, width)
+
+    return output.getvalue()
 
 
 def _case_history_record(
@@ -1376,7 +1549,20 @@ if results_are_current and has_stored_result:
     st.subheader("3. Reproducible deliverables")
     case_json = json.dumps(spec, indent=2)
     python_script = builder.to_python_script()
-    download_cols = st.columns(3)
+    workbook_bytes = None
+    workbook_error = None
+    try:
+        workbook_bytes = _engineering_workbook_bytes(
+            spec,
+            result,
+            stream_table,
+            equipment_table,
+            constraint_table,
+        )
+    except Exception as export_error:
+        workbook_error = str(export_error)
+
+    download_cols = st.columns(4)
     download_cols[0].download_button(
         "Download case JSON",
         data=case_json,
@@ -1401,6 +1587,22 @@ if results_are_current and has_stored_result:
         )
     else:
         download_cols[2].info("Serialized NeqSim model was unavailable.")
+    if workbook_bytes:
+        download_cols[3].download_button(
+            "Download engineering workbook",
+            data=workbook_bytes,
+            file_name="process_flowsheet_engineering_workbook.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+        )
+    else:
+        download_cols[3].info(
+            "Engineering workbook was unavailable."
+            + (f" {workbook_error}" if workbook_error else "")
+        )
 
     st.info(
         "This solved process is also available in the current session under "
