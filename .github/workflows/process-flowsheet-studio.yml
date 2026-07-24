@@ -1,0 +1,38 @@
+name: Process Flowsheet Studio
+
+on:
+  pull_request:
+    paths:
+      - "pages/35_Process_Flowsheet_Studio.py"
+      - "process_chat/process_builder.py"
+      - "process_chat/process_model.py"
+      - "tests/test_process_graph_conservation.py"
+      - ".github/workflows/process-flowsheet-studio.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  studio-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install native NeqSim
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install neqsim
+      - name: Compile affected Python sources
+        run: |
+          python -m py_compile \
+            pages/35_Process_Flowsheet_Studio.py \
+            process_chat/process_builder.py \
+            process_chat/process_model.py \
+            tests/test_process_graph_conservation.py
+      - name: Run native multi-inlet conservation benchmark
+        run: python tests/test_process_graph_conservation.py -v
