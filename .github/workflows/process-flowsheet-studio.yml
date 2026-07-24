@@ -5,7 +5,9 @@ on:
     paths:
       - "pages/35_Process_Flowsheet_Studio.py"
       - "process_chat/process_builder.py"
+      - "process_chat/flowsheet_editor.py"
       - "process_chat/process_model.py"
+      - "tests/test_flowsheet_editor.py"
       - "tests/test_process_graph_conservation.py"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
@@ -34,7 +36,11 @@ jobs:
           python -m py_compile \
             pages/35_Process_Flowsheet_Studio.py \
             process_chat/process_builder.py \
+            process_chat/flowsheet_editor.py \
             process_chat/process_model.py \
+            tests/test_flowsheet_editor.py \
             tests/test_process_graph_conservation.py
+      - name: Run draft graph editor regression tests
+        run: python tests/test_flowsheet_editor.py -v
       - name: Run native multi-inlet conservation benchmark
         run: python tests/test_process_graph_conservation.py -v
