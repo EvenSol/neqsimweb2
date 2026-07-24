@@ -38,6 +38,8 @@ from process_chat.flowsheet_editor import (  # noqa: E402
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
     material_connection_rows,
+    remove_inline_unit,
+    rename_inline_unit,
     validate_catalog_unit,
 )
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
@@ -2331,15 +2333,26 @@ def _render_object_property_editor() -> str:
 
 
 def _render_graph_palette(spec: dict[str, Any]) -> None:
-    """Render safe inline insertion controls for the active unsolved graph."""
+    """Render safe lifecycle controls for the active unsolved graph."""
     catalog = inline_unit_catalog()
     catalog_rows = inline_unit_catalog_rows()
     connection_rows = material_connection_rows(spec["connections"])
     connection_labels = {
         row["id"]: row["label"] for row in connection_rows
     }
+    protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
+    added_units = [
+        unit
+        for unit in spec["units"]
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() not in protected_unit_ids
+    ]
+    added_unit_map = {
+        str(unit["id"]).strip(): unit for unit in added_units
+    }
 
-    with st.expander("Add equipment from palette", expanded=False):
+    with st.expander("Edit flowsheet graph", expanded=False):
+        st.markdown("#### Add equipment from palette")
         st.caption(
             "Insert a native NeqSim unit into one existing material path. "
             "The draft is validated before it replaces the active graph."
@@ -2441,7 +2454,10 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     spec,
                     candidate_draft,
                 )
-                _build_execution_plan(candidate_case)
+                _validate_case_graph(
+                    candidate_case,
+                    candidate_case["process"],
+                )
             except ValueError as edit_error:
                 st.error(f"Equipment insertion failed: {edit_error}")
             else:
@@ -2452,6 +2468,121 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     "Review its initial properties and run NeqSim."
                 )
                 st.rerun()
+
+        if added_unit_map:
+            st.divider()
+            st.markdown("#### Manage added equipment")
+            selected_unit_id = st.selectbox(
+                "Added equipment",
+                options=list(added_unit_map),
+                format_func=lambda value: (
+                    f"{added_unit_map[value]['name']} · "
+                    f"{added_unit_map[value]['type']} · {value}"
+                ),
+                key="flowsheet_added_unit",
+            )
+            selected_unit = added_unit_map[selected_unit_id]
+            renamed_unit_name = st.text_input(
+                "Equipment display name",
+                value=str(selected_unit["name"]),
+                key=f"flowsheet_added_unit_name_{selected_unit_id}",
+                help=(
+                    "The stable graph ID and all port connections remain "
+                    "unchanged."
+                ),
+            )
+            lifecycle_cols = st.columns(2)
+            rename_unit = lifecycle_cols[0].button(
+                "Rename equipment",
+                use_container_width=True,
+                key=f"flowsheet_rename_unit_{selected_unit_id}",
+            )
+            confirm_removal = lifecycle_cols[1].checkbox(
+                "Confirm removal",
+                key=f"flowsheet_confirm_remove_{selected_unit_id}",
+                help=(
+                    "Removal reconnects the unit's single incoming and outgoing "
+                    "material path. Branches and energy links are protected."
+                ),
+            )
+            remove_unit = lifecycle_cols[1].button(
+                "Remove equipment",
+                disabled=not confirm_removal,
+                use_container_width=True,
+                key=f"flowsheet_remove_unit_{selected_unit_id}",
+            )
+
+            if rename_unit:
+                try:
+                    units = rename_inline_unit(
+                        spec["units"],
+                        selected_unit_id,
+                        renamed_unit_name,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        spec["connections"],
+                    )
+                    candidate_case = apply_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(f"Equipment rename failed: {edit_error}")
+                else:
+                    st.session_state[GRAPH_DRAFT_STATE_KEY] = candidate_draft
+                    _clear_studio_runtime(clear_history=False)
+                    st.session_state[CASE_NOTICE_STATE_KEY] = (
+                        f"Renamed '{selected_unit['name']}' to "
+                        f"'{renamed_unit_name.strip()}'. "
+                        "The stable graph ID and connections were retained."
+                    )
+                    st.rerun()
+
+            if remove_unit:
+                try:
+                    units, connections = remove_inline_unit(
+                        spec["units"],
+                        spec["connections"],
+                        selected_unit_id,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        connections,
+                    )
+                    candidate_case = apply_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                    starter_units, starter_connections = (
+                        _build_template_graph(candidate_case["process"])
+                    )
+                except ValueError as edit_error:
+                    st.error(f"Equipment removal failed: {edit_error}")
+                else:
+                    if (
+                        units == starter_units
+                        and connections == starter_connections
+                    ):
+                        st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
+                    else:
+                        st.session_state[
+                            GRAPH_DRAFT_STATE_KEY
+                        ] = candidate_draft
+                    _clear_studio_runtime(clear_history=False)
+                    st.session_state[CASE_NOTICE_STATE_KEY] = (
+                        f"Removed '{selected_unit['name']}' and reconnected "
+                        "its material path. Run NeqSim to solve the updated graph."
+                    )
+                    st.rerun()
 
         if st.session_state.get(GRAPH_DRAFT_STATE_KEY) is not None:
             st.divider()
