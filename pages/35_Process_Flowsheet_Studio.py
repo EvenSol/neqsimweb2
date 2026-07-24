@@ -31,6 +31,15 @@ if "add-opens" not in os.environ.get("JAVA_TOOL_OPTIONS", ""):
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from process_chat.flowsheet_editor import (  # noqa: E402
+    apply_graph_draft,
+    create_graph_draft,
+    inline_unit_catalog,
+    inline_unit_catalog_rows,
+    insert_inline_unit_on_connection,
+    material_connection_rows,
+    validate_catalog_unit,
+)
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
 from theme import apply_theme, theme_toggle  # noqa: E402
 
@@ -43,6 +52,7 @@ FAILURE_SIGNATURE_STATE_KEY = "flowsheet_studio_failure_signature"
 CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
 CASE_HISTORY_BASELINE_STATE_KEY = "flowsheet_case_history_baseline"
 CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
+GRAPH_DRAFT_STATE_KEY = "flowsheet_studio_graph_draft"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
 LEGACY_CASE_SCHEMA_VERSION = 1
 SHARED_FLUID_CASE_SCHEMA_VERSION = 2
@@ -174,6 +184,7 @@ def _start_new_case() -> None:
     st.session_state["flowsheet_composition_source"] = DEFAULT_COMPOSITION.copy()
     st.session_state["flowsheet_composition_revision"] = next_revision
     st.session_state["flowsheet_selected_object"] = "feed gas"
+    st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
     _clear_studio_runtime(clear_history=True)
 
     for key in (
@@ -838,7 +849,7 @@ def _validate_case_graph(
     case_data: dict[str, Any],
     process: list[dict[str, Any]],
 ) -> None:
-    """Validate schema-v3 graph integrity and the current builder projection."""
+    """Validate schema-v3 graph integrity and starter-template compatibility."""
     if case_data["schema_version"] < CASE_SCHEMA_VERSION:
         return
 
@@ -854,21 +865,18 @@ def _validate_case_graph(
 
     _validate_graph_integrity(inlets, units, connections)
     indexed_units = _index_graph_objects(units, "units")
-    indexed_connections = _index_graph_objects(connections, "connections")
-    expected_units, expected_connections = _build_template_graph(process)
+    expected_units, _ = _build_template_graph(process)
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
-    if indexed_units != expected_unit_map:
-        raise ValueError(
-            "Graph units conflict with the current ProcessBuilder projection."
-        )
-
-    expected_connection_map = {
-        connection["id"]: connection for connection in expected_connections
-    }
-    if indexed_connections != expected_connection_map:
-        raise ValueError(
-            "Graph connections conflict with the current ProcessBuilder projection."
-        )
+    for expected_unit_id, expected_unit in expected_unit_map.items():
+        if indexed_units.get(expected_unit_id) != expected_unit:
+            raise ValueError(
+                "Graph units conflict with the starter-template projection at "
+                f"'{expected_unit_id}'."
+            )
+    for unit_id, unit in indexed_units.items():
+        if unit_id not in expected_unit_map:
+            validate_catalog_unit(unit)
+    _build_execution_plan(case_data)
 
 def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
     """Validate an exported Studio case and map it back to UI controls."""
@@ -1092,6 +1100,21 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         stage_1_isentropic_efficiency=efficiency_1,
         stage_2_isentropic_efficiency=efficiency_2,
     )
+    graph_draft = None
+    if schema_version >= CASE_SCHEMA_VERSION:
+        imported_draft = create_graph_draft(
+            case_data["units"],
+            case_data["connections"],
+        )
+        if (
+            imported_draft["units"] != canonical_spec["units"]
+            or imported_draft["connections"] != canonical_spec["connections"]
+        ):
+            graph_draft = imported_draft
+            canonical_spec = apply_graph_draft(
+                canonical_spec,
+                imported_draft,
+            )
     warnings = _validate_case(canonical_spec, composition_total)
     if schema_version < CASE_SCHEMA_VERSION:
         warnings.insert(
@@ -1112,6 +1135,7 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         "flowsheet_intercooler_pressure_drop_bar": intercooler_pressure_drop_bar,
         "flowsheet_export_temperature_c": export_temperature_c,
         "flowsheet_export_pressure_drop_bar": export_pressure_drop_bar,
+        GRAPH_DRAFT_STATE_KEY: graph_draft,
     }
     return controls, composition_table, warnings
 
@@ -1123,7 +1147,14 @@ def _apply_imported_case(
 ) -> None:
     """Replace the current controls and invalidate any previously solved model."""
     for key, value in controls.items():
+        if key == GRAPH_DRAFT_STATE_KEY:
+            continue
         st.session_state[key] = value
+    graph_draft = controls.get(GRAPH_DRAFT_STATE_KEY)
+    if graph_draft is None:
+        st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
+    else:
+        st.session_state[GRAPH_DRAFT_STATE_KEY] = graph_draft
     st.session_state["flowsheet_composition_source"] = composition_table
     st.session_state["flowsheet_composition_revision"] += 1
     _clear_studio_runtime(clear_history=False)
@@ -2299,6 +2330,158 @@ def _render_object_property_editor() -> str:
     return selected_object
 
 
+def _render_graph_palette(spec: dict[str, Any]) -> None:
+    """Render safe inline insertion controls for the active unsolved graph."""
+    catalog = inline_unit_catalog()
+    catalog_rows = inline_unit_catalog_rows()
+    connection_rows = material_connection_rows(spec["connections"])
+    connection_labels = {
+        row["id"]: row["label"] for row in connection_rows
+    }
+
+    with st.expander("Add equipment from palette", expanded=False):
+        st.caption(
+            "Insert a native NeqSim unit into one existing material path. "
+            "The draft is validated before it replaces the active graph."
+        )
+        st.dataframe(
+            pd.DataFrame(catalog_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+        unit_type = st.selectbox(
+            "Equipment type",
+            options=list(catalog),
+            format_func=lambda value: (
+                f"{catalog[value]['label']} · "
+                f"{catalog[value]['category']}"
+            ),
+            key="flowsheet_palette_unit_type",
+        )
+        selected_definition = catalog[unit_type]
+        unit_name = st.text_input(
+            "Equipment name",
+            value="",
+            placeholder=f"New {selected_definition['label']}",
+            key="flowsheet_palette_unit_name",
+        )
+        connection_id = st.selectbox(
+            "Material path",
+            options=list(connection_labels),
+            format_func=connection_labels.__getitem__,
+            key="flowsheet_palette_connection",
+        )
+        st.caption("Initial properties and engineering units")
+        parameter_units = {
+            "outlet_pressure_bara": "bara (absolute)",
+            "isentropic_efficiency": "-",
+            "efficiency": "-",
+            "outlet_temperature_C": "°C",
+            "pressure_drop_bar": "bar",
+            "length": "m",
+            "diameter": "m",
+            "roughness": "m",
+        }
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Property": property_name,
+                        "Value": property_value,
+                        "Unit": parameter_units.get(
+                            property_name,
+                            "explicit in property name",
+                        ),
+                    }
+                    for property_name, property_value in (
+                        selected_definition["default_params"].items()
+                    )
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        insert_unit = st.button(
+            "Insert equipment in selected path",
+            disabled=not connection_rows,
+            use_container_width=True,
+            key="flowsheet_insert_palette_unit",
+        )
+        if insert_unit:
+            try:
+                requested_name = (
+                    unit_name.strip()
+                    or f"New {selected_definition['label']}"
+                )
+                existing_names = {
+                    str(unit.get("name", "")).strip().casefold()
+                    for unit in spec["units"]
+                    if isinstance(unit, dict)
+                }
+                resolved_name = requested_name
+                name_suffix = 2
+                while resolved_name.casefold() in existing_names:
+                    resolved_name = f"{requested_name} {name_suffix}"
+                    name_suffix += 1
+                units, connections, new_unit_id = (
+                    insert_inline_unit_on_connection(
+                        spec["units"],
+                        spec["connections"],
+                        connection_id,
+                        unit_type,
+                        resolved_name,
+                    )
+                )
+                candidate_draft = create_graph_draft(
+                    units,
+                    connections,
+                )
+                candidate_case = apply_graph_draft(
+                    spec,
+                    candidate_draft,
+                )
+                _build_execution_plan(candidate_case)
+            except ValueError as edit_error:
+                st.error(f"Equipment insertion failed: {edit_error}")
+            else:
+                st.session_state[GRAPH_DRAFT_STATE_KEY] = candidate_draft
+                _clear_studio_runtime(clear_history=False)
+                st.session_state[CASE_NOTICE_STATE_KEY] = (
+                    f"Added '{resolved_name}' ({new_unit_id}). "
+                    "Review its initial properties and run NeqSim."
+                )
+                st.rerun()
+
+        if st.session_state.get(GRAPH_DRAFT_STATE_KEY) is not None:
+            st.divider()
+            st.caption(
+                "This unsolved graph draft persists in the current session "
+                "and is included in the case JSON."
+            )
+            action_cols = st.columns(2)
+            action_cols[0].download_button(
+                "Download unsolved case JSON",
+                data=json.dumps(spec, indent=2),
+                file_name="process_flowsheet_unsolved_case.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+            reset_draft = action_cols[1].button(
+                "Restore starter graph",
+                use_container_width=True,
+                key="flowsheet_restore_starter_graph",
+            )
+            if reset_draft:
+                st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
+                _clear_studio_runtime(clear_history=False)
+                st.session_state[CASE_NOTICE_STATE_KEY] = (
+                    "Restored the validated starter graph. "
+                    "Fluid and equipment-property inputs were retained."
+                )
+                st.rerun()
+
+
 st.set_page_config(
     page_title=PAGE_TITLE,
     page_icon="images/neqsimlogocircleflat.png",
@@ -2353,6 +2536,7 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Graph validation enforces declared ports, direction, and single port occupancy.
 - A deterministic execution plan orders acyclic multi-inlet graphs and dependencies.
 - Each inlet compiles to an independent ProcessBuilder fluid definition with explicit units.
+- Inline equipment edits persist as an unsolved graph draft and are included in JSON cases.
 - Cyclic graphs remain blocked until recycle and tear-stream solving is available.
 - Fluid validation supports multiple compatible inlets with independent conditions.
 - Pseudo-component names cannot carry conflicting molar mass or density data.
@@ -2523,6 +2707,12 @@ else:
             stage_1_isentropic_efficiency=stage_1_isentropic_efficiency,
             stage_2_isentropic_efficiency=stage_2_isentropic_efficiency,
         )
+        active_graph_draft = st.session_state.get(GRAPH_DRAFT_STATE_KEY)
+        if active_graph_draft is not None:
+            draft_case_spec = apply_graph_draft(
+                draft_case_spec,
+                active_graph_draft,
+            )
         draft_warnings = _validate_case(draft_case_spec, preview_total)
         current_case_signature = _case_signature(draft_case_spec, preview_total)
     except ValueError as validation_error:
@@ -2540,6 +2730,7 @@ solver_status, results_are_current = _solver_status(
 solver_status_placeholder.write(f"**Solver:** {solver_status}")
 
 if draft_case_spec is not None:
+    _render_graph_palette(draft_case_spec)
     with st.expander("Graph execution plan", expanded=False):
         st.caption(
             "Derived from inlet, unit, port, and connection definitions. "
