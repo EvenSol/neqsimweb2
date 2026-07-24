@@ -792,6 +792,31 @@ class NeqSimProcessModel:
             break
         return feeds
 
+    @staticmethod
+    def _trailing_material_product_streams(units: List[Any]) -> List[Any]:
+        """Return native Stream units following the final process equipment."""
+        utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
+        last_equipment_index = -1
+        for index, unit in enumerate(units):
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if unit_class != "Stream" and unit_class not in utility_types:
+                last_equipment_index = index
+        if last_equipment_index < 0:
+            return []
+
+        products: List[Any] = []
+        for unit in units[last_equipment_index + 1:]:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if unit_class == "Stream":
+                products.append(unit)
+        return products
+
     def get_diagram_dot(
         self,
         style: str = "HYSYS",
@@ -1759,21 +1784,13 @@ class NeqSimProcessModel:
                         "kg/hr",
                     )
 
-                # --- Detect terminal product streams ---
-                # Find the last non-Stream, non-utility unit in process order.
-                # Any Stream-type unit appearing AFTER it is a terminal product.
-                last_equip_idx = -1
-                for i, u in enumerate(all_units):
-                    uclass = str(u.getClass().getSimpleName())
-                    if uclass != "Stream" and uclass not in _utility_types:
-                        last_equip_idx = i
-
-                terminal_stream_units = []
-                for i, u in enumerate(all_units):
-                    if i > last_equip_idx and i > 0:  # skip first unit (feed)
-                        uclass = str(u.getClass().getSimpleName())
-                        if uclass == "Stream":
-                            terminal_stream_units.append(u)
+                terminal_stream_units = [
+                    stream
+                    for process_units in unit_groups
+                    for stream in self._trailing_material_product_streams(
+                        process_units
+                    )
+                ]
 
                 if terminal_stream_units:
                     # Explicit terminal streams — use them as products
@@ -1789,6 +1806,16 @@ class NeqSimProcessModel:
                                 product_details.append(f"{sname}=0 (no flow)")
                         except Exception:
                             pass
+                    kpis["material_product_count"] = KPI(
+                        "material_product_count",
+                        float(len(terminal_stream_units)),
+                        "count",
+                    )
+                    kpis["material_product_flow_kg_hr"] = KPI(
+                        "material_product_flow_kg_hr",
+                        product_flow,
+                        "kg/hr",
+                    )
                 else:
                     # Fallback: use the last non-utility unit's ALL outlets
                     last = None
