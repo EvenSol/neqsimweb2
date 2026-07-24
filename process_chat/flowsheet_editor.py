@@ -182,3 +182,145 @@ def validate_catalog_unit(unit: Any) -> None:
         )
     if not isinstance(unit.get("params"), dict):
         raise ValueError(f"Inline unit '{unit_id}' params must be an object.")
+
+
+def _connection_index(
+    connections: list[Any],
+    connection_id: str,
+) -> int:
+    """Return one unique connection index or fail with an explicit message."""
+    matches = [
+        index
+        for index, connection in enumerate(connections)
+        if isinstance(connection, dict)
+        and str(connection.get("id", "")).strip() == connection_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph connection '{connection_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph connection id '{connection_id}' is duplicated.")
+    return matches[0]
+
+
+def _unique_connection_id(stem: str, existing_ids: set[str]) -> str:
+    """Return a stable connection id without overwriting an existing edge."""
+    connection_id = _slugify(stem)
+    suffix = 2
+    while connection_id in existing_ids:
+        connection_id = f"{_slugify(stem)}-{suffix}"
+        suffix += 1
+    return connection_id
+
+
+def insert_inline_unit_on_connection(
+    units: list[Any],
+    connections: list[Any],
+    connection_id: str,
+    unit_type: str,
+    unit_name: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Transactionally insert one catalog unit into a material connection.
+
+    The existing edge keeps its id and source but terminates at the new unit's
+    ``in`` port. A new edge connects the new unit's ``out`` port to the
+    original target. Inputs are never mutated, so callers can safely retain an
+    undo snapshot before accepting the returned graph.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    copied_connections = copy.deepcopy(connections)
+    cleaned_connection_id = str(connection_id).strip()
+    selected_index = _connection_index(
+        copied_connections,
+        cleaned_connection_id,
+    )
+    selected_connection = copied_connections[selected_index]
+    if str(selected_connection.get("type", "")).strip().lower() != "material":
+        raise ValueError("Inline equipment can only be inserted in material paths.")
+
+    source = selected_connection.get("source")
+    target = selected_connection.get("target")
+    if not isinstance(source, dict) or not isinstance(target, dict):
+        raise ValueError(
+            f"Connection '{cleaned_connection_id}' requires source and target."
+        )
+    for endpoint_name, endpoint in (("source", source), ("target", target)):
+        if not str(endpoint.get("kind", "")).strip():
+            raise ValueError(
+                f"Connection '{cleaned_connection_id}' {endpoint_name} needs kind."
+            )
+        if not str(endpoint.get("id", "")).strip():
+            raise ValueError(
+                f"Connection '{cleaned_connection_id}' {endpoint_name} needs id."
+            )
+        if not str(endpoint.get("port", "")).strip():
+            raise ValueError(
+                f"Connection '{cleaned_connection_id}' {endpoint_name} needs port."
+            )
+
+    existing_object_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in copied_units
+        if isinstance(unit, dict)
+    }
+    existing_object_ids.update(
+        str(endpoint.get("id", "")).strip()
+        for connection in copied_connections
+        if isinstance(connection, dict)
+        for endpoint in (
+            connection.get("source"),
+            connection.get("target"),
+        )
+        if isinstance(endpoint, dict)
+    )
+    new_unit = create_inline_unit_spec(
+        unit_type,
+        unit_name,
+        existing_object_ids,
+    )
+    validate_catalog_unit(new_unit)
+
+    target_id = str(target["id"]).strip()
+    target_index = next(
+        (
+            index
+            for index, unit in enumerate(copied_units)
+            if isinstance(unit, dict)
+            and str(unit.get("id", "")).strip() == target_id
+        ),
+        len(copied_units),
+    )
+    copied_units.insert(target_index, new_unit)
+
+    selected_connection["target"] = {
+        "kind": "unit",
+        "id": new_unit["id"],
+        "port": "in",
+    }
+    existing_connection_ids = {
+        str(connection.get("id", "")).strip()
+        for connection in copied_connections
+        if isinstance(connection, dict)
+    }
+    downstream_connection_id = _unique_connection_id(
+        f"{new_unit['id']}-to-{target_id}",
+        existing_connection_ids,
+    )
+    copied_connections.insert(
+        selected_index + 1,
+        {
+            "id": downstream_connection_id,
+            "type": "material",
+            "source": {
+                "kind": "unit",
+                "id": new_unit["id"],
+                "port": "out",
+            },
+            "target": target,
+        },
+    )
+    return copied_units, copied_connections, new_unit["id"]
