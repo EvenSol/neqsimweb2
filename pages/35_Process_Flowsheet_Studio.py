@@ -9,7 +9,10 @@ import os
 import sys
 import traceback
 from dataclasses import asdict
+from datetime import datetime, timezone
+from importlib import metadata
 from io import BytesIO
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -677,6 +680,56 @@ def _format_metric(value: float | None, unit: str, digits: int = 1) -> str:
     return f"{value:,.{digits}f} {unit}"
 
 
+def _neqsim_package_version() -> str:
+    """Return the installed NeqSim Python package version when available."""
+    try:
+        return metadata.version("neqsim")
+    except metadata.PackageNotFoundError:
+        return "not reported"
+
+
+def _solver_run_record(
+    result: Any,
+    model: Any,
+    signature: str,
+    execution_seconds: float,
+    completed_at_utc: str | None = None,
+    neqsim_version: str | None = None,
+) -> dict[str, Any]:
+    """Create deterministic provenance for one successful Studio execution."""
+    elapsed_seconds = _finite_float(execution_seconds, "Execution wall time")
+    if elapsed_seconds < 0.0:
+        raise ValueError("Execution wall time cannot be negative.")
+
+    validation_statuses = [
+        str(getattr(item, "status", "UNKNOWN")).upper()
+        for item in result.constraints
+    ]
+    try:
+        unit_count = len(model.list_units())
+    except Exception:
+        unit_count = None
+    try:
+        stream_count = len(model.list_streams())
+    except Exception:
+        stream_count = None
+
+    return {
+        "Execution status": "Solved",
+        "Completed at [UTC]": completed_at_utc
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "Execution wall time [s]": round(elapsed_seconds, 3),
+        "NeqSim package version": neqsim_version or _neqsim_package_version(),
+        "Case fingerprint": signature[:12],
+        "Unit operations": unit_count,
+        "Indexed stream references": stream_count,
+        "Validation checks": len(validation_statuses),
+        "Validation warnings / violations": sum(
+            status in {"WARN", "VIOLATION"} for status in validation_statuses
+        ),
+    }
+
+
 def _workbook_cell(value: Any) -> Any:
     """Return an Excel-safe scalar while preserving ordinary numeric cells."""
     if value is None:
@@ -702,6 +755,7 @@ def _engineering_workbook_bytes(
     stream_table: pd.DataFrame,
     equipment_table: pd.DataFrame,
     constraint_table: pd.DataFrame,
+    run_record: dict[str, Any],
 ) -> bytes:
     """Build a review-ready Excel workbook from one solved NeqSim case."""
     fluid = spec["fluid"]
@@ -761,7 +815,36 @@ def _engineering_workbook_bytes(
                 process_steps["export cooler"]["params"]["outlet_temperature_C"],
                 "°C",
             ),
-            ("Solver", "State represented by workbook", "Solved", ""),
+            (
+                "Solver",
+                "State represented by workbook",
+                run_record.get("Execution status", "Not recorded"),
+                "",
+            ),
+            (
+                "Solver",
+                "Completed",
+                run_record.get("Completed at [UTC]", "Not recorded"),
+                "UTC",
+            ),
+            (
+                "Solver",
+                "Build, solve, and serialization wall time",
+                run_record.get("Execution wall time [s]"),
+                "s",
+            ),
+            (
+                "Software",
+                "NeqSim Python package version",
+                run_record.get("NeqSim package version", "Not reported"),
+                "",
+            ),
+            (
+                "Reproducibility",
+                "Case fingerprint",
+                run_record.get("Case fingerprint", "Not recorded"),
+                "SHA-256 prefix",
+            ),
         ],
         columns=["Section", "Parameter", "Value", "Unit / basis"],
     )
@@ -1336,11 +1419,19 @@ if run_case:
         case_warnings = draft_warnings
 
         solver_status_placeholder.write("**Solver:** Solving")
+        execution_started = perf_counter()
         with st.spinner("Building and solving the NeqSim process..."):
             builder = ProcessBuilder()
             model = builder.build_from_spec(case_spec)
             result = model.run()
             model_bytes = builder.save_neqsim_bytes()
+        execution_seconds = perf_counter() - execution_started
+        run_record = _solver_run_record(
+            result,
+            model,
+            current_case_signature,
+            execution_seconds,
+        )
 
         state = {
             "spec": case_spec,
@@ -1350,6 +1441,7 @@ if run_case:
             "result": result,
             "model_bytes": model_bytes,
             "signature": current_case_signature,
+            "run_record": run_record,
         }
         st.session_state[CASE_STATE_KEY] = state
         st.session_state[RESULT_STATE_KEY] = True
@@ -1408,6 +1500,7 @@ if results_are_current and has_stored_result:
     model = state["model"]
     result = state["result"]
     model_bytes = state["model_bytes"]
+    run_record = state.get("run_record", {})
 
     st.divider()
     st.subheader("2. Engineering results")
@@ -1601,6 +1694,27 @@ if results_are_current and has_stored_result:
             use_container_width=True,
             hide_index=True,
         )
+        st.markdown("#### Solver run record")
+        if run_record:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Property": key, "Value": value}
+                        for key, value in run_record.items()
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                "Execution wall time includes process construction, native "
+                "NeqSim solving, and model serialization."
+            )
+        else:
+            st.info(
+                "Run provenance was not recorded for this legacy session result. "
+                "Run the case again to create it."
+            )
         st.caption(
             "Validation level: NeqSim convergence evidence, pressure ordering, "
             "composition normalization, mass balance, and engineering bounds."
@@ -1618,6 +1732,7 @@ if results_are_current and has_stored_result:
             stream_table,
             equipment_table,
             constraint_table,
+            run_record,
         )
     except Exception as export_error:
         workbook_error = str(export_error)
