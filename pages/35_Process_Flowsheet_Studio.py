@@ -663,6 +663,56 @@ def _validate_graph_integrity(
         used_routes.add(route_key)
 
 
+def _build_inlet_fluid_specs(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compile shared characterization and inlet conditions for ProcessBuilder."""
+    fluid_packages = spec.get("fluid_packages")
+    inlets = spec.get("inlets")
+    if not isinstance(fluid_packages, list):
+        raise ValueError("Inlet fluid construction requires fluid_packages.")
+    if not isinstance(inlets, list):
+        raise ValueError("Inlet fluid construction requires inlets.")
+
+    _validate_fluid_package_integrity(fluid_packages, inlets)
+    packages_by_id = {
+        str(package["id"]).strip(): package for package in fluid_packages
+    }
+    inlet_specs: list[dict[str, Any]] = []
+    for inlet in inlets:
+        package_id = str(inlet["fluid_package_id"]).strip()
+        package = packages_by_id[package_id]
+        fluid_spec = {
+            "eos_model": str(package["eos_model"]).lower().strip(),
+            "mixing_rule": int(float(package["mixing_rule"])),
+            "components": dict(inlet["composition"]),
+            "composition_basis": inlet["composition_basis"],
+            "temperature_C": float(inlet["temperature_C"]),
+            "pressure_bara": float(inlet["pressure_bara"]),
+            "total_flow": float(inlet["total_flow"]),
+            "flow_unit": inlet["flow_unit"],
+        }
+        characterization = json.loads(
+            json.dumps(
+                {
+                    "component_registry": package["component_registry"],
+                    "binary_interaction_parameters": package[
+                        "binary_interaction_parameters"
+                    ],
+                },
+                allow_nan=False,
+            )
+        )
+        inlet_specs.append(
+            {
+                "inlet_id": str(inlet["id"]).strip(),
+                "name": str(inlet.get("name", inlet["id"])).strip(),
+                "fluid_package_id": package_id,
+                "fluid_spec": fluid_spec,
+                "characterization": characterization,
+            }
+        )
+    return inlet_specs
+
+
 def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
     """Compile a validated acyclic process graph into deterministic steps."""
     fluid_packages = spec.get("fluid_packages")
@@ -1292,8 +1342,15 @@ def _build_case_spec(
 def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     """Return non-blocking engineering warnings after hard validation."""
     _build_execution_plan(spec)
+    inlet_fluid_specs = _build_inlet_fluid_specs(spec)
     warnings: list[str] = []
     fluid = spec["fluid"]
+    if len(inlet_fluid_specs) != 1:
+        raise ValueError("The current starter solver requires exactly one inlet.")
+    if inlet_fluid_specs[0]["fluid_spec"] != fluid:
+        raise ValueError(
+            "The generic inlet definition conflicts with the ProcessBuilder fluid."
+        )
     process = spec["process"]
 
     stage_1_pressure = process[2]["params"]["outlet_pressure_bara"]
@@ -1840,6 +1897,31 @@ def _engineering_workbook_bytes(
         ]
     )
     execution_plan_table = pd.DataFrame(_build_execution_plan(spec))
+    inlet_fluid_spec_table = pd.DataFrame(
+        [
+            {
+                "Inlet ID": inlet_spec["inlet_id"],
+                "Name": inlet_spec["name"],
+                "Fluid package": inlet_spec["fluid_package_id"],
+                "EOS": inlet_spec["fluid_spec"]["eos_model"].upper(),
+                "Mixing rule": inlet_spec["fluid_spec"]["mixing_rule"],
+                "Composition basis": inlet_spec["fluid_spec"][
+                    "composition_basis"
+                ],
+                "Composition": json.dumps(
+                    inlet_spec["fluid_spec"]["components"],
+                    sort_keys=True,
+                ),
+                "Temperature [°C]": inlet_spec["fluid_spec"]["temperature_C"],
+                "Pressure [bara]": inlet_spec["fluid_spec"]["pressure_bara"],
+                "Mass flow [kg/hr]": inlet_spec["fluid_spec"]["total_flow"],
+                "Interaction source": inlet_spec["characterization"][
+                    "binary_interaction_parameters"
+                ]["source"],
+            }
+            for inlet_spec in _build_inlet_fluid_specs(spec)
+        ]
+    )
     assumptions = list(spec.get("assumptions", []))
     assumptions_table = pd.DataFrame(
         {
@@ -1860,6 +1942,7 @@ def _engineering_workbook_bytes(
         "Units": unit_table,
         "Connections": connection_table,
         "Execution Plan": execution_plan_table,
+        "Inlet Build Specs": inlet_fluid_spec_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -2246,6 +2329,7 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Unit nodes expose material ports; connections identify source and target ports.
 - Graph validation enforces declared ports, direction, and single port occupancy.
 - A deterministic execution plan orders acyclic multi-inlet graphs and dependencies.
+- Each inlet compiles to an independent ProcessBuilder fluid definition with explicit units.
 - Cyclic graphs remain blocked until recycle and tear-stream solving is available.
 - Fluid validation supports multiple compatible inlets with independent conditions.
 - Pseudo-component names cannot carry conflicting molar mass or density data.
@@ -2440,6 +2524,40 @@ if draft_case_spec is not None:
         )
         st.dataframe(
             pd.DataFrame(_build_execution_plan(draft_case_spec)),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.markdown("#### Independent inlet fluid definitions")
+        st.caption(
+            "All inlets reuse validated characterization while retaining their "
+            "own molar composition, temperature, absolute pressure, and mass flow."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Inlet ID": inlet_spec["inlet_id"],
+                        "Fluid package": inlet_spec["fluid_package_id"],
+                        "EOS": inlet_spec["fluid_spec"]["eos_model"].upper(),
+                        "Mixing rule": inlet_spec["fluid_spec"]["mixing_rule"],
+                        "Components": len(
+                            inlet_spec["fluid_spec"]["components"]
+                        ),
+                        "Temperature [°C]": inlet_spec["fluid_spec"][
+                            "temperature_C"
+                        ],
+                        "Pressure [bara]": inlet_spec["fluid_spec"][
+                            "pressure_bara"
+                        ],
+                        "Mass flow [kg/hr]": inlet_spec["fluid_spec"][
+                            "total_flow"
+                        ],
+                    }
+                    for inlet_spec in _build_inlet_fluid_specs(
+                        draft_case_spec
+                    )
+                ]
+            ),
             use_container_width=True,
             hide_index=True,
         )
