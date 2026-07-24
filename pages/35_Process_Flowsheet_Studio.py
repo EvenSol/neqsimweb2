@@ -705,6 +705,48 @@ def _equipment_dataframe(model: Any) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _selected_object_result_tables(
+    selected_object: str,
+    stream_table: pd.DataFrame,
+    equipment_table: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Filter current solved results for one object in the template palette."""
+    if selected_object not in TEMPLATE_OBJECTS:
+        raise ValueError(f"Unknown flowsheet object: {selected_object}")
+
+    selected_key = selected_object.casefold()
+
+    def equipment_matches(value: Any) -> bool:
+        name = str(value).casefold()
+        return name == selected_key or name.endswith(f"/{selected_key}")
+
+    def stream_matches(value: Any) -> bool:
+        name = str(value).casefold()
+        if name == selected_key:
+            return True
+        owner = name.split(".", 1)[0]
+        return owner == selected_key or owner.endswith(f"/{selected_key}")
+
+    if "Equipment" in equipment_table.columns:
+        selected_equipment = equipment_table[
+            equipment_table["Equipment"].map(equipment_matches)
+        ].copy()
+    else:
+        selected_equipment = equipment_table.iloc[0:0].copy()
+
+    if "Stream" in stream_table.columns:
+        selected_streams = stream_table[
+            stream_table["Stream"].map(stream_matches)
+        ].copy()
+    else:
+        selected_streams = stream_table.iloc[0:0].copy()
+
+    return (
+        selected_equipment.reset_index(drop=True),
+        selected_streams.reset_index(drop=True),
+    )
+
+
 def _constraint_dataframe(result: Any) -> pd.DataFrame:
     records = [asdict(item) for item in result.constraints]
     if not records:
@@ -1181,8 +1223,8 @@ def _template_object_label(object_name: str) -> str:
     return f"{display_name} · {object_type}"
 
 
-def _render_object_property_editor() -> None:
-    """Render supported properties for one selected template object."""
+def _render_object_property_editor() -> str:
+    """Render supported properties and return the selected template object."""
     st.markdown("#### Selected-object properties")
     st.caption(
         "Search the current flowsheet, select one object, and edit its supported "
@@ -1276,6 +1318,7 @@ def _render_object_property_editor() -> None:
         "Property edits update the structured case specification. Run NeqSim to "
         "solve the edited case and refresh Process Chat."
     )
+    return selected_object
 
 
 st.set_page_config(
@@ -1412,7 +1455,7 @@ with fluid_col:
     )
 
 with object_col:
-    _render_object_property_editor()
+    selected_object = _render_object_property_editor()
 
 stage_1_pressure_bara = float(
     st.session_state["flowsheet_stage_1_pressure_bara"]
@@ -1734,6 +1777,16 @@ if results_are_current and has_stored_result:
                 )
                 st.rerun()
 
+    stream_table = _stream_dataframe(model)
+    equipment_table = _equipment_dataframe(model)
+    selected_equipment_table, selected_stream_table = (
+        _selected_object_result_tables(
+            selected_object,
+            stream_table,
+            equipment_table,
+        )
+    )
+
     diagram_tab, streams_tab, equipment_tab, validation_tab = st.tabs(
         [
             "Flowsheet",
@@ -1754,10 +1807,37 @@ if results_are_current and has_stored_result:
             st.graphviz_chart(dot_source, use_container_width=True)
         except Exception as diagram_error:
             st.warning(f"Diagram rendering was unavailable: {diagram_error}")
+
+        selected_display_name = TEMPLATE_OBJECTS[selected_object][0]
+        st.markdown(f"#### {selected_display_name} · solved results")
+        if selected_equipment_table.empty and selected_stream_table.empty:
+            st.info("The model adapter returned no solved rows for this object.")
+        if not selected_equipment_table.empty:
+            st.caption("Equipment performance")
+            st.dataframe(
+                selected_equipment_table,
+                use_container_width=True,
+                hide_index=True,
+            )
+        if not selected_stream_table.empty:
+            st.caption("Outlet stream conditions")
+            st.dataframe(
+                selected_stream_table.style.format(
+                    {
+                        "Temperature [°C]": "{:.2f}",
+                        "Pressure [bara]": "{:.3f}",
+                        "Mass flow [kg/hr]": "{:,.2f}",
+                        "Molar flow [mol/s]": "{:,.4f}",
+                    },
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
         with st.expander("Build log", expanded=False):
             st.code("\n".join(builder.build_log))
 
-    stream_table = _stream_dataframe(model)
     with streams_tab:
         if stream_table.empty:
             st.info("No stream rows were returned by the model adapter.")
@@ -1776,7 +1856,6 @@ if results_are_current and has_stored_result:
                 hide_index=True,
             )
 
-    equipment_table = _equipment_dataframe(model)
     with equipment_tab:
         if equipment_table.empty:
             st.info("No equipment rows were returned by the model adapter.")
