@@ -45,7 +45,8 @@ CASE_HISTORY_BASELINE_STATE_KEY = "flowsheet_case_history_baseline"
 CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
 LEGACY_CASE_SCHEMA_VERSION = 1
-CASE_SCHEMA_VERSION = 2
+SHARED_FLUID_CASE_SCHEMA_VERSION = 2
+CASE_SCHEMA_VERSION = 3
 BASE_FLUID_PACKAGE_ID = "base-fluid"
 PRIMARY_INLET_ID = "feed-gas"
 MAX_CASE_FILE_BYTES = 1_000_000
@@ -68,6 +69,14 @@ TEMPLATE_OBJECTS = {
     "interstage scrubber": ("Interstage scrubber", "Separator"),
     "compressor stage 2": ("Compressor stage 2", "Compressor"),
     "export cooler": ("Export cooler", "Cooler"),
+}
+TEMPLATE_UNIT_IDS = {
+    "inlet scrubber": "inlet-scrubber",
+    "compressor stage 1": "compressor-stage-1",
+    "intercooler": "intercooler",
+    "interstage scrubber": "interstage-scrubber",
+    "compressor stage 2": "compressor-stage-2",
+    "export cooler": "export-cooler",
 }
 
 CONTROL_DEFAULTS = {
@@ -328,6 +337,82 @@ def _validate_case_architecture(
             raise ValueError(f"The {label} conflicts with the builder projection.")
 
 
+
+def _validate_case_graph(
+    case_data: dict[str, Any],
+    process: list[dict[str, Any]],
+) -> None:
+    """Validate schema-v3 graph metadata against the current builder projection."""
+    if case_data["schema_version"] < CASE_SCHEMA_VERSION:
+        return
+
+    units = case_data.get("units")
+    connections = case_data.get("connections")
+    if not isinstance(units, list):
+        raise ValueError("Schema v3 requires a units array.")
+    if not isinstance(connections, list):
+        raise ValueError("Schema v3 requires a connections array.")
+
+    expected_units, expected_connections = _build_template_graph(process)
+
+    def _index_objects(
+        objects: list[Any],
+        label: str,
+    ) -> dict[str, dict[str, Any]]:
+        indexed: dict[str, dict[str, Any]] = {}
+        for index, item in enumerate(objects):
+            if not isinstance(item, dict):
+                raise ValueError(f"{label}[{index}] must be an object.")
+            item_id = str(item.get("id", "")).strip()
+            if not item_id:
+                raise ValueError(f"{label}[{index}].id cannot be empty.")
+            if item_id in indexed:
+                raise ValueError(f"{label} ids must be unique.")
+            indexed[item_id] = item
+        return indexed
+
+    indexed_units = _index_objects(units, "units")
+    expected_unit_map = {unit["id"]: unit for unit in expected_units}
+    if indexed_units != expected_unit_map:
+        raise ValueError(
+            "Graph units conflict with the current ProcessBuilder projection."
+        )
+
+    indexed_connections = _index_objects(connections, "connections")
+    expected_connection_map = {
+        connection["id"]: connection for connection in expected_connections
+    }
+    if indexed_connections != expected_connection_map:
+        raise ValueError(
+            "Graph connections conflict with the current ProcessBuilder projection."
+        )
+
+    inlet_ids = {str(inlet.get("id", "")) for inlet in case_data["inlets"]}
+    unit_ids = set(indexed_units)
+    for connection in connections:
+        if connection.get("type") != "material":
+            raise ValueError("The starter graph supports material connections only.")
+        for endpoint_name in ("source", "target"):
+            endpoint = connection.get(endpoint_name)
+            if not isinstance(endpoint, dict):
+                raise ValueError(
+                    f"Connection {connection['id']} {endpoint_name} must be an object."
+                )
+            endpoint_kind = endpoint.get("kind")
+            endpoint_id = endpoint.get("id")
+            if endpoint_kind == "inlet" and endpoint_id not in inlet_ids:
+                raise ValueError(
+                    f"Connection {connection['id']} references an unknown inlet."
+                )
+            if endpoint_kind == "unit" and endpoint_id not in unit_ids:
+                raise ValueError(
+                    f"Connection {connection['id']} references an unknown unit."
+                )
+            if endpoint_kind not in ("inlet", "unit"):
+                raise ValueError(
+                    f"Connection {connection['id']} has an unsupported endpoint kind."
+                )
+
 def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
     """Validate an exported Studio case and map it back to UI controls."""
     if not isinstance(case_data, dict):
@@ -335,13 +420,14 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
     schema_version = case_data.get("schema_version")
     supported_schema_versions = (
         LEGACY_CASE_SCHEMA_VERSION,
+        SHARED_FLUID_CASE_SCHEMA_VERSION,
         CASE_SCHEMA_VERSION,
     )
     if type(schema_version) is not int or schema_version not in (
         supported_schema_versions
     ):
         raise ValueError(
-            "Unsupported schema_version. Expected version 1 or 2."
+            "Unsupported schema_version. Expected version 1, 2, or 3."
         )
 
     case_name = str(case_data.get("name", "")).strip()
@@ -531,6 +617,8 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         50.0,
     )
 
+    _validate_case_graph(case_data, process)
+
     canonical_spec = _build_case_spec(
         case_name=case_name,
         composition=normalized_composition,
@@ -548,10 +636,10 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         stage_2_isentropic_efficiency=efficiency_2,
     )
     warnings = _validate_case(canonical_spec, composition_total)
-    if schema_version == LEGACY_CASE_SCHEMA_VERSION:
+    if schema_version < CASE_SCHEMA_VERSION:
         warnings.insert(
             0,
-            "Schema-v1 case migrated to the shared-fluid schema v2.",
+            f"Schema-v{schema_version} case migrated to graph schema v3.",
         )
     controls = {
         "flowsheet_case_name": case_name,
@@ -615,6 +703,73 @@ def _clean_composition(table: pd.DataFrame) -> tuple[dict[str, float], float]:
     return normalized, total
 
 
+def _build_template_graph(
+    process: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Project the starter process into stable nodes and explicit material edges."""
+    units: list[dict[str, Any]] = []
+    for step in process[1:]:
+        unit = {
+            "id": TEMPLATE_UNIT_IDS[step["name"]],
+            "name": step["name"],
+            "type": step["type"],
+            "ports": {
+                "material_in": ["in"],
+                "material_out": (
+                    ["gas", "liquid"] if step["type"] == "separator" else ["out"]
+                ),
+            },
+        }
+        if "params" in step:
+            unit["params"] = dict(step["params"])
+        if "outlet" in step:
+            unit["builder_outlet"] = step["outlet"]
+        units.append(unit)
+
+    path = (
+        (
+            "feed-gas-to-inlet-scrubber",
+            ("inlet", PRIMARY_INLET_ID, "out"),
+            ("unit", "inlet-scrubber", "in"),
+        ),
+        (
+            "inlet-scrubber-gas-to-compressor-stage-1",
+            ("unit", "inlet-scrubber", "gas"),
+            ("unit", "compressor-stage-1", "in"),
+        ),
+        (
+            "compressor-stage-1-to-intercooler",
+            ("unit", "compressor-stage-1", "out"),
+            ("unit", "intercooler", "in"),
+        ),
+        (
+            "intercooler-to-interstage-scrubber",
+            ("unit", "intercooler", "out"),
+            ("unit", "interstage-scrubber", "in"),
+        ),
+        (
+            "interstage-scrubber-gas-to-compressor-stage-2",
+            ("unit", "interstage-scrubber", "gas"),
+            ("unit", "compressor-stage-2", "in"),
+        ),
+        (
+            "compressor-stage-2-to-export-cooler",
+            ("unit", "compressor-stage-2", "out"),
+            ("unit", "export-cooler", "in"),
+        ),
+    )
+    connections = [
+        {
+            "id": connection_id,
+            "type": "material",
+            "source": {"kind": source[0], "id": source[1], "port": source[2]},
+            "target": {"kind": target[0], "id": target[1], "port": target[2]},
+        }
+        for connection_id, source, target in path
+    ]
+    return units, connections
+
+
 def _build_case_spec(
     case_name: str,
     composition: dict[str, float],
@@ -631,7 +786,7 @@ def _build_case_spec(
     stage_1_isentropic_efficiency: float,
     stage_2_isentropic_efficiency: float,
 ) -> dict[str, Any]:
-    """Create schema-v2 case data plus the current ProcessBuilder projection."""
+    """Create schema-v3 case data plus the current ProcessBuilder projection."""
     fluid_spec = {
         "eos_model": eos_model,
         "mixing_rule": 2,
@@ -671,6 +826,61 @@ def _build_case_spec(
         "total_flow": feed_flow_kg_hr,
         "flow_unit": "kg/hr",
     }
+    process = [
+        {
+            "name": "feed gas",
+            "type": "stream",
+            "params": {
+                "temperature_C": feed_temperature_c,
+                "pressure_bara": feed_pressure_bara,
+                "flow_rate": feed_flow_kg_hr,
+                "flow_unit": "kg/hr",
+            },
+        },
+        {
+            "name": "inlet scrubber",
+            "type": "separator",
+            "outlet": "gas",
+        },
+        {
+            "name": "compressor stage 1",
+            "type": "compressor",
+            "params": {
+                "outlet_pressure_bara": stage_1_pressure_bara,
+                "isentropic_efficiency": stage_1_isentropic_efficiency,
+            },
+        },
+        {
+            "name": "intercooler",
+            "type": "cooler",
+            "params": {
+                "outlet_temperature_C": intercooler_temperature_c,
+                "pressure_drop_bar": intercooler_pressure_drop_bar,
+            },
+        },
+        {
+            "name": "interstage scrubber",
+            "type": "separator",
+            "outlet": "gas",
+        },
+        {
+            "name": "compressor stage 2",
+            "type": "compressor",
+            "params": {
+                "outlet_pressure_bara": stage_2_pressure_bara,
+                "isentropic_efficiency": stage_2_isentropic_efficiency,
+            },
+        },
+        {
+            "name": "export cooler",
+            "type": "cooler",
+            "params": {
+                "outlet_temperature_C": export_temperature_c,
+                "pressure_drop_bar": export_pressure_drop_bar,
+            },
+        },
+    ]
+    units, connections = _build_template_graph(process)
     return {
         "schema_version": CASE_SCHEMA_VERSION,
         "name": case_name,
@@ -685,66 +895,15 @@ def _build_case_spec(
             "Compressors use the specified isentropic efficiency.",
             "Cooler pressure drops are fixed values in bar.",
             "All inlet streams reference a shared base fluid characterization.",
+            "Material paths use explicit source and target ports.",
         ],
         "fluid_packages": [fluid_package],
         "inlets": [inlet],
+        "units": units,
+        "connections": connections,
         "fluid": fluid_spec,
-        "process": [
-            {
-                "name": "feed gas",
-                "type": "stream",
-                "params": {
-                    "temperature_C": feed_temperature_c,
-                    "pressure_bara": feed_pressure_bara,
-                    "flow_rate": feed_flow_kg_hr,
-                    "flow_unit": "kg/hr",
-                },
-            },
-            {
-                "name": "inlet scrubber",
-                "type": "separator",
-                "outlet": "gas",
-            },
-            {
-                "name": "compressor stage 1",
-                "type": "compressor",
-                "params": {
-                    "outlet_pressure_bara": stage_1_pressure_bara,
-                    "isentropic_efficiency": stage_1_isentropic_efficiency,
-                },
-            },
-            {
-                "name": "intercooler",
-                "type": "cooler",
-                "params": {
-                    "outlet_temperature_C": intercooler_temperature_c,
-                    "pressure_drop_bar": intercooler_pressure_drop_bar,
-                },
-            },
-            {
-                "name": "interstage scrubber",
-                "type": "separator",
-                "outlet": "gas",
-            },
-            {
-                "name": "compressor stage 2",
-                "type": "compressor",
-                "params": {
-                    "outlet_pressure_bara": stage_2_pressure_bara,
-                    "isentropic_efficiency": stage_2_isentropic_efficiency,
-                },
-            },
-            {
-                "name": "export cooler",
-                "type": "cooler",
-                "params": {
-                    "outlet_temperature_C": export_temperature_c,
-                    "pressure_drop_bar": export_pressure_drop_bar,
-                },
-            },
-        ],
+        "process": process,
     }
-
 
 def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     """Return non-blocking engineering warnings after hard validation."""
@@ -1259,6 +1418,42 @@ def _engineering_workbook_bytes(
             for inlet in spec["inlets"]
         ]
     )
+    unit_table = pd.DataFrame(
+        [
+            {
+                "Unit ID": unit["id"],
+                "Name": unit["name"],
+                "Type": unit["type"],
+                "Material inlet ports": ", ".join(
+                    unit["ports"]["material_in"]
+                ),
+                "Material outlet ports": ", ".join(
+                    unit["ports"]["material_out"]
+                ),
+                "Builder settings": json.dumps(
+                    unit.get("params", {}),
+                    sort_keys=True,
+                ),
+                "Builder outlet": unit.get("builder_outlet", ""),
+            }
+            for unit in spec["units"]
+        ]
+    )
+    connection_table = pd.DataFrame(
+        [
+            {
+                "Connection ID": connection["id"],
+                "Type": connection["type"],
+                "Source kind": connection["source"]["kind"],
+                "Source ID": connection["source"]["id"],
+                "Source port": connection["source"]["port"],
+                "Target kind": connection["target"]["kind"],
+                "Target ID": connection["target"]["id"],
+                "Target port": connection["target"]["port"],
+            }
+            for connection in spec["connections"]
+        ]
+    )
     assumptions = list(spec.get("assumptions", []))
     assumptions_table = pd.DataFrame(
         {
@@ -1276,6 +1471,8 @@ def _engineering_workbook_bytes(
         "Composition": composition_table,
         "Fluid Package": fluid_package_table,
         "Inlets": inlet_table,
+        "Units": unit_table,
+        "Connections": connection_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -1658,8 +1855,9 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Steady-state thermodynamic and process simulation in NeqSim.
 - Pressure inputs are absolute (`bara`); temperature inputs are degrees Celsius.
 - Composition is molar and is normalized before calculation.
-- Schema v2 separates shared fluid characterization from inlet conditions.
-- The current starter template projects one inlet into the Process Chat builder.
+- Schema v3 separates shared fluid/inlet data and records an explicit process graph.
+- Unit nodes expose material ports; connections identify source and target ports.
+- The starter graph still projects one inlet into the Process Chat builder.
 - Cooling duties and compressor powers come directly from the solved NeqSim model.
 - Results are suitable for screening and engineering studies, not design certification.
 """
