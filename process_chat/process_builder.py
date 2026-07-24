@@ -914,7 +914,11 @@ class ProcessBuilder:
         )
         self._build_log.append("Running acyclic graph simulation...")
         NeqSimProcessModel._run_until_converged(process_system)
-        self._model = NeqSimProcessModel.from_process_system(process_system)
+        NeqSimProcessModel._run_acyclic_mixer_energy_closure(process_system)
+        self._model = NeqSimProcessModel.from_process_system(
+            process_system,
+            enforce_acyclic_mixer_energy=True,
+        )
         self._build_log.append("Acyclic graph built and converged successfully.")
         return self._model
 
