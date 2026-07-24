@@ -491,13 +491,13 @@ class ProcessBuilder:
         inlet_specs: List[dict],
         execution_order: List[str],
     ) -> NeqSimProcessModel:
-        """Build and solve a validated acyclic, single-inlet-unit graph.
+        """Build and solve a validated acyclic material-flow graph.
 
         The graph specification contains unit nodes and explicit material
         connections; inlet_specs contains ProcessBuilder-compatible independent
         fluids. execution_order must list every inlet and unit once in dependency
-        order. Multi-input mixers, energy links, and recycles remain explicit
-        later solver stages and are rejected here.
+        order. Mixers may combine multiple upstream material streams. Energy
+        links and recycles remain explicit later solver stages and are rejected.
         """
         from neqsim import jneqsim
 
@@ -631,32 +631,76 @@ class ProcessBuilder:
 
             unit_spec = indexed_units[node_id]
             unit_type = str(unit_spec["type"]).strip().lower()
-            incoming = incoming_material[node_id]
-            if len(incoming) != 1:
-                if unit_type == "mixer" and len(incoming) > 1:
-                    raise ValueError(
-                        f"Mixer '{node_id}' has {len(incoming)} material inlets; "
-                        "multi-stream mixer execution is not implemented yet."
-                    )
+            incoming = sorted(
+                incoming_material[node_id],
+                key=lambda connection: (
+                    str(connection["target"].get("port", "")).strip(),
+                    str(connection["id"]).strip(),
+                ),
+            )
+            if not incoming:
                 raise ValueError(
-                    f"Unit '{node_id}' requires exactly one material inlet; "
-                    f"found {len(incoming)}."
+                    f"Unit '{node_id}' requires at least one material inlet."
                 )
 
-            source_stream = self.resolve_material_output(
-                incoming[0]["source"],
-                inlet_streams,
-                unit_objects,
-            )
-            unit = self._create_unit(
-                str(unit_spec["name"]).strip(),
-                unit_type,
-                source_stream,
-                dict(unit_spec.get("params", {})),
-            )
+            if unit_type == "mixer":
+                if len(incoming) < 2:
+                    raise ValueError(
+                        f"Mixer '{node_id}' requires at least two material inlets."
+                    )
+                source_streams = [
+                    self.resolve_material_output(
+                        connection["source"],
+                        inlet_streams,
+                        unit_objects,
+                    )
+                    for connection in incoming
+                ]
+                unit = self._create_unit(
+                    str(unit_spec["name"]).strip(),
+                    unit_type,
+                    source_streams[0],
+                    dict(unit_spec.get("params", {})),
+                )
+                for connection, source_stream in zip(
+                    incoming[1:],
+                    source_streams[1:],
+                ):
+                    try:
+                        unit.addStream(source_stream)
+                    except Exception as exc:
+                        connection_id = str(connection["id"]).strip()
+                        raise ValueError(
+                            f"Mixer '{node_id}' could not add material connection "
+                            f"'{connection_id}'."
+                        ) from exc
+                self._build_log.append(
+                    f"Added graph mixer: {node_id} "
+                    f"({len(source_streams)} material inlets)"
+                )
+            else:
+                if len(incoming) != 1:
+                    raise ValueError(
+                        f"Unit '{node_id}' requires exactly one material inlet; "
+                        f"found {len(incoming)}."
+                    )
+                source_stream = self.resolve_material_output(
+                    incoming[0]["source"],
+                    inlet_streams,
+                    unit_objects,
+                )
+                unit = self._create_unit(
+                    str(unit_spec["name"]).strip(),
+                    unit_type,
+                    source_stream,
+                    dict(unit_spec.get("params", {})),
+                )
+                self._build_log.append(
+                    f"Added graph unit: {node_id} ({unit_type})"
+                )
+
             process_system.add(unit)
             unit_objects[node_id] = unit
-            self._build_log.append(f"Added graph unit: {node_id} ({unit_type})")
 
         self._build_log.append("Running acyclic graph simulation...")
         NeqSimProcessModel._run_until_converged(process_system)
