@@ -5,10 +5,13 @@ from __future__ import annotations
 import unittest
 
 from process_chat.flowsheet_editor import (
+    apply_graph_draft,
     create_inline_unit_spec,
+    create_graph_draft,
     inline_unit_catalog,
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
+    material_connection_rows,
     validate_catalog_unit,
 )
 
@@ -204,6 +207,119 @@ class InlineInsertionTest(unittest.TestCase):
                     )
         self.assertEqual([unit["id"] for unit in self.units], ["compressor-1"])
         self.assertEqual(len(self.connections), 1)
+
+
+class GraphDraftLifecycleTest(unittest.TestCase):
+    """Validate isolated draft persistence and presentation helpers."""
+
+    def setUp(self):
+        self.units = [
+            create_inline_unit_spec(
+                "cooler",
+                "Product Cooler",
+                set(),
+            )
+        ]
+        self.connections = [
+            {
+                "id": "feed-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "product-cooler",
+                    "port": "in",
+                },
+            }
+        ]
+
+    def test_create_and_apply_draft_preserve_original_objects(self):
+        draft = create_graph_draft(self.units, self.connections)
+        case_spec = {
+            "schema_version": 3,
+            "name": "case",
+            "units": [],
+            "connections": [],
+        }
+        updated = apply_graph_draft(case_spec, draft)
+
+        self.assertEqual(updated["units"], self.units)
+        self.assertEqual(updated["connections"], self.connections)
+        draft["units"][0]["name"] = "changed draft"
+        updated["units"][0]["name"] = "changed case"
+        self.assertEqual(self.units[0]["name"], "Product Cooler")
+        self.assertEqual(case_spec["units"], [])
+
+    def test_material_connection_rows_ignore_energy_links(self):
+        rows = material_connection_rows(
+            [
+                *self.connections,
+                {
+                    "id": "heater-duty",
+                    "type": "energy",
+                    "source": {
+                        "kind": "unit",
+                        "id": "utility",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "heater",
+                        "port": "energy",
+                    },
+                },
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "id": "feed-to-cooler",
+                    "label": "feed:out → product-cooler:in",
+                }
+            ],
+        )
+
+    def test_invalid_drafts_fail_before_application(self):
+        invalid_drafts = (
+            (
+                {
+                    "schema_version": 2,
+                    "units": self.units,
+                    "connections": self.connections,
+                },
+                "Unsupported graph draft schema",
+            ),
+            (
+                {
+                    "schema_version": 1,
+                    "units": [*self.units, self.units[0]],
+                    "connections": self.connections,
+                },
+                "unit id 'product-cooler' is duplicated",
+            ),
+            (
+                {
+                    "schema_version": 1,
+                    "units": self.units,
+                    "connections": [
+                        {**self.connections[0], "type": "signal"}
+                    ],
+                },
+                "has invalid type",
+            ),
+        )
+        for draft, message in invalid_drafts:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    apply_graph_draft(
+                        {"units": [], "connections": []},
+                        draft,
+                    )
 
 
 if __name__ == "__main__":
