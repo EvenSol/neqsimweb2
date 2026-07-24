@@ -400,6 +400,91 @@ class ProcessBuilder:
             stream_names.add(stream_name)
         return streams
 
+    def resolve_material_output(
+        self,
+        endpoint: dict,
+        inlet_streams: Dict[str, Any],
+        unit_objects: Dict[str, Any],
+    ):
+        """Resolve one validated graph source endpoint to a native stream.
+
+        Inlets expose material port 'out'. Unit ports use explicit names:
+        'out'/'main', 'gas'/'vapor', 'liquid'/'oil', 'water'/'aqueous', or
+        indexed splitter ports such as 'out_0' and 'split_1'. Missing objects,
+        unsupported ports, failed getters, and null streams are reported
+        explicitly instead of silently falling back to another outlet.
+        """
+        if not isinstance(endpoint, dict):
+            raise ValueError("Material source endpoint must be an object.")
+        if not isinstance(inlet_streams, dict) or not isinstance(unit_objects, dict):
+            raise ValueError("Material source registries must be objects.")
+
+        source_kind = str(endpoint.get("kind", "")).strip().lower()
+        source_id = str(endpoint.get("id", "")).strip()
+        source_port = str(endpoint.get("port", "")).strip().lower()
+        if not source_id or not source_port:
+            raise ValueError("Material source endpoint requires id and port.")
+
+        if source_kind == "inlet":
+            if source_port != "out":
+                raise ValueError(
+                    f"Inlet '{source_id}' exposes only material output port 'out'."
+                )
+            if source_id not in inlet_streams:
+                raise ValueError(f"Unknown material inlet '{source_id}'.")
+            return inlet_streams[source_id]
+
+        if source_kind != "unit":
+            raise ValueError(
+                f"Unsupported material source kind '{source_kind or '<empty>'}'."
+            )
+        if source_id not in unit_objects:
+            raise ValueError(f"Unknown material unit '{source_id}'.")
+        unit = unit_objects[source_id]
+
+        indexed_port = re.fullmatch(r"(?:out|split)[_-]?(\d+)", source_port)
+        if indexed_port:
+            getter_names = ("getSplitStream",)
+            getter_args = (int(indexed_port.group(1)),)
+        else:
+            getter_args = ()
+            getter_names_by_port = {
+                "out": ("getOutletStream", "getOutStream", "getGasOutStream"),
+                "main": ("getOutletStream", "getOutStream", "getGasOutStream"),
+                "gas": ("getGasOutStream",),
+                "vapor": ("getGasOutStream",),
+                "liquid": ("getLiquidOutStream", "getOilOutStream"),
+                "oil": ("getOilOutStream", "getLiquidOutStream"),
+                "water": ("getWaterOutStream",),
+                "aqueous": ("getWaterOutStream",),
+            }
+            getter_names = getter_names_by_port.get(source_port)
+            if getter_names is None:
+                raise ValueError(
+                    f"Unsupported material output port '{source_port}' on "
+                    f"unit '{source_id}'."
+                )
+
+        last_error: Optional[Exception] = None
+        for getter_name in getter_names:
+            if not hasattr(unit, getter_name):
+                continue
+            try:
+                stream = getattr(unit, getter_name)(*getter_args)
+            except Exception as exc:
+                last_error = exc
+                continue
+            if stream is not None:
+                return stream
+
+        message = (
+            f"Unit '{source_id}' could not provide material output "
+            f"port '{source_port}'."
+        )
+        if last_error is not None:
+            raise ValueError(message) from last_error
+        raise ValueError(message)
+
     # -- Build from spec ----------------------------------------------------
 
     def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
