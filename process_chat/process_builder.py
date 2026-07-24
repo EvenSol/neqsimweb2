@@ -9,6 +9,7 @@ Supports:
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import tempfile
@@ -485,6 +486,108 @@ class ProcessBuilder:
             raise ValueError(message) from last_error
         raise ValueError(message)
 
+    @staticmethod
+    def _configure_graph_splitter(
+        unit: Any,
+        unit_id: str,
+        unit_spec: dict,
+    ) -> List[float]:
+        """Map declared indexed output ports to normalized native split factors."""
+        ports = unit_spec.get("ports")
+        if not isinstance(ports, dict):
+            raise ValueError(f"Splitter '{unit_id}' requires a ports object.")
+        material_outputs = ports.get("material_out")
+        if not isinstance(material_outputs, list) or len(material_outputs) < 2:
+            raise ValueError(
+                f"Splitter '{unit_id}' requires at least two material output ports."
+            )
+
+        params = unit_spec.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"Splitter '{unit_id}' params must be an object.")
+        raw_factors = params.get("split_factors")
+        if not isinstance(raw_factors, list):
+            raise ValueError(
+                f"Splitter '{unit_id}' requires a split_factors array."
+            )
+        if len(raw_factors) != len(material_outputs):
+            raise ValueError(
+                f"Splitter '{unit_id}' split_factors must match its "
+                "material output ports."
+            )
+
+        factors_by_index: Dict[int, float] = {}
+        for port_name, raw_factor in zip(material_outputs, raw_factors):
+            cleaned_port = str(port_name).strip().lower()
+            indexed_port = re.fullmatch(
+                r"(?:out|split)[_-]?(\d+)",
+                cleaned_port,
+            )
+            if indexed_port is None:
+                raise ValueError(
+                    f"Splitter '{unit_id}' output port '{cleaned_port}' "
+                    "must identify a native split index."
+                )
+            split_index = int(indexed_port.group(1))
+            if split_index in factors_by_index:
+                raise ValueError(
+                    f"Splitter '{unit_id}' maps multiple ports to split index "
+                    f"{split_index}."
+                )
+            if type(raw_factor) is bool:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split factors must be numeric."
+                )
+            try:
+                factor = float(raw_factor)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split factors must be numeric."
+                ) from exc
+            if not math.isfinite(factor) or factor < 0.0:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split factors must be finite and "
+                    "non-negative."
+                )
+            factors_by_index[split_index] = factor
+
+        expected_indices = set(range(len(material_outputs)))
+        if set(factors_by_index) != expected_indices:
+            raise ValueError(
+                f"Splitter '{unit_id}' output indices must be contiguous from "
+                f"0 to {len(material_outputs) - 1}."
+            )
+
+        total_factor = sum(factors_by_index.values())
+        if total_factor <= 0.0:
+            raise ValueError(
+                f"Splitter '{unit_id}' split factors must have a positive sum."
+            )
+        normalized_factors = [
+            factors_by_index[index] / total_factor
+            for index in range(len(material_outputs))
+        ]
+
+        if not hasattr(unit, "setSplitFactors"):
+            raise ValueError(
+                f"Splitter '{unit_id}' does not expose native setSplitFactors."
+            )
+        native_factors: Any = normalized_factors
+        try:
+            from jpype import JArray, JDouble
+        except ImportError:
+            pass
+        else:
+            native_factors = JArray(JDouble)(normalized_factors)
+        try:
+            unit.setSplitFactors(native_factors)
+        except Exception as exc:
+            raise ValueError(
+                f"Splitter '{unit_id}' could not apply native split factors."
+            ) from exc
+
+        return normalized_factors
+
     def build_acyclic_graph(
         self,
         graph_spec: dict,
@@ -697,6 +800,20 @@ class ProcessBuilder:
                 )
                 self._build_log.append(
                     f"Added graph unit: {node_id} ({unit_type})"
+                )
+
+            if unit_type == "splitter":
+                split_factors = self._configure_graph_splitter(
+                    unit,
+                    node_id,
+                    unit_spec,
+                )
+                factor_summary = ", ".join(
+                    f"out_{index}={factor:.6f}"
+                    for index, factor in enumerate(split_factors)
+                )
+                self._build_log.append(
+                    f"Configured graph splitter: {node_id} ({factor_summary})"
                 )
 
             process_system.add(unit)
