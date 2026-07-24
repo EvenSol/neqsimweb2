@@ -343,6 +343,19 @@ class ProcessBuilder:
     def build_log(self) -> List[str]:
         return list(self._build_log)
 
+    # -- Native fluid construction ------------------------------------------
+
+    def create_fluid_from_spec(self, fluid_spec: dict):
+        """Create a fresh NeqSim thermodynamic system from one fluid definition.
+
+        Temperature is expressed in degrees Celsius, pressure in absolute bara,
+        and flow uses the explicit flow_unit in the specification. Repeated
+        calls create independent native systems for separate process inlets.
+        """
+        if not isinstance(fluid_spec, dict):
+            raise ValueError("Fluid specification must be an object.")
+        return self._create_fluid(dict(fluid_spec))
+
     # -- Build from spec ----------------------------------------------------
 
     def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
@@ -367,7 +380,7 @@ class ProcessBuilder:
             raise ValueError("Process spec must contain at least one step in 'process'.")
 
         # 1. Create the thermodynamic fluid
-        fluid = self._create_fluid(fluid_spec)
+        fluid = self.create_fluid_from_spec(fluid_spec)
         self._build_log.append(
             f"Created fluid: EOS={fluid_spec.get('eos_model', 'srk')}, "
             f"{len(fluid_spec.get('components', {}))} components"
