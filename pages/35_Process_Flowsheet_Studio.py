@@ -216,66 +216,259 @@ def _bounded_float(
     return result
 
 
+def _validate_fluid_package_integrity(
+    fluid_packages: list[Any],
+    inlets: list[Any],
+) -> None:
+    """Validate shared characterization and any number of inlet conditions."""
+    if not fluid_packages:
+        raise ValueError("At least one fluid package is required.")
+    if not inlets:
+        raise ValueError("At least one inlet stream is required.")
+
+    packages_by_id: dict[str, dict[str, Any]] = {}
+    registry_by_package: dict[str, set[str]] = {}
+    component_definitions: dict[str, dict[str, Any]] = {}
+
+    for package_index, package in enumerate(fluid_packages):
+        if not isinstance(package, dict):
+            raise ValueError(f"fluid_packages[{package_index}] must be an object.")
+        package_id = str(package.get("id", "")).strip()
+        if not package_id:
+            raise ValueError(f"fluid_packages[{package_index}].id cannot be empty.")
+        if package_id in packages_by_id:
+            raise ValueError("Fluid-package ids must be unique.")
+        packages_by_id[package_id] = package
+
+        eos_model = str(package.get("eos_model", "")).lower().strip()
+        if eos_model not in SUPPORTED_EOS_MODELS:
+            raise ValueError(
+                f"Fluid package '{package_id}' has an unsupported equation of state."
+            )
+        mixing_rule = _finite_float(
+            package.get("mixing_rule"),
+            f"fluid package '{package_id}' mixing_rule",
+        )
+        if not mixing_rule.is_integer() or mixing_rule < 0.0:
+            raise ValueError(
+                f"Fluid package '{package_id}' mixing_rule must be a non-negative "
+                "integer."
+            )
+
+        interaction_parameters = package.get("binary_interaction_parameters")
+        if not isinstance(interaction_parameters, dict):
+            raise ValueError(
+                f"Fluid package '{package_id}' interaction parameters must be an "
+                "object."
+            )
+        if not str(interaction_parameters.get("source", "")).strip():
+            raise ValueError(
+                f"Fluid package '{package_id}' needs an interaction-data source."
+            )
+        if not isinstance(interaction_parameters.get("overrides", {}), dict):
+            raise ValueError(
+                f"Fluid package '{package_id}' interaction overrides must be an "
+                "object."
+            )
+
+        registry = package.get("component_registry")
+        if not isinstance(registry, list) or not registry:
+            raise ValueError(
+                f"Fluid package '{package_id}' needs a component registry."
+            )
+        registry_names: set[str] = set()
+        registry_keys: set[str] = set()
+        for component_index, component in enumerate(registry):
+            if not isinstance(component, dict):
+                raise ValueError(
+                    f"Fluid package '{package_id}' component "
+                    f"{component_index} must be an object."
+                )
+            component_name = str(component.get("name", "")).strip()
+            if not component_name:
+                raise ValueError(
+                    f"Fluid package '{package_id}' has an unnamed component."
+                )
+            component_key = component_name.casefold()
+            if component_key in registry_keys:
+                raise ValueError(
+                    f"Fluid package '{package_id}' component names must be unique."
+                )
+            registry_names.add(component_name)
+            registry_keys.add(component_key)
+
+            component_kind = str(component.get("kind", "")).lower().strip()
+            if component_kind not in ("standard", "pseudo"):
+                raise ValueError(
+                    f"Component '{component_name}' kind must be standard or pseudo."
+                )
+            definition: dict[str, Any] = {"kind": component_kind}
+            if component_kind == "pseudo":
+                molar_mass = _finite_float(
+                    component.get("molar_mass_kg_per_mol"),
+                    f"{component_name} molar_mass_kg_per_mol",
+                )
+                density = _finite_float(
+                    component.get("normal_liquid_density_kg_per_m3"),
+                    f"{component_name} normal_liquid_density_kg_per_m3",
+                )
+                if molar_mass <= 0.0 or density <= 0.0:
+                    raise ValueError(
+                        f"Pseudo-component '{component_name}' properties must be "
+                        "positive."
+                    )
+                definition.update(
+                    {
+                        "molar_mass_kg_per_mol": molar_mass,
+                        "normal_liquid_density_kg_per_m3": density,
+                    }
+                )
+
+            previous_definition = component_definitions.get(component_key)
+            if previous_definition is not None:
+                if previous_definition["kind"] != definition["kind"]:
+                    raise ValueError(
+                        f"Component '{component_name}' cannot be both standard and "
+                        "pseudo."
+                    )
+                if component_kind == "pseudo":
+                    for property_name in (
+                        "molar_mass_kg_per_mol",
+                        "normal_liquid_density_kg_per_m3",
+                    ):
+                        if not math.isclose(
+                            previous_definition[property_name],
+                            definition[property_name],
+                            rel_tol=1.0e-9,
+                            abs_tol=1.0e-12,
+                        ):
+                            raise ValueError(
+                                f"Pseudo-component '{component_name}' has conflicting "
+                                f"{property_name} characterization."
+                            )
+            else:
+                component_definitions[component_key] = definition
+        registry_by_package[package_id] = registry_names
+
+    inlet_ids: set[str] = set()
+    for inlet_index, inlet in enumerate(inlets):
+        if not isinstance(inlet, dict):
+            raise ValueError(f"inlets[{inlet_index}] must be an object.")
+        inlet_id = str(inlet.get("id", "")).strip()
+        if not inlet_id:
+            raise ValueError(f"inlets[{inlet_index}].id cannot be empty.")
+        if inlet_id in inlet_ids:
+            raise ValueError("Inlet ids must be unique.")
+        inlet_ids.add(inlet_id)
+
+        package_id = str(inlet.get("fluid_package_id", "")).strip()
+        if package_id not in packages_by_id:
+            raise ValueError(
+                f"Inlet '{inlet_id}' references unknown fluid package "
+                f"'{package_id}'."
+            )
+        if inlet.get("composition_basis") != "mole_fraction":
+            raise ValueError(f"Inlet '{inlet_id}' requires mole fractions.")
+        if inlet.get("flow_unit") != "kg/hr":
+            raise ValueError(f"Inlet '{inlet_id}' requires kg/hr mass flow.")
+
+        composition = inlet.get("composition")
+        if not isinstance(composition, dict):
+            raise ValueError(f"Inlet '{inlet_id}' composition must be an object.")
+        if set(composition) != registry_by_package[package_id]:
+            raise ValueError(
+                f"Inlet '{inlet_id}' composition must match the shared component "
+                "registry exactly."
+            )
+        composition_total = 0.0
+        for component_name, fraction_value in composition.items():
+            fraction = _finite_float(
+                fraction_value,
+                f"Inlet '{inlet_id}' {component_name} mole fraction",
+            )
+            if not 0.0 <= fraction <= 1.0:
+                raise ValueError(
+                    f"Inlet '{inlet_id}' mole fractions must be between 0 and 1."
+                )
+            composition_total += fraction
+        if not math.isclose(
+            composition_total,
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1.0e-6,
+        ):
+            raise ValueError(
+                f"Inlet '{inlet_id}' mole fractions must sum to 1.0."
+            )
+
+        temperature = _finite_float(
+            inlet.get("temperature_C"),
+            f"Inlet '{inlet_id}' temperature_C",
+        )
+        pressure = _finite_float(
+            inlet.get("pressure_bara"),
+            f"Inlet '{inlet_id}' pressure_bara",
+        )
+        flow = _finite_float(
+            inlet.get("total_flow"),
+            f"Inlet '{inlet_id}' total_flow",
+        )
+        if temperature <= -273.15:
+            raise ValueError(
+                f"Inlet '{inlet_id}' temperature must be above absolute zero."
+            )
+        if pressure <= 0.0:
+            raise ValueError(f"Inlet '{inlet_id}' pressure must be positive.")
+        if flow <= 0.0:
+            raise ValueError(f"Inlet '{inlet_id}' flow must be positive.")
+
+
 def _validate_case_architecture(
     case_data: dict[str, Any],
     expected_fluid: dict[str, Any],
 ) -> None:
-    """Validate schema-v2 fluid-package and inlet data against the builder view."""
+    """Validate shared-fluid schema and the current single-inlet builder view."""
     if case_data["schema_version"] == LEGACY_CASE_SCHEMA_VERSION:
         return
 
     fluid_packages = case_data.get("fluid_packages")
-    if not isinstance(fluid_packages, list) or len(fluid_packages) != 1:
-        raise ValueError("Schema v2 requires exactly one shared fluid package.")
+    inlets = case_data.get("inlets")
+    if not isinstance(fluid_packages, list):
+        raise ValueError("The case requires a fluid_packages array.")
+    if not isinstance(inlets, list):
+        raise ValueError("The case requires an inlets array.")
+    _validate_fluid_package_integrity(fluid_packages, inlets)
+
+    if len(fluid_packages) != 1:
+        raise ValueError("The current starter template requires one fluid package.")
     package = fluid_packages[0]
-    if not isinstance(package, dict):
-        raise ValueError("Each fluid package must be an object.")
-    package_id = str(package.get("id", "")).strip()
+    package_id = str(package["id"]).strip()
     if package_id != BASE_FLUID_PACKAGE_ID:
         raise ValueError(
             f"The starter template fluid package id must be "
             f"'{BASE_FLUID_PACKAGE_ID}'."
         )
-    if str(package.get("eos_model", "")).lower() != expected_fluid["eos_model"]:
+    if str(package["eos_model"]).lower() != expected_fluid["eos_model"]:
         raise ValueError("Fluid-package and builder EOS definitions are inconsistent.")
-    package_mixing_rule = _finite_float(
-        package.get("mixing_rule"),
-        "fluid_packages[0].mixing_rule",
-    )
-    if (
-        not package_mixing_rule.is_integer()
-        or int(package_mixing_rule) != expected_fluid["mixing_rule"]
-    ):
+    package_mixing_rule = int(float(package["mixing_rule"]))
+    if package_mixing_rule != expected_fluid["mixing_rule"]:
         raise ValueError(
             "Fluid-package and builder mixing-rule definitions are inconsistent."
         )
 
-    registry = package.get("component_registry")
-    if not isinstance(registry, list) or not registry:
-        raise ValueError("The shared fluid package needs a component registry.")
-    registry_names: list[str] = []
-    for index, component in enumerate(registry):
-        if not isinstance(component, dict):
-            raise ValueError(f"component_registry[{index}] must be an object.")
-        name = str(component.get("name", "")).strip()
-        if not name:
-            raise ValueError(f"component_registry[{index}].name cannot be empty.")
-        if component.get("kind") != "standard":
-            raise ValueError(
-                "The current builder projection supports standard components only."
-            )
-        registry_names.append(name)
-    if len(registry_names) != len(set(registry_names)):
-        raise ValueError("Fluid-package component names must be unique.")
+    registry = package["component_registry"]
+    registry_names = [str(component["name"]).strip() for component in registry]
+    if any(component["kind"] != "standard" for component in registry):
+        raise ValueError(
+            "The current builder projection supports standard components only."
+        )
     if set(registry_names) != set(expected_fluid["components"]):
         raise ValueError(
             "The fluid-package registry and builder components are inconsistent."
         )
 
-    interaction_parameters = package.get("binary_interaction_parameters")
-    if not isinstance(interaction_parameters, dict):
-        raise ValueError("binary_interaction_parameters must be an object.")
-    if interaction_parameters.get("source") != "NeqSim database":
+    interaction_parameters = package["binary_interaction_parameters"]
+    if interaction_parameters["source"] != "NeqSim database":
         raise ValueError(
             "The current builder projection requires NeqSim database interactions."
         )
@@ -284,33 +477,17 @@ def _validate_case_architecture(
             "Binary-interaction overrides are not yet supported by ProcessBuilder."
         )
 
-    inlets = case_data.get("inlets")
-    if not isinstance(inlets, list) or len(inlets) != 1:
+    if len(inlets) != 1:
         raise ValueError("The current starter template requires exactly one inlet.")
     inlet = inlets[0]
-    if not isinstance(inlet, dict):
-        raise ValueError("Each inlet must be an object.")
-    if str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID:
+    if str(inlet["id"]).strip() != PRIMARY_INLET_ID:
         raise ValueError(f"The starter-template inlet id must be '{PRIMARY_INLET_ID}'.")
-    if inlet.get("fluid_package_id") != package_id:
+    if inlet["fluid_package_id"] != package_id:
         raise ValueError("The inlet references an unknown fluid package.")
-    if inlet.get("composition_basis") != "mole_fraction":
-        raise ValueError("The starter-template inlet requires mole fractions.")
-    if inlet.get("flow_unit") != "kg/hr":
-        raise ValueError("The starter-template inlet requires kg/hr mass flow.")
 
-    inlet_composition = inlet.get("composition")
-    if not isinstance(inlet_composition, dict):
-        raise ValueError("The inlet composition must be an object.")
-    if set(inlet_composition) != set(expected_fluid["components"]):
-        raise ValueError(
-            "The inlet composition and shared component registry are inconsistent."
-        )
+    inlet_composition = inlet["composition"]
     for component, expected_fraction in expected_fluid["components"].items():
-        inlet_fraction = _finite_float(
-            inlet_composition.get(component),
-            f"inlets[0].composition.{component}",
-        )
+        inlet_fraction = float(inlet_composition[component])
         if not math.isclose(
             inlet_fraction,
             expected_fraction,
@@ -327,7 +504,7 @@ def _validate_case_architecture(
         ("total_flow", "total_flow", "inlet flow"),
     )
     for inlet_key, expected_key, label in comparisons:
-        inlet_value = _finite_float(inlet.get(inlet_key), label)
+        inlet_value = float(inlet[inlet_key])
         if not math.isclose(
             inlet_value,
             expected_fluid[expected_key],
@@ -335,8 +512,6 @@ def _validate_case_architecture(
             abs_tol=1.0e-12,
         ):
             raise ValueError(f"The {label} conflicts with the builder projection.")
-
-
 
 def _index_graph_objects(
     objects: list[Any],
@@ -1969,6 +2144,8 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Schema v3 separates shared fluid/inlet data and records an explicit process graph.
 - Unit nodes expose material ports; connections identify source and target ports.
 - Graph validation enforces declared ports, direction, and single port occupancy.
+- Fluid validation supports multiple compatible inlets with independent conditions.
+- Pseudo-component names cannot carry conflicting molar mass or density data.
 - The starter graph still projects one inlet into the Process Chat builder.
 - Cooling duties and compressor powers come directly from the solved NeqSim model.
 - Results are suitable for screening and engineering studies, not design certification.
