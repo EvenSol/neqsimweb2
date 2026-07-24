@@ -757,6 +757,41 @@ class NeqSimProcessModel:
         """
         return self._proc
 
+    def _process_unit_groups(self) -> List[List[Any]]:
+        """Return ordered unit-operation groups for material-boundary analysis."""
+        process_systems = (
+            self.get_process_systems() if self._is_process_model else [self._proc]
+        )
+        groups: List[List[Any]] = []
+        for process_system in process_systems:
+            try:
+                units = list(process_system.getUnitOperations())
+            except Exception:
+                try:
+                    units = list(process_system.getUnitOperationList())
+                except Exception:
+                    units = []
+            groups.append(units)
+        return groups
+
+    @staticmethod
+    def _leading_material_feed_streams(units: List[Any]) -> List[Any]:
+        """Return native Stream units preceding the first process equipment."""
+        utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
+        feeds: List[Any] = []
+        for unit in units:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                break
+            if unit_class == "Stream":
+                feeds.append(unit)
+                continue
+            if unit_class in utility_types:
+                continue
+            break
+        return feeds
+
     def get_diagram_dot(
         self,
         style: str = "HYSYS",
@@ -1681,38 +1716,48 @@ class NeqSimProcessModel:
         # "export oil", "fuel gas").  If none are found, we fall back to
         # the last non-utility unit's ALL outlets.
         try:
-            # Collect all unit operations across all process systems
-            all_units = []
-            if self._is_process_model:
-                for ps in self.get_process_systems():
-                    try:
-                        all_units.extend(list(ps.getUnitOperations()))
-                    except Exception:
-                        pass
-            else:
-                try:
-                    all_units = list(self._proc.getUnitOperations())
-                except Exception:
-                    pass
+            unit_groups = self._process_unit_groups()
+            all_units = [
+                unit
+                for process_units in unit_groups
+                for unit in process_units
+            ]
             feed_flow = 0.0
+            feed_details = []
             product_flow = 0.0
             product_details = []  # for diagnostic output
 
             _utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
 
             if all_units:
-                # Feed flow: first unit in the process
-                first = all_units[0]
-                try:
-                    feed_flow = float(first.getFlowRate("kg/hr"))
-                except Exception:
-                    for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
-                        if hasattr(first, m):
-                            try:
-                                feed_flow = float(getattr(first, m)().getFlowRate("kg/hr"))
-                                break
-                            except Exception:
-                                pass
+                feed_streams = [
+                    stream
+                    for process_units in unit_groups
+                    for stream in self._leading_material_feed_streams(process_units)
+                ]
+                for stream in feed_streams:
+                    try:
+                        flow = float(stream.getFlowRate("kg/hr"))
+                        name = (
+                            str(stream.getName())
+                            if stream.getName()
+                            else "feed"
+                        )
+                        feed_flow += flow
+                        feed_details.append(f"{name}={flow:.0f}")
+                    except Exception:
+                        pass
+                if feed_streams:
+                    kpis["material_feed_count"] = KPI(
+                        "material_feed_count",
+                        float(len(feed_streams)),
+                        "count",
+                    )
+                    kpis["material_feed_flow_kg_hr"] = KPI(
+                        "material_feed_flow_kg_hr",
+                        feed_flow,
+                        "kg/hr",
+                    )
 
                 # --- Detect terminal product streams ---
                 # Find the last non-Stream, non-utility unit in process order.
@@ -1818,11 +1863,18 @@ class NeqSimProcessModel:
             if feed_flow > 0:
                 balance_pct = abs(feed_flow - product_flow) / feed_flow * 100
                 kpis["mass_balance_pct"] = KPI("mass_balance_pct", balance_pct, "%")
+                feed_detail_str = (
+                    ", ".join(feed_details)
+                    if feed_details
+                    else f"{feed_flow:.0f}"
+                )
                 detail_str = ", ".join(product_details) if product_details else f"{product_flow:.0f}"
                 status = "OK" if balance_pct < 1.0 else "WARN" if balance_pct < 5.0 else "VIOLATION"
                 constraints.append(ConstraintStatus(
                     "mass_balance", status,
-                    f"Feed={feed_flow:.0f} kg/hr, Products={product_flow:.0f} kg/hr ({detail_str}), imbalance={balance_pct:.2f}%"
+                    f"Feeds={feed_flow:.0f} kg/hr ({feed_detail_str}), "
+                    f"Products={product_flow:.0f} kg/hr ({detail_str}), "
+                    f"imbalance={balance_pct:.2f}%"
                 ))
         except Exception:
             pass
