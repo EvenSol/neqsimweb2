@@ -338,47 +338,184 @@ def _validate_case_architecture(
 
 
 
+def _index_graph_objects(
+    objects: list[Any],
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    """Index graph objects by stable id and reject malformed or duplicate ids."""
+    indexed: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(objects):
+        if not isinstance(item, dict):
+            raise ValueError(f"{label}[{index}] must be an object.")
+        item_id = str(item.get("id", "")).strip()
+        if not item_id:
+            raise ValueError(f"{label}[{index}].id cannot be empty.")
+        if item_id in indexed:
+            raise ValueError(f"{label} ids must be unique.")
+        indexed[item_id] = item
+    return indexed
+
+
+def _validate_graph_integrity(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+) -> None:
+    """Validate reusable node, port, and connection invariants."""
+    indexed_inlets = _index_graph_objects(inlets, "inlets")
+    indexed_units = _index_graph_objects(units, "units")
+    overlapping_ids = set(indexed_inlets).intersection(indexed_units)
+    if overlapping_ids:
+        duplicate_id = sorted(overlapping_ids)[0]
+        raise ValueError(
+            f"Graph id '{duplicate_id}' is used by both an inlet and a unit."
+        )
+
+    for unit_id, unit in indexed_units.items():
+        ports = unit.get("ports")
+        if not isinstance(ports, dict):
+            raise ValueError(f"Unit '{unit_id}' requires a ports object.")
+        for connection_type in ("material", "energy"):
+            input_key = f"{connection_type}_in"
+            output_key = f"{connection_type}_out"
+            input_ports = ports.get(input_key, [])
+            output_ports = ports.get(output_key, [])
+            for key, port_names in (
+                (input_key, input_ports),
+                (output_key, output_ports),
+            ):
+                if not isinstance(port_names, list):
+                    raise ValueError(f"Unit '{unit_id}' {key} must be an array.")
+                cleaned_ports = [str(port).strip() for port in port_names]
+                if any(not port for port in cleaned_ports):
+                    raise ValueError(f"Unit '{unit_id}' {key} has an empty port.")
+                if len(cleaned_ports) != len(set(cleaned_ports)):
+                    raise ValueError(f"Unit '{unit_id}' {key} ports must be unique.")
+            ambiguous_ports = set(input_ports).intersection(output_ports)
+            if ambiguous_ports:
+                port = sorted(ambiguous_ports)[0]
+                raise ValueError(
+                    f"Unit '{unit_id}' port '{port}' cannot be both input and output."
+                )
+
+    indexed_connections = _index_graph_objects(connections, "connections")
+    used_sources: set[tuple[str, str, str, str]] = set()
+    used_targets: set[tuple[str, str, str, str]] = set()
+    used_routes: set[
+        tuple[str, str, str, str, str, str, str]
+    ] = set()
+
+    for connection_id, connection in indexed_connections.items():
+        connection_type = str(connection.get("type", "")).strip()
+        if connection_type not in ("material", "energy"):
+            raise ValueError(
+                f"Connection '{connection_id}' type must be material or energy."
+            )
+        endpoints: dict[str, tuple[str, str, str]] = {}
+        for endpoint_name in ("source", "target"):
+            endpoint = connection.get(endpoint_name)
+            if not isinstance(endpoint, dict):
+                raise ValueError(
+                    f"Connection '{connection_id}' {endpoint_name} must be an object."
+                )
+            endpoint_kind = str(endpoint.get("kind", "")).strip()
+            endpoint_id = str(endpoint.get("id", "")).strip()
+            endpoint_port = str(endpoint.get("port", "")).strip()
+            if not endpoint_id or not endpoint_port:
+                raise ValueError(
+                    f"Connection '{connection_id}' {endpoint_name} needs id and port."
+                )
+            if endpoint_kind == "inlet":
+                if endpoint_id not in indexed_inlets:
+                    raise ValueError(
+                        f"Connection '{connection_id}' references unknown inlet "
+                        f"'{endpoint_id}'."
+                    )
+                if endpoint_name != "source":
+                    raise ValueError(
+                        f"Inlet '{endpoint_id}' can only be a connection source."
+                    )
+                if connection_type != "material" or endpoint_port != "out":
+                    raise ValueError(
+                        f"Inlet '{endpoint_id}' exposes only material output port 'out'."
+                    )
+            elif endpoint_kind == "unit":
+                if endpoint_id not in indexed_units:
+                    raise ValueError(
+                        f"Connection '{connection_id}' references unknown unit "
+                        f"'{endpoint_id}'."
+                    )
+                direction = "out" if endpoint_name == "source" else "in"
+                port_key = f"{connection_type}_{direction}"
+                declared_ports = indexed_units[endpoint_id]["ports"].get(port_key, [])
+                if endpoint_port not in declared_ports:
+                    raise ValueError(
+                        f"Connection '{connection_id}' uses undeclared {port_key} "
+                        f"port '{endpoint_port}' on unit '{endpoint_id}'."
+                    )
+            else:
+                raise ValueError(
+                    f"Connection '{connection_id}' has unsupported endpoint kind "
+                    f"'{endpoint_kind}'."
+                )
+            endpoints[endpoint_name] = (
+                endpoint_kind,
+                endpoint_id,
+                endpoint_port,
+            )
+
+        source = endpoints["source"]
+        target = endpoints["target"]
+        if source[:2] == target[:2]:
+            raise ValueError(
+                f"Connection '{connection_id}' cannot connect a node to itself."
+            )
+        source_key = (connection_type, *source)
+        target_key = (connection_type, *target)
+        route_key = (connection_type, *source, *target)
+        if source_key in used_sources:
+            raise ValueError(
+                f"Graph output port {source[1]}:{source[2]} has multiple connections."
+            )
+        if target_key in used_targets:
+            raise ValueError(
+                f"Graph input port {target[1]}:{target[2]} has multiple connections."
+            )
+        if route_key in used_routes:
+            raise ValueError(f"Connection route '{connection_id}' is duplicated.")
+        used_sources.add(source_key)
+        used_targets.add(target_key)
+        used_routes.add(route_key)
+
+
 def _validate_case_graph(
     case_data: dict[str, Any],
     process: list[dict[str, Any]],
 ) -> None:
-    """Validate schema-v3 graph metadata against the current builder projection."""
+    """Validate schema-v3 graph integrity and the current builder projection."""
     if case_data["schema_version"] < CASE_SCHEMA_VERSION:
         return
 
+    inlets = case_data.get("inlets")
     units = case_data.get("units")
     connections = case_data.get("connections")
+    if not isinstance(inlets, list) or not inlets:
+        raise ValueError("Schema v3 requires a non-empty inlets array.")
     if not isinstance(units, list):
         raise ValueError("Schema v3 requires a units array.")
     if not isinstance(connections, list):
         raise ValueError("Schema v3 requires a connections array.")
 
+    _validate_graph_integrity(inlets, units, connections)
+    indexed_units = _index_graph_objects(units, "units")
+    indexed_connections = _index_graph_objects(connections, "connections")
     expected_units, expected_connections = _build_template_graph(process)
-
-    def _index_objects(
-        objects: list[Any],
-        label: str,
-    ) -> dict[str, dict[str, Any]]:
-        indexed: dict[str, dict[str, Any]] = {}
-        for index, item in enumerate(objects):
-            if not isinstance(item, dict):
-                raise ValueError(f"{label}[{index}] must be an object.")
-            item_id = str(item.get("id", "")).strip()
-            if not item_id:
-                raise ValueError(f"{label}[{index}].id cannot be empty.")
-            if item_id in indexed:
-                raise ValueError(f"{label} ids must be unique.")
-            indexed[item_id] = item
-        return indexed
-
-    indexed_units = _index_objects(units, "units")
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
     if indexed_units != expected_unit_map:
         raise ValueError(
             "Graph units conflict with the current ProcessBuilder projection."
         )
 
-    indexed_connections = _index_objects(connections, "connections")
     expected_connection_map = {
         connection["id"]: connection for connection in expected_connections
     }
@@ -386,32 +523,6 @@ def _validate_case_graph(
         raise ValueError(
             "Graph connections conflict with the current ProcessBuilder projection."
         )
-
-    inlet_ids = {str(inlet.get("id", "")) for inlet in case_data["inlets"]}
-    unit_ids = set(indexed_units)
-    for connection in connections:
-        if connection.get("type") != "material":
-            raise ValueError("The starter graph supports material connections only.")
-        for endpoint_name in ("source", "target"):
-            endpoint = connection.get(endpoint_name)
-            if not isinstance(endpoint, dict):
-                raise ValueError(
-                    f"Connection {connection['id']} {endpoint_name} must be an object."
-                )
-            endpoint_kind = endpoint.get("kind")
-            endpoint_id = endpoint.get("id")
-            if endpoint_kind == "inlet" and endpoint_id not in inlet_ids:
-                raise ValueError(
-                    f"Connection {connection['id']} references an unknown inlet."
-                )
-            if endpoint_kind == "unit" and endpoint_id not in unit_ids:
-                raise ValueError(
-                    f"Connection {connection['id']} references an unknown unit."
-                )
-            if endpoint_kind not in ("inlet", "unit"):
-                raise ValueError(
-                    f"Connection {connection['id']} has an unsupported endpoint kind."
-                )
 
 def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
     """Validate an exported Studio case and map it back to UI controls."""
@@ -1857,6 +1968,7 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Composition is molar and is normalized before calculation.
 - Schema v3 separates shared fluid/inlet data and records an explicit process graph.
 - Unit nodes expose material ports; connections identify source and target ports.
+- Graph validation enforces declared ports, direction, and single port occupancy.
 - The starter graph still projects one inlet into the Process Chat builder.
 - Cooling duties and compressor powers come directly from the solved NeqSim model.
 - Results are suitable for screening and engineering studies, not design certification.
