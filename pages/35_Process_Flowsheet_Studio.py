@@ -663,6 +663,104 @@ def _validate_graph_integrity(
         used_routes.add(route_key)
 
 
+def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compile a validated acyclic process graph into deterministic steps."""
+    fluid_packages = spec.get("fluid_packages")
+    inlets = spec.get("inlets")
+    units = spec.get("units")
+    connections = spec.get("connections")
+    if not isinstance(fluid_packages, list):
+        raise ValueError("Execution planning requires a fluid_packages array.")
+    if not isinstance(inlets, list):
+        raise ValueError("Execution planning requires an inlets array.")
+    if not isinstance(units, list):
+        raise ValueError("Execution planning requires a units array.")
+    if not isinstance(connections, list):
+        raise ValueError("Execution planning requires a connections array.")
+
+    _validate_fluid_package_integrity(fluid_packages, inlets)
+    _validate_graph_integrity(inlets, units, connections)
+
+    indexed_inlets = _index_graph_objects(inlets, "inlets")
+    indexed_units = _index_graph_objects(units, "units")
+    node_order = [*indexed_inlets, *indexed_units]
+    order_index = {
+        node_id: node_index for node_index, node_id in enumerate(node_order)
+    }
+    incoming: dict[str, list[str]] = {node_id: [] for node_id in node_order}
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_order}
+    dependencies: dict[str, set[str]] = {
+        node_id: set() for node_id in node_order
+    }
+    dependents: dict[str, set[str]] = {
+        node_id: set() for node_id in node_order
+    }
+
+    for connection in connections:
+        connection_id = str(connection["id"]).strip()
+        source_id = str(connection["source"]["id"]).strip()
+        target_id = str(connection["target"]["id"]).strip()
+        outgoing[source_id].append(connection_id)
+        incoming[target_id].append(connection_id)
+        dependencies[target_id].add(source_id)
+        dependents[source_id].add(target_id)
+
+    pending_dependencies = {
+        node_id: len(node_dependencies)
+        for node_id, node_dependencies in dependencies.items()
+    }
+    ready = [
+        node_id
+        for node_id in node_order
+        if pending_dependencies[node_id] == 0
+    ]
+    ordered_nodes: list[str] = []
+    while ready:
+        node_id = ready.pop(0)
+        ordered_nodes.append(node_id)
+        for dependent_id in sorted(
+            dependents[node_id],
+            key=order_index.__getitem__,
+        ):
+            pending_dependencies[dependent_id] -= 1
+            if pending_dependencies[dependent_id] == 0:
+                ready.append(dependent_id)
+                ready.sort(key=order_index.__getitem__)
+
+    if len(ordered_nodes) != len(node_order):
+        cyclic_nodes = [
+            node_id
+            for node_id in node_order
+            if pending_dependencies[node_id] > 0
+        ]
+        raise ValueError(
+            "The acyclic executor cannot schedule graph cycles involving: "
+            f"{', '.join(cyclic_nodes)}. Recycles require tear-stream solving."
+        )
+
+    plan: list[dict[str, Any]] = []
+    for step_number, node_id in enumerate(ordered_nodes, start=1):
+        is_inlet = node_id in indexed_inlets
+        node = indexed_inlets[node_id] if is_inlet else indexed_units[node_id]
+        node_dependencies = sorted(
+            dependencies[node_id],
+            key=order_index.__getitem__,
+        )
+        plan.append(
+            {
+                "Step": step_number,
+                "Kind": "inlet" if is_inlet else "unit",
+                "Object ID": node_id,
+                "Name": str(node.get("name", node_id)).strip() or node_id,
+                "Type": "stream" if is_inlet else str(node.get("type", "")),
+                "Dependencies": ", ".join(node_dependencies),
+                "Incoming connections": ", ".join(incoming[node_id]),
+                "Outgoing connections": ", ".join(outgoing[node_id]),
+            }
+        )
+    return plan
+
+
 def _validate_case_graph(
     case_data: dict[str, Any],
     process: list[dict[str, Any]],
@@ -1193,6 +1291,7 @@ def _build_case_spec(
 
 def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     """Return non-blocking engineering warnings after hard validation."""
+    _build_execution_plan(spec)
     warnings: list[str] = []
     fluid = spec["fluid"]
     process = spec["process"]
@@ -1740,6 +1839,7 @@ def _engineering_workbook_bytes(
             for connection in spec["connections"]
         ]
     )
+    execution_plan_table = pd.DataFrame(_build_execution_plan(spec))
     assumptions = list(spec.get("assumptions", []))
     assumptions_table = pd.DataFrame(
         {
@@ -1759,6 +1859,7 @@ def _engineering_workbook_bytes(
         "Inlets": inlet_table,
         "Units": unit_table,
         "Connections": connection_table,
+        "Execution Plan": execution_plan_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -2144,6 +2245,8 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Schema v3 separates shared fluid/inlet data and records an explicit process graph.
 - Unit nodes expose material ports; connections identify source and target ports.
 - Graph validation enforces declared ports, direction, and single port occupancy.
+- A deterministic execution plan orders acyclic multi-inlet graphs and dependencies.
+- Cyclic graphs remain blocked until recycle and tear-stream solving is available.
 - Fluid validation supports multiple compatible inlets with independent conditions.
 - Pseudo-component names cannot carry conflicting molar mass or density data.
 - The starter graph still projects one inlet into the Process Chat builder.
@@ -2328,6 +2431,18 @@ solver_status, results_are_current = _solver_status(
     failure_signature=st.session_state.get(FAILURE_SIGNATURE_STATE_KEY),
 )
 solver_status_placeholder.write(f"**Solver:** {solver_status}")
+
+if draft_case_spec is not None:
+    with st.expander("Graph execution plan", expanded=False):
+        st.caption(
+            "Derived from inlet, unit, port, and connection definitions. "
+            "Steps are deterministic; cyclic graphs require the later recycle solver."
+        )
+        st.dataframe(
+            pd.DataFrame(_build_execution_plan(draft_case_spec)),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 run_case = st.button(
     "▶ Run NeqSim flowsheet",
