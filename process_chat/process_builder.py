@@ -485,6 +485,185 @@ class ProcessBuilder:
             raise ValueError(message) from last_error
         raise ValueError(message)
 
+    def build_acyclic_graph(
+        self,
+        graph_spec: dict,
+        inlet_specs: List[dict],
+        execution_order: List[str],
+    ) -> NeqSimProcessModel:
+        """Build and solve a validated acyclic, single-inlet-unit graph.
+
+        The graph specification contains unit nodes and explicit material
+        connections; inlet_specs contains ProcessBuilder-compatible independent
+        fluids. execution_order must list every inlet and unit once in dependency
+        order. Multi-input mixers, energy links, and recycles remain explicit
+        later solver stages and are rejected here.
+        """
+        from neqsim import jneqsim
+
+        if not isinstance(graph_spec, dict):
+            raise ValueError("Graph specification must be an object.")
+        if not isinstance(inlet_specs, list) or not inlet_specs:
+            raise ValueError("Acyclic graph execution requires inlet specifications.")
+        if not isinstance(execution_order, list) or not execution_order:
+            raise ValueError("Acyclic graph execution requires an execution order.")
+
+        unit_specs = graph_spec.get("units")
+        connections = graph_spec.get("connections")
+        if not isinstance(unit_specs, list):
+            raise ValueError("Graph specification requires a units array.")
+        if not isinstance(connections, list):
+            raise ValueError("Graph specification requires a connections array.")
+
+        inlet_ids: list[str] = []
+        inlet_names: set[str] = set()
+        for inlet_index, inlet_spec in enumerate(inlet_specs):
+            if not isinstance(inlet_spec, dict):
+                raise ValueError(
+                    f"Inlet specification {inlet_index} must be an object."
+                )
+            inlet_id = str(inlet_spec.get("inlet_id", "")).strip()
+            inlet_name = str(inlet_spec.get("name", "")).strip()
+            if not inlet_id or not inlet_name:
+                raise ValueError(
+                    f"Inlet specification {inlet_index} requires inlet_id and name."
+                )
+            if inlet_id in inlet_ids:
+                raise ValueError(f"Inlet id '{inlet_id}' is duplicated.")
+            if inlet_name in inlet_names:
+                raise ValueError(f"Inlet stream name '{inlet_name}' is duplicated.")
+            inlet_ids.append(inlet_id)
+            inlet_names.add(inlet_name)
+
+        indexed_units: Dict[str, dict] = {}
+        unit_names: set[str] = set()
+        for unit_index, unit_spec in enumerate(unit_specs):
+            if not isinstance(unit_spec, dict):
+                raise ValueError(f"Unit specification {unit_index} must be an object.")
+            unit_id = str(unit_spec.get("id", "")).strip()
+            unit_name = str(unit_spec.get("name", "")).strip()
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if not unit_id or not unit_name or not unit_type:
+                raise ValueError(
+                    f"Unit specification {unit_index} requires id, name, and type."
+                )
+            if unit_id in indexed_units or unit_id in inlet_ids:
+                raise ValueError(f"Graph object id '{unit_id}' is duplicated.")
+            if unit_name in unit_names or unit_name in inlet_names:
+                raise ValueError(f"Process object name '{unit_name}' is duplicated.")
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError(f"Unit '{unit_id}' params must be an object.")
+            indexed_units[unit_id] = unit_spec
+            unit_names.add(unit_name)
+
+        expected_ids = [*inlet_ids, *indexed_units]
+        ordered_ids = [str(node_id).strip() for node_id in execution_order]
+        if any(not node_id for node_id in ordered_ids):
+            raise ValueError("Execution order cannot contain an empty object id.")
+        if len(ordered_ids) != len(set(ordered_ids)):
+            raise ValueError("Execution order object ids must be unique.")
+        if set(ordered_ids) != set(expected_ids):
+            missing = sorted(set(expected_ids).difference(ordered_ids))
+            unexpected = sorted(set(ordered_ids).difference(expected_ids))
+            details = []
+            if missing:
+                details.append(f"missing: {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected: {', '.join(unexpected)}")
+            raise ValueError(
+                "Execution order must contain every graph object once ("
+                + "; ".join(details)
+                + ")."
+            )
+
+        incoming_material: Dict[str, list[dict]] = {
+            unit_id: [] for unit_id in indexed_units
+        }
+        for connection_index, connection in enumerate(connections):
+            if not isinstance(connection, dict):
+                raise ValueError(
+                    f"Connection specification {connection_index} must be an object."
+                )
+            connection_type = str(connection.get("type", "")).strip().lower()
+            connection_id = str(connection.get("id", "")).strip()
+            if not connection_id:
+                raise ValueError(f"Connection {connection_index} requires an id.")
+            if connection_type != "material":
+                raise ValueError(
+                    f"Connection '{connection_id}' is not a material connection. "
+                    "Energy links require a later executor stage."
+                )
+            source = connection.get("source")
+            target = connection.get("target")
+            if not isinstance(source, dict) or not isinstance(target, dict):
+                raise ValueError(
+                    f"Connection '{connection_id}' requires source and target objects."
+                )
+            target_kind = str(target.get("kind", "")).strip().lower()
+            target_id = str(target.get("id", "")).strip()
+            if target_kind != "unit" or target_id not in indexed_units:
+                raise ValueError(
+                    f"Connection '{connection_id}' requires a known unit target."
+                )
+            incoming_material[target_id].append(connection)
+
+        process_name = str(graph_spec.get("name", "Graph Process")).strip()
+        self._process_name = process_name or "Graph Process"
+        self._spec = {
+            "name": self._process_name,
+            "graph": graph_spec,
+            "inlet_specs": inlet_specs,
+            "execution_order": list(ordered_ids),
+        }
+        self._build_log.clear()
+
+        inlet_streams = self.create_inlet_streams(inlet_specs)
+        ProcessSystem = jneqsim.process.processmodel.ProcessSystem
+        process_system = ProcessSystem()
+        unit_objects: Dict[str, Any] = {}
+
+        for node_id in ordered_ids:
+            if node_id in inlet_streams:
+                process_system.add(inlet_streams[node_id])
+                self._build_log.append(f"Added inlet stream: {node_id}")
+                continue
+
+            unit_spec = indexed_units[node_id]
+            unit_type = str(unit_spec["type"]).strip().lower()
+            incoming = incoming_material[node_id]
+            if len(incoming) != 1:
+                if unit_type == "mixer" and len(incoming) > 1:
+                    raise ValueError(
+                        f"Mixer '{node_id}' has {len(incoming)} material inlets; "
+                        "multi-stream mixer execution is not implemented yet."
+                    )
+                raise ValueError(
+                    f"Unit '{node_id}' requires exactly one material inlet; "
+                    f"found {len(incoming)}."
+                )
+
+            source_stream = self.resolve_material_output(
+                incoming[0]["source"],
+                inlet_streams,
+                unit_objects,
+            )
+            unit = self._create_unit(
+                str(unit_spec["name"]).strip(),
+                unit_type,
+                source_stream,
+                dict(unit_spec.get("params", {})),
+            )
+            process_system.add(unit)
+            unit_objects[node_id] = unit
+            self._build_log.append(f"Added graph unit: {node_id} ({unit_type})")
+
+        self._build_log.append("Running acyclic graph simulation...")
+        NeqSimProcessModel._run_until_converged(process_system)
+        self._model = NeqSimProcessModel.from_process_system(process_system)
+        self._build_log.append("Acyclic graph built and converged successfully.")
+        return self._model
+
     # -- Build from spec ----------------------------------------------------
 
     def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
