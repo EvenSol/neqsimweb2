@@ -747,6 +747,79 @@ def _selected_object_result_tables(
     )
 
 
+def _pressure_profile_dataframe(
+    spec: dict[str, Any],
+    equipment_table: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compare solved outlet pressures with the current case specifications."""
+    process_steps = {step["name"]: step for step in spec["process"]}
+    stage_1_pressure = float(
+        process_steps["compressor stage 1"]["params"]["outlet_pressure_bara"]
+    )
+    stage_2_pressure = float(
+        process_steps["compressor stage 2"]["params"]["outlet_pressure_bara"]
+    )
+    intercooler_drop = float(
+        process_steps["intercooler"]["params"]["pressure_drop_bar"]
+    )
+    export_drop = float(
+        process_steps["export cooler"]["params"]["pressure_drop_bar"]
+    )
+    expected_pressures = (
+        ("Compressor stage 1", "compressor stage 1", stage_1_pressure),
+        ("Intercooler", "intercooler", stage_1_pressure - intercooler_drop),
+        ("Compressor stage 2", "compressor stage 2", stage_2_pressure),
+        ("Export cooler", "export cooler", stage_2_pressure - export_drop),
+    )
+
+    records: list[dict[str, Any]] = []
+    for display_name, object_name, expected in expected_pressures:
+        actual = None
+        if {
+            "Equipment",
+            "outletPressure_bara",
+        }.issubset(equipment_table.columns):
+            object_key = object_name.casefold()
+            names = equipment_table["Equipment"].astype(str).str.casefold()
+            matches = equipment_table[
+                (names == object_key) | names.str.endswith(f"/{object_key}")
+            ]
+            if not matches.empty:
+                candidate = pd.to_numeric(
+                    matches.iloc[0]["outletPressure_bara"],
+                    errors="coerce",
+                )
+                if pd.notna(candidate) and math.isfinite(float(candidate)):
+                    actual = float(candidate)
+
+        deviation = None if actual is None else actual - expected
+        if deviation is None:
+            status = "WARN"
+            detail = "Solved outlet pressure was not reported by the model adapter."
+        elif abs(deviation) <= 0.05:
+            status = "OK"
+            detail = "Calculated pressure matches the current specification."
+        elif abs(deviation) <= 0.50:
+            status = "WARN"
+            detail = "Calculated pressure is outside the 0.05 bar pass tolerance."
+        else:
+            status = "VIOLATION"
+            detail = "Calculated pressure differs by more than 0.50 bar."
+
+        records.append(
+            {
+                "Operation": display_name,
+                "Expected outlet [bara]": expected,
+                "Calculated outlet [bara]": actual,
+                "Deviation [bar]": deviation,
+                "Pass tolerance [bar]": 0.05,
+                "Status": status,
+                "Detail": detail,
+            }
+        )
+    return pd.DataFrame(records)
+
+
 def _constraint_dataframe(result: Any) -> pd.DataFrame:
     records = [asdict(item) for item in result.constraints]
     if not records:
@@ -846,6 +919,7 @@ def _engineering_workbook_bytes(
     stream_table: pd.DataFrame,
     equipment_table: pd.DataFrame,
     constraint_table: pd.DataFrame,
+    pressure_profile_table: pd.DataFrame,
     run_record: dict[str, Any],
 ) -> bytes:
     """Build a review-ready Excel workbook from one solved NeqSim case."""
@@ -992,6 +1066,7 @@ def _engineering_workbook_bytes(
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
+        "Pressure Profile": pressure_profile_table,
         "Assumptions": assumptions_table,
     }
 
@@ -1787,6 +1862,8 @@ if results_are_current and has_stored_result:
         )
     )
 
+    pressure_profile_table = _pressure_profile_dataframe(spec, equipment_table)
+
     diagram_tab, streams_tab, equipment_tab, validation_tab = st.tabs(
         [
             "Flowsheet",
@@ -1869,9 +1946,18 @@ if results_are_current and has_stored_result:
     constraint_table = _constraint_dataframe(result)
     with validation_tab:
         status_counts = constraint_table["status"].value_counts()
-        if status_counts.get("VIOLATION", 0) > 0:
+        profile_counts = pressure_profile_table["Status"].value_counts()
+        violation_count = status_counts.get("VIOLATION", 0) + profile_counts.get(
+            "VIOLATION",
+            0,
+        )
+        warning_count = status_counts.get("WARN", 0) + profile_counts.get(
+            "WARN",
+            0,
+        )
+        if violation_count > 0:
             st.error("One or more engineering validation checks reported a violation.")
-        elif status_counts.get("WARN", 0) > 0:
+        elif warning_count > 0:
             st.warning("The calculation completed with engineering warnings.")
         else:
             st.success("All reported engineering validation checks passed.")
@@ -1879,6 +1965,24 @@ if results_are_current and has_stored_result:
             constraint_table,
             use_container_width=True,
             hide_index=True,
+        )
+        st.markdown("#### Solved pressure profile")
+        st.dataframe(
+            pressure_profile_table.style.format(
+                {
+                    "Expected outlet [bara]": "{:.3f}",
+                    "Calculated outlet [bara]": "{:.3f}",
+                    "Deviation [bar]": "{:+.3f}",
+                    "Pass tolerance [bar]": "{:.2f}",
+                },
+                na_rep="—",
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "Pressures are absolute. OK requires agreement within 0.05 bar; "
+            "a deviation above 0.50 bar is a violation."
         )
         st.markdown("#### Solver run record")
         if run_record:
@@ -1918,6 +2022,7 @@ if results_are_current and has_stored_result:
             stream_table,
             equipment_table,
             constraint_table,
+            pressure_profile_table,
             run_record,
         )
     except Exception as export_error:
