@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from process_chat.flowsheet_editor import (
@@ -320,6 +321,46 @@ class GraphDraftLifecycleTest(unittest.TestCase):
                         {"units": [], "connections": []},
                         draft,
                     )
+
+    def test_inserted_draft_round_trips_through_case_json(self):
+        units, connections, inserted_id = (
+            insert_inline_unit_on_connection(
+                self.units,
+                self.connections,
+                "feed-to-cooler",
+                "valve",
+                "Product pressure valve",
+            )
+        )
+        draft = create_graph_draft(units, connections)
+        encoded_case = json.dumps(
+            {
+                "schema_version": 3,
+                "name": "persisted draft",
+                "units": draft["units"],
+                "connections": draft["connections"],
+            },
+            allow_nan=False,
+        )
+        loaded_case = json.loads(encoded_case)
+        loaded_draft = create_graph_draft(
+            loaded_case["units"],
+            loaded_case["connections"],
+        )
+        restored_case = apply_graph_draft(
+            {
+                "schema_version": 3,
+                "name": "starter",
+                "units": [],
+                "connections": [],
+            },
+            loaded_draft,
+        )
+
+        self.assertEqual(inserted_id, "product-pressure-valve")
+        self.assertEqual(restored_case["units"], units)
+        self.assertEqual(restored_case["connections"], connections)
+        self.assertEqual(restored_case["name"], "starter")
 
 
 if __name__ == "__main__":
