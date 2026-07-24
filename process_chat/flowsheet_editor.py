@@ -329,6 +329,157 @@ def insert_inline_unit_on_connection(
     return copied_units, copied_connections, new_unit["id"]
 
 
+def rename_inline_unit(
+    units: list[Any],
+    unit_id: str,
+    new_name: str,
+) -> list[dict[str, Any]]:
+    """Rename one catalog unit without changing its stable graph identity."""
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    cleaned_unit_id = str(unit_id).strip()
+    matches = [
+        index
+        for index, unit in enumerate(copied_units)
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+
+    cleaned_name = str(new_name).strip()
+    if not cleaned_name:
+        raise ValueError("Equipment name cannot be empty.")
+    if len(cleaned_name) > 80:
+        raise ValueError("Equipment name cannot exceed 80 characters.")
+    for unit in copied_units:
+        if not isinstance(unit, dict):
+            continue
+        existing_id = str(unit.get("id", "")).strip()
+        existing_name = str(unit.get("name", "")).strip()
+        if (
+            existing_id != cleaned_unit_id
+            and existing_name.casefold() == cleaned_name.casefold()
+        ):
+            raise ValueError(
+                f"Equipment name '{cleaned_name}' is already in use."
+            )
+
+    selected_unit = copied_units[matches[0]]
+    validate_catalog_unit(selected_unit)
+    selected_unit["name"] = cleaned_name
+    validate_catalog_unit(selected_unit)
+    return copied_units
+
+
+def remove_inline_unit(
+    units: list[Any],
+    connections: list[Any],
+    unit_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Remove one inline catalog unit and reconnect its material path.
+
+    Removal is deliberately limited to a unit with exactly one ``in`` material
+    connection and one ``out`` material connection. Energy links, branches, or
+    any other references must be removed explicitly in a later graph editor.
+    Inputs are never mutated.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    copied_connections = copy.deepcopy(connections)
+    cleaned_unit_id = str(unit_id).strip()
+    unit_matches = [
+        index
+        for index, unit in enumerate(copied_units)
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not unit_matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(unit_matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+    validate_catalog_unit(copied_units[unit_matches[0]])
+
+    incoming_indices: list[int] = []
+    outgoing_indices: list[int] = []
+    unsupported_references: list[str] = []
+    for index, connection in enumerate(copied_connections):
+        if not isinstance(connection, dict):
+            continue
+        connection_id = str(connection.get("id", "")).strip() or str(index)
+        connection_type = str(connection.get("type", "")).strip().lower()
+        source = connection.get("source")
+        target = connection.get("target")
+        source_matches = (
+            isinstance(source, dict)
+            and str(source.get("kind", "")).strip() == "unit"
+            and str(source.get("id", "")).strip() == cleaned_unit_id
+        )
+        target_matches = (
+            isinstance(target, dict)
+            and str(target.get("kind", "")).strip() == "unit"
+            and str(target.get("id", "")).strip() == cleaned_unit_id
+        )
+        if not source_matches and not target_matches:
+            continue
+
+        if (
+            connection_type == "material"
+            and target_matches
+            and str(target.get("port", "")).strip() == "in"
+            and not source_matches
+        ):
+            incoming_indices.append(index)
+        elif (
+            connection_type == "material"
+            and source_matches
+            and str(source.get("port", "")).strip() == "out"
+            and not target_matches
+        ):
+            outgoing_indices.append(index)
+        else:
+            unsupported_references.append(connection_id)
+
+    if unsupported_references:
+        raise ValueError(
+            f"Inline unit '{cleaned_unit_id}' has unsupported connections: "
+            + ", ".join(unsupported_references)
+            + "."
+        )
+    if len(incoming_indices) != 1 or len(outgoing_indices) != 1:
+        raise ValueError(
+            f"Inline unit '{cleaned_unit_id}' requires exactly one incoming "
+            "and one outgoing material connection."
+        )
+
+    incoming_index = incoming_indices[0]
+    outgoing_index = outgoing_indices[0]
+    outgoing_target = copied_connections[outgoing_index].get("target")
+    if not isinstance(outgoing_target, dict):
+        raise ValueError(
+            f"Inline unit '{cleaned_unit_id}' outgoing target must be an object."
+        )
+    if str(outgoing_target.get("id", "")).strip() == cleaned_unit_id:
+        raise ValueError(
+            f"Inline unit '{cleaned_unit_id}' cannot reconnect to itself."
+        )
+
+    copied_connections[incoming_index]["target"] = copy.deepcopy(
+        outgoing_target
+    )
+    copied_connections.pop(outgoing_index)
+    copied_units.pop(unit_matches[0])
+    return copied_units, copied_connections
+
+
 def create_graph_draft(
     units: list[Any],
     connections: list[Any],
