@@ -588,6 +588,91 @@ class ProcessBuilder:
 
         return normalized_factors
 
+    def _add_terminal_material_streams(
+        self,
+        unit_specs: List[dict],
+        connections: List[dict],
+        inlet_streams: Dict[str, Any],
+        unit_objects: Dict[str, Any],
+        process_system: Any,
+        reserved_names: set[str],
+    ) -> Dict[str, Any]:
+        """Add named native streams for every unconnected material output port."""
+        from neqsim import jneqsim
+
+        connected_outputs: set[tuple[str, str]] = set()
+        for connection in connections:
+            source = connection["source"]
+            if str(source.get("kind", "")).strip().lower() != "unit":
+                continue
+            connected_outputs.add(
+                (
+                    str(source.get("id", "")).strip(),
+                    str(source.get("port", "")).strip().lower(),
+                )
+            )
+
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        terminal_streams: Dict[str, Any] = {}
+        used_names = set(reserved_names)
+        for unit_spec in unit_specs:
+            unit_id = str(unit_spec["id"]).strip()
+            unit_name = str(unit_spec["name"]).strip()
+            ports = unit_spec.get("ports")
+            if not isinstance(ports, dict):
+                raise ValueError(f"Unit '{unit_id}' requires a ports object.")
+            material_outputs = ports.get("material_out")
+            if not isinstance(material_outputs, list):
+                raise ValueError(
+                    f"Unit '{unit_id}' requires a material_out ports array."
+                )
+            for raw_port in material_outputs:
+                output_port = str(raw_port).strip().lower()
+                if not output_port:
+                    raise ValueError(
+                        f"Unit '{unit_id}' has an empty material output port."
+                    )
+                endpoint_key = (unit_id, output_port)
+                if endpoint_key in connected_outputs:
+                    continue
+
+                boundary_name = f"{unit_name} [{output_port}] product"
+                if boundary_name in used_names:
+                    raise ValueError(
+                        f"Terminal stream name '{boundary_name}' is duplicated."
+                    )
+                source_stream = self.resolve_material_output(
+                    {
+                        "kind": "unit",
+                        "id": unit_id,
+                        "port": output_port,
+                    },
+                    inlet_streams,
+                    unit_objects,
+                )
+                try:
+                    terminal_stream = StreamClass(boundary_name, source_stream)
+                    process_system.add(terminal_stream)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Could not create terminal stream for unit '{unit_id}' "
+                        f"port '{output_port}'."
+                    ) from exc
+
+                boundary_id = f"{unit_id}:{output_port}"
+                terminal_streams[boundary_id] = terminal_stream
+                used_names.add(boundary_name)
+                self._build_log.append(
+                    f"Added terminal product stream: {boundary_id}"
+                )
+
+        if not terminal_streams:
+            raise ValueError(
+                "Acyclic graph requires at least one unconnected material "
+                "output port."
+            )
+        return terminal_streams
+
     def build_acyclic_graph(
         self,
         graph_spec: dict,
@@ -819,6 +904,14 @@ class ProcessBuilder:
             process_system.add(unit)
             unit_objects[node_id] = unit
 
+        self._add_terminal_material_streams(
+            unit_specs,
+            connections,
+            inlet_streams,
+            unit_objects,
+            process_system,
+            inlet_names.union(unit_names),
+        )
         self._build_log.append("Running acyclic graph simulation...")
         NeqSimProcessModel._run_until_converged(process_system)
         self._model = NeqSimProcessModel.from_process_system(process_system)
