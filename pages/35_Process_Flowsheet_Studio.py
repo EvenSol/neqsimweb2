@@ -811,6 +811,29 @@ def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
     return plan
 
 
+def _build_graph_solver_inputs(
+    spec: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    """Compile one validated Studio case for generic graph execution."""
+    execution_plan = _build_execution_plan(spec)
+    inlet_specs = _build_inlet_fluid_specs(spec)
+    graph_spec = {
+        "name": str(spec.get("name", "Graph Process")).strip()
+        or "Graph Process",
+        "units": json.loads(
+            json.dumps(spec["units"], allow_nan=False)
+        ),
+        "connections": json.loads(
+            json.dumps(spec["connections"], allow_nan=False)
+        ),
+    }
+    execution_order = [
+        str(step["Object ID"]).strip()
+        for step in execution_plan
+    ]
+    return graph_spec, inlet_specs, execution_order
+
+
 def _validate_case_graph(
     case_data: dict[str, Any],
     process: list[dict[str, Any]],
@@ -2579,7 +2602,14 @@ if run_case:
         execution_started = perf_counter()
         with st.spinner("Building and solving the NeqSim process..."):
             builder = ProcessBuilder()
-            model = builder.build_from_spec(case_spec)
+            graph_spec, inlet_specs, execution_order = (
+                _build_graph_solver_inputs(case_spec)
+            )
+            model = builder.build_acyclic_graph(
+                graph_spec,
+                inlet_specs,
+                execution_order,
+            )
             result = model.run()
             model_bytes = builder.save_neqsim_bytes()
         execution_seconds = perf_counter() - execution_started
@@ -3009,3 +3039,4 @@ if results_are_current and has_stored_result:
         "This solved process is also available in the current session under "
         "Process Chat for natural-language what-if analysis."
     )
+
