@@ -7,6 +7,9 @@ import re
 from typing import Any
 
 
+GRAPH_DRAFT_SCHEMA_VERSION = 1
+
+
 _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
     "compressor": {
         "label": "Compressor",
@@ -324,3 +327,138 @@ def insert_inline_unit_on_connection(
         },
     )
     return copied_units, copied_connections, new_unit["id"]
+
+
+def create_graph_draft(
+    units: list[Any],
+    connections: list[Any],
+) -> dict[str, Any]:
+    """Create an isolated, versioned draft from case graph arrays."""
+    if not isinstance(units, list):
+        raise ValueError("Graph draft units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph draft connections must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    copied_connections = copy.deepcopy(connections)
+    unit_ids: set[str] = set()
+    for index, unit in enumerate(copied_units):
+        if not isinstance(unit, dict):
+            raise ValueError(f"Graph draft unit {index} must be an object.")
+        unit_id = str(unit.get("id", "")).strip()
+        if not unit_id:
+            raise ValueError(f"Graph draft unit {index} requires an id.")
+        if unit_id in unit_ids:
+            raise ValueError(f"Graph draft unit id '{unit_id}' is duplicated.")
+        unit_ids.add(unit_id)
+
+    connection_ids: set[str] = set()
+    for index, connection in enumerate(copied_connections):
+        if not isinstance(connection, dict):
+            raise ValueError(
+                f"Graph draft connection {index} must be an object."
+            )
+        connection_id = str(connection.get("id", "")).strip()
+        if not connection_id:
+            raise ValueError(f"Graph draft connection {index} requires an id.")
+        if connection_id in connection_ids:
+            raise ValueError(
+                f"Graph draft connection id '{connection_id}' is duplicated."
+            )
+        connection_ids.add(connection_id)
+        if str(connection.get("type", "")).strip() not in (
+            "material",
+            "energy",
+        ):
+            raise ValueError(
+                f"Graph draft connection '{connection_id}' has invalid type."
+            )
+        for endpoint_name in ("source", "target"):
+            endpoint = connection.get(endpoint_name)
+            if not isinstance(endpoint, dict):
+                raise ValueError(
+                    f"Graph draft connection '{connection_id}' "
+                    f"{endpoint_name} must be an object."
+                )
+            for field_name in ("kind", "id", "port"):
+                if not str(endpoint.get(field_name, "")).strip():
+                    raise ValueError(
+                        f"Graph draft connection '{connection_id}' "
+                        f"{endpoint_name} requires {field_name}."
+                    )
+
+    return {
+        "schema_version": GRAPH_DRAFT_SCHEMA_VERSION,
+        "units": copied_units,
+        "connections": copied_connections,
+    }
+
+
+def apply_graph_draft(
+    case_spec: dict[str, Any],
+    draft: Any,
+) -> dict[str, Any]:
+    """Apply a validated draft to an isolated copy of a complete case."""
+    if not isinstance(case_spec, dict):
+        raise ValueError("Case specification must be an object.")
+    if not isinstance(draft, dict):
+        raise ValueError("Graph draft must be an object.")
+    if draft.get("schema_version") != GRAPH_DRAFT_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported graph draft schema version. Expected version 1."
+        )
+    validated = create_graph_draft(
+        draft.get("units"),
+        draft.get("connections"),
+    )
+    updated_case = copy.deepcopy(case_spec)
+    updated_case["units"] = validated["units"]
+    updated_case["connections"] = validated["connections"]
+    return updated_case
+
+
+def material_connection_rows(
+    connections: list[Any],
+) -> list[dict[str, str]]:
+    """Return deterministic palette labels for editable material paths."""
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    rows: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            raise ValueError(f"Graph connection {index} must be an object.")
+        connection_id = str(connection.get("id", "")).strip()
+        if not connection_id:
+            raise ValueError(f"Graph connection {index} requires an id.")
+        if connection_id in seen_ids:
+            raise ValueError(f"Graph connection id '{connection_id}' is duplicated.")
+        seen_ids.add(connection_id)
+        if str(connection.get("type", "")).strip().lower() != "material":
+            continue
+
+        source = connection.get("source")
+        target = connection.get("target")
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            raise ValueError(
+                f"Connection '{connection_id}' requires source and target."
+            )
+        source_id = str(source.get("id", "")).strip()
+        source_port = str(source.get("port", "")).strip()
+        target_id = str(target.get("id", "")).strip()
+        target_port = str(target.get("port", "")).strip()
+        if not all((source_id, source_port, target_id, target_port)):
+            raise ValueError(
+                f"Connection '{connection_id}' has an incomplete material route."
+            )
+        rows.append(
+            {
+                "id": connection_id,
+                "label": (
+                    f"{source_id}:{source_port} → "
+                    f"{target_id}:{target_port}"
+                ),
+            }
+        )
+    return rows
