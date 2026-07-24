@@ -13,6 +13,8 @@ from process_chat.flowsheet_editor import (
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
     material_connection_rows,
+    remove_inline_unit,
+    rename_inline_unit,
     validate_catalog_unit,
 )
 
@@ -208,6 +210,140 @@ class InlineInsertionTest(unittest.TestCase):
                     )
         self.assertEqual([unit["id"] for unit in self.units], ["compressor-1"])
         self.assertEqual(len(self.connections), 1)
+
+
+class InlineUnitLifecycleTest(unittest.TestCase):
+    """Validate safe rename and removal of added inline equipment."""
+
+    def setUp(self):
+        self.units = [
+            create_inline_unit_spec(
+                "cooler",
+                "Product Cooler",
+                set(),
+            )
+        ]
+        self.connections = [
+            {
+                "id": "feed-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "product-cooler",
+                    "port": "in",
+                },
+            }
+        ]
+
+    def _insert_valve(self):
+        return insert_inline_unit_on_connection(
+            self.units,
+            self.connections,
+            "feed-to-cooler",
+            "valve",
+            "Product Valve",
+        )
+
+    def test_rename_preserves_stable_id_routes_and_inputs(self):
+        units, connections, inserted_id = self._insert_valve()
+        renamed = rename_inline_unit(
+            units,
+            inserted_id,
+            " Export Pressure Valve ",
+        )
+
+        renamed_unit = next(
+            unit for unit in renamed if unit["id"] == inserted_id
+        )
+        self.assertEqual(inserted_id, "product-valve")
+        self.assertEqual(renamed_unit["name"], "Export Pressure Valve")
+        self.assertEqual(
+            [connection["id"] for connection in connections],
+            ["feed-to-cooler", "product-valve-to-product-cooler"],
+        )
+        self.assertEqual(
+            next(unit for unit in units if unit["id"] == inserted_id)["name"],
+            "Product Valve",
+        )
+        self.assertEqual(self.units[0]["name"], "Product Cooler")
+
+    def test_rename_rejects_unknown_invalid_or_duplicate_names(self):
+        units, _, inserted_id = self._insert_valve()
+        invalid_cases = (
+            ("missing", "Renamed", "Unknown graph unit"),
+            (inserted_id, " ", "name cannot be empty"),
+            (inserted_id, "x" * 81, "cannot exceed 80"),
+            (inserted_id, "product cooler", "already in use"),
+        )
+        for unit_id, new_name, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    rename_inline_unit(units, unit_id, new_name)
+
+    def test_remove_restores_original_route_without_mutating_inputs(self):
+        units, connections, inserted_id = self._insert_valve()
+        restored_units, restored_connections = remove_inline_unit(
+            units,
+            connections,
+            inserted_id,
+        )
+
+        self.assertEqual(restored_units, self.units)
+        self.assertEqual(restored_connections, self.connections)
+        self.assertEqual(len(units), 2)
+        self.assertEqual(len(connections), 2)
+        self.assertTrue(
+            any(unit["id"] == inserted_id for unit in units)
+        )
+
+    def test_remove_rejects_branches_and_nonmaterial_references(self):
+        units, connections, inserted_id = self._insert_valve()
+        branch = {
+            "id": "valve-branch",
+            "type": "material",
+            "source": {
+                "kind": "unit",
+                "id": inserted_id,
+                "port": "out",
+            },
+            "target": {
+                "kind": "unit",
+                "id": "branch-target",
+                "port": "in",
+            },
+        }
+        energy_link = {
+            "id": "valve-energy",
+            "type": "energy",
+            "source": {
+                "kind": "unit",
+                "id": inserted_id,
+                "port": "energy",
+            },
+            "target": {
+                "kind": "unit",
+                "id": "utility",
+                "port": "in",
+            },
+        }
+        for extra_connection, message in (
+            (branch, "requires exactly one incoming"),
+            (energy_link, "has unsupported connections"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    remove_inline_unit(
+                        units,
+                        [*connections, extra_connection],
+                        inserted_id,
+                    )
+        self.assertEqual(len(units), 2)
+        self.assertEqual(len(connections), 2)
 
 
 class GraphDraftLifecycleTest(unittest.TestCase):
