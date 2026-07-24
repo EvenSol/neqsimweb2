@@ -356,6 +356,50 @@ class ProcessBuilder:
             raise ValueError("Fluid specification must be an object.")
         return self._create_fluid(dict(fluid_spec))
 
+    def create_inlet_streams(
+        self,
+        inlet_specs: List[dict],
+    ) -> Dict[str, Any]:
+        """Create independent native stream objects for validated process inlets.
+
+        Each entry requires inlet_id, name, and a ProcessBuilder-compatible
+        fluid_spec. Returned streams are keyed by inlet id and are not attached
+        to a ProcessSystem, leaving graph execution responsible for ordering.
+        """
+        from neqsim import jneqsim
+
+        if not isinstance(inlet_specs, list) or not inlet_specs:
+            raise ValueError("Inlet specifications must be a non-empty array.")
+
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        streams: Dict[str, Any] = {}
+        stream_names: set[str] = set()
+        for inlet_index, inlet_spec in enumerate(inlet_specs):
+            if not isinstance(inlet_spec, dict):
+                raise ValueError(
+                    f"Inlet specification {inlet_index} must be an object."
+                )
+            inlet_id = str(inlet_spec.get("inlet_id", "")).strip()
+            stream_name = str(inlet_spec.get("name", "")).strip()
+            fluid_spec = inlet_spec.get("fluid_spec")
+            if not inlet_id:
+                raise ValueError(
+                    f"Inlet specification {inlet_index} requires inlet_id."
+                )
+            if not stream_name:
+                raise ValueError(f"Inlet '{inlet_id}' requires a stream name.")
+            if inlet_id in streams:
+                raise ValueError(f"Inlet id '{inlet_id}' is duplicated.")
+            if stream_name in stream_names:
+                raise ValueError(f"Inlet stream name '{stream_name}' is duplicated.")
+            if not isinstance(fluid_spec, dict):
+                raise ValueError(f"Inlet '{inlet_id}' requires a fluid_spec object.")
+
+            fluid = self.create_fluid_from_spec(fluid_spec)
+            streams[inlet_id] = StreamClass(stream_name, fluid)
+            stream_names.add(stream_name)
+        return streams
+
     # -- Build from spec ----------------------------------------------------
 
     def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
