@@ -75,7 +75,8 @@ CONTROL_DEFAULTS = {
     "flowsheet_feed_flow_kg_hr": 100_000.0,
     "flowsheet_stage_1_pressure_bara": 80.0,
     "flowsheet_stage_2_pressure_bara": 130.0,
-    "flowsheet_isentropic_efficiency": 0.78,
+    "flowsheet_stage_1_isentropic_efficiency": 0.78,
+    "flowsheet_stage_2_isentropic_efficiency": 0.78,
     "flowsheet_intercooler_temperature_c": 35.0,
     "flowsheet_export_temperature_c": 40.0,
 }
@@ -361,10 +362,6 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         0.50,
         0.95,
     )
-    if not math.isclose(efficiency_1, efficiency_2):
-        raise ValueError(
-            "Both compressor stages must use the same isentropic efficiency."
-        )
     intercooler_temperature_c = _bounded_float(
         intercooler_params.get("outlet_temperature_C"),
         "intercooler outlet temperature",
@@ -389,7 +386,8 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         stage_2_pressure_bara=stage_2_pressure_bara,
         intercooler_temperature_c=intercooler_temperature_c,
         export_temperature_c=export_temperature_c,
-        isentropic_efficiency=efficiency_1,
+        stage_1_isentropic_efficiency=efficiency_1,
+        stage_2_isentropic_efficiency=efficiency_2,
     )
     warnings = _validate_case(canonical_spec, composition_total)
     controls = {
@@ -400,7 +398,8 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         "flowsheet_feed_flow_kg_hr": feed_flow_kg_hr,
         "flowsheet_stage_1_pressure_bara": stage_1_pressure_bara,
         "flowsheet_stage_2_pressure_bara": stage_2_pressure_bara,
-        "flowsheet_isentropic_efficiency": efficiency_1,
+        "flowsheet_stage_1_isentropic_efficiency": efficiency_1,
+        "flowsheet_stage_2_isentropic_efficiency": efficiency_2,
         "flowsheet_intercooler_temperature_c": intercooler_temperature_c,
         "flowsheet_export_temperature_c": export_temperature_c,
     }
@@ -462,7 +461,8 @@ def _build_case_spec(
     stage_2_pressure_bara: float,
     intercooler_temperature_c: float,
     export_temperature_c: float,
-    isentropic_efficiency: float,
+    stage_1_isentropic_efficiency: float,
+    stage_2_isentropic_efficiency: float,
 ) -> dict[str, Any]:
     """Create the ProcessBuilder specification for the first Studio template."""
     return {
@@ -510,7 +510,7 @@ def _build_case_spec(
                 "type": "compressor",
                 "params": {
                     "outlet_pressure_bara": stage_1_pressure_bara,
-                    "isentropic_efficiency": isentropic_efficiency,
+                    "isentropic_efficiency": stage_1_isentropic_efficiency,
                 },
             },
             {
@@ -530,7 +530,7 @@ def _build_case_spec(
                 "type": "compressor",
                 "params": {
                     "outlet_pressure_bara": stage_2_pressure_bara,
-                    "isentropic_efficiency": isentropic_efficiency,
+                    "isentropic_efficiency": stage_2_isentropic_efficiency,
                 },
             },
             {
@@ -553,7 +553,8 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     stage_1_pressure = process[2]["params"]["outlet_pressure_bara"]
     stage_2_pressure = process[5]["params"]["outlet_pressure_bara"]
     feed_pressure = fluid["pressure_bara"]
-    efficiency = process[2]["params"]["isentropic_efficiency"]
+    stage_1_efficiency = process[2]["params"]["isentropic_efficiency"]
+    stage_2_efficiency = process[5]["params"]["isentropic_efficiency"]
 
     if feed_pressure <= 0.0:
         raise ValueError("Feed pressure must be greater than zero bara.")
@@ -564,8 +565,15 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
             "Pressure ordering must be feed pressure < stage 1 pressure "
             "< stage 2 pressure."
         )
-    if not 0.5 <= efficiency <= 1.0:
-        raise ValueError("Isentropic efficiency must be between 0.50 and 1.00.")
+    for stage_number, efficiency in (
+        (1, stage_1_efficiency),
+        (2, stage_2_efficiency),
+    ):
+        if not 0.50 <= efficiency <= 0.95:
+            raise ValueError(
+                f"Compressor stage {stage_number} isentropic efficiency must be "
+                "between 0.50 and 0.95."
+            )
     if abs(composition_total - 1.0) > 1.0e-6:
         warnings.append(
             f"Composition summed to {composition_total:.6f} and was normalized to 1.0."
@@ -796,9 +804,17 @@ def _engineering_workbook_bytes(
                 "bara absolute",
             ),
             (
-                "Compressors",
+                "Compressor stage 1",
                 "Isentropic efficiency",
                 process_steps["compressor stage 1"]["params"][
+                    "isentropic_efficiency"
+                ],
+                "fraction",
+            ),
+            (
+                "Compressor stage 2",
+                "Isentropic efficiency",
+                process_steps["compressor stage 2"]["params"][
                     "isentropic_efficiency"
                 ],
                 "fraction",
@@ -975,8 +991,11 @@ def _case_history_record(
         "Stage 2 pressure [bara]": float(
             process[5]["params"]["outlet_pressure_bara"]
         ),
-        "Isentropic efficiency [-]": float(
+        "Stage 1 efficiency [-]": float(
             process[2]["params"]["isentropic_efficiency"]
+        ),
+        "Stage 2 efficiency [-]": float(
+            process[5]["params"]["isentropic_efficiency"]
         ),
         "Compressor power [kW]": total_power_kw,
         "Cooling duty magnitude [kW]": total_duty_kw,
@@ -1130,12 +1149,12 @@ def _render_object_property_editor() -> None:
             key="flowsheet_stage_1_pressure_bara",
         )
         st.slider(
-            "Shared isentropic efficiency [-]",
+            "Isentropic efficiency [-]",
             min_value=0.50,
             max_value=0.95,
             step=0.01,
-            key="flowsheet_isentropic_efficiency",
-            help="The current template applies one efficiency to both stages.",
+            key="flowsheet_stage_1_isentropic_efficiency",
+            help="Applied only to compressor stage 1.",
         )
     elif selected_object == "compressor stage 2":
         st.number_input(
@@ -1146,12 +1165,12 @@ def _render_object_property_editor() -> None:
             key="flowsheet_stage_2_pressure_bara",
         )
         st.slider(
-            "Shared isentropic efficiency [-]",
+            "Isentropic efficiency [-]",
             min_value=0.50,
             max_value=0.95,
             step=0.01,
-            key="flowsheet_isentropic_efficiency",
-            help="The current template applies one efficiency to both stages.",
+            key="flowsheet_stage_2_isentropic_efficiency",
+            help="Applied only to compressor stage 2.",
         )
     elif selected_object == "intercooler":
         st.number_input(
@@ -1328,8 +1347,11 @@ stage_1_pressure_bara = float(
 stage_2_pressure_bara = float(
     st.session_state["flowsheet_stage_2_pressure_bara"]
 )
-isentropic_efficiency = float(
-    st.session_state["flowsheet_isentropic_efficiency"]
+stage_1_isentropic_efficiency = float(
+    st.session_state["flowsheet_stage_1_isentropic_efficiency"]
+)
+stage_2_isentropic_efficiency = float(
+    st.session_state["flowsheet_stage_2_isentropic_efficiency"]
 )
 intercooler_temperature_c = float(
     st.session_state["flowsheet_intercooler_temperature_c"]
@@ -1387,7 +1409,8 @@ else:
             stage_2_pressure_bara=stage_2_pressure_bara,
             intercooler_temperature_c=intercooler_temperature_c,
             export_temperature_c=export_temperature_c,
-            isentropic_efficiency=isentropic_efficiency,
+            stage_1_isentropic_efficiency=stage_1_isentropic_efficiency,
+            stage_2_isentropic_efficiency=stage_2_isentropic_efficiency,
         )
         draft_warnings = _validate_case(draft_case_spec, preview_total)
         current_case_signature = _case_signature(draft_case_spec, preview_total)
@@ -1573,7 +1596,8 @@ if results_are_current and has_stored_result:
             "Feed flow [kg/hr]": "{:,.2f}",
             "Stage 1 pressure [bara]": "{:.2f}",
             "Stage 2 pressure [bara]": "{:.2f}",
-            "Isentropic efficiency [-]": "{:.3f}",
+            "Stage 1 efficiency [-]": "{:.3f}",
+            "Stage 2 efficiency [-]": "{:.3f}",
             "Compressor power [kW]": "{:,.2f}",
             "Cooling duty magnitude [kW]": "{:,.2f}",
             "Specific energy [kWh/t]": "{:.3f}",
