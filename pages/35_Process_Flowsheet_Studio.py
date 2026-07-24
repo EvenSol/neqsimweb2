@@ -78,7 +78,9 @@ CONTROL_DEFAULTS = {
     "flowsheet_stage_1_isentropic_efficiency": 0.78,
     "flowsheet_stage_2_isentropic_efficiency": 0.78,
     "flowsheet_intercooler_temperature_c": 35.0,
+    "flowsheet_intercooler_pressure_drop_bar": 0.0,
     "flowsheet_export_temperature_c": 40.0,
+    "flowsheet_export_pressure_drop_bar": 0.0,
 }
 
 DEFAULT_COMPOSITION = pd.DataFrame(
@@ -374,6 +376,18 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         -50.0,
         150.0,
     )
+    intercooler_pressure_drop_bar = _bounded_float(
+        intercooler_params.get("pressure_drop_bar", 0.0),
+        "intercooler pressure drop",
+        0.0,
+        50.0,
+    )
+    export_pressure_drop_bar = _bounded_float(
+        export_cooler_params.get("pressure_drop_bar", 0.0),
+        "export cooler pressure drop",
+        0.0,
+        50.0,
+    )
 
     canonical_spec = _build_case_spec(
         case_name=case_name,
@@ -385,7 +399,9 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         stage_1_pressure_bara=stage_1_pressure_bara,
         stage_2_pressure_bara=stage_2_pressure_bara,
         intercooler_temperature_c=intercooler_temperature_c,
+        intercooler_pressure_drop_bar=intercooler_pressure_drop_bar,
         export_temperature_c=export_temperature_c,
+        export_pressure_drop_bar=export_pressure_drop_bar,
         stage_1_isentropic_efficiency=efficiency_1,
         stage_2_isentropic_efficiency=efficiency_2,
     )
@@ -401,7 +417,9 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         "flowsheet_stage_1_isentropic_efficiency": efficiency_1,
         "flowsheet_stage_2_isentropic_efficiency": efficiency_2,
         "flowsheet_intercooler_temperature_c": intercooler_temperature_c,
+        "flowsheet_intercooler_pressure_drop_bar": intercooler_pressure_drop_bar,
         "flowsheet_export_temperature_c": export_temperature_c,
+        "flowsheet_export_pressure_drop_bar": export_pressure_drop_bar,
     }
     return controls, composition_table, warnings
 
@@ -460,7 +478,9 @@ def _build_case_spec(
     stage_1_pressure_bara: float,
     stage_2_pressure_bara: float,
     intercooler_temperature_c: float,
+    intercooler_pressure_drop_bar: float,
     export_temperature_c: float,
+    export_pressure_drop_bar: float,
     stage_1_isentropic_efficiency: float,
     stage_2_isentropic_efficiency: float,
 ) -> dict[str, Any]:
@@ -477,7 +497,7 @@ def _build_case_spec(
             "Pressures are absolute (bara).",
             "Feed flow is mass flow in kg/hr.",
             "Compressors use the specified isentropic efficiency.",
-            "Coolers impose outlet temperature without an explicit pressure drop.",
+            "Cooler pressure drops are fixed values in bar.",
         ],
         "fluid": {
             "eos_model": eos_model,
@@ -518,6 +538,7 @@ def _build_case_spec(
                 "type": "cooler",
                 "params": {
                     "outlet_temperature_C": intercooler_temperature_c,
+                    "pressure_drop_bar": intercooler_pressure_drop_bar,
                 },
             },
             {
@@ -538,6 +559,7 @@ def _build_case_spec(
                 "type": "cooler",
                 "params": {
                     "outlet_temperature_C": export_temperature_c,
+                    "pressure_drop_bar": export_pressure_drop_bar,
                 },
             },
         ],
@@ -555,6 +577,8 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     feed_pressure = fluid["pressure_bara"]
     stage_1_efficiency = process[2]["params"]["isentropic_efficiency"]
     stage_2_efficiency = process[5]["params"]["isentropic_efficiency"]
+    intercooler_pressure_drop = process[3]["params"]["pressure_drop_bar"]
+    export_pressure_drop = process[6]["params"]["pressure_drop_bar"]
 
     if feed_pressure <= 0.0:
         raise ValueError("Feed pressure must be greater than zero bara.")
@@ -574,13 +598,30 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
                 f"Compressor stage {stage_number} isentropic efficiency must be "
                 "between 0.50 and 0.95."
             )
+    for cooler_name, pressure_drop, inlet_pressure in (
+        ("Intercooler", intercooler_pressure_drop, stage_1_pressure),
+        ("Export cooler", export_pressure_drop, stage_2_pressure),
+    ):
+        if not 0.0 <= pressure_drop <= 50.0:
+            raise ValueError(
+                f"{cooler_name} pressure drop must be between 0 and 50 bar."
+            )
+        if pressure_drop >= inlet_pressure:
+            raise ValueError(
+                f"{cooler_name} pressure drop must be lower than its inlet pressure."
+            )
+        if pressure_drop / inlet_pressure > 0.10:
+            warnings.append(
+                f"{cooler_name} pressure drop exceeds 10% of its inlet pressure."
+            )
     if abs(composition_total - 1.0) > 1.0e-6:
         warnings.append(
             f"Composition summed to {composition_total:.6f} and was normalized to 1.0."
         )
     if stage_1_pressure / feed_pressure > 3.0:
         warnings.append("Stage 1 pressure ratio exceeds 3.0; check compressor feasibility.")
-    if stage_2_pressure / stage_1_pressure > 3.0:
+    stage_2_inlet_pressure = stage_1_pressure - intercooler_pressure_drop
+    if stage_2_pressure / stage_2_inlet_pressure > 3.0:
         warnings.append("Stage 2 pressure ratio exceeds 3.0; check compressor feasibility.")
     if fluid["eos_model"] == "gerg2008":
         warnings.append(
@@ -826,10 +867,22 @@ def _engineering_workbook_bytes(
                 "°C",
             ),
             (
+                "Intercooler",
+                "Pressure drop",
+                process_steps["intercooler"]["params"]["pressure_drop_bar"],
+                "bar",
+            ),
+            (
                 "Export cooler",
                 "Outlet temperature",
                 process_steps["export cooler"]["params"]["outlet_temperature_C"],
                 "°C",
+            ),
+            (
+                "Export cooler",
+                "Pressure drop",
+                process_steps["export cooler"]["params"]["pressure_drop_bar"],
+                "bar",
             ),
             (
                 "Solver",
@@ -996,6 +1049,12 @@ def _case_history_record(
         ),
         "Stage 2 efficiency [-]": float(
             process[5]["params"]["isentropic_efficiency"]
+        ),
+        "Intercooler pressure drop [bar]": float(
+            process[3]["params"]["pressure_drop_bar"]
+        ),
+        "Export cooler pressure drop [bar]": float(
+            process[6]["params"]["pressure_drop_bar"]
         ),
         "Compressor power [kW]": total_power_kw,
         "Cooling duty magnitude [kW]": total_duty_kw,
@@ -1180,6 +1239,13 @@ def _render_object_property_editor() -> None:
             step=1.0,
             key="flowsheet_intercooler_temperature_c",
         )
+        st.number_input(
+            "Pressure drop [bar]",
+            min_value=0.0,
+            max_value=50.0,
+            step=0.1,
+            key="flowsheet_intercooler_pressure_drop_bar",
+        )
     elif selected_object == "export cooler":
         st.number_input(
             "Outlet temperature [°C]",
@@ -1187,6 +1253,13 @@ def _render_object_property_editor() -> None:
             max_value=150.0,
             step=1.0,
             key="flowsheet_export_temperature_c",
+        )
+        st.number_input(
+            "Pressure drop [bar]",
+            min_value=0.0,
+            max_value=50.0,
+            step=0.1,
+            key="flowsheet_export_pressure_drop_bar",
         )
     elif selected_object == "feed gas":
         st.info(
@@ -1356,8 +1429,14 @@ stage_2_isentropic_efficiency = float(
 intercooler_temperature_c = float(
     st.session_state["flowsheet_intercooler_temperature_c"]
 )
+intercooler_pressure_drop_bar = float(
+    st.session_state["flowsheet_intercooler_pressure_drop_bar"]
+)
 export_temperature_c = float(
     st.session_state["flowsheet_export_temperature_c"]
+)
+export_pressure_drop_bar = float(
+    st.session_state["flowsheet_export_pressure_drop_bar"]
 )
 
 st.markdown("**Feed composition**")
@@ -1408,7 +1487,9 @@ else:
             stage_1_pressure_bara=stage_1_pressure_bara,
             stage_2_pressure_bara=stage_2_pressure_bara,
             intercooler_temperature_c=intercooler_temperature_c,
+            intercooler_pressure_drop_bar=intercooler_pressure_drop_bar,
             export_temperature_c=export_temperature_c,
+            export_pressure_drop_bar=export_pressure_drop_bar,
             stage_1_isentropic_efficiency=stage_1_isentropic_efficiency,
             stage_2_isentropic_efficiency=stage_2_isentropic_efficiency,
         )
@@ -1598,6 +1679,8 @@ if results_are_current and has_stored_result:
             "Stage 2 pressure [bara]": "{:.2f}",
             "Stage 1 efficiency [-]": "{:.3f}",
             "Stage 2 efficiency [-]": "{:.3f}",
+            "Intercooler pressure drop [bar]": "{:.3f}",
+            "Export cooler pressure drop [bar]": "{:.3f}",
             "Compressor power [kW]": "{:,.2f}",
             "Cooling duty magnitude [kW]": "{:,.2f}",
             "Specific energy [kWh/t]": "{:.3f}",
