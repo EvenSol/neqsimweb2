@@ -44,7 +44,10 @@ CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
 CASE_HISTORY_BASELINE_STATE_KEY = "flowsheet_case_history_baseline"
 CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
-CASE_SCHEMA_VERSION = 1
+LEGACY_CASE_SCHEMA_VERSION = 1
+CASE_SCHEMA_VERSION = 2
+BASE_FLUID_PACKAGE_ID = "base-fluid"
+PRIMARY_INLET_ID = "feed-gas"
 MAX_CASE_FILE_BYTES = 1_000_000
 MAX_CASE_HISTORY = 20
 SUPPORTED_EOS_MODELS = ("srk", "pr", "cpa", "gerg2008")
@@ -204,14 +207,141 @@ def _bounded_float(
     return result
 
 
+def _validate_case_architecture(
+    case_data: dict[str, Any],
+    expected_fluid: dict[str, Any],
+) -> None:
+    """Validate schema-v2 fluid-package and inlet data against the builder view."""
+    if case_data["schema_version"] == LEGACY_CASE_SCHEMA_VERSION:
+        return
+
+    fluid_packages = case_data.get("fluid_packages")
+    if not isinstance(fluid_packages, list) or len(fluid_packages) != 1:
+        raise ValueError("Schema v2 requires exactly one shared fluid package.")
+    package = fluid_packages[0]
+    if not isinstance(package, dict):
+        raise ValueError("Each fluid package must be an object.")
+    package_id = str(package.get("id", "")).strip()
+    if package_id != BASE_FLUID_PACKAGE_ID:
+        raise ValueError(
+            f"The starter template fluid package id must be "
+            f"'{BASE_FLUID_PACKAGE_ID}'."
+        )
+    if str(package.get("eos_model", "")).lower() != expected_fluid["eos_model"]:
+        raise ValueError("Fluid-package and builder EOS definitions are inconsistent.")
+    package_mixing_rule = _finite_float(
+        package.get("mixing_rule"),
+        "fluid_packages[0].mixing_rule",
+    )
+    if (
+        not package_mixing_rule.is_integer()
+        or int(package_mixing_rule) != expected_fluid["mixing_rule"]
+    ):
+        raise ValueError(
+            "Fluid-package and builder mixing-rule definitions are inconsistent."
+        )
+
+    registry = package.get("component_registry")
+    if not isinstance(registry, list) or not registry:
+        raise ValueError("The shared fluid package needs a component registry.")
+    registry_names: list[str] = []
+    for index, component in enumerate(registry):
+        if not isinstance(component, dict):
+            raise ValueError(f"component_registry[{index}] must be an object.")
+        name = str(component.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"component_registry[{index}].name cannot be empty.")
+        if component.get("kind") != "standard":
+            raise ValueError(
+                "The current builder projection supports standard components only."
+            )
+        registry_names.append(name)
+    if len(registry_names) != len(set(registry_names)):
+        raise ValueError("Fluid-package component names must be unique.")
+    if set(registry_names) != set(expected_fluid["components"]):
+        raise ValueError(
+            "The fluid-package registry and builder components are inconsistent."
+        )
+
+    interaction_parameters = package.get("binary_interaction_parameters")
+    if not isinstance(interaction_parameters, dict):
+        raise ValueError("binary_interaction_parameters must be an object.")
+    if interaction_parameters.get("source") != "NeqSim database":
+        raise ValueError(
+            "The current builder projection requires NeqSim database interactions."
+        )
+    if interaction_parameters.get("overrides"):
+        raise ValueError(
+            "Binary-interaction overrides are not yet supported by ProcessBuilder."
+        )
+
+    inlets = case_data.get("inlets")
+    if not isinstance(inlets, list) or len(inlets) != 1:
+        raise ValueError("The current starter template requires exactly one inlet.")
+    inlet = inlets[0]
+    if not isinstance(inlet, dict):
+        raise ValueError("Each inlet must be an object.")
+    if str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID:
+        raise ValueError(f"The starter-template inlet id must be '{PRIMARY_INLET_ID}'.")
+    if inlet.get("fluid_package_id") != package_id:
+        raise ValueError("The inlet references an unknown fluid package.")
+    if inlet.get("composition_basis") != "mole_fraction":
+        raise ValueError("The starter-template inlet requires mole fractions.")
+    if inlet.get("flow_unit") != "kg/hr":
+        raise ValueError("The starter-template inlet requires kg/hr mass flow.")
+
+    inlet_composition = inlet.get("composition")
+    if not isinstance(inlet_composition, dict):
+        raise ValueError("The inlet composition must be an object.")
+    if set(inlet_composition) != set(expected_fluid["components"]):
+        raise ValueError(
+            "The inlet composition and shared component registry are inconsistent."
+        )
+    for component, expected_fraction in expected_fluid["components"].items():
+        inlet_fraction = _finite_float(
+            inlet_composition.get(component),
+            f"inlets[0].composition.{component}",
+        )
+        if not math.isclose(
+            inlet_fraction,
+            expected_fraction,
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                f"Inlet and builder compositions differ for {component}."
+            )
+
+    comparisons = (
+        ("temperature_C", "temperature_C", "inlet temperature"),
+        ("pressure_bara", "pressure_bara", "inlet pressure"),
+        ("total_flow", "total_flow", "inlet flow"),
+    )
+    for inlet_key, expected_key, label in comparisons:
+        inlet_value = _finite_float(inlet.get(inlet_key), label)
+        if not math.isclose(
+            inlet_value,
+            expected_fluid[expected_key],
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(f"The {label} conflicts with the builder projection.")
+
+
 def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
     """Validate an exported Studio case and map it back to UI controls."""
     if not isinstance(case_data, dict):
         raise ValueError("The case JSON root must be an object.")
     schema_version = case_data.get("schema_version")
-    if type(schema_version) is not int or schema_version != CASE_SCHEMA_VERSION:
+    supported_schema_versions = (
+        LEGACY_CASE_SCHEMA_VERSION,
+        CASE_SCHEMA_VERSION,
+    )
+    if type(schema_version) is not int or schema_version not in (
+        supported_schema_versions
+    ):
         raise ValueError(
-            f"Unsupported schema_version. Expected {CASE_SCHEMA_VERSION}."
+            "Unsupported schema_version. Expected version 1 or 2."
         )
 
     case_name = str(case_data.get("name", "")).strip()
@@ -340,6 +470,18 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
     if not math.isclose(feed_flow_kg_hr, feed_param_flow):
         raise ValueError("Fluid and feed-stream flow rates are inconsistent.")
 
+    _validate_case_architecture(
+        case_data,
+        {
+            "eos_model": eos_model,
+            "mixing_rule": int(mixing_rule),
+            "components": normalized_composition,
+            "temperature_C": feed_temperature_c,
+            "pressure_bara": feed_pressure_bara,
+            "total_flow": feed_flow_kg_hr,
+        },
+    )
+
     stage_1_pressure_bara = _bounded_float(
         compressor_1_params.get("outlet_pressure_bara"),
         "compressor stage 1 outlet pressure",
@@ -406,6 +548,11 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         stage_2_isentropic_efficiency=efficiency_2,
     )
     warnings = _validate_case(canonical_spec, composition_total)
+    if schema_version == LEGACY_CASE_SCHEMA_VERSION:
+        warnings.insert(
+            0,
+            "Schema-v1 case migrated to the shared-fluid schema v2.",
+        )
     controls = {
         "flowsheet_case_name": case_name,
         "flowsheet_eos_model": eos_model,
@@ -484,7 +631,46 @@ def _build_case_spec(
     stage_1_isentropic_efficiency: float,
     stage_2_isentropic_efficiency: float,
 ) -> dict[str, Any]:
-    """Create the ProcessBuilder specification for the first Studio template."""
+    """Create schema-v2 case data plus the current ProcessBuilder projection."""
+    fluid_spec = {
+        "eos_model": eos_model,
+        "mixing_rule": 2,
+        "components": dict(composition),
+        "composition_basis": "mole_fraction",
+        "temperature_C": feed_temperature_c,
+        "pressure_bara": feed_pressure_bara,
+        "total_flow": feed_flow_kg_hr,
+        "flow_unit": "kg/hr",
+    }
+    fluid_package = {
+        "id": BASE_FLUID_PACKAGE_ID,
+        "name": "Base fluid characterization",
+        "eos_model": eos_model,
+        "mixing_rule": 2,
+        "component_registry": [
+            {
+                "name": component,
+                "kind": "standard",
+                "source": "NeqSim component database",
+            }
+            for component in composition
+        ],
+        "binary_interaction_parameters": {
+            "source": "NeqSim database",
+            "overrides": {},
+        },
+    }
+    inlet = {
+        "id": PRIMARY_INLET_ID,
+        "name": "feed gas",
+        "fluid_package_id": BASE_FLUID_PACKAGE_ID,
+        "composition": dict(composition),
+        "composition_basis": "mole_fraction",
+        "temperature_C": feed_temperature_c,
+        "pressure_bara": feed_pressure_bara,
+        "total_flow": feed_flow_kg_hr,
+        "flow_unit": "kg/hr",
+    }
     return {
         "schema_version": CASE_SCHEMA_VERSION,
         "name": case_name,
@@ -498,17 +684,11 @@ def _build_case_spec(
             "Feed flow is mass flow in kg/hr.",
             "Compressors use the specified isentropic efficiency.",
             "Cooler pressure drops are fixed values in bar.",
+            "All inlet streams reference a shared base fluid characterization.",
         ],
-        "fluid": {
-            "eos_model": eos_model,
-            "mixing_rule": 2,
-            "components": composition,
-            "composition_basis": "mole_fraction",
-            "temperature_C": feed_temperature_c,
-            "pressure_bara": feed_pressure_bara,
-            "total_flow": feed_flow_kg_hr,
-            "flow_unit": "kg/hr",
-        },
+        "fluid_packages": [fluid_package],
+        "inlets": [inlet],
+        "fluid": fluid_spec,
         "process": [
             {
                 "name": "feed gas",
@@ -1048,6 +1228,37 @@ def _engineering_workbook_bytes(
             "Mole fraction [-]": list(fluid["components"].values()),
         }
     )
+    fluid_package_table = pd.DataFrame(
+        [
+            {
+                "Package ID": package["id"],
+                "Name": package["name"],
+                "EOS": str(package["eos_model"]).upper(),
+                "Mixing rule": package["mixing_rule"],
+                "Registered components": len(package["component_registry"]),
+                "Interaction source": package[
+                    "binary_interaction_parameters"
+                ]["source"],
+            }
+            for package in spec["fluid_packages"]
+        ]
+    )
+    inlet_table = pd.DataFrame(
+        [
+            {
+                "Inlet ID": inlet["id"],
+                "Name": inlet["name"],
+                "Fluid package": inlet["fluid_package_id"],
+                "Temperature [°C]": inlet["temperature_C"],
+                "Pressure [bara]": inlet["pressure_bara"],
+                "Flow": inlet["total_flow"],
+                "Flow unit": inlet["flow_unit"],
+                "Composition basis": inlet["composition_basis"],
+                "Components": len(inlet["composition"]),
+            }
+            for inlet in spec["inlets"]
+        ]
+    )
     assumptions = list(spec.get("assumptions", []))
     assumptions_table = pd.DataFrame(
         {
@@ -1063,6 +1274,8 @@ def _engineering_workbook_bytes(
         "Case Summary": case_summary,
         "KPIs": kpi_table,
         "Composition": composition_table,
+        "Fluid Package": fluid_package_table,
+        "Inlets": inlet_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -1445,6 +1658,8 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Steady-state thermodynamic and process simulation in NeqSim.
 - Pressure inputs are absolute (`bara`); temperature inputs are degrees Celsius.
 - Composition is molar and is normalized before calculation.
+- Schema v2 separates shared fluid characterization from inlet conditions.
+- The current starter template projects one inlet into the Process Chat builder.
 - Cooling duties and compressor powers come directly from the solved NeqSim model.
 - Results are suitable for screening and engineering studies, not design certification.
 """
