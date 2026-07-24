@@ -15,6 +15,7 @@ Provides:
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -141,17 +142,27 @@ class NeqSimProcessModel:
     for the chat + what-if engine.
     """
 
-    def __init__(self, process_system, source_bytes: Optional[bytes] = None):
+    def __init__(
+        self,
+        process_system,
+        source_bytes: Optional[bytes] = None,
+        enforce_acyclic_mixer_energy: bool = False,
+    ):
         """
         Args:
             process_system: A NeqSim ProcessSystem **or ProcessModel** Java object.
             source_bytes: Original file bytes for clone-by-reload.
+            enforce_acyclic_mixer_energy: Recheck adiabatic mixer energy
+                closure after each acyclic graph execution.
         """
         self._proc = process_system
         self._source_bytes = source_bytes
         self._units: Dict[str, Any] = {}
         self._streams: Dict[str, Any] = {}
         self._is_process_model = self._detect_process_model(process_system)
+        self._enforce_acyclic_mixer_energy = bool(
+            enforce_acyclic_mixer_energy
+        )
         self._index_model_objects()
 
     # ----- ProcessModel detection -----
@@ -504,6 +515,70 @@ class NeqSimProcessModel:
             # Still zero — reset recycles and try again
             _reset_recycles(units)
 
+    @staticmethod
+    def _run_acyclic_mixer_energy_closure(
+        proc,
+        relative_tolerance: float = 1.0e-7,
+    ) -> None:
+        """Run an ordered graph pass and enforce adiabatic mixer closure."""
+        try:
+            units = list(proc.getUnitOperations())
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not inspect acyclic graph units for energy closure."
+            ) from exc
+
+        has_mixer = any(
+            str(unit.getClass().getSimpleName()) == "Mixer"
+            for unit in units
+        )
+        if not has_mixer:
+            return
+
+        from jpype import JClass
+        from neqsim import jneqsim
+
+        run_id = JClass("java.util.UUID").randomUUID()
+        operations_class = (
+            jneqsim.thermodynamicoperations.ThermodynamicOperations
+        )
+        for unit in units:
+            unit.run(run_id)
+            if str(unit.getClass().getSimpleName()) != "Mixer":
+                continue
+
+            target_enthalpy = float(unit.calcMixStreamEnthalpy())
+            outlet_system = unit.getOutletStream().getThermoSystem()
+            outlet_system.init(3)
+            actual_enthalpy = float(outlet_system.getEnthalpy())
+            energy_scale = max(abs(target_enthalpy), 1.0)
+            relative_error = abs(
+                actual_enthalpy - target_enthalpy
+            ) / energy_scale
+            if relative_error <= relative_tolerance:
+                continue
+
+            try:
+                operations_class(outlet_system).PHflash(target_enthalpy)
+                outlet_system.init(3)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Mixer '{unit.getName()}' could not close its "
+                    "adiabatic energy balance."
+                ) from exc
+
+            actual_enthalpy = float(outlet_system.getEnthalpy())
+            relative_error = abs(
+                actual_enthalpy - target_enthalpy
+            ) / energy_scale
+            if not math.isfinite(relative_error) or (
+                relative_error > relative_tolerance
+            ):
+                raise RuntimeError(
+                    f"Mixer '{unit.getName()}' energy balance did not "
+                    f"converge (relative residual {relative_error:.3e})."
+                )
+
     @classmethod
     def from_bytes(cls, file_bytes: bytes, filename: str = "process.neqsim") -> "NeqSimProcessModel":
         """Load a ProcessSystem from in-memory bytes (e.g. Streamlit file_uploader)."""
@@ -525,7 +600,11 @@ class NeqSimProcessModel:
                 pass
 
     @classmethod
-    def from_process_system(cls, process_system) -> "NeqSimProcessModel":
+    def from_process_system(
+        cls,
+        process_system,
+        enforce_acyclic_mixer_energy: bool = False,
+    ) -> "NeqSimProcessModel":
         """Wrap an existing ProcessSystem object (e.g. built in code)."""
         import neqsim
 
@@ -543,7 +622,11 @@ class NeqSimProcessModel:
             except OSError:
                 pass
 
-        return cls(process_system, source_bytes=file_bytes)
+        return cls(
+            process_system,
+            source_bytes=file_bytes,
+            enforce_acyclic_mixer_energy=enforce_acyclic_mixer_energy,
+        )
 
     # ----- Cloning -----
 
@@ -582,7 +665,17 @@ class NeqSimProcessModel:
                 "Cannot clone: no source bytes available. "
                 "Load from file or use from_process_system() to enable cloning."
             )
-        return NeqSimProcessModel.from_bytes(self._source_bytes)
+        clone = NeqSimProcessModel.from_bytes(self._source_bytes)
+        clone._enforce_acyclic_mixer_energy = (
+            self._enforce_acyclic_mixer_energy
+        )
+        if (
+            clone._enforce_acyclic_mixer_energy
+            and not clone._is_process_model
+        ):
+            clone._run_acyclic_mixer_energy_closure(clone._proc)
+            clone._index_model_objects()
+        return clone
 
     # ----- Introspection -----
 
@@ -1542,6 +1635,8 @@ class NeqSimProcessModel:
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
             self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
+            if self._enforce_acyclic_mixer_energy:
+                self._run_acyclic_mixer_energy_closure(self._proc)
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
@@ -1559,6 +1654,8 @@ class NeqSimProcessModel:
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
             self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
+            if self._enforce_acyclic_mixer_energy:
+                self._run_acyclic_mixer_energy_closure(self._proc)
         self._index_model_objects()
 
     @staticmethod
