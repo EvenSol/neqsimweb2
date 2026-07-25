@@ -21,12 +21,14 @@ from process_chat.flowsheet_editor import (
     inline_unit_property_rows,
     insert_inline_unit_on_connection,
     material_connection_rows,
+    process_unit_property_rows,
     record_graph_history,
     redo_graph_history,
     remove_inline_unit,
     rename_inline_unit,
     undo_graph_history,
     update_inline_unit_properties,
+    update_process_unit_properties,
     validate_catalog_unit,
 )
 
@@ -128,6 +130,30 @@ class UnitCatalogTest(unittest.TestCase):
             with self.subTest(unit_type=unit_type, message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     inline_unit_property_rows(unit_type, params)
+
+    def test_process_property_rows_cover_template_separators(self):
+        compressor_params = {
+            "outlet_pressure_bara": 125,
+            "isentropic_efficiency": 0.82,
+        }
+
+        self.assertEqual(
+            process_unit_property_rows("compressor", compressor_params),
+            inline_unit_property_rows("compressor", compressor_params),
+        )
+        self.assertEqual(process_unit_property_rows("separator"), [])
+        self.assertEqual(process_unit_property_rows("separator", {}), [])
+
+    def test_process_property_rows_reject_invalid_requests(self):
+        invalid_cases = (
+            ("separator", {"pressure_drop_bar": 1.0}, "unsupported property"),
+            ("separator", [], "params must be an object"),
+            ("mixer", {}, "Unsupported process unit type"),
+        )
+        for unit_type, params, message in invalid_cases:
+            with self.subTest(unit_type=unit_type):
+                with self.assertRaisesRegex(ValueError, message):
+                    process_unit_property_rows(unit_type, params)
 
     def test_invalid_catalog_requests_fail_explicitly(self):
         for unit_type, name, message in (
@@ -416,6 +442,7 @@ class InlineUnitLifecycleTest(unittest.TestCase):
                     )
         self.assertEqual(self.units, original)
 
+
     def test_remove_restores_original_route_without_mutating_inputs(self):
         units, connections, inserted_id = self._insert_valve()
         restored_units, restored_connections = remove_inline_unit(
@@ -475,6 +502,107 @@ class InlineUnitLifecycleTest(unittest.TestCase):
                     )
         self.assertEqual(len(units), 2)
         self.assertEqual(len(connections), 2)
+
+
+class ProcessUnitPropertyUpdateTest(unittest.TestCase):
+    """Validate property updates beyond palette-inserted equipment."""
+
+    def setUp(self):
+        self.units = [
+            {
+                "id": "inlet-scrubber",
+                "name": "inlet scrubber",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["gas", "liquid"],
+                },
+            },
+            {
+                "id": "compressor-stage-1",
+                "name": "compressor stage 1",
+                "type": "compressor",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                },
+                "params": {
+                    "outlet_pressure_bara": 80.0,
+                    "isentropic_efficiency": 0.78,
+                },
+            },
+        ]
+
+    def test_updates_template_unit_without_mutating_inputs(self):
+        updated = update_process_unit_properties(
+            self.units,
+            "compressor-stage-1",
+            {
+                "outlet_pressure_bara": 90,
+                "isentropic_efficiency": 0.80,
+            },
+        )
+
+        self.assertEqual(
+            updated[1]["params"],
+            {
+                "outlet_pressure_bara": 90.0,
+                "isentropic_efficiency": 0.8,
+            },
+        )
+        self.assertEqual(
+            self.units[1]["params"]["outlet_pressure_bara"],
+            80.0,
+        )
+
+    def test_separator_accepts_noop_and_preserves_paramless_shape(self):
+        updated = update_process_unit_properties(
+            self.units,
+            "inlet-scrubber",
+            {},
+        )
+
+        self.assertNotIn("params", updated[0])
+        self.assertEqual(updated, self.units)
+
+    def test_rejects_invalid_generic_updates_without_mutation(self):
+        duplicated = [*self.units, dict(self.units[1])]
+        invalid_cases = (
+            (
+                self.units,
+                "inlet-scrubber",
+                {"pressure_drop_bar": 1.0},
+                "unsupported property",
+            ),
+            (
+                self.units,
+                "compressor-stage-1",
+                {"outlet_pressure_bara": float("inf")},
+                "must be finite",
+            ),
+            (
+                self.units,
+                "missing",
+                {},
+                "Unknown graph unit",
+            ),
+            (
+                duplicated,
+                "compressor-stage-1",
+                {},
+                "duplicated",
+            ),
+        )
+        original = json.loads(json.dumps(self.units))
+        for units, unit_id, updates, message in invalid_cases:
+            with self.subTest(unit_id=unit_id, message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    update_process_unit_properties(
+                        units,
+                        unit_id,
+                        updates,
+                    )
+        self.assertEqual(self.units, original)
 
 
 class GraphDraftLifecycleTest(unittest.TestCase):
