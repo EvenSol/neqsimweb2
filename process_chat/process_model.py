@@ -23,6 +23,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
+_COMPONENT_BALANCE_OK_PCT = 0.01
+_COMPONENT_BALANCE_WARN_PCT = 1.0
 
 
 class _MaterialBoundaryIdentityTracker:
@@ -973,16 +975,16 @@ class NeqSimProcessModel:
     def _material_boundary_component_flows(
         stream: Any,
         total_molar_flow: Optional[float],
-    ) -> Dict[str, float]:
+    ) -> Optional[Dict[str, float]]:
         """Return solved overall component molar flows in mol/s when available."""
         if total_molar_flow is None or not hasattr(stream, "getFluid"):
-            return {}
+            return None
         try:
             fluid = stream.getFluid()
             phase = fluid.getPhase(0)
             component_count = int(phase.getNumberOfComponents())
         except Exception:
-            return {}
+            return None
 
         component_flows: Dict[str, float] = {}
         for index in range(component_count):
@@ -991,17 +993,17 @@ class NeqSimProcessModel:
                 name = str(component.getName()).strip()
                 overall_fraction = float(component.getz())
             except Exception:
-                return {}
+                return None
             if (
                 not name
                 or name in component_flows
                 or not math.isfinite(overall_fraction)
                 or overall_fraction < -1.0e-12
             ):
-                return {}
+                return None
             component_flow = total_molar_flow * max(overall_fraction, 0.0)
             if not math.isfinite(component_flow):
-                return {}
+                return None
             component_flows[name] = component_flow
         return component_flows
 
@@ -1038,7 +1040,7 @@ class NeqSimProcessModel:
             "temperature_C": None,
             "pressure_bara": None,
             "molar_flow_mol_sec": None,
-            "component_molar_flows_mol_sec": {},
+            "component_molar_flows_mol_sec": None,
         }
         for key, getter_name, unit in (
             ("temperature_C", "getTemperature", "C"),
@@ -1989,6 +1991,7 @@ class NeqSimProcessModel:
         # "export oil", "fuel gas").  If none are found, we fall back to
         # the last non-utility unit's ALL outlets.
         material_boundaries: List[Dict[str, Any]] = []
+        component_balances: List[Dict[str, Any]] = []
         try:
             material_boundary_identities = _MaterialBoundaryIdentityTracker()
 
@@ -2221,6 +2224,51 @@ class NeqSimProcessModel:
                     f"Products={product_flow:.0f} kg/hr ({detail_str}), "
                     f"imbalance={balance_pct:.2f}%"
                 ))
+
+            from .solver_diagnostics import component_balance_rows
+
+            component_balances = component_balance_rows(
+                ModelRunResult(
+                    kpis={},
+                    constraints=[],
+                    raw={"material_boundaries": material_boundaries},
+                )
+            )
+            if component_balances:
+                worst_component = max(
+                    component_balances,
+                    key=lambda row: float(row["imbalance_pct"]),
+                )
+                maximum_imbalance = float(
+                    worst_component["imbalance_pct"]
+                )
+                kpis["component_balance_count"] = KPI(
+                    "component_balance_count",
+                    float(len(component_balances)),
+                    "count",
+                )
+                kpis["component_balance_max_pct"] = KPI(
+                    "component_balance_max_pct",
+                    maximum_imbalance,
+                    "%",
+                )
+                component_status = (
+                    "OK"
+                    if maximum_imbalance < _COMPONENT_BALANCE_OK_PCT
+                    else "WARN"
+                    if maximum_imbalance < _COMPONENT_BALANCE_WARN_PCT
+                    else "VIOLATION"
+                )
+                constraints.append(
+                    ConstraintStatus(
+                        "component_balance",
+                        component_status,
+                        "Maximum component imbalance="
+                        f"{maximum_imbalance:.6g}% "
+                        f"({worst_component['component']}); "
+                        f"{len(component_balances)} components checked.",
+                    )
+                )
         except Exception:
             pass
 
@@ -2232,6 +2280,7 @@ class NeqSimProcessModel:
                 "unit_names": list(self._units.keys()),
                 "stream_names": list(self._streams.keys()),
                 "material_boundaries": material_boundaries,
+                "component_balances": component_balances,
             }
         )
 

@@ -12,6 +12,7 @@ _BOUNDARY_NUMERIC_FIELDS = (
     "pressure_bara",
     "molar_flow_mol_sec",
 )
+_COMPONENT_BALANCE_ABSOLUTE_TOL_MOL_SEC = 1.0e-9
 
 
 def material_boundary_rows(result: Any) -> List[Dict[str, Any]]:
@@ -203,7 +204,11 @@ def component_balance_rows(result: Any) -> List[Dict[str, float | str]]:
             if row["role"] == "product"
         )
         residual = product_flow - feed_flow
-        component_scale = max(feed_flow, product_flow, 1.0e-12)
+        component_scale = max(
+            feed_flow,
+            product_flow,
+            _COMPONENT_BALANCE_ABSOLUTE_TOL_MOL_SEC,
+        )
         imbalance_pct = abs(residual) / component_scale * 100.0
         balance_rows.append(
             {

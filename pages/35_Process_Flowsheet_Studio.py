@@ -35,6 +35,7 @@ sys.path.insert(0, _PROJECT_ROOT)
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
 from process_chat.solver_diagnostics import (  # noqa: E402
+    component_balance_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
 )
@@ -1828,6 +1829,34 @@ def _material_boundary_dataframe(result: Any) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
+def _component_balance_dataframe(result: Any) -> pd.DataFrame:
+    """Build an explicit-unit component closure table."""
+    columns = [
+        "Component",
+        "Feed molar flow [mol/s]",
+        "Product molar flow [mol/s]",
+        "Residual [mol/s]",
+        "Imbalance [%]",
+    ]
+    records = [
+        {
+            "Component": row["component"],
+            "Feed molar flow [mol/s]": row[
+                "feed_molar_flow_mol_sec"
+            ],
+            "Product molar flow [mol/s]": row[
+                "product_molar_flow_mol_sec"
+            ],
+            "Residual [mol/s]": row[
+                "residual_molar_flow_mol_sec"
+            ],
+            "Imbalance [%]": row["imbalance_pct"],
+        }
+        for row in component_balance_rows(result)
+    ]
+    return pd.DataFrame(records, columns=columns)
+
+
 def _kpi_value(result: Any, name: str) -> float | None:
     kpi = result.kpis.get(name)
     return float(kpi.value) if kpi is not None else None
@@ -2153,6 +2182,7 @@ def _engineering_workbook_bytes(
         }
     )
     material_boundary_table = _material_boundary_dataframe(result)
+    component_balance_table = _component_balance_dataframe(result)
     sheet_frames = {
         "Case Summary": case_summary,
         "KPIs": kpi_table,
@@ -2164,6 +2194,7 @@ def _engineering_workbook_bytes(
         "Execution Plan": execution_plan_table,
         "Inlet Build Specs": inlet_fluid_spec_table,
         "Material Balance": material_boundary_table,
+        "Component Balance": component_balance_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -2228,6 +2259,10 @@ def _case_history_record(
     total_power_kw = _kpi_value(result, "total_power_kW")
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
+    component_balance_pct = _kpi_value(
+        result,
+        "component_balance_max_pct",
+    )
     feed_flow_kg_hr = solved_feed_flow_kg_hr(
         result,
         float(spec["fluid"]["total_flow"]),
@@ -2281,6 +2316,7 @@ def _case_history_record(
         "Cooling duty magnitude [kW]": total_duty_kw,
         "Specific energy [kWh/t]": specific_energy_kwh_t,
         "Mass imbalance [%]": mass_balance_pct,
+        "Max component imbalance [%]": component_balance_pct,
         "Validation": validation_status,
     }
 
@@ -3975,6 +4011,7 @@ if results_are_current and has_stored_result:
 
     constraint_table = _constraint_dataframe(result)
     material_boundary_table = _material_boundary_dataframe(result)
+    component_balance_table = _component_balance_dataframe(result)
     with validation_tab:
         status_counts = constraint_table["status"].value_counts()
         profile_counts = pressure_profile_table["Status"].value_counts()
@@ -4020,6 +4057,31 @@ if results_are_current and has_stored_result:
             st.caption(
                 "Feed and product rows are native solved streams. "
                 "Mass flow is aggregated across every listed boundary."
+            )
+        st.markdown("#### Component balance")
+        if component_balance_table.empty:
+            st.info(
+                "Component-level boundary diagnostics are unavailable "
+                "for this result."
+            )
+        else:
+            st.dataframe(
+                component_balance_table.style.format(
+                    {
+                        "Feed molar flow [mol/s]": "{:,.9g}",
+                        "Product molar flow [mol/s]": "{:,.9g}",
+                        "Residual [mol/s]": "{:+.6e}",
+                        "Imbalance [%]": "{:.6g}",
+                    },
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                "Component flows are aggregated across every solved "
+                "feed and product boundary. Relative imbalance uses a "
+                "1e-9 mol/s absolute scale floor for trace components."
             )
         st.markdown("#### Solved pressure profile")
         st.dataframe(
