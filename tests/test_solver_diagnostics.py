@@ -21,16 +21,23 @@ from process_chat.solver_diagnostics import (
 
 
 class _FallbackStream:
-    def __init__(self, name, mass_flow=None, hash_code=None):
+    def __init__(
+        self,
+        name,
+        mass_flow=None,
+        hash_code=None,
+        class_name="Stream",
+    ):
         self._name = name
         self._mass_flow = mass_flow
         self._hash_code = hash_code
+        self._class_name = class_name
 
     def hashCode(self):
         return self._hash_code if self._hash_code is not None else id(self)
 
     def getClass(self):
-        return _JavaClass("Stream")
+        return _JavaClass(self._class_name)
 
     def getName(self):
         return self._name
@@ -420,6 +427,34 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                         [_FallbackReactiveEquipment(class_name)]
                     ),
                     [],
+                )
+
+    def test_material_boundary_discovery_accepts_stream_subclasses(self):
+        for class_name in ("Stream", "EquilibriumStream", "WellStream"):
+            with self.subTest(class_name=class_name):
+                feed = _FallbackStream(
+                    "feed",
+                    100.0,
+                    class_name=class_name,
+                )
+                product = _FallbackStream(
+                    "product",
+                    100.0,
+                    class_name=class_name,
+                )
+                units = [feed, _FallbackEquipment(), product]
+
+                self.assertEqual(
+                    NeqSimProcessModel._leading_material_feed_streams(
+                        units
+                    ),
+                    [feed],
+                )
+                self.assertEqual(
+                    NeqSimProcessModel._trailing_material_product_streams(
+                        units
+                    ),
+                    [product],
                 )
 
     def test_missing_current_component_data_returns_unknown(self):

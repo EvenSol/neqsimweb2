@@ -25,6 +25,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
 _COMPONENT_BALANCE_OK_PCT = 0.01
 _COMPONENT_BALANCE_WARN_PCT = 1.0
+_MATERIAL_STREAM_UNIT_CLASSES = {
+    "equilibriumstream",
+    "stream",
+    "wellstream",
+}
 _SPECIES_CHANGING_UNIT_CLASSES = {
     "fuelcell",
     "gasturbine",
@@ -996,7 +1001,7 @@ class NeqSimProcessModel:
 
     @staticmethod
     def _leading_material_feed_streams(units: List[Any]) -> List[Any]:
-        """Return native Stream units preceding the first process equipment."""
+        """Return material-stream units preceding the first process equipment."""
         utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
         feeds: List[Any] = []
         for unit in units:
@@ -1004,7 +1009,7 @@ class NeqSimProcessModel:
                 unit_class = str(unit.getClass().getSimpleName())
             except Exception:
                 break
-            if unit_class == "Stream":
+            if unit_class.lower() in _MATERIAL_STREAM_UNIT_CLASSES:
                 feeds.append(unit)
                 continue
             if unit_class in utility_types:
@@ -1014,7 +1019,7 @@ class NeqSimProcessModel:
 
     @staticmethod
     def _trailing_material_product_streams(units: List[Any]) -> List[Any]:
-        """Return native Stream units following the final process equipment."""
+        """Return material-stream units following the final process equipment."""
         utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
         last_equipment_index = -1
         for index, unit in enumerate(units):
@@ -1022,7 +1027,10 @@ class NeqSimProcessModel:
                 unit_class = str(unit.getClass().getSimpleName())
             except Exception:
                 continue
-            if unit_class != "Stream" and unit_class not in utility_types:
+            if (
+                unit_class.lower() not in _MATERIAL_STREAM_UNIT_CLASSES
+                and unit_class not in utility_types
+            ):
                 last_equipment_index = index
         if last_equipment_index < 0:
             return []
@@ -1033,7 +1041,7 @@ class NeqSimProcessModel:
                 unit_class = str(unit.getClass().getSimpleName())
             except Exception:
                 continue
-            if unit_class == "Stream":
+            if unit_class.lower() in _MATERIAL_STREAM_UNIT_CLASSES:
                 products.append(unit)
         return products
 
