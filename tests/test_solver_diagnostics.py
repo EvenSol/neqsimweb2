@@ -13,6 +13,7 @@ from process_chat.process_model import (
 )
 from process_chat.solver_diagnostics import (
     aggregate_material_balance,
+    component_balance_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
 )
@@ -135,6 +136,103 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             solved_feed_flow_kg_hr(result, 60_000.0),
             100_000.0,
         )
+
+    def test_aggregates_component_feed_and_product_closure(self):
+        rows = [
+            {
+                "role": "feed",
+                "stream_name": "dry gas",
+                "mass_flow_kg_hr": 60_000,
+                "molar_flow_mol_sec": 100.0,
+                "component_molar_flows_mol_sec": {
+                    "methane": 95.0,
+                    "ethane": 5.0,
+                },
+            },
+            {
+                "role": "feed",
+                "stream_name": "rich gas",
+                "mass_flow_kg_hr": 40_000,
+                "molar_flow_mol_sec": 50.0,
+                "component_molar_flows_mol_sec": {
+                    "methane": 40.0,
+                    "ethane": 10.0,
+                },
+            },
+            {
+                "role": "product",
+                "stream_name": "mixed product",
+                "mass_flow_kg_hr": 100_000,
+                "molar_flow_mol_sec": 150.0,
+                "component_molar_flows_mol_sec": {
+                    "methane": 135.0,
+                    "ethane": 15.0,
+                },
+            },
+        ]
+
+        balances = component_balance_rows(_result(rows))
+
+        self.assertEqual(
+            [row["component"] for row in balances],
+            ["ethane", "methane"],
+        )
+        for row in balances:
+            self.assertEqual(
+                row["feed_molar_flow_mol_sec"],
+                row["product_molar_flow_mol_sec"],
+            )
+            self.assertEqual(row["residual_molar_flow_mol_sec"], 0.0)
+            self.assertEqual(row["imbalance_pct"], 0.0)
+
+    def test_component_balance_preserves_legacy_and_rejects_gaps(self):
+        legacy = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "legacy feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                }
+            ]
+        )
+        self.assertEqual(component_balance_rows(legacy), [])
+
+        incomplete = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                    "component_molar_flows_mol_sec": {},
+                },
+                {
+                    "role": "product",
+                    "stream_name": "product",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                    "component_molar_flows_mol_sec": {"methane": 1.0},
+                },
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            component_balance_rows(incomplete)
+
+        malformed = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "component_molar_flows_mol_sec": {
+                        "methane": -1.0,
+                    },
+                }
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            component_balance_rows(malformed)
 
     def test_uses_solver_kpis_before_legacy_feed_fallback(self):
         result = _result(
