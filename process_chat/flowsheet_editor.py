@@ -981,16 +981,16 @@ def rename_inline_unit(
     return copied_units
 
 
-def update_inline_unit_properties(
+def update_process_unit_properties(
     units: list[Any],
     unit_id: str,
     property_updates: Any,
 ) -> list[dict[str, Any]]:
-    """Transactionally update validated properties for one catalog unit."""
+    """Transactionally update metadata-backed properties for one process unit."""
     if not isinstance(units, list):
         raise ValueError("Graph units must be an array.")
     if not isinstance(property_updates, dict):
-        raise ValueError("Inline unit property updates must be an object.")
+        raise ValueError("Process unit property updates must be an object.")
 
     copied_units = copy.deepcopy(units)
     cleaned_unit_id = str(unit_id).strip()
@@ -1006,20 +1006,46 @@ def update_inline_unit_properties(
         raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
 
     selected_unit = copied_units[matches[0]]
-    validate_catalog_unit(selected_unit)
+    current_params = selected_unit.get("params", {})
+    if not isinstance(current_params, dict):
+        raise ValueError(
+            f"Process unit '{cleaned_unit_id}' params must be an object."
+        )
     updated_params = {
-        **selected_unit["params"],
+        **current_params,
         **copy.deepcopy(property_updates),
     }
-    property_rows = inline_unit_property_rows(
+    property_rows = process_unit_property_rows(
         selected_unit["type"],
         updated_params,
     )
-    selected_unit["params"] = {
+    normalized_params = {
         row["key"]: row["value"] for row in property_rows
     }
-    validate_catalog_unit(selected_unit)
+    if normalized_params or "params" in selected_unit:
+        selected_unit["params"] = normalized_params
     return copied_units
+
+
+def update_inline_unit_properties(
+    units: list[Any],
+    unit_id: str,
+    property_updates: Any,
+) -> list[dict[str, Any]]:
+    """Update one inline-palette unit while preserving its catalog contract."""
+    updated_units = update_process_unit_properties(
+        units,
+        unit_id,
+        property_updates,
+    )
+    cleaned_unit_id = str(unit_id).strip()
+    selected_unit = next(
+        unit
+        for unit in updated_units
+        if str(unit.get("id", "")).strip() == cleaned_unit_id
+    )
+    validate_catalog_unit(selected_unit)
+    return updated_units
 
 
 def remove_inline_unit(
