@@ -52,6 +52,7 @@ _EDITOR_SYMBOL_NAMES = (
     "inline_unit_property_rows",
     "insert_inline_unit_on_connection",
     "material_connection_rows",
+    "process_unit_property_rows",
     "record_graph_history",
     "redo_graph_history",
     "remove_inline_unit",
@@ -113,6 +114,56 @@ TEMPLATE_UNIT_IDS = {
     "interstage scrubber": "interstage-scrubber",
     "compressor stage 2": "compressor-stage-2",
     "export cooler": "export-cooler",
+}
+TEMPLATE_PROPERTY_CONTROLS = {
+    "compressor stage 1": {
+        "outlet_pressure_bara": {
+            "state_key": "flowsheet_stage_1_pressure_bara",
+            "minimum": 1.0,
+            "maximum": 500.0,
+        },
+        "isentropic_efficiency": {
+            "state_key": "flowsheet_stage_1_isentropic_efficiency",
+            "minimum": 0.50,
+            "maximum": 0.95,
+        },
+    },
+    "compressor stage 2": {
+        "outlet_pressure_bara": {
+            "state_key": "flowsheet_stage_2_pressure_bara",
+            "minimum": 1.0,
+            "maximum": 500.0,
+        },
+        "isentropic_efficiency": {
+            "state_key": "flowsheet_stage_2_isentropic_efficiency",
+            "minimum": 0.50,
+            "maximum": 0.95,
+        },
+    },
+    "intercooler": {
+        "outlet_temperature_C": {
+            "state_key": "flowsheet_intercooler_temperature_c",
+            "minimum": -50.0,
+            "maximum": 150.0,
+        },
+        "pressure_drop_bar": {
+            "state_key": "flowsheet_intercooler_pressure_drop_bar",
+            "minimum": 0.0,
+            "maximum": 50.0,
+        },
+    },
+    "export cooler": {
+        "outlet_temperature_C": {
+            "state_key": "flowsheet_export_temperature_c",
+            "minimum": -50.0,
+            "maximum": 150.0,
+        },
+        "pressure_drop_bar": {
+            "state_key": "flowsheet_export_pressure_drop_bar",
+            "minimum": 0.0,
+            "maximum": 50.0,
+        },
+    },
 }
 
 CONTROL_DEFAULTS = {
@@ -2278,78 +2329,45 @@ def _render_object_property_editor() -> str:
     st.write(f"**Selected:** {display_name}")
     st.caption(f"Object type: {object_type}")
 
-    if selected_object == "compressor stage 1":
-        st.number_input(
-            "Discharge pressure [bara]",
-            min_value=1.0,
-            max_value=500.0,
-            step=1.0,
-            key="flowsheet_stage_1_pressure_bara",
-        )
-        st.slider(
-            "Isentropic efficiency [-]",
-            min_value=0.50,
-            max_value=0.95,
-            step=0.01,
-            key="flowsheet_stage_1_isentropic_efficiency",
-            help="Applied only to compressor stage 1.",
-        )
-    elif selected_object == "compressor stage 2":
-        st.number_input(
-            "Discharge pressure [bara]",
-            min_value=1.0,
-            max_value=500.0,
-            step=1.0,
-            key="flowsheet_stage_2_pressure_bara",
-        )
-        st.slider(
-            "Isentropic efficiency [-]",
-            min_value=0.50,
-            max_value=0.95,
-            step=0.01,
-            key="flowsheet_stage_2_isentropic_efficiency",
-            help="Applied only to compressor stage 2.",
-        )
-    elif selected_object == "intercooler":
-        st.number_input(
-            "Outlet temperature [°C]",
-            min_value=-50.0,
-            max_value=150.0,
-            step=1.0,
-            key="flowsheet_intercooler_temperature_c",
-        )
-        st.number_input(
-            "Pressure drop [bar]",
-            min_value=0.0,
-            max_value=50.0,
-            step=0.1,
-            key="flowsheet_intercooler_pressure_drop_bar",
-        )
-    elif selected_object == "export cooler":
-        st.number_input(
-            "Outlet temperature [°C]",
-            min_value=-50.0,
-            max_value=150.0,
-            step=1.0,
-            key="flowsheet_export_temperature_c",
-        )
-        st.number_input(
-            "Pressure drop [bar]",
-            min_value=0.0,
-            max_value=50.0,
-            step=0.1,
-            key="flowsheet_export_pressure_drop_bar",
-        )
-    elif selected_object == "feed gas":
+    if selected_object == "feed gas":
         st.info(
             "Feed temperature, absolute pressure, mass flow, equation of state, "
             "and molar composition are edited in the fluid basis."
         )
     else:
-        st.info(
-            "This separator performs an equilibrium split at its inlet conditions. "
-            "The current template has no independent separator set point."
+        property_controls = TEMPLATE_PROPERTY_CONTROLS.get(
+            selected_object,
+            {},
         )
+        unit_type = object_type.casefold()
+        params = {
+            property_name: st.session_state[definition["state_key"]]
+            for property_name, definition in property_controls.items()
+        }
+        property_rows = process_unit_property_rows(unit_type, params)
+        if not property_rows:
+            st.info(
+                "This separator performs an equilibrium split at its inlet "
+                "conditions. The native unit has no independent steady-state "
+                "property in the current schema."
+            )
+        for row in property_rows:
+            control = property_controls.get(row["key"])
+            if control is None:
+                raise ValueError(
+                    f"Template object '{selected_object}' is missing the "
+                    f"'{row['key']}' control binding."
+                )
+            minimum = max(float(row["minimum"]), control["minimum"])
+            maximum = min(float(row["maximum"]), control["maximum"])
+            st.number_input(
+                f"{row['label']} [{row['unit']}]",
+                min_value=minimum,
+                max_value=maximum,
+                step=float(row["step"]),
+                format=row["format"],
+                key=control["state_key"],
+            )
 
     st.caption(
         "Property edits update the structured case specification. Run NeqSim to "
@@ -3070,6 +3088,8 @@ with st.expander("Model scope and assumptions", expanded=False):
   JSON cases.
 - Added equipment properties are metadata-driven, bounded, and stored with
   explicit units.
+- Starter-template equipment uses the same property metadata; separators expose
+  their native equilibrium behavior without invented set points.
 - The active draft graph is automatically laid out before NeqSim execution.
 - Cyclic graphs remain blocked until recycle and tear-stream solving is available.
 - Fluid validation supports multiple compatible inlets with independent conditions.
