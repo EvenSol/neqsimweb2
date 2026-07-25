@@ -974,7 +974,13 @@ class NeqSimProcessModel:
     @staticmethod
     def _reactive_unit_names(units: List[Any]) -> List[str]:
         """Return units that make species-level boundary closure inapplicable."""
-        reactive_class_tokens = ("reactor", "electrolyzer", "flare")
+        reactive_class_tokens = (
+            "reactor",
+            "electrolyzer",
+            "flare",
+            "gasturbine",
+            "combust",
+        )
         reactive_units: List[str] = []
         for unit in units:
             try:

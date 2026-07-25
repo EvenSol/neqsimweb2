@@ -77,8 +77,14 @@ class _FallbackEquipment:
 
 
 class _FallbackReactiveEquipment:
+    def __init__(self, class_name="GibbsReactor"):
+        self._class_name = class_name
+
     def getClass(self):
-        return _JavaClass("GibbsReactor")
+        return _JavaClass(self._class_name)
+
+    def getName(self):
+        return self._class_name
 
 
 class ValidationSummaryTest(unittest.TestCase):
@@ -105,9 +111,6 @@ class ValidationSummaryTest(unittest.TestCase):
             aggregate_validation_status(["OK", "not-reported"]),
             "UNKNOWN",
         )
-
-    def getName(self):
-        return "equilibrium reactor"
 
 
 def _result(rows=None, **kpi_values):
@@ -333,6 +336,16 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(component_constraint.status, "UNKNOWN")
         self.assertIn("reactive flowsheets", component_constraint.detail)
         self.assertNotIn("component_balance_max_pct", result.kpis)
+
+    def test_combustion_equipment_is_reactive(self):
+        for class_name in ("GasTurbine", "CombustionEngine"):
+            with self.subTest(class_name=class_name):
+                self.assertEqual(
+                    NeqSimProcessModel._reactive_unit_names(
+                        [_FallbackReactiveEquipment(class_name)]
+                    ),
+                    [class_name],
+                )
 
     def test_missing_current_component_data_returns_unknown(self):
         feed = _FallbackStream("feed", 100.0)
