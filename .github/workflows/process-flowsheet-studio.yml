@@ -11,6 +11,7 @@ on:
       - "tests/test_flowsheet_editor.py"
       - "tests/test_process_graph_conservation.py"
       - "tests/test_runtime_imports.py"
+      - "tests/test_studio_warm_deployment.py"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
 
@@ -32,7 +33,7 @@ jobs:
       - name: Install native NeqSim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install neqsim
+          python -m pip install neqsim "streamlit>=1.30.0"
       - name: Compile affected Python sources
         run: |
           python -m py_compile \
@@ -43,9 +44,12 @@ jobs:
             process_chat/process_model.py \
             tests/test_flowsheet_editor.py \
             tests/test_process_graph_conservation.py \
-            tests/test_runtime_imports.py
+            tests/test_runtime_imports.py \
+            tests/test_studio_warm_deployment.py
       - name: Run deployment-safe import regression tests
         run: python tests/test_runtime_imports.py -v
+      - name: Run warm-deployment Streamlit smoke test
+        run: python tests/test_studio_warm_deployment.py -v
       - name: Run draft graph editor regression tests
         run: python tests/test_flowsheet_editor.py -v
       - name: Run native multi-inlet conservation benchmark
