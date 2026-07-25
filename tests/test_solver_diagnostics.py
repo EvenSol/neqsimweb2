@@ -13,6 +13,7 @@ from process_chat.process_model import (
 )
 from process_chat.solver_diagnostics import (
     aggregate_material_balance,
+    aggregate_validation_status,
     component_balance_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
@@ -78,6 +79,32 @@ class _FallbackEquipment:
 class _FallbackReactiveEquipment:
     def getClass(self):
         return _JavaClass("GibbsReactor")
+
+
+class ValidationSummaryTest(unittest.TestCase):
+    """Preserve incomplete validation as a non-passing aggregate state."""
+
+    def test_status_precedence_preserves_unknown_checks(self):
+        self.assertEqual(aggregate_validation_status([]), "OK")
+        self.assertEqual(aggregate_validation_status(["OK"]), "OK")
+        self.assertEqual(
+            aggregate_validation_status(["OK", "UNKNOWN"]),
+            "UNKNOWN",
+        )
+        self.assertEqual(
+            aggregate_validation_status(["UNKNOWN", "WARN"]),
+            "WARN",
+        )
+        self.assertEqual(
+            aggregate_validation_status(["WARN", "VIOLATION"]),
+            "VIOLATION",
+        )
+
+    def test_unrecognized_status_is_incomplete(self):
+        self.assertEqual(
+            aggregate_validation_status(["OK", "not-reported"]),
+            "UNKNOWN",
+        )
 
     def getName(self):
         return "equilibrium reactor"

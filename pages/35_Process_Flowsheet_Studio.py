@@ -35,6 +35,7 @@ sys.path.insert(0, _PROJECT_ROOT)
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
 from process_chat.solver_diagnostics import (  # noqa: E402
+    aggregate_validation_status,
     component_balance_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
@@ -1893,6 +1894,7 @@ def _solver_run_record(
         str(getattr(item, "status", "UNKNOWN")).upper()
         for item in result.constraints
     ]
+    validation_summary = aggregate_validation_status(validation_statuses)
     try:
         unit_count = len(model.list_units())
     except Exception:
@@ -1912,8 +1914,12 @@ def _solver_run_record(
         "Unit operations": unit_count,
         "Indexed stream references": stream_count,
         "Validation checks": len(validation_statuses),
+        "Validation summary": validation_summary,
         "Validation warnings / violations": sum(
             status in {"WARN", "VIOLATION"} for status in validation_statuses
+        ),
+        "Validation incomplete checks": sum(
+            status == "UNKNOWN" for status in validation_statuses
         ),
     }
 
@@ -2272,16 +2278,11 @@ def _case_history_record(
     if total_power_kw is not None and feed_tonnes_per_hour > 0.0:
         specific_energy_kwh_t = total_power_kw / feed_tonnes_per_hour
 
-    constraint_statuses = {
+    constraint_statuses = [
         str(getattr(constraint, "status", "")).upper()
         for constraint in result.constraints
-    }
-    if "VIOLATION" in constraint_statuses:
-        validation_status = "VIOLATION"
-    elif "WARN" in constraint_statuses:
-        validation_status = "WARN"
-    else:
-        validation_status = "OK"
+    ]
+    validation_status = aggregate_validation_status(constraint_statuses)
 
     process = spec["process"]
     return {
@@ -4023,10 +4024,19 @@ if results_are_current and has_stored_result:
             "WARN",
             0,
         )
+        unknown_count = status_counts.get("UNKNOWN", 0) + profile_counts.get(
+            "UNKNOWN",
+            0,
+        )
         if violation_count > 0:
             st.error("One or more engineering validation checks reported a violation.")
         elif warning_count > 0:
             st.warning("The calculation completed with engineering warnings.")
+        elif unknown_count > 0:
+            st.warning(
+                "The calculation completed, but one or more engineering "
+                "validation checks are unavailable or not applicable."
+            )
         else:
             st.success("All reported engineering validation checks passed.")
         st.dataframe(

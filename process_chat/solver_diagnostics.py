@@ -13,6 +13,23 @@ _BOUNDARY_NUMERIC_FIELDS = (
     "molar_flow_mol_sec",
 )
 _COMPONENT_BALANCE_ABSOLUTE_TOL_MOL_SEC = 1.0e-9
+_VALIDATION_STATUSES = {"OK", "WARN", "VIOLATION", "UNKNOWN"}
+
+
+def aggregate_validation_status(statuses: Any) -> str:
+    """Return the most severe reported validation status."""
+    normalized = {
+        str(status).strip().upper()
+        for status in statuses
+    }
+    if not normalized:
+        return "OK"
+    if not normalized.issubset(_VALIDATION_STATUSES):
+        normalized.add("UNKNOWN")
+    for status in ("VIOLATION", "WARN", "UNKNOWN"):
+        if status in normalized:
+            return status
+    return "OK"
 
 
 def material_boundary_rows(result: Any) -> List[Dict[str, Any]]:
