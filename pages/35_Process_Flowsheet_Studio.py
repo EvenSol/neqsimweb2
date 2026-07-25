@@ -2685,9 +2685,22 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             )
             selected_inlet = secondary_inlet_map[selected_inlet_id]
             st.markdown("##### Operating conditions")
-            condition_rows = inlet_condition_property_rows(selected_inlet)
+            try:
+                condition_rows = inlet_condition_property_rows(
+                    selected_inlet
+                )
+            except ValueError as condition_metadata_error:
+                condition_rows = []
+                st.warning(
+                    "Stored inlet conditions are outside the current editor "
+                    "limits and have been preserved. The case remains runnable; "
+                    f"edit its composition here or revise the conditions in "
+                    f"case JSON. Details: {condition_metadata_error}"
+                )
             condition_updates: dict[str, float] = {}
-            condition_columns = st.columns(len(condition_rows))
+            condition_columns = (
+                st.columns(len(condition_rows)) if condition_rows else []
+            )
             for column, row in zip(condition_columns, condition_rows):
                 condition_updates[row["key"]] = column.number_input(
                     f"{row['label']} [{row['unit']}]",
@@ -2754,11 +2767,13 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         str(row["component"]): row["mole_fraction"]
                         for row in composition_table.to_dict("records")
                     }
-                    inlets = update_inlet_conditions(
-                        spec["inlets"],
-                        selected_inlet_id,
-                        condition_updates,
-                    )
+                    inlets = spec["inlets"]
+                    if condition_rows:
+                        inlets = update_inlet_conditions(
+                            inlets,
+                            selected_inlet_id,
+                            condition_updates,
+                        )
                     inlets = update_inlet_composition(
                         inlets,
                         selected_inlet_id,
