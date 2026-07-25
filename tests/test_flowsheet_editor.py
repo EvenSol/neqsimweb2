@@ -8,10 +8,14 @@ import unittest
 from process_chat.flowsheet_editor import (
     apply_graph_draft,
     build_graph_draft_dot,
+    connect_graph_ports,
     create_graph_draft,
     create_graph_history,
     create_inline_unit_spec,
+    disconnect_graph_connection,
+    graph_connection_rows,
     graph_history_status,
+    graph_port_rows,
     inline_unit_catalog,
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
@@ -649,6 +653,344 @@ class GraphHistoryTest(unittest.TestCase):
                     )
         with self.assertRaisesRegex(ValueError, "no earlier revision"):
             undo_graph_history(history)
+
+
+class GraphPortConnectionTest(unittest.TestCase):
+    """Validate explicit material and energy port connection editing."""
+
+    def setUp(self):
+        self.inlets = [
+            {"id": "feed-a", "name": "Feed A"},
+            {"id": "feed-b", "name": "Feed B"},
+        ]
+        self.units = [
+            {
+                "id": "mixer",
+                "name": "Feed mixer",
+                "type": "mixer",
+                "ports": {
+                    "material_in": ["in_0", "in_1"],
+                    "material_out": ["out"],
+                },
+            },
+            {
+                "id": "heater",
+                "name": "Feed heater",
+                "type": "heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": ["duty"],
+                },
+            },
+            {
+                "id": "splitter",
+                "name": "Product splitter",
+                "type": "splitter",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out_0", "out_1"],
+                },
+            },
+            {
+                "id": "utility",
+                "name": "Heating utility",
+                "type": "utility",
+                "ports": {
+                    "energy_out": ["duty"],
+                },
+            },
+        ]
+        self.connections = [
+            {
+                "id": "feed-a-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "mixer",
+                    "port": "in_0",
+                },
+            },
+            {
+                "id": "mixer-heater",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "mixer",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "utility-heater",
+                "type": "energy",
+                "source": {
+                    "kind": "unit",
+                    "id": "utility",
+                    "port": "duty",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "duty",
+                },
+            },
+        ]
+
+    def test_port_rows_report_declared_ports_and_occupancy(self):
+        material_sources = graph_port_rows(
+            self.inlets,
+            self.units,
+            self.connections,
+            "material",
+            "source",
+        )
+        material_targets = graph_port_rows(
+            self.inlets,
+            self.units,
+            self.connections,
+            "material",
+            "target",
+        )
+        source_occupancy = {
+            (row["id"], row["port"]): row["connected"]
+            for row in material_sources
+        }
+        target_occupancy = {
+            (row["id"], row["port"]): row["connected"]
+            for row in material_targets
+        }
+
+        self.assertTrue(source_occupancy[("feed-a", "out")])
+        self.assertFalse(source_occupancy[("feed-b", "out")])
+        self.assertTrue(source_occupancy[("mixer", "out")])
+        self.assertFalse(source_occupancy[("splitter", "out_1")])
+        self.assertTrue(target_occupancy[("mixer", "in_0")])
+        self.assertFalse(target_occupancy[("mixer", "in_1")])
+        self.assertTrue(target_occupancy[("heater", "in")])
+        self.assertFalse(target_occupancy[("splitter", "in")])
+
+        available_sources = graph_port_rows(
+            self.inlets,
+            self.units,
+            self.connections,
+            "energy",
+            "source",
+            available_only=True,
+        )
+        self.assertEqual(available_sources, [])
+
+    def test_connects_second_inlet_without_mutating_inputs(self):
+        source = {
+            "kind": "inlet",
+            "id": "feed-b",
+            "port": "out",
+        }
+        target = {
+            "kind": "unit",
+            "id": "mixer",
+            "port": "in_1",
+        }
+        updated, connection_id = connect_graph_ports(
+            self.inlets,
+            self.units,
+            self.connections,
+            "material",
+            source,
+            target,
+        )
+
+        self.assertEqual(
+            connection_id,
+            "material-feed-b-out-to-mixer-in-1",
+        )
+        self.assertEqual(updated[-1]["source"], source)
+        self.assertEqual(updated[-1]["target"], target)
+        self.assertEqual(len(self.connections), 3)
+        source["id"] = "changed"
+        self.assertEqual(updated[-1]["source"]["id"], "feed-b")
+
+    def test_connects_splitter_branch_and_energy_link(self):
+        without_energy = disconnect_graph_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "utility-heater",
+        )
+        with_splitter, material_id = connect_graph_ports(
+            self.inlets,
+            self.units,
+            without_energy,
+            "material",
+            {"kind": "unit", "id": "heater", "port": "out"},
+            {"kind": "unit", "id": "splitter", "port": "in"},
+        )
+        updated, energy_id = connect_graph_ports(
+            self.inlets,
+            self.units,
+            with_splitter,
+            "energy",
+            {"kind": "unit", "id": "utility", "port": "duty"},
+            {"kind": "unit", "id": "heater", "port": "duty"},
+        )
+
+        self.assertEqual(
+            material_id,
+            "material-heater-out-to-splitter-in",
+        )
+        self.assertEqual(
+            energy_id,
+            "energy-utility-duty-to-heater-duty",
+        )
+        self.assertEqual(updated[-1]["type"], "energy")
+
+    def test_rejects_occupied_undeclared_and_self_connections(self):
+        invalid_cases = (
+            (
+                "material",
+                {"kind": "inlet", "id": "feed-a", "port": "out"},
+                {"kind": "unit", "id": "mixer", "port": "in_1"},
+                "output port feed-a:out already has",
+            ),
+            (
+                "material",
+                {"kind": "inlet", "id": "feed-b", "port": "out"},
+                {"kind": "unit", "id": "heater", "port": "in"},
+                "input port heater:in already has",
+            ),
+            (
+                "material",
+                {"kind": "unit", "id": "heater", "port": "missing"},
+                {"kind": "unit", "id": "splitter", "port": "in"},
+                "not a declared output",
+            ),
+            (
+                "material",
+                {"kind": "unit", "id": "splitter", "port": "out_0"},
+                {"kind": "unit", "id": "splitter", "port": "in"},
+                "cannot connect a node to itself",
+            ),
+        )
+        for connection_type, source, target, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    connect_graph_ports(
+                        self.inlets,
+                        self.units,
+                        self.connections,
+                        connection_type,
+                        source,
+                        target,
+                    )
+        self.assertEqual(len(self.connections), 3)
+
+    def test_disconnect_preserves_order_and_original_graph(self):
+        updated = disconnect_graph_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "mixer-heater",
+        )
+
+        self.assertEqual(
+            [connection["id"] for connection in updated],
+            ["feed-a-mixer", "utility-heater"],
+        )
+        self.assertEqual(
+            [connection["id"] for connection in self.connections],
+            ["feed-a-mixer", "mixer-heater", "utility-heater"],
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown graph connection"):
+            disconnect_graph_connection(
+                self.inlets,
+                self.units,
+                self.connections,
+                "missing",
+            )
+
+    def test_connection_rows_cover_material_and_energy_paths(self):
+        rows = graph_connection_rows(
+            self.inlets,
+            self.units,
+            self.connections,
+        )
+
+        self.assertEqual(
+            [row["type"] for row in rows],
+            ["material", "material", "energy"],
+        )
+        self.assertEqual(
+            rows[-1]["label"],
+            "ENERGY · utility:duty → heater:duty",
+        )
+
+    def test_invalid_port_inventory_fails_explicitly(self):
+        invalid_cases = (
+            (
+                [{**self.inlets[0]}, {**self.inlets[0]}],
+                self.units,
+                self.connections,
+                "Graph object id 'feed-a' is duplicated",
+            ),
+            (
+                self.inlets,
+                [
+                    *self.units,
+                    {
+                        "id": "broken",
+                        "ports": {"material_in": ["in", "in"]},
+                    },
+                ],
+                self.connections,
+                "target port 'broken:in' is duplicated",
+            ),
+            (
+                self.inlets,
+                self.units,
+                [
+                    *self.connections,
+                    {
+                        **self.connections[0],
+                        "id": "feed-a-again",
+                        "target": {
+                            "kind": "unit",
+                            "id": "mixer",
+                            "port": "in_1",
+                        },
+                    },
+                ],
+                "output port feed-a:out already has",
+            ),
+        )
+        for inlets, units, connections, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    graph_connection_rows(inlets, units, connections)
+
+        for connection_type, direction, available_only, message in (
+            ("signal", "source", False, "material or energy"),
+            ("material", "sideways", False, "source or target"),
+            ("material", "source", 1, "must be a boolean"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    graph_port_rows(
+                        self.inlets,
+                        self.units,
+                        self.connections,
+                        connection_type,
+                        direction,
+                        available_only,
+                    )
 
 
 class GraphDraftDiagramTest(unittest.TestCase):
