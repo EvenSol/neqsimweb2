@@ -6,11 +6,49 @@ import math
 import unittest
 from types import SimpleNamespace
 
+from process_chat.process_model import NeqSimProcessModel
 from process_chat.solver_diagnostics import (
     aggregate_material_balance,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
 )
+
+
+class _FallbackStream:
+    def __init__(self, name, mass_flow=None):
+        self._name = name
+        self._mass_flow = mass_flow
+
+    def hashCode(self):
+        return id(self)
+
+    def getName(self):
+        return self._name
+
+    def getFlowRate(self, unit):
+        if self._mass_flow is None:
+            raise RuntimeError("unreadable stream")
+        if unit == "kg/hr":
+            return self._mass_flow
+        if unit == "mol/sec":
+            return self._mass_flow / 100.0
+        raise ValueError(unit)
+
+    def getTemperature(self, unit):
+        if unit != "C":
+            raise ValueError(unit)
+        return 20.0
+
+    def getPressure(self, unit):
+        if unit != "bara":
+            raise ValueError(unit)
+        return 45.0
+
+
+class _FallbackProcess:
+    @staticmethod
+    def getUnitOperations():
+        return []
 
 
 def _result(rows=None, **kpi_values):
@@ -119,6 +157,33 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "finite and positive"):
             solved_feed_flow_kg_hr(_result(), 0.0)
+
+    def test_unreadable_fallback_stream_does_not_hide_later_boundaries(self):
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess()
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "broken feed": _FallbackStream("broken feed"),
+            "backup feed": _FallbackStream("backup feed", 100.0),
+            "export product": _FallbackStream("export product", 100.0),
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [
+                ("feed", "backup feed"),
+                ("product", "export product"),
+            ],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
 
 if __name__ == "__main__":

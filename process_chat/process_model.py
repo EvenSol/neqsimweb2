@@ -2044,11 +2044,14 @@ class NeqSimProcessModel:
                         keyword in lower
                         for keyword in ("feed", "inlet", "well", "input")
                     ):
-                        record = self._material_boundary_record(
-                            s,
-                            "feed",
-                            name,
-                        )
+                        try:
+                            record = self._material_boundary_record(
+                                s,
+                                "feed",
+                                name,
+                            )
+                        except ValueError:
+                            continue
                         flow = record["mass_flow_kg_hr"]
                         feed_flow += flow
                         material_boundaries.append(record)
@@ -2062,11 +2065,14 @@ class NeqSimProcessModel:
                             "fuel",
                         )
                     ):
-                        record = self._material_boundary_record(
-                            s,
-                            "product",
-                            name,
-                        )
+                        try:
+                            record = self._material_boundary_record(
+                                s,
+                                "product",
+                                name,
+                            )
+                        except ValueError:
+                            continue
                         flow = record["mass_flow_kg_hr"]
                         product_flow += flow
                         material_boundaries.append(record)
