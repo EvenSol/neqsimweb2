@@ -227,10 +227,22 @@ class _FallbackEjector:
         return self._outlet
 
 
+class _FallbackInletMixer:
+    def __init__(self, *inlets):
+        self._inlets = inlets
+
+    def getClass(self):
+        return _JavaClass("Mixer")
+
+    def getInletStreams(self):
+        return self._inlets
+
+
 class _FallbackTank:
-    def __init__(self, gas_outlet, liquid_outlet):
+    def __init__(self, gas_outlet, liquid_outlet, inlet_stream=None):
         self._gas_outlet = gas_outlet
         self._liquid_outlet = liquid_outlet
+        self.inletStreamMixer = _FallbackInletMixer(inlet_stream)
 
     def getClass(self):
         return _JavaClass("Tank")
@@ -246,9 +258,10 @@ class _FallbackTank:
 
 
 class _FallbackElectrolyzer:
-    def __init__(self, hydrogen_outlet, oxygen_outlet):
+    def __init__(self, hydrogen_outlet, oxygen_outlet, water_inlet=None):
         self._hydrogen_outlet = hydrogen_outlet
         self._oxygen_outlet = oxygen_outlet
+        self.waterInlet = water_inlet
 
     def getClass(self):
         return _JavaClass("Electrolyzer")
@@ -261,9 +274,10 @@ class _FallbackElectrolyzer:
 
 
 class _FallbackCO2Electrolyzer:
-    def __init__(self, gas_outlet, liquid_outlet):
+    def __init__(self, gas_outlet, liquid_outlet, inlet_stream=None):
         self._gas_outlet = gas_outlet
         self._liquid_outlet = liquid_outlet
+        self.inletStream = inlet_stream
 
     def getClass(self):
         return _JavaClass("CO2Electrolyzer")
@@ -787,6 +801,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 equipment = equipment_type(
                     first_product,
                     second_product,
+                    processed_feed,
                 )
                 heater = _FallbackHeater(feed, processed_feed)
                 model = NeqSimProcessModel.__new__(NeqSimProcessModel)
@@ -863,16 +878,16 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 _FallbackProcess(
                     [
                         unsafe_feed,
-                        _FallbackHeater(unsafe_feed, processed_feed),
-                        _FallbackElectrolyzer(hydrogen, oxygen),
-                    ]
-                ),
-                _FallbackProcess(
-                    [
                         safe_feed,
+                        _FallbackHeater(unsafe_feed, processed_feed),
                         _FallbackHeater(
                             safe_feed,
                             raw_safe_product,
+                        ),
+                        _FallbackElectrolyzer(
+                            hydrogen,
+                            oxygen,
+                            processed_feed,
                         ),
                         named_safe_product,
                     ]
@@ -1238,7 +1253,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         gas_product = _FallbackStream("gas product", 70.0)
         liquid_product = _FallbackStream("liquid product", 30.0)
         heater = _FallbackHeater(feed, tank_inlet)
-        tank = _FallbackTank(gas_product, liquid_product)
+        tank = _FallbackTank(gas_product, liquid_product, tank_inlet)
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         model._proc = _FallbackProcess([feed, heater, tank])
         model._source_bytes = None
@@ -1594,6 +1609,36 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertFalse(tracker.contains("product", first_stream))
         tracker.add("feed", second_stream)
         self.assertTrue(tracker.contains("feed", second_stream))
+
+    def test_native_private_opaque_unit_inlets_are_discovered(self):
+        from neqsim import jneqsim
+
+        fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
+        fluid.addComponent("water", 1.0)
+        stream = jneqsim.process.equipment.stream.Stream("feed", fluid)
+        equipment = (
+            jneqsim.process.equipment.electrolyzer.Electrolyzer(
+                "water electrolyzer",
+                stream,
+            ),
+            jneqsim.process.equipment.electrolyzer.CO2Electrolyzer(
+                "co2 electrolyzer",
+                stream,
+            ),
+            jneqsim.process.equipment.tank.Tank(
+                "tank",
+                stream,
+            ),
+        )
+
+        for unit in equipment:
+            with self.subTest(unit=str(unit.getName())):
+                inlets = NeqSimProcessModel._material_inlet_streams(unit)
+                self.assertEqual(len(inlets), 1)
+                self.assertTrue(
+                    inlets[0] == stream
+                    or inlets[0].getFluid() == stream.getFluid()
+                )
 
     def test_reference_tracker_rejects_invalid_roles(self):
         tracker = _MaterialBoundaryIdentityTracker()
