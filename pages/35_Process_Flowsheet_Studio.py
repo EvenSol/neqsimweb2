@@ -34,12 +34,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from process_chat.flowsheet_editor import (  # noqa: E402
     apply_graph_draft,
     create_graph_draft,
+    create_graph_history,
+    graph_history_status,
     inline_unit_catalog,
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
     material_connection_rows,
+    record_graph_history,
+    redo_graph_history,
     remove_inline_unit,
     rename_inline_unit,
+    undo_graph_history,
     validate_catalog_unit,
 )
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
@@ -55,6 +60,7 @@ CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
 CASE_HISTORY_BASELINE_STATE_KEY = "flowsheet_case_history_baseline"
 CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
 GRAPH_DRAFT_STATE_KEY = "flowsheet_studio_graph_draft"
+GRAPH_HISTORY_STATE_KEY = "flowsheet_studio_graph_history"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
 LEGACY_CASE_SCHEMA_VERSION = 1
 SHARED_FLUID_CASE_SCHEMA_VERSION = 2
@@ -187,6 +193,7 @@ def _start_new_case() -> None:
     st.session_state["flowsheet_composition_revision"] = next_revision
     st.session_state["flowsheet_selected_object"] = "feed gas"
     st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
+    st.session_state.pop(GRAPH_HISTORY_STATE_KEY, None)
     _clear_studio_runtime(clear_history=True)
 
     for key in (
@@ -1157,6 +1164,7 @@ def _apply_imported_case(
         st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
     else:
         st.session_state[GRAPH_DRAFT_STATE_KEY] = graph_draft
+    st.session_state.pop(GRAPH_HISTORY_STATE_KEY, None)
     st.session_state["flowsheet_composition_source"] = composition_table
     st.session_state["flowsheet_composition_revision"] += 1
     _clear_studio_runtime(clear_history=False)
@@ -2332,6 +2340,69 @@ def _render_object_property_editor() -> str:
     return selected_object
 
 
+def _graph_history_for_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """Return current history, bootstrapping an imported graph when needed."""
+    existing_history = st.session_state.get(GRAPH_HISTORY_STATE_KEY)
+    if existing_history is not None:
+        graph_history_status(existing_history)
+        return existing_history
+
+    starter_units, starter_connections = _build_template_graph(
+        spec["process"]
+    )
+    history = create_graph_history(starter_units, starter_connections)
+    if (
+        spec["units"] != starter_units
+        or spec["connections"] != starter_connections
+    ):
+        history = record_graph_history(
+            history,
+            spec["units"],
+            spec["connections"],
+        )
+        st.session_state[GRAPH_HISTORY_STATE_KEY] = history
+    return history
+
+
+def _activate_graph_revision(
+    spec: dict[str, Any],
+    history: dict[str, Any],
+    draft: dict[str, Any],
+    notice: str,
+) -> None:
+    """Validate and activate one history revision without stale solve state."""
+    candidate_case = apply_graph_draft(spec, draft)
+    _validate_case_graph(candidate_case, candidate_case["process"])
+    starter_units, starter_connections = _build_template_graph(
+        candidate_case["process"]
+    )
+    if (
+        draft["units"] == starter_units
+        and draft["connections"] == starter_connections
+    ):
+        st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
+    else:
+        st.session_state[GRAPH_DRAFT_STATE_KEY] = draft
+    st.session_state[GRAPH_HISTORY_STATE_KEY] = history
+    _clear_studio_runtime(clear_history=False)
+    st.session_state[CASE_NOTICE_STATE_KEY] = notice
+
+
+def _record_graph_revision(
+    spec: dict[str, Any],
+    draft: dict[str, Any],
+    notice: str,
+) -> None:
+    """Record and activate one accepted graph edit."""
+    history = _graph_history_for_spec(spec)
+    history = record_graph_history(
+        history,
+        draft["units"],
+        draft["connections"],
+    )
+    _activate_graph_revision(spec, history, draft, notice)
+
+
 def _render_graph_palette(spec: dict[str, Any]) -> None:
     """Render safe lifecycle controls for the active unsolved graph."""
     catalog = inline_unit_catalog()
@@ -2352,6 +2423,56 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
     }
 
     with st.expander("Edit flowsheet graph", expanded=False):
+        graph_history = _graph_history_for_spec(spec)
+        history_status = graph_history_status(graph_history)
+        st.markdown("#### Edit history")
+        history_cols = st.columns(3)
+        history_cols[0].caption(
+            "Graph revision "
+            f"{history_status['position']} of {history_status['total']}"
+        )
+        undo_edit = history_cols[1].button(
+            "Undo graph edit",
+            disabled=not history_status["can_undo"],
+            use_container_width=True,
+            key="flowsheet_undo_graph_edit",
+        )
+        redo_edit = history_cols[2].button(
+            "Redo graph edit",
+            disabled=not history_status["can_redo"],
+            use_container_width=True,
+            key="flowsheet_redo_graph_edit",
+        )
+        if undo_edit or redo_edit:
+            try:
+                if undo_edit:
+                    graph_history, selected_draft = undo_graph_history(
+                        graph_history
+                    )
+                    navigation_notice = (
+                        "Undid the latest graph edit. "
+                        "Run NeqSim to solve this revision."
+                    )
+                else:
+                    graph_history, selected_draft = redo_graph_history(
+                        graph_history
+                    )
+                    navigation_notice = (
+                        "Redid the next graph edit. "
+                        "Run NeqSim to solve this revision."
+                    )
+                _activate_graph_revision(
+                    spec,
+                    graph_history,
+                    selected_draft,
+                    navigation_notice,
+                )
+            except ValueError as history_error:
+                st.error(f"Graph history navigation failed: {history_error}")
+            else:
+                st.rerun()
+
+        st.divider()
         st.markdown("#### Add equipment from palette")
         st.caption(
             "Insert a native NeqSim unit into one existing material path. "
@@ -2378,11 +2499,24 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             placeholder=f"New {selected_definition['label']}",
             key="flowsheet_palette_unit_name",
         )
+        graph_widget_revision = hashlib.sha256(
+            json.dumps(
+                {
+                    "units": spec["units"],
+                    "connections": spec["connections"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:12]
         connection_id = st.selectbox(
             "Material path",
             options=list(connection_labels),
             format_func=connection_labels.__getitem__,
-            key="flowsheet_palette_connection",
+            key=(
+                "flowsheet_palette_connection_"
+                f"{graph_widget_revision}"
+            ),
         )
         st.caption("Initial properties and engineering units")
         parameter_units = {
@@ -2461,11 +2595,13 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             except ValueError as edit_error:
                 st.error(f"Equipment insertion failed: {edit_error}")
             else:
-                st.session_state[GRAPH_DRAFT_STATE_KEY] = candidate_draft
-                _clear_studio_runtime(clear_history=False)
-                st.session_state[CASE_NOTICE_STATE_KEY] = (
-                    f"Added '{resolved_name}' ({new_unit_id}). "
-                    "Review its initial properties and run NeqSim."
+                _record_graph_revision(
+                    spec,
+                    candidate_draft,
+                    (
+                        f"Added '{resolved_name}' ({new_unit_id}). "
+                        "Review its initial properties and run NeqSim."
+                    ),
                 )
                 st.rerun()
 
@@ -2534,12 +2670,14 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 except ValueError as edit_error:
                     st.error(f"Equipment rename failed: {edit_error}")
                 else:
-                    st.session_state[GRAPH_DRAFT_STATE_KEY] = candidate_draft
-                    _clear_studio_runtime(clear_history=False)
-                    st.session_state[CASE_NOTICE_STATE_KEY] = (
-                        f"Renamed '{selected_unit['name']}' to "
-                        f"'{renamed_unit_name.strip()}'. "
-                        "The stable graph ID and connections were retained."
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Renamed '{selected_unit['name']}' to "
+                            f"'{renamed_unit_name.strip()}'. "
+                            "The stable graph ID and connections were retained."
+                        ),
                     )
                     st.rerun()
 
@@ -2562,25 +2700,17 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         candidate_case,
                         candidate_case["process"],
                     )
-                    starter_units, starter_connections = (
-                        _build_template_graph(candidate_case["process"])
-                    )
                 except ValueError as edit_error:
                     st.error(f"Equipment removal failed: {edit_error}")
                 else:
-                    if (
-                        units == starter_units
-                        and connections == starter_connections
-                    ):
-                        st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
-                    else:
-                        st.session_state[
-                            GRAPH_DRAFT_STATE_KEY
-                        ] = candidate_draft
-                    _clear_studio_runtime(clear_history=False)
-                    st.session_state[CASE_NOTICE_STATE_KEY] = (
-                        f"Removed '{selected_unit['name']}' and reconnected "
-                        "its material path. Run NeqSim to solve the updated graph."
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Removed '{selected_unit['name']}' and reconnected "
+                            "its material path. Run NeqSim to solve the "
+                            "updated graph."
+                        ),
                     )
                     st.rerun()
 
@@ -2604,11 +2734,20 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 key="flowsheet_restore_starter_graph",
             )
             if reset_draft:
-                st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
-                _clear_studio_runtime(clear_history=False)
-                st.session_state[CASE_NOTICE_STATE_KEY] = (
-                    "Restored the validated starter graph. "
-                    "Fluid and equipment-property inputs were retained."
+                starter_units, starter_connections = _build_template_graph(
+                    spec["process"]
+                )
+                starter_draft = create_graph_draft(
+                    starter_units,
+                    starter_connections,
+                )
+                _record_graph_revision(
+                    spec,
+                    starter_draft,
+                    (
+                        "Restored the validated starter graph. "
+                        "Fluid and equipment-property inputs were retained."
+                    ),
                 )
                 st.rerun()
 
