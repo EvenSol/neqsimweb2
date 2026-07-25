@@ -11,6 +11,7 @@ _BOUNDARY_NUMERIC_FIELDS = (
     "temperature_C",
     "pressure_bara",
     "molar_flow_mol_sec",
+    "enthalpy_flow_kW",
 )
 _COMPONENT_BALANCE_ABSOLUTE_TOL_MOL_SEC = 1.0e-9
 _VALIDATION_STATUSES = {"OK", "WARN", "VIOLATION", "UNKNOWN"}
