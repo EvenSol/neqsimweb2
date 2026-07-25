@@ -34,9 +34,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from process_chat.flowsheet_editor import (  # noqa: E402
     apply_graph_draft,
     build_graph_draft_dot,
+    connect_graph_ports,
     create_graph_draft,
     create_graph_history,
+    disconnect_graph_connection,
+    graph_connection_rows,
     graph_history_status,
+    graph_port_rows,
     inline_unit_catalog,
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
@@ -2412,6 +2416,24 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
     connection_labels = {
         row["id"]: row["label"] for row in connection_rows
     }
+    all_connection_rows = graph_connection_rows(
+        spec["inlets"],
+        spec["units"],
+        spec["connections"],
+    )
+    all_connection_labels = {
+        row["id"]: row["label"] for row in all_connection_rows
+    }
+    graph_widget_revision = hashlib.sha256(
+        json.dumps(
+            {
+                "units": spec["units"],
+                "connections": spec["connections"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:12]
     protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
     added_units = [
         unit
@@ -2498,6 +2520,157 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 st.rerun()
 
         st.divider()
+        st.markdown("#### Connect and disconnect ports")
+        st.caption(
+            "Create explicit material or energy paths between declared ports. "
+            "One connection is allowed per input or output port; splitters and "
+            "mixers expose distinct branch ports."
+        )
+        connection_type = st.selectbox(
+            "Connection type",
+            options=["material", "energy"],
+            format_func=str.title,
+            key="flowsheet_connection_type",
+        )
+        available_source_rows = graph_port_rows(
+            spec["inlets"],
+            spec["units"],
+            spec["connections"],
+            connection_type,
+            "source",
+            available_only=True,
+        )
+        available_target_rows = graph_port_rows(
+            spec["inlets"],
+            spec["units"],
+            spec["connections"],
+            connection_type,
+            "target",
+            available_only=True,
+        )
+        port_cols = st.columns(2)
+        source_index = port_cols[0].selectbox(
+            "Available source port",
+            options=list(range(len(available_source_rows))),
+            format_func=lambda index: available_source_rows[index]["label"],
+            key=f"flowsheet_source_port_{graph_widget_revision}",
+        )
+        target_index = port_cols[1].selectbox(
+            "Available target port",
+            options=list(range(len(available_target_rows))),
+            format_func=lambda index: available_target_rows[index]["label"],
+            key=f"flowsheet_target_port_{graph_widget_revision}",
+        )
+        connect_ports = st.button(
+            "Connect selected ports",
+            disabled=(
+                source_index is None
+                or target_index is None
+            ),
+            use_container_width=True,
+            key=f"flowsheet_connect_ports_{graph_widget_revision}",
+        )
+        if connect_ports:
+            try:
+                connections, new_connection_id = connect_graph_ports(
+                    spec["inlets"],
+                    spec["units"],
+                    spec["connections"],
+                    connection_type,
+                    available_source_rows[source_index]["endpoint"],
+                    available_target_rows[target_index]["endpoint"],
+                )
+                candidate_draft = create_graph_draft(
+                    spec["units"],
+                    connections,
+                )
+                candidate_case = apply_graph_draft(
+                    spec,
+                    candidate_draft,
+                )
+                _validate_case_graph(
+                    candidate_case,
+                    candidate_case["process"],
+                )
+            except ValueError as edit_error:
+                st.error(f"Port connection failed: {edit_error}")
+            else:
+                _record_graph_revision(
+                    spec,
+                    candidate_draft,
+                    (
+                        f"Created {connection_type} connection "
+                        f"'{new_connection_id}'. Run NeqSim to solve "
+                        "the updated graph."
+                    ),
+                )
+                st.rerun()
+
+        if all_connection_rows:
+            disconnect_id = st.selectbox(
+                "Existing connection",
+                options=list(all_connection_labels),
+                format_func=all_connection_labels.__getitem__,
+                key=(
+                    "flowsheet_disconnect_connection_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            confirm_disconnect = st.checkbox(
+                "Confirm disconnection",
+                key=(
+                    "flowsheet_confirm_disconnect_"
+                    f"{graph_widget_revision}"
+                ),
+                help=(
+                    "The selected path is removed from the unsolved draft. "
+                    "Undo restores it."
+                ),
+            )
+            disconnect_ports = st.button(
+                "Disconnect selected path",
+                disabled=not confirm_disconnect,
+                use_container_width=True,
+                key=(
+                    "flowsheet_disconnect_ports_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            if disconnect_ports:
+                try:
+                    connections = disconnect_graph_connection(
+                        spec["inlets"],
+                        spec["units"],
+                        spec["connections"],
+                        disconnect_id,
+                    )
+                    candidate_draft = create_graph_draft(
+                        spec["units"],
+                        connections,
+                    )
+                    candidate_case = apply_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(f"Port disconnection failed: {edit_error}")
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Disconnected '{disconnect_id}'. "
+                            "Use undo to restore the path or reconnect "
+                            "available ports before solving."
+                        ),
+                    )
+                    st.rerun()
+
+        st.divider()
         st.markdown("#### Add equipment from palette")
         st.caption(
             "Insert a native NeqSim unit into one existing material path. "
@@ -2524,16 +2697,6 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             placeholder=f"New {selected_definition['label']}",
             key="flowsheet_palette_unit_name",
         )
-        graph_widget_revision = hashlib.sha256(
-            json.dumps(
-                {
-                    "units": spec["units"],
-                    "connections": spec["connections"],
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()[:12]
         connection_id = st.selectbox(
             "Material path",
             options=list(connection_labels),
@@ -2828,6 +2991,7 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Composition is molar and is normalized before calculation.
 - Schema v3 separates shared fluid/inlet data and records an explicit process graph.
 - Unit nodes expose material ports; connections identify source and target ports.
+- Material and energy ports can be connected or disconnected in the draft editor.
 - Graph validation enforces declared ports, direction, and single port occupancy.
 - A deterministic execution plan orders acyclic multi-inlet graphs and dependencies.
 - Each inlet compiles to an independent ProcessBuilder fluid definition with explicit units.
