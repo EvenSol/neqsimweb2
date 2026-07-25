@@ -101,11 +101,45 @@ class _FallbackHeatExchanger:
 
 
 class _FallbackTerminalMixer(_FallbackEquipment):
-    def __init__(self, outlet):
+    def __init__(self, outlet, inlets=None):
         self._outlet = outlet
+        self._inlets = inlets or []
 
     def getOutletStream(self):
         return self._outlet
+
+    def getInletStreams(self):
+        return self._inlets
+
+
+class _FallbackHeater:
+    def __init__(self, inlet, outlet):
+        self._inlet = inlet
+        self._outlet = outlet
+
+    def getClass(self):
+        return _JavaClass("Heater")
+
+    def getInletStream(self):
+        return self._inlet
+
+    def getOutletStream(self):
+        return self._outlet
+
+
+class _FallbackSplitter:
+    def __init__(self, inlet, outlets):
+        self._inlet = inlet
+        self._outlets = outlets
+
+    def getClass(self):
+        return _JavaClass("Splitter")
+
+    def getInletStreams(self):
+        return [self._inlet]
+
+    def getOutletStreams(self):
+        return self._outlets
 
 
 class _FallbackTurboExpander:
@@ -628,6 +662,86 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(
             result.kpis["material_product_count"].value,
             2.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_discovers_parallel_terminal_branches(self):
+        feed = _FallbackStream("feed", 200.0)
+        branch_a = _FallbackStream("branch a", 100.0)
+        branch_b = _FallbackStream("branch b", 100.0)
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 100.0)
+        splitter = _FallbackSplitter(feed, [branch_a, branch_b])
+        heater_a = _FallbackHeater(branch_a, product_a)
+        heater_b = _FallbackHeater(branch_b, product_b)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, splitter, heater_a, heater_b]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                branch_a,
+                branch_b,
+                product_a,
+                product_b,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["product a", "product b"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_discovers_feed_after_upstream_equipment(self):
+        feed_a = _FallbackStream("feed a", 100.0)
+        heated_feed = _FallbackStream("heated feed", 100.0)
+        feed_b = _FallbackStream("feed b", 100.0)
+        product = _FallbackStream("product", 200.0)
+        heater = _FallbackHeater(feed_a, heated_feed)
+        mixer = _FallbackTerminalMixer(
+            product,
+            [heated_feed, feed_b],
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed_a, heater, feed_b, mixer]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed_a,
+                heated_feed,
+                feed_b,
+                product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["feed a", "feed b"],
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 

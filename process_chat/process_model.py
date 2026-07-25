@@ -1094,6 +1094,98 @@ class NeqSimProcessModel:
         return outlets
 
     @staticmethod
+    def _material_inlet_streams(unit: Any) -> List[Any]:
+        """Return every discoverable material inlet on a native unit."""
+        inlets: List[Any] = []
+
+        if hasattr(unit, "getInletStreams"):
+            try:
+                inlets.extend(
+                    stream
+                    for stream in unit.getInletStreams()
+                    if stream is not None
+                )
+            except Exception:
+                pass
+
+        for method_name in (
+            "getInStream",
+            "getFeedStream",
+            "getStream",
+            "getInputStream",
+        ):
+            if not hasattr(unit, method_name):
+                continue
+            for index in range(100):
+                try:
+                    stream = getattr(unit, method_name)(index)
+                except Exception:
+                    break
+                if stream is None:
+                    break
+                inlets.append(stream)
+
+        for method_name in (
+            "getInletStream",
+            "getInStream",
+            "getFeed",
+            "getFeedStream",
+            "getCompressorInletStream",
+            "getExpanderInletStream",
+        ):
+            if not hasattr(unit, method_name):
+                continue
+            try:
+                stream = getattr(unit, method_name)()
+            except Exception:
+                continue
+            if stream is not None:
+                inlets.append(stream)
+
+        return inlets
+
+    @staticmethod
+    def _connectivity_material_boundaries(
+        units: List[Any],
+    ) -> Tuple[List[Any], List[Tuple[Any, str]]]:
+        """Discover external sources and terminal sinks from native ports."""
+        consumed = _MaterialBoundaryIdentityTracker()
+        produced = _MaterialBoundaryIdentityTracker()
+        stream_units: List[Any] = []
+        equipment_outlets: List[Tuple[Any, str]] = []
+
+        for unit in units:
+            try:
+                unit_class = str(
+                    unit.getClass().getSimpleName()
+                ).lower()
+            except Exception:
+                continue
+            if unit_class in _MATERIAL_STREAM_UNIT_CLASSES:
+                stream_units.append(unit)
+                continue
+            for stream in NeqSimProcessModel._material_inlet_streams(unit):
+                consumed.add("feed", stream)
+            for stream, label in (
+                NeqSimProcessModel._fallback_material_outlet_streams(unit)
+            ):
+                produced.add("product", stream)
+                equipment_outlets.append((stream, label))
+
+        feeds = [
+            stream
+            for stream in stream_units
+            if consumed.contains("feed", stream)
+            and not produced.contains("product", stream)
+        ]
+        products = [
+            (stream, label)
+            for stream, label in equipment_outlets
+            if not consumed.contains("feed", stream)
+        ]
+        return feeds, products
+
+    @staticmethod
     def _component_balance_exclusion_names(
         units: List[Any],
     ) -> List[str]:
@@ -2183,11 +2275,21 @@ class NeqSimProcessModel:
             _utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
 
             if all_units:
-                feed_streams = [
-                    stream
+                connectivity_boundaries = [
+                    self._connectivity_material_boundaries(process_units)
                     for process_units in unit_groups
-                    for stream in self._leading_material_feed_streams(process_units)
                 ]
+                feed_streams = []
+                for process_units, (connected_feeds, _products) in zip(
+                    unit_groups,
+                    connectivity_boundaries,
+                ):
+                    feed_streams.extend(
+                        connected_feeds
+                        or self._leading_material_feed_streams(
+                            process_units
+                        )
+                    )
                 for stream in feed_streams:
                     try:
                         record = _record_material_boundary(
@@ -2225,7 +2327,10 @@ class NeqSimProcessModel:
                         product_details.append(f"{sname}=0 (no flow)")
                     return flow
 
-                for process_units in unit_groups:
+                for (
+                    process_units,
+                    (_connected_feeds, connected_products),
+                ) in zip(unit_groups, connectivity_boundaries):
                     terminal_stream_units = (
                         self._trailing_material_product_streams(
                             process_units
@@ -2239,8 +2344,16 @@ class NeqSimProcessModel:
                                 pass
                         continue
 
-                    # Discover every outlet on this child process's final
-                    # non-utility unit when no explicit product stream exists.
+                    if connected_products:
+                        for stream, label in connected_products:
+                            try:
+                                _add_outlet_flow(stream, label)
+                            except Exception:
+                                pass
+                        continue
+
+                    # Compatibility fallback for native units whose ports
+                    # cannot be inspected through the supported interfaces.
                     last = None
                     for unit in reversed(process_units):
                         try:
