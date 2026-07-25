@@ -1635,10 +1635,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             with self.subTest(unit=str(unit.getName())):
                 inlets = NeqSimProcessModel._material_inlet_streams(unit)
                 self.assertEqual(len(inlets), 1)
-                self.assertTrue(
-                    inlets[0] == stream
-                    or inlets[0].getFluid() == stream.getFluid()
-                )
+                self.assertTrue(inlets[0] == stream)
 
     def test_reference_tracker_rejects_invalid_roles(self):
         tracker = _MaterialBoundaryIdentityTracker()
