@@ -972,6 +972,28 @@ class NeqSimProcessModel:
         return products
 
     @staticmethod
+    def _reactive_unit_names(units: List[Any]) -> List[str]:
+        """Return units that make species-level boundary closure inapplicable."""
+        reactive_class_tokens = ("reactor", "electrolyzer", "flare")
+        reactive_units: List[str] = []
+        for unit in units:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if not any(
+                token in unit_class.lower()
+                for token in reactive_class_tokens
+            ):
+                continue
+            try:
+                unit_name = str(unit.getName()).strip()
+            except Exception:
+                unit_name = ""
+            reactive_units.append(unit_name or unit_class)
+        return reactive_units
+
+    @staticmethod
     def _material_boundary_component_flows(
         stream: Any,
         total_molar_flow: Optional[float],
@@ -1992,6 +2014,7 @@ class NeqSimProcessModel:
         # the last non-utility unit's ALL outlets.
         material_boundaries: List[Dict[str, Any]] = []
         component_balances: List[Dict[str, Any]] = []
+        component_balance_applicable: Optional[bool] = None
         try:
             material_boundary_identities = _MaterialBoundaryIdentityTracker()
 
@@ -2225,16 +2248,32 @@ class NeqSimProcessModel:
                     f"imbalance={balance_pct:.2f}%"
                 ))
 
-            from .solver_diagnostics import component_balance_rows
-
-            component_balances = component_balance_rows(
-                ModelRunResult(
-                    kpis={},
-                    constraints=[],
-                    raw={"material_boundaries": material_boundaries},
+            reactive_units = self._reactive_unit_names(all_units)
+            component_balance_applicable = not reactive_units
+            if reactive_units:
+                constraints.append(
+                    ConstraintStatus(
+                        "component_balance",
+                        "UNKNOWN",
+                        "Species-level boundary closure is not applicable "
+                        "to reactive flowsheets. Reactive units: "
+                        f"{', '.join(reactive_units)}.",
+                    )
                 )
-            )
-            if component_balances:
+            else:
+                from .solver_diagnostics import component_balance_rows
+
+                component_balances = component_balance_rows(
+                    ModelRunResult(
+                        kpis={},
+                        constraints=[],
+                        raw={
+                            "material_boundaries": material_boundaries,
+                            "component_balance_applicable": True,
+                        },
+                    )
+                )
+            if component_balance_applicable and component_balances:
                 worst_component = max(
                     component_balances,
                     key=lambda row: float(row["imbalance_pct"]),
@@ -2281,6 +2320,7 @@ class NeqSimProcessModel:
                 "stream_names": list(self._streams.keys()),
                 "material_boundaries": material_boundaries,
                 "component_balances": component_balances,
+                "component_balance_applicable": component_balance_applicable,
             }
         )
 

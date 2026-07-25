@@ -155,6 +155,12 @@ def aggregate_material_balance(result: Any) -> Dict[str, Optional[float]]:
 
 def component_balance_rows(result: Any) -> List[Dict[str, float | str]]:
     """Return component feed/product closure rows from solved boundaries."""
+    raw = getattr(result, "raw", {})
+    if (
+        isinstance(raw, dict)
+        and raw.get("component_balance_applicable") is False
+    ):
+        return []
     rows = material_boundary_rows(result)
     if not rows:
         return []

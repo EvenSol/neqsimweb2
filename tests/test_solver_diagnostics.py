@@ -75,6 +75,14 @@ class _FallbackEquipment:
         return _JavaClass("Mixer")
 
 
+class _FallbackReactiveEquipment:
+    def getClass(self):
+        return _JavaClass("GibbsReactor")
+
+    def getName(self):
+        return "equilibrium reactor"
+
+
 def _result(rows=None, **kpi_values):
     return SimpleNamespace(
         raw={"material_boundaries": rows or []},
@@ -233,6 +241,33 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "non-negative"):
             component_balance_rows(malformed)
+
+    def test_reactive_process_marks_species_closure_not_applicable(self):
+        feed = _FallbackStream("feed", 100.0)
+        product = _FallbackStream("product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, _FallbackReactiveEquipment(), product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {"feed": feed, "product": product}
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertFalse(result.raw["component_balance_applicable"])
+        self.assertEqual(result.raw["component_balances"], [])
+        self.assertEqual(component_balance_rows(result), [])
+        component_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "component_balance"
+        )
+        self.assertEqual(component_constraint.status, "UNKNOWN")
+        self.assertIn("reactive flowsheets", component_constraint.detail)
+        self.assertNotIn("component_balance_max_pct", result.kpis)
 
     def test_uses_solver_kpis_before_legacy_feed_fallback(self):
         result = _result(
