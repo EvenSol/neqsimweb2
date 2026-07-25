@@ -47,6 +47,7 @@ _EDITOR_SYMBOL_NAMES = (
     "graph_connection_rows",
     "graph_history_status",
     "graph_port_rows",
+    "inlet_condition_property_rows",
     "inline_unit_catalog",
     "inline_unit_catalog_rows",
     "inline_unit_property_rows",
@@ -3084,6 +3085,7 @@ with st.expander("Model scope and assumptions", expanded=False):
   dependencies.
 - Each inlet compiles to an independent ProcessBuilder fluid definition with
   explicit units.
+- Inlet temperature, absolute pressure, and mass flow use shared property metadata.
 - Inline equipment edits persist as an unsolved graph draft and are included in
   JSON cases.
 - Added equipment properties are metadata-driven, bounded, and stored with
@@ -3157,26 +3159,40 @@ with fluid_col:
         help="Mixing rule 2 is used for cubic/association equations of state.",
         key="flowsheet_eos_model",
     )
-    feed_temperature_c = st.number_input(
-        "Feed temperature [°C]",
-        min_value=-100.0,
-        max_value=200.0,
-        step=1.0,
-        key="flowsheet_feed_temperature_c",
+    feed_condition_rows = inlet_condition_property_rows(
+        {
+            "id": PRIMARY_INLET_ID,
+            "temperature_C": st.session_state[
+                "flowsheet_feed_temperature_c"
+            ],
+            "pressure_bara": st.session_state[
+                "flowsheet_feed_pressure_bara"
+            ],
+            "total_flow": st.session_state["flowsheet_feed_flow_kg_hr"],
+            "flow_unit": "kg/hr",
+        }
     )
-    feed_pressure_bara = st.number_input(
-        "Feed pressure [bara]",
-        min_value=1.0,
-        max_value=500.0,
-        step=1.0,
-        key="flowsheet_feed_pressure_bara",
-    )
-    feed_flow_kg_hr = st.number_input(
-        "Feed mass flow [kg/hr]",
-        min_value=1.0,
-        max_value=10_000_000.0,
-        step=1_000.0,
-        key="flowsheet_feed_flow_kg_hr",
+    feed_condition_state_keys = {
+        "temperature_C": "flowsheet_feed_temperature_c",
+        "pressure_bara": "flowsheet_feed_pressure_bara",
+        "total_flow": "flowsheet_feed_flow_kg_hr",
+    }
+    feed_condition_values: dict[str, float] = {}
+    for row in feed_condition_rows:
+        feed_condition_values[row["key"]] = st.number_input(
+            f"Feed {row['label'].casefold()} [{row['unit']}]",
+            min_value=float(row["minimum"]),
+            max_value=float(row["maximum"]),
+            step=float(row["step"]),
+            format=row["format"],
+            key=feed_condition_state_keys[row["key"]],
+        )
+    feed_temperature_c = feed_condition_values["temperature_C"]
+    feed_pressure_bara = feed_condition_values["pressure_bara"]
+    feed_flow_kg_hr = feed_condition_values["total_flow"]
+    st.caption(
+        "Inlet conditions are independent of the shared EOS, component "
+        "registry, and characterization."
     )
 
 with object_col:
