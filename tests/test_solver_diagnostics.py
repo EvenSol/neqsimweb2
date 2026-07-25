@@ -245,6 +245,36 @@ class _FallbackTank:
         return self._liquid_outlet
 
 
+class _FallbackElectrolyzer:
+    def __init__(self, hydrogen_outlet, oxygen_outlet):
+        self._hydrogen_outlet = hydrogen_outlet
+        self._oxygen_outlet = oxygen_outlet
+
+    def getClass(self):
+        return _JavaClass("Electrolyzer")
+
+    def getHydrogenOutStream(self):
+        return self._hydrogen_outlet
+
+    def getOxygenOutStream(self):
+        return self._oxygen_outlet
+
+
+class _FallbackCO2Electrolyzer:
+    def __init__(self, gas_outlet, liquid_outlet):
+        self._gas_outlet = gas_outlet
+        self._liquid_outlet = liquid_outlet
+
+    def getClass(self):
+        return _JavaClass("CO2Electrolyzer")
+
+    def getGasProductStream(self):
+        return self._gas_outlet
+
+    def getLiquidProductStream(self):
+        return self._liquid_outlet
+
+
 class _FallbackProcessModel:
     def __init__(self, processes):
         self._processes = processes
@@ -727,6 +757,71 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             ["compressor product", "expander product"],
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_fallback_enumerates_electrolyzer_products(self):
+        cases = (
+            (
+                _FallbackElectrolyzer,
+                ("hydrogen product", "oxygen product"),
+            ),
+            (
+                _FallbackCO2Electrolyzer,
+                ("gas product", "liquid product"),
+            ),
+        )
+        for equipment_type, product_names in cases:
+            with self.subTest(equipment=equipment_type.__name__):
+                feed = _FallbackStream("feed", 100.0)
+                first_product = _FallbackStream(
+                    product_names[0],
+                    40.0,
+                )
+                second_product = _FallbackStream(
+                    product_names[1],
+                    60.0,
+                )
+                equipment = equipment_type(
+                    first_product,
+                    second_product,
+                )
+                model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+                model._proc = _FallbackProcess([feed, equipment])
+                model._source_bytes = None
+                model._units = {}
+                model._streams = {
+                    stream.getName(): stream
+                    for stream in (
+                        feed,
+                        first_product,
+                        second_product,
+                    )
+                }
+                model._is_process_model = False
+                model._enforce_acyclic_mixer_energy = False
+
+                result = model._extract_results()
+
+                self.assertEqual(
+                    [
+                        row["stream_name"]
+                        for row in result.raw["material_boundaries"]
+                        if row["role"] == "product"
+                    ],
+                    list(product_names),
+                )
+                self.assertEqual(
+                    result.kpis["mass_balance_pct"].value,
+                    0.0,
+                )
+                component_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "component_balance"
+                )
+                self.assertEqual(
+                    component_constraint.status,
+                    "UNKNOWN",
+                )
 
     def test_fallback_discovers_products_for_each_child_process(self):
         feed_a = _FallbackStream("feed a", 100.0)
