@@ -31,10 +31,14 @@ _SPECIES_CHANGING_UNIT_CLASSES = {
     "h2sscavenger",
 }
 _SPECIES_CHANGING_UNIT_TOKENS = (
+    "burner",
+    "gasifier",
     "reactor",
     "electrolyzer",
     "flare",
     "combust",
+    "fuelcell",
+    "scavenger",
 )
 
 

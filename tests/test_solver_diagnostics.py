@@ -343,6 +343,9 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             "CombustionEngine",
             "FuelCell",
             "H2SScavenger",
+            "FurnaceBurner",
+            "SyngasBurnerZone",
+            "BiomassGasifier",
         ):
             with self.subTest(class_name=class_name):
                 self.assertEqual(
