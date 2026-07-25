@@ -7,6 +7,7 @@ import unittest
 
 from process_chat.flowsheet_editor import (
     apply_graph_draft,
+    build_graph_draft_dot,
     create_graph_draft,
     create_graph_history,
     create_inline_unit_spec,
@@ -648,6 +649,234 @@ class GraphHistoryTest(unittest.TestCase):
                     )
         with self.assertRaisesRegex(ValueError, "no earlier revision"):
             undo_graph_history(history)
+
+
+class GraphDraftDiagramTest(unittest.TestCase):
+    """Validate deterministic draft diagrams for arbitrary process graphs."""
+
+    def setUp(self):
+        self.inlets = [
+            {"id": "feed-a", "name": "Feed A"},
+            {"id": "feed-b", "name": "Feed B"},
+        ]
+        self.units = [
+            {
+                "id": "mixer",
+                "name": "Feed mixer",
+                "type": "mixer",
+                "ports": {
+                    "material_in": ["in_0", "in_1"],
+                    "material_out": ["out"],
+                },
+            },
+            {
+                "id": "heater",
+                "name": "Feed heater",
+                "type": "heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": ["duty"],
+                },
+            },
+            {
+                "id": "utility",
+                "name": "Heating utility",
+                "type": "utility",
+                "ports": {
+                    "energy_out": ["duty"],
+                },
+            },
+            {
+                "id": "separator",
+                "name": "Product separator",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["gas", "liquid"],
+                },
+            },
+        ]
+        self.connections = [
+            {
+                "id": "feed-a-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "mixer",
+                    "port": "in_0",
+                },
+            },
+            {
+                "id": "feed-b-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-b",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "mixer",
+                    "port": "in_1",
+                },
+            },
+            {
+                "id": "mixer-heater",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "mixer",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "utility-heater",
+                "type": "energy",
+                "source": {
+                    "kind": "unit",
+                    "id": "utility",
+                    "port": "duty",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "duty",
+                },
+            },
+            {
+                "id": "heater-separator",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "in",
+                },
+            },
+        ]
+
+    def test_layout_shows_multi_inlet_energy_and_product_boundaries(self):
+        dot = build_graph_draft_dot(
+            self.inlets,
+            self.units,
+            self.connections,
+        )
+
+        self.assertIn('rankdir="LR"', dot)
+        self.assertIn("Feed A\\nINLET", dot)
+        self.assertIn("Feed mixer\\nMIXER", dot)
+        self.assertIn("separator:gas\\nPRODUCT", dot)
+        self.assertIn("separator:liquid\\nPRODUCT", dot)
+        self.assertEqual(dot.count(" -> "), 7)
+        self.assertEqual(dot.count('style="dashed"'), 1)
+        self.assertIn("duty → duty", dot)
+
+    def test_layout_is_connection_order_independent_and_input_safe(self):
+        forward = build_graph_draft_dot(
+            self.inlets,
+            self.units,
+            self.connections,
+        )
+        reverse = build_graph_draft_dot(
+            self.inlets,
+            self.units,
+            list(reversed(self.connections)),
+        )
+
+        self.assertEqual(forward, reverse)
+        self.assertEqual(self.connections[0]["source"]["id"], "feed-a")
+
+    def test_layout_quotes_user_labels_and_uses_internal_node_ids(self):
+        inlets = [
+            {
+                "id": 'feed"; unsafe',
+                "name": 'Feed "quoted"',
+            }
+        ]
+        connection = {
+            **self.connections[0],
+            "source": {
+                "kind": "inlet",
+                "id": 'feed"; unsafe',
+                "port": "out",
+            },
+        }
+        dot = build_graph_draft_dot(inlets, self.units, [connection])
+
+        self.assertIn(r'Feed \"quoted\"\nINLET', dot)
+        self.assertNotIn('feed"; unsafe ->', dot)
+        self.assertIn("inlet_0 -> unit_0", dot)
+
+    def test_invalid_preview_graphs_fail_explicitly(self):
+        invalid_cases = (
+            (
+                "not-an-array",
+                self.units,
+                self.connections,
+                "inlets must be an array",
+            ),
+            (
+                [self.inlets[0], self.inlets[0]],
+                self.units,
+                self.connections,
+                "inlet id 'feed-a' is duplicated",
+            ),
+            (
+                [{"id": "mixer"}],
+                self.units,
+                self.connections,
+                "both an inlet and a unit",
+            ),
+            (
+                self.inlets,
+                self.units,
+                [
+                    {
+                        **self.connections[0],
+                        "source": {
+                            "kind": "inlet",
+                            "id": "missing",
+                            "port": "out",
+                        },
+                    }
+                ],
+                "unknown source inlet 'missing'",
+            ),
+            (
+                self.inlets,
+                self.units,
+                [
+                    {
+                        **self.connections[0],
+                        "target": {
+                            "kind": "unit",
+                            "id": "mixer",
+                            "port": "missing",
+                        },
+                    }
+                ],
+                "uses undeclared material_in port 'missing'",
+            ),
+        )
+        for inlets, units, connections, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    build_graph_draft_dot(inlets, units, connections)
 
 
 if __name__ == "__main__":
