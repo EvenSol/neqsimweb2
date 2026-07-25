@@ -12,9 +12,11 @@ from process_chat.process_model import (
     _MaterialBoundaryIdentityTracker,
 )
 from process_chat.solver_diagnostics import (
+    aggregate_energy_balance,
     aggregate_material_balance,
     aggregate_validation_status,
     component_balance_rows,
+    energy_transfer_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
 )
@@ -459,6 +461,124 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
 
         self.assertEqual(record["mass_flow_kg_hr"], 0.0)
         self.assertEqual(record["enthalpy_flow_kW"], 0.0)
+
+    def test_aggregates_signed_system_energy_closure(self):
+        rows = [
+            {
+                "role": "feed",
+                "stream_name": "feed",
+                "mass_flow_kg_hr": 100_000.0,
+                "enthalpy_flow_kW": 514.109802,
+            },
+            {
+                "role": "product",
+                "stream_name": "product",
+                "mass_flow_kg_hr": 100_000.0,
+                "enthalpy_flow_kW": -90.016530,
+            },
+        ]
+        result = _result(rows)
+        result.raw.update(
+            {
+                "energy_balance_applicable": True,
+                "energy_transfers": [
+                    {
+                        "unit_name": "compressor",
+                        "unit_type": "Compressor",
+                        "transfer_kind": "shaft_work",
+                        "energy_transfer_kW": 3490.419834,
+                    },
+                    {
+                        "unit_name": "cooler",
+                        "unit_type": "Cooler",
+                        "transfer_kind": "heat",
+                        "energy_transfer_kW": -4094.546166,
+                    },
+                ],
+            }
+        )
+
+        transfers = energy_transfer_rows(result)
+        summary = aggregate_energy_balance(result)
+
+        self.assertEqual(len(transfers), 2)
+        self.assertAlmostEqual(
+            summary["external_energy_transfer_kW"],
+            -604.126332,
+            places=6,
+        )
+        self.assertAlmostEqual(summary["residual_kW"], 0.0, places=6)
+        self.assertLess(summary["imbalance_pct"], 1.0e-6)
+
+    def test_energy_balance_rejects_missing_positive_flow_enthalpy(self):
+        result = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 100.0,
+                    "enthalpy_flow_kW": None,
+                },
+                {
+                    "role": "product",
+                    "stream_name": "product",
+                    "mass_flow_kg_hr": 100.0,
+                    "enthalpy_flow_kW": 10.0,
+                },
+            ]
+        )
+        result.raw["energy_balance_applicable"] = True
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "incomplete for positive-flow row",
+        ):
+            aggregate_energy_balance(result)
+
+    def test_energy_balance_preserves_explicit_inapplicability(self):
+        result = _result([])
+        result.raw.update(
+            {
+                "energy_balance_applicable": False,
+                "energy_transfers": [],
+            }
+        )
+
+        summary = aggregate_energy_balance(result)
+
+        self.assertIs(summary["applicable"], False)
+        self.assertIsNone(summary["imbalance_pct"])
+
+    def test_energy_transfer_extraction_avoids_pump_duty_double_count(self):
+        class _FallbackPump:
+            def getClass(self):
+                return _JavaClass("Pump")
+
+            def getName(self):
+                return "feed pump"
+
+            def getPower(self):
+                return 1_500_000.0
+
+            def getDuty(self):
+                return 1_500_000.0
+
+        transfers, excluded = NeqSimProcessModel._system_energy_transfers(
+            [_FallbackPump()]
+        )
+
+        self.assertEqual(excluded, [])
+        self.assertEqual(
+            transfers,
+            [
+                {
+                    "unit_name": "feed pump",
+                    "unit_type": "Pump",
+                    "transfer_kind": "shaft_work",
+                    "energy_transfer_kW": 1500.0,
+                }
+            ],
+        )
 
     def test_aggregates_component_feed_and_product_closure(self):
         rows = [
