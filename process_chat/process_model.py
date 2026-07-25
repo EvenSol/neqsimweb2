@@ -48,8 +48,15 @@ class _MaterialBoundaryIdentityTracker:
         except Exception:
             pass
 
+    def _validate_role(self, role: str) -> None:
+        if role not in self._ROLES:
+            raise ValueError(
+                "Material boundary identity role must be feed or product."
+            )
+
     def contains(self, role: str, stream: Any) -> bool:
         """Return whether this exact stream reference was recorded for a role."""
+        self._validate_role(role)
         java_map = self._java_maps.get(role)
         if java_map is not None:
             try:
@@ -60,6 +67,7 @@ class _MaterialBoundaryIdentityTracker:
 
     def add(self, role: str, stream: Any) -> None:
         """Remember one exact native or Python stream reference for a role."""
+        self._validate_role(role)
         java_map = self._java_maps.get(role)
         if java_map is not None:
             try:
