@@ -77,6 +77,8 @@ def import_local_symbols(
         if missing:
             _assert_local_module(module, Path(project_root))
             importlib.invalidate_caches()
+            for name in names:
+                module.__dict__.pop(name, None)
             module = importlib.reload(module)
             missing = [name for name in names if not hasattr(module, name)]
 
