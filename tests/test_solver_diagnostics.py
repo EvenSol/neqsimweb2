@@ -83,6 +83,23 @@ class _FallbackEquipment:
         return _JavaClass("Mixer")
 
 
+class _FallbackHeatExchanger:
+    def __init__(self, outlets):
+        self._outlets = outlets
+
+    def getClass(self):
+        return _JavaClass("HeatExchanger")
+
+    def getName(self):
+        return "terminal exchanger"
+
+    def getOutletStreams(self):
+        return self._outlets
+
+    def getOutletStream(self):
+        return self._outlets[0]
+
+
 class _FallbackReactiveEquipment:
     def __init__(self, class_name="GibbsReactor"):
         self._class_name = class_name
@@ -456,6 +473,45 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                     ),
                     [product],
                 )
+
+    def test_fallback_enumerates_all_heat_exchanger_products(self):
+        feed_a = _FallbackStream("feed a", 100.0)
+        feed_b = _FallbackStream("feed b", 100.0)
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 100.0)
+        exchanger = _FallbackHeatExchanger([product_a, product_b])
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess([feed_a, feed_b, exchanger])
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed a": feed_a,
+            "feed b": feed_b,
+            "product a": product_a,
+            "product b": product_b,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [
+                ("feed", "feed a"),
+                ("feed", "feed b"),
+                ("product", "product a"),
+                ("product", "product b"),
+            ],
+        )
+        self.assertEqual(
+            result.kpis["material_product_count"].value,
+            2.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
     def test_missing_current_component_data_returns_unknown(self):
         feed = _FallbackStream("feed", 100.0)

@@ -1046,6 +1046,52 @@ class NeqSimProcessModel:
         return products
 
     @staticmethod
+    def _fallback_material_outlet_streams(
+        unit: Any,
+    ) -> List[Tuple[Any, str]]:
+        """Return every discoverable material outlet on a terminal unit."""
+        outlets: List[Tuple[Any, str]] = []
+
+        if hasattr(unit, "getOutletStreams"):
+            try:
+                for index, stream in enumerate(unit.getOutletStreams()):
+                    if stream is not None:
+                        outlets.append((stream, f"out_{index}"))
+            except Exception:
+                pass
+
+        for method_name in ("getOutStream", "getSplitStream"):
+            if not hasattr(unit, method_name):
+                continue
+            for index in range(100):
+                try:
+                    stream = getattr(unit, method_name)(index)
+                except Exception:
+                    break
+                if stream is None:
+                    break
+                outlets.append((stream, f"out_{index}"))
+
+        for method_name, label in (
+            ("getOutletStream", "gas_out"),
+            ("getOutStream", "gas_out"),
+            ("getGasOutStream", "gas_out"),
+            ("getOilOutStream", "oil"),
+            ("getLiquidOutStream", "liquid"),
+            ("getWaterOutStream", "water"),
+        ):
+            if not hasattr(unit, method_name):
+                continue
+            try:
+                stream = getattr(unit, method_name)()
+            except Exception:
+                continue
+            if stream is not None:
+                outlets.append((stream, label))
+
+        return outlets
+
+    @staticmethod
     def _component_balance_exclusion_names(
         units: List[Any],
     ) -> List[str]:
@@ -2213,31 +2259,11 @@ class NeqSimProcessModel:
                                 product_details.append(f"{sname}={flow:.0f}")
                             return flow
 
-                        # Gas outlet
-                        for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
-                            if hasattr(last, m):
-                                try:
-                                    s = getattr(last, m)()
-                                    _add_outlet_flow(s, "gas_out")
-                                    break
-                                except Exception:
-                                    pass
-                        # Oil outlet (three-phase separators)
-                        if hasattr(last, "getOilOutStream"):
+                        for stream, label in (
+                            self._fallback_material_outlet_streams(last)
+                        ):
                             try:
-                                _add_outlet_flow(last.getOilOutStream(), "oil")
-                            except Exception:
-                                pass
-                        # Liquid outlet
-                        if hasattr(last, "getLiquidOutStream"):
-                            try:
-                                _add_outlet_flow(last.getLiquidOutStream(), "liquid")
-                            except Exception:
-                                pass
-                        # Water outlet (three-phase separators)
-                        if hasattr(last, "getWaterOutStream"):
-                            try:
-                                _add_outlet_flow(last.getWaterOutStream(), "water")
+                                _add_outlet_flow(stream, label)
                             except Exception:
                                 pass
 
