@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import unittest
 
@@ -16,6 +17,7 @@ from process_chat.flowsheet_editor import (
     graph_connection_rows,
     graph_history_status,
     graph_port_rows,
+    inlet_condition_property_rows,
     inline_unit_catalog,
     inline_unit_catalog_rows,
     inline_unit_property_rows,
@@ -27,6 +29,7 @@ from process_chat.flowsheet_editor import (
     remove_inline_unit,
     rename_inline_unit,
     undo_graph_history,
+    update_inlet_conditions,
     update_inline_unit_properties,
     update_process_unit_properties,
     validate_catalog_unit,
@@ -169,6 +172,144 @@ class UnitCatalogTest(unittest.TestCase):
         malformed["ports"]["material_out"] = ["wrong"]
         with self.assertRaisesRegex(ValueError, "ports do not match"):
             validate_catalog_unit(malformed)
+
+
+class InletConditionMetadataTest(unittest.TestCase):
+    """Validate explicit-unit metadata for reusable material inlets."""
+
+    def test_inlet_conditions_have_deterministic_units_and_bounds(self):
+        rows = inlet_condition_property_rows(
+            {
+                "id": "feed-a",
+                "temperature_C": 25.0,
+                "pressure_bara": 50.0,
+                "total_flow": 100_000.0,
+                "flow_unit": "kg/hr",
+            }
+        )
+        self.assertEqual(
+            [row["key"] for row in rows],
+            ["temperature_C", "pressure_bara", "total_flow"],
+        )
+        self.assertEqual(
+            [row["unit"] for row in rows],
+            ["°C", "bara (absolute)", "kg/hr"],
+        )
+        self.assertEqual(rows[0]["minimum"], -100.0)
+        self.assertEqual(rows[1]["minimum"], 1.0)
+        self.assertEqual(rows[2]["maximum"], 10_000_000.0)
+
+    def test_invalid_inlet_condition_metadata_fails_explicitly(self):
+        valid = {
+            "id": "feed-a",
+            "temperature_C": 25.0,
+            "pressure_bara": 50.0,
+            "total_flow": 100_000.0,
+            "flow_unit": "kg/hr",
+        }
+        invalid_cases = (
+            (None, "must be an object"),
+            ({**valid, "id": " "}, "non-empty id"),
+            ({**valid, "flow_unit": "kg/s"}, "mass flow in kg/hr"),
+            (
+                {key: value for key, value in valid.items() if key != "pressure_bara"},
+                "missing condition 'pressure_bara'",
+            ),
+            ({**valid, "temperature_C": True}, "must be numeric"),
+            ({**valid, "pressure_bara": float("inf")}, "must be finite"),
+            ({**valid, "total_flow": 0.0}, "must be between"),
+        )
+        for inlet, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    inlet_condition_property_rows(inlet)
+
+
+class InletConditionUpdateTest(unittest.TestCase):
+    """Validate independent, immutable updates for multiple graph inlets."""
+
+    def setUp(self):
+        self.inlets = [
+            {
+                "id": "feed-a",
+                "name": "feed A",
+                "fluid_package_id": "base-fluid",
+                "composition": {"methane": 0.90, "ethane": 0.10},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 25.0,
+                "pressure_bara": 50.0,
+                "total_flow": 60_000.0,
+                "flow_unit": "kg/hr",
+            },
+            {
+                "id": "feed-b",
+                "name": "feed B",
+                "fluid_package_id": "base-fluid",
+                "composition": {"methane": 0.80, "ethane": 0.20},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 35.0,
+                "pressure_bara": 45.0,
+                "total_flow": 40_000.0,
+                "flow_unit": "kg/hr",
+            },
+        ]
+
+    def test_updates_one_inlet_without_changing_characterization_or_peer(self):
+        updated = update_inlet_conditions(
+            self.inlets,
+            "feed-b",
+            {
+                "temperature_C": 30.0,
+                "pressure_bara": 47.5,
+                "total_flow": 42_000.0,
+            },
+        )
+
+        self.assertEqual(updated[0], self.inlets[0])
+        self.assertEqual(updated[1]["temperature_C"], 30.0)
+        self.assertEqual(updated[1]["pressure_bara"], 47.5)
+        self.assertEqual(updated[1]["total_flow"], 42_000.0)
+        self.assertEqual(
+            updated[1]["fluid_package_id"],
+            self.inlets[1]["fluid_package_id"],
+        )
+        self.assertEqual(
+            updated[1]["composition"],
+            self.inlets[1]["composition"],
+        )
+        self.assertEqual(self.inlets[1]["temperature_C"], 35.0)
+
+    def test_normalizes_numeric_values_and_supports_partial_updates(self):
+        updated = update_inlet_conditions(
+            self.inlets,
+            "feed-a",
+            {"pressure_bara": "52.5"},
+        )
+        self.assertEqual(updated[0]["pressure_bara"], 52.5)
+        self.assertIsInstance(updated[0]["pressure_bara"], float)
+        self.assertEqual(updated[0]["temperature_C"], 25.0)
+        self.assertEqual(updated[0]["total_flow"], 60_000.0)
+
+    def test_invalid_updates_fail_without_mutating_inputs(self):
+        invalid_cases = (
+            ("missing", {}, "Unknown material inlet"),
+            ("feed-a", [], "updates must be an object"),
+            ("feed-a", {"composition": {}}, "unsupported condition"),
+            ("feed-a", {"pressure_bara": 0.0}, "must be between"),
+        )
+        for inlet_id, updates, message in invalid_cases:
+            with self.subTest(inlet_id=inlet_id, message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    update_inlet_conditions(
+                        self.inlets,
+                        inlet_id,
+                        updates,
+                    )
+
+        duplicated = [self.inlets[0], copy.deepcopy(self.inlets[0])]
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            update_inlet_conditions(duplicated, "feed-a", {})
+        self.assertEqual(self.inlets[0]["pressure_bara"], 50.0)
 
 
 class InlineInsertionTest(unittest.TestCase):
