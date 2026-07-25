@@ -1198,6 +1198,13 @@ class NeqSimProcessModel:
                 ).lower()
             except Exception:
                 field_class = ""
+            if field_name == "inletStreamMixer":
+                inlets.extend(
+                    NeqSimProcessModel._material_inlet_streams(
+                        field_value
+                    )
+                )
+                continue
             if (
                 field_class in _MATERIAL_STREAM_UNIT_CLASSES
                 or hasattr(field_value, "getFluid")
@@ -1208,7 +1215,14 @@ class NeqSimProcessModel:
                 NeqSimProcessModel._material_inlet_streams(field_value)
             )
 
-        return inlets
+        unique_inlets = []
+        inlet_identities = _MaterialBoundaryIdentityTracker()
+        for stream in inlets:
+            if inlet_identities.contains("feed", stream):
+                continue
+            inlet_identities.add("feed", stream)
+            unique_inlets.append(stream)
+        return unique_inlets
 
     @staticmethod
     def _material_fluid_reference(stream: Any) -> Optional[Any]:
