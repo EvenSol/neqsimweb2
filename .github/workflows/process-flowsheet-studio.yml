@@ -7,10 +7,12 @@ on:
       - "process_chat/process_builder.py"
       - "process_chat/flowsheet_editor.py"
       - "process_chat/runtime_imports.py"
+      - "process_chat/solver_diagnostics.py"
       - "process_chat/process_model.py"
       - "tests/test_flowsheet_editor.py"
       - "tests/test_process_graph_conservation.py"
       - "tests/test_runtime_imports.py"
+      - "tests/test_solver_diagnostics.py"
       - "tests/test_studio_warm_deployment.py"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
@@ -41,10 +43,12 @@ jobs:
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
             process_chat/runtime_imports.py \
+            process_chat/solver_diagnostics.py \
             process_chat/process_model.py \
             tests/test_flowsheet_editor.py \
             tests/test_process_graph_conservation.py \
             tests/test_runtime_imports.py \
+            tests/test_solver_diagnostics.py \
             tests/test_studio_warm_deployment.py
       - name: Run deployment-safe import regression tests
         run: python tests/test_runtime_imports.py -v
@@ -52,5 +56,7 @@ jobs:
         run: python tests/test_studio_warm_deployment.py -v
       - name: Run draft graph editor regression tests
         run: python tests/test_flowsheet_editor.py -v
+      - name: Run solver diagnostic adapter tests
+        run: python tests/test_solver_diagnostics.py -v
       - name: Run native multi-inlet conservation benchmark
         run: python tests/test_process_graph_conservation.py -v

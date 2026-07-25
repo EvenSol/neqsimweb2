@@ -209,6 +209,45 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     result.kpis["mass_balance_pct"].value,
                     1.0e-6,
                 )
+                boundary_rows = result.raw["material_boundaries"]
+                self.assertEqual(
+                    [
+                        (row["role"], row["stream_name"])
+                        for row in boundary_rows
+                    ],
+                    [
+                        ("feed", "dry gas"),
+                        ("feed", "rich gas"),
+                        ("product", "feed mixer [out] product"),
+                    ],
+                )
+                self.assertAlmostEqual(
+                    sum(
+                        row["mass_flow_kg_hr"]
+                        for row in boundary_rows
+                        if row["role"] == "feed"
+                    ),
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertAlmostEqual(
+                    sum(
+                        row["mass_flow_kg_hr"]
+                        for row in boundary_rows
+                        if row["role"] == "product"
+                    ),
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                for row in boundary_rows:
+                    self.assertTrue(
+                        math.isfinite(row["mass_flow_kg_hr"])
+                    )
+                    self.assertTrue(math.isfinite(row["temperature_C"]))
+                    self.assertTrue(math.isfinite(row["pressure_bara"]))
+                    self.assertTrue(
+                        math.isfinite(row["molar_flow_mol_sec"])
+                    )
                 mass_constraint = next(
                     constraint
                     for constraint in result.constraints

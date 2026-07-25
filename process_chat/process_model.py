@@ -910,6 +910,48 @@ class NeqSimProcessModel:
                 products.append(unit)
         return products
 
+    @staticmethod
+    def _material_boundary_record(
+        stream: Any,
+        role: str,
+        fallback_name: str,
+    ) -> Dict[str, Any]:
+        """Return one explicit-unit record for a solved material boundary."""
+        if role not in {"feed", "product"}:
+            raise ValueError("Material boundary role must be feed or product.")
+        try:
+            name = str(stream.getName()) if stream.getName() else fallback_name
+            mass_flow = float(stream.getFlowRate("kg/hr"))
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read solved {role} boundary '{fallback_name}'."
+            ) from exc
+        if not math.isfinite(mass_flow):
+            raise ValueError(
+                f"Solved {role} boundary '{name}' has a non-finite mass flow."
+            )
+
+        record: Dict[str, Any] = {
+            "role": role,
+            "stream_name": name,
+            "mass_flow_kg_hr": mass_flow,
+            "temperature_C": None,
+            "pressure_bara": None,
+            "molar_flow_mol_sec": None,
+        }
+        for key, getter_name, unit in (
+            ("temperature_C", "getTemperature", "C"),
+            ("pressure_bara", "getPressure", "bara"),
+            ("molar_flow_mol_sec", "getFlowRate", "mol/sec"),
+        ):
+            try:
+                value = float(getattr(stream, getter_name)(unit))
+            except Exception:
+                continue
+            if math.isfinite(value):
+                record[key] = value
+        return record
+
     def get_diagram_dot(
         self,
         style: str = "HYSYS",
@@ -1837,6 +1879,7 @@ class NeqSimProcessModel:
         # NeqSim convention for marking product streams like "export gas",
         # "export oil", "fuel gas").  If none are found, we fall back to
         # the last non-utility unit's ALL outlets.
+        material_boundaries: List[Dict[str, Any]] = []
         try:
             unit_groups = self._process_unit_groups()
             all_units = [
@@ -1859,14 +1902,16 @@ class NeqSimProcessModel:
                 ]
                 for stream in feed_streams:
                     try:
-                        flow = float(stream.getFlowRate("kg/hr"))
-                        name = (
-                            str(stream.getName())
-                            if stream.getName()
-                            else "feed"
+                        record = self._material_boundary_record(
+                            stream,
+                            "feed",
+                            "feed",
                         )
+                        flow = record["mass_flow_kg_hr"]
+                        name = record["stream_name"]
                         feed_flow += flow
                         feed_details.append(f"{name}={flow:.0f}")
+                        material_boundaries.append(record)
                     except Exception:
                         pass
                 if feed_streams:
@@ -1893,8 +1938,14 @@ class NeqSimProcessModel:
                     # Explicit terminal streams — use them as products
                     for s in terminal_stream_units:
                         try:
-                            flow = float(s.getFlowRate("kg/hr"))
-                            sname = str(s.getName()) if s.getName() else "product"
+                            record = self._material_boundary_record(
+                                s,
+                                "product",
+                                "product",
+                            )
+                            flow = record["mass_flow_kg_hr"]
+                            sname = record["stream_name"]
+                            material_boundaries.append(record)
                             if abs(flow) > 0.01:
                                 product_flow += flow
                                 product_details.append(f"{sname}={flow:.0f}")
@@ -1927,7 +1978,7 @@ class NeqSimProcessModel:
                         seen_outlet_ids: set = set()
 
                         def _add_outlet_flow(stream_obj, label: str) -> float:
-                            """Add stream flow if not already counted (dedup by hashCode)."""
+                            """Add a distinct fallback product stream flow."""
                             nonlocal product_flow
                             try:
                                 sid = int(stream_obj.hashCode())
@@ -1936,9 +1987,15 @@ class NeqSimProcessModel:
                             if sid in seen_outlet_ids:
                                 return 0.0
                             seen_outlet_ids.add(sid)
-                            flow = float(stream_obj.getFlowRate("kg/hr"))
+                            record = self._material_boundary_record(
+                                stream_obj,
+                                "product",
+                                label,
+                            )
+                            flow = record["mass_flow_kg_hr"]
+                            material_boundaries.append(record)
                             if abs(flow) > 0.01:
-                                sname = str(stream_obj.getName()) if stream_obj.getName() else label
+                                sname = record["stream_name"]
                                 product_flow += flow
                                 product_details.append(f"{sname}={flow:.0f}")
                             return flow
@@ -1973,16 +2030,52 @@ class NeqSimProcessModel:
 
             # Fallback: match by stream name keywords
             if feed_flow == 0.0:
+                seen_fallback_ids: set = set()
                 for name, s in self._streams.items():
                     try:
-                        flow = float(s.getFlowRate("kg/hr"))
+                        sid = int(s.hashCode())
                     except Exception:
+                        sid = id(s)
+                    if sid in seen_fallback_ids:
                         continue
+                    seen_fallback_ids.add(sid)
                     lower = name.lower()
-                    if any(kw in lower for kw in ("feed", "inlet", "well", "input")):
+                    if any(
+                        keyword in lower
+                        for keyword in ("feed", "inlet", "well", "input")
+                    ):
+                        try:
+                            record = self._material_boundary_record(
+                                s,
+                                "feed",
+                                name,
+                            )
+                        except ValueError:
+                            continue
+                        flow = record["mass_flow_kg_hr"]
                         feed_flow += flow
-                    elif any(kw in lower for kw in ("export", "product", "outlet", "output", "fuel")):
+                        material_boundaries.append(record)
+                    elif any(
+                        keyword in lower
+                        for keyword in (
+                            "export",
+                            "product",
+                            "outlet",
+                            "output",
+                            "fuel",
+                        )
+                    ):
+                        try:
+                            record = self._material_boundary_record(
+                                s,
+                                "product",
+                                name,
+                            )
+                        except ValueError:
+                            continue
+                        flow = record["mass_flow_kg_hr"]
                         product_flow += flow
+                        material_boundaries.append(record)
 
             if feed_flow > 0:
                 balance_pct = abs(feed_flow - product_flow) / feed_flow * 100
@@ -2010,6 +2103,7 @@ class NeqSimProcessModel:
             raw={
                 "unit_names": list(self._units.keys()),
                 "stream_names": list(self._streams.keys()),
+                "material_boundaries": material_boundaries,
             }
         )
 
