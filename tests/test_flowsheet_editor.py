@@ -791,6 +791,61 @@ class GraphDraftLifecycleTest(unittest.TestCase):
         self.assertEqual(self.units[0]["name"], "Product Cooler")
         self.assertEqual(case_spec["units"], [])
 
+    def test_inlet_aware_draft_applies_without_mutating_case_or_draft(self):
+        original_inlets = [
+            {
+                "id": "feed-a",
+                "name": "Feed A",
+                "temperature_C": 20.0,
+            }
+        ]
+        edited_inlets = [
+            {
+                "id": "feed-a",
+                "name": "Feed A",
+                "temperature_C": 35.0,
+            },
+            {
+                "id": "feed-b",
+                "name": "Feed B",
+                "temperature_C": 10.0,
+            },
+        ]
+        draft = create_graph_draft(
+            self.units,
+            self.connections,
+            edited_inlets,
+        )
+        case_spec = {
+            "schema_version": 3,
+            "inlets": original_inlets,
+            "units": [],
+            "connections": [],
+        }
+
+        updated = apply_graph_draft(case_spec, draft)
+
+        self.assertEqual(updated["inlets"], edited_inlets)
+        self.assertEqual(case_spec["inlets"], original_inlets)
+        updated["inlets"][0]["temperature_C"] = 50.0
+        draft["inlets"][1]["name"] = "changed"
+        self.assertEqual(edited_inlets[0]["temperature_C"], 35.0)
+        self.assertEqual(edited_inlets[1]["name"], "Feed B")
+
+    def test_legacy_draft_preserves_existing_case_inlets(self):
+        legacy_draft = create_graph_draft(self.units, self.connections)
+        case_spec = {
+            "schema_version": 3,
+            "inlets": [{"id": "feed-a", "name": "Feed A"}],
+            "units": [],
+            "connections": [],
+        }
+
+        updated = apply_graph_draft(case_spec, legacy_draft)
+
+        self.assertEqual(updated["inlets"], case_spec["inlets"])
+        self.assertNotIn("inlets", legacy_draft)
+
     def test_material_connection_rows_ignore_energy_links(self):
         rows = material_connection_rows(
             [
@@ -838,6 +893,18 @@ class GraphDraftLifecycleTest(unittest.TestCase):
                     "connections": self.connections,
                 },
                 "unit id 'product-cooler' is duplicated",
+            ),
+            (
+                {
+                    "schema_version": 1,
+                    "inlets": [
+                        {"id": "feed"},
+                        {"id": "feed"},
+                    ],
+                    "units": self.units,
+                    "connections": self.connections,
+                },
+                "inlet id 'feed' is duplicated",
             ),
             (
                 {
@@ -1043,6 +1110,43 @@ class GraphHistoryTest(unittest.TestCase):
                     )
         with self.assertRaisesRegex(ValueError, "no earlier revision"):
             undo_graph_history(history)
+
+    def test_history_undo_and_redo_include_inlet_conditions(self):
+        inlets = [
+            {
+                "id": "feed-a",
+                "name": "Feed A",
+                "fluid_package_id": "shared",
+                "composition": {"methane": 1.0},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 20.0,
+                "pressure_bara": 50.0,
+                "total_flow": 60_000.0,
+                "flow_unit": "kg/hr",
+            }
+        ]
+        history = create_graph_history(
+            self.units,
+            self.connections,
+            inlets,
+        )
+        updated_inlets = update_inlet_conditions(
+            inlets,
+            "feed-a",
+            {"temperature_C": 30.0},
+        )
+        history = record_graph_history(
+            history,
+            self.units,
+            self.connections,
+            updated_inlets,
+        )
+
+        undone, original = undo_graph_history(history)
+        self.assertEqual(original["inlets"][0]["temperature_C"], 20.0)
+        redone, edited = redo_graph_history(undone)
+        self.assertEqual(edited["inlets"][0]["temperature_C"], 30.0)
+        self.assertEqual(redone, history)
 
 
 class GraphPortConnectionTest(unittest.TestCase):
