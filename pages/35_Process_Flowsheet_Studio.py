@@ -441,6 +441,7 @@ def _validate_fluid_package_integrity(
         registry_by_package[package_id] = registry_names
 
     inlet_ids: set[str] = set()
+    inlet_names: set[str] = set()
     for inlet_index, inlet in enumerate(inlets):
         if not isinstance(inlet, dict):
             raise ValueError(f"inlets[{inlet_index}] must be an object.")
@@ -450,6 +451,13 @@ def _validate_fluid_package_integrity(
         if inlet_id in inlet_ids:
             raise ValueError("Inlet ids must be unique.")
         inlet_ids.add(inlet_id)
+
+        inlet_name = str(inlet.get("name", "")).strip()
+        if not inlet_name:
+            raise ValueError(f"Inlet '{inlet_id}' requires a stream name.")
+        if inlet_name in inlet_names:
+            raise ValueError(f"Inlet stream name '{inlet_name}' is duplicated.")
+        inlet_names.add(inlet_name)
 
         package_id = str(inlet.get("fluid_package_id", "")).strip()
         if package_id not in packages_by_id:
@@ -961,6 +969,8 @@ def _validate_case_graph(
         if unit_id in expected_unit_map:
             continue
         if str(unit.get("type", "")).strip().lower() == "mixer":
+            if not str(unit.get("name", "")).strip():
+                raise ValueError(f"Graph mixer '{unit_id}' requires a name.")
             ports = unit.get("ports")
             if not isinstance(ports, dict):
                 raise ValueError(f"Graph mixer '{unit_id}' requires ports.")
@@ -2494,9 +2504,16 @@ def _activate_graph_revision(
     starter_units, starter_connections = _build_template_graph(
         candidate_case["process"]
     )
+    draft_inlets = draft.get("inlets")
+    has_secondary_inlets = isinstance(draft_inlets, list) and any(
+        isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID
+        for inlet in draft_inlets
+    )
     if (
         draft["units"] == starter_units
         and draft["connections"] == starter_connections
+        and not has_secondary_inlets
     ):
         st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
     else:

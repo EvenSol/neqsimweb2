@@ -1661,6 +1661,12 @@ class GraphDraftDiagramTest(unittest.TestCase):
     def test_invalid_preview_graphs_fail_explicitly(self):
         invalid_cases = (
             (
+                None,
+                self.units,
+                self.connections,
+                "Graph preview inlets must be an array",
+            ),
+            (
                 "not-an-array",
                 self.units,
                 self.connections,
