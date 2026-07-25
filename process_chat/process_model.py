@@ -2499,15 +2499,17 @@ class NeqSimProcessModel:
                         product_details.append(f"{sname}=0 (no flow)")
                     return flow
 
-                terminal_stream_units = [
-                    stream
-                    for process_units in unit_groups
-                    for stream in (
-                        self._trailing_material_product_streams(
-                            process_units
+                terminal_stream_units = []
+                if not connectivity_unsafe_units:
+                    terminal_stream_units = [
+                        stream
+                        for process_units in unit_groups
+                        for stream in (
+                            self._trailing_material_product_streams(
+                                process_units
+                            )
                         )
-                    )
-                ]
+                    ]
                 explicit_product_fluids = (
                     _MaterialBoundaryIdentityTracker()
                 )
@@ -2528,7 +2530,9 @@ class NeqSimProcessModel:
                     if fluid is not None:
                         explicit_product_fluids.add("product", fluid)
 
-                for stream, label in connected_products:
+                for stream, label in (
+                    [] if connectivity_unsafe_units else connected_products
+                ):
                     fluid = self._material_fluid_reference(stream)
                     if (
                         fluid is not None
@@ -2543,7 +2547,11 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
 
-                if not terminal_stream_units and not connected_products:
+                if (
+                    not connectivity_unsafe_units
+                    and not terminal_stream_units
+                    and not connected_products
+                ):
                     # Compatibility fallback for native units whose ports
                     # cannot be inspected through the supported interfaces.
                     for process_units in unit_groups:
@@ -2588,14 +2596,17 @@ class NeqSimProcessModel:
                             continue
                         flow = record["mass_flow_kg_hr"]
                         feed_flow += flow
-                    elif any(
-                        keyword in lower
-                        for keyword in (
-                            "export",
-                            "product",
-                            "outlet",
-                            "output",
-                            "fuel",
+                    elif (
+                        not connectivity_unsafe_units
+                        and any(
+                            keyword in lower
+                            for keyword in (
+                                "export",
+                                "product",
+                                "outlet",
+                                "output",
+                                "fuel",
+                            )
                         )
                     ):
                         try:
