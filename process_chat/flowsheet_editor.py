@@ -958,6 +958,47 @@ def rename_inline_unit(
     return copied_units
 
 
+def update_inline_unit_properties(
+    units: list[Any],
+    unit_id: str,
+    property_updates: Any,
+) -> list[dict[str, Any]]:
+    """Transactionally update validated properties for one catalog unit."""
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(property_updates, dict):
+        raise ValueError("Inline unit property updates must be an object.")
+
+    copied_units = copy.deepcopy(units)
+    cleaned_unit_id = str(unit_id).strip()
+    matches = [
+        index
+        for index, unit in enumerate(copied_units)
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+
+    selected_unit = copied_units[matches[0]]
+    validate_catalog_unit(selected_unit)
+    updated_params = {
+        **selected_unit["params"],
+        **copy.deepcopy(property_updates),
+    }
+    property_rows = inline_unit_property_rows(
+        selected_unit["type"],
+        updated_params,
+    )
+    selected_unit["params"] = {
+        row["key"]: row["value"] for row in property_rows
+    }
+    validate_catalog_unit(selected_unit)
+    return copied_units
+
+
 def remove_inline_unit(
     units: list[Any],
     connections: list[Any],
