@@ -279,6 +279,33 @@ _PROCESS_UNIT_PROPERTY_DEFINITIONS["separator"] = {
     "properties": {},
 }
 
+_INLET_CONDITION_PROPERTIES = {
+    "temperature_C": _number_property(
+        "Temperature",
+        "°C",
+        -100.0,
+        200.0,
+        1.0,
+        "%.2f",
+    ),
+    "pressure_bara": _number_property(
+        "Pressure",
+        "bara (absolute)",
+        1.0,
+        500.0,
+        1.0,
+        "%.2f",
+    ),
+    "total_flow": _number_property(
+        "Mass flow",
+        "kg/hr",
+        1.0,
+        10_000_000.0,
+        1_000.0,
+        "%.2f",
+    ),
+}
+
 
 def inline_unit_catalog() -> dict[str, dict[str, Any]]:
     """Return an isolated copy of units safe for inline graph insertion."""
@@ -371,6 +398,59 @@ def inline_unit_property_rows(
     if cleaned_type not in _INLINE_UNIT_CATALOG:
         raise ValueError(f"Unsupported inline unit type '{cleaned_type}'.")
     return process_unit_property_rows(cleaned_type, params)
+
+
+def inlet_condition_property_rows(inlet: Any) -> list[dict[str, Any]]:
+    """Return explicit-unit rows for one material-inlet operating condition."""
+    if not isinstance(inlet, dict):
+        raise ValueError("Material inlet must be an object.")
+    inlet_id = str(inlet.get("id", "")).strip()
+    if not inlet_id:
+        raise ValueError("Material inlet requires a non-empty id.")
+    if inlet.get("flow_unit") != "kg/hr":
+        raise ValueError(
+            f"Material inlet '{inlet_id}' requires mass flow in kg/hr."
+        )
+
+    condition_keys = set(_INLET_CONDITION_PROPERTIES)
+    missing = sorted(condition_keys - set(inlet))
+    if missing:
+        raise ValueError(
+            f"Material inlet '{inlet_id}' is missing condition '{missing[0]}'."
+        )
+
+    rows: list[dict[str, Any]] = []
+    for key, metadata in _INLET_CONDITION_PROPERTIES.items():
+        raw_value = inlet[key]
+        if isinstance(raw_value, bool):
+            raise ValueError(f"Material inlet condition '{key}' must be numeric.")
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Material inlet condition '{key}' must be numeric."
+            ) from error
+        if not math.isfinite(value):
+            raise ValueError(f"Material inlet condition '{key}' must be finite.")
+        if value < metadata["minimum"] or value > metadata["maximum"]:
+            raise ValueError(
+                f"Material inlet condition '{key}' must be between "
+                f"{metadata['minimum']} and {metadata['maximum']} "
+                f"{metadata['unit']}."
+            )
+        rows.append(
+            {
+                "key": key,
+                "label": metadata["label"],
+                "unit": metadata["unit"],
+                "value": value,
+                "minimum": metadata["minimum"],
+                "maximum": metadata["maximum"],
+                "step": metadata["step"],
+                "format": metadata["format"],
+            }
+        )
+    return rows
 
 
 def _slugify(value: str) -> str:
