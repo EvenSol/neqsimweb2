@@ -1528,6 +1528,8 @@ def build_graph_draft_dot(
     amber paths, and each unconnected material output is shown as an explicit
     product boundary. Internal DOT node ids never contain user-provided text.
     """
+    if not isinstance(inlets, list):
+        raise ValueError("Graph preview inlets must be an array.")
     validated_draft = create_graph_draft(units, connections, inlets)
     validated_inlets = validated_draft["inlets"]
     validated_units = validated_draft["units"]
