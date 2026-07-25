@@ -2384,11 +2384,63 @@ class NeqSimProcessModel:
                     self._connectivity_material_boundaries(all_units)
                 )
                 if connectivity_unsafe_units:
-                    # Do not expose upstream outlets as terminal products
-                    # when a downstream native inlet cannot be inspected.
-                    # The terminal-unit fallback still reports its readable
-                    # outlets while closure remains explicitly unavailable.
-                    connected_products = []
+                    # Suppress only outlets upstream of an opaque inlet in
+                    # the same child process. Readable unsafe-unit products
+                    # and products from independent child processes remain
+                    # reportable while closure is explicitly unavailable.
+                    suspect_products = _MaterialBoundaryIdentityTracker()
+                    suspect_product_fluids = (
+                        _MaterialBoundaryIdentityTracker()
+                    )
+                    for process_units in unit_groups:
+                        unsafe_indices = []
+                        for index, unit in enumerate(process_units):
+                            try:
+                                unit_class = str(
+                                    unit.getClass().getSimpleName()
+                                ).lower()
+                            except Exception:
+                                continue
+                            if (
+                                unit_class
+                                in _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES
+                            ):
+                                unsafe_indices.append(index)
+                        if not unsafe_indices:
+                            continue
+                        for upstream_unit in process_units[
+                            : max(unsafe_indices)
+                        ]:
+                            for stream, _ in (
+                                self._fallback_material_outlet_streams(
+                                    upstream_unit
+                                )
+                            ):
+                                suspect_products.add("product", stream)
+                                fluid = self._material_fluid_reference(
+                                    stream
+                                )
+                                if fluid is not None:
+                                    suspect_product_fluids.add(
+                                        "product",
+                                        fluid,
+                                    )
+                    filtered_products = []
+                    for stream, label in connected_products:
+                        fluid = self._material_fluid_reference(stream)
+                        if (
+                            suspect_products.contains("product", stream)
+                            or (
+                                fluid is not None
+                                and suspect_product_fluids.contains(
+                                    "product",
+                                    fluid,
+                                )
+                            )
+                        ):
+                            continue
+                        filtered_products.append((stream, label))
+                    connected_products = filtered_products
                 consumed_streams, consumed_fluids = (
                     self._material_consumption_trackers(all_units)
                 )
