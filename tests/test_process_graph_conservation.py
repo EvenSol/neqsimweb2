@@ -248,6 +248,22 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     self.assertTrue(
                         math.isfinite(row["molar_flow_mol_sec"])
                     )
+                    self.assertEqual(
+                        set(row["component_molar_flows_mol_sec"]),
+                        {"methane", "ethane"},
+                    )
+                    self.assertAlmostEqual(
+                        sum(
+                            row[
+                                "component_molar_flows_mol_sec"
+                            ].values()
+                        ),
+                        row["molar_flow_mol_sec"],
+                        delta=max(
+                            1.0e-9 * row["molar_flow_mol_sec"],
+                            1.0e-9,
+                        ),
+                    )
                 mass_constraint = next(
                     constraint
                     for constraint in result.constraints

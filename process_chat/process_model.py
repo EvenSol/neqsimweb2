@@ -970,6 +970,42 @@ class NeqSimProcessModel:
         return products
 
     @staticmethod
+    def _material_boundary_component_flows(
+        stream: Any,
+        total_molar_flow: Optional[float],
+    ) -> Dict[str, float]:
+        """Return solved overall component molar flows in mol/s when available."""
+        if total_molar_flow is None or not hasattr(stream, "getFluid"):
+            return {}
+        try:
+            fluid = stream.getFluid()
+            phase = fluid.getPhase(0)
+            component_count = int(phase.getNumberOfComponents())
+        except Exception:
+            return {}
+
+        component_flows: Dict[str, float] = {}
+        for index in range(component_count):
+            try:
+                component = phase.getComponent(index)
+                name = str(component.getName()).strip()
+                overall_fraction = float(component.getz())
+            except Exception:
+                return {}
+            if (
+                not name
+                or name in component_flows
+                or not math.isfinite(overall_fraction)
+                or overall_fraction < -1.0e-12
+            ):
+                return {}
+            component_flow = total_molar_flow * max(overall_fraction, 0.0)
+            if not math.isfinite(component_flow):
+                return {}
+            component_flows[name] = component_flow
+        return component_flows
+
+    @staticmethod
     def _material_boundary_record(
         stream: Any,
         role: str,
@@ -1002,6 +1038,7 @@ class NeqSimProcessModel:
             "temperature_C": None,
             "pressure_bara": None,
             "molar_flow_mol_sec": None,
+            "component_molar_flows_mol_sec": {},
         }
         for key, getter_name, unit in (
             ("temperature_C", "getTemperature", "C"),
@@ -1016,6 +1053,12 @@ class NeqSimProcessModel:
                 record[key] = value
         if is_no_flow:
             record["molar_flow_mol_sec"] = 0.0
+        record["component_molar_flows_mol_sec"] = (
+            NeqSimProcessModel._material_boundary_component_flows(
+                stream,
+                record["molar_flow_mol_sec"],
+            )
+        )
         return record
 
     def get_diagram_dot(
