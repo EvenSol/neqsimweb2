@@ -17,6 +17,7 @@ from process_chat.flowsheet_editor import (
     graph_connection_rows,
     graph_history_status,
     graph_port_rows,
+    inlet_composition_property_rows,
     inlet_condition_property_rows,
     inline_unit_catalog,
     inline_unit_catalog_rows,
@@ -223,6 +224,85 @@ class InletConditionMetadataTest(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     inlet_condition_property_rows(inlet)
+
+
+class InletCompositionMetadataTest(unittest.TestCase):
+    """Validate explicit-unit composition metadata for material inlets."""
+
+    def test_composition_rows_preserve_registry_order_and_units(self):
+        rows = inlet_composition_property_rows(
+            {
+                "id": "feed-a",
+                "composition": {
+                    "methane": 0.80,
+                    "ethane": 0.15,
+                    "propane": 0.05,
+                },
+                "composition_basis": "mole_fraction",
+            }
+        )
+
+        self.assertEqual(
+            [row["component"] for row in rows],
+            ["methane", "ethane", "propane"],
+        )
+        self.assertEqual(
+            [row["mole_fraction"] for row in rows],
+            [0.80, 0.15, 0.05],
+        )
+        self.assertTrue(all(row["unit"] == "mol/mol" for row in rows))
+        self.assertTrue(all(row["minimum"] == 0.0 for row in rows))
+        self.assertTrue(all(row["maximum"] == 1.0 for row in rows))
+
+    def test_invalid_composition_metadata_fails_explicitly(self):
+        valid = {
+            "id": "feed-a",
+            "composition": {"methane": 0.90, "ethane": 0.10},
+            "composition_basis": "mole_fraction",
+        }
+        invalid_cases = (
+            (None, "must be an object"),
+            ({**valid, "id": " "}, "non-empty id"),
+            ({**valid, "composition_basis": "mass_fraction"}, "mole-fraction"),
+            ({**valid, "composition": {}}, "non-empty composition"),
+            (
+                {**valid, "composition": {" ": 0.90, "ethane": 0.10}},
+                "empty component name",
+            ),
+            (
+                {
+                    **valid,
+                    "composition": {"methane": 0.90, "Methane": 0.10},
+                },
+                "duplicate component",
+            ),
+            (
+                {**valid, "composition": {"methane": True, "ethane": 0.0}},
+                "must be numeric",
+            ),
+            (
+                {
+                    **valid,
+                    "composition": {
+                        "methane": float("inf"),
+                        "ethane": 0.0,
+                    },
+                },
+                "must be finite",
+            ),
+            (
+                {**valid, "composition": {"methane": 1.1, "ethane": -0.1}},
+                "between 0 and 1",
+            ),
+            (
+                {**valid, "composition": {"methane": 0.80, "ethane": 0.10}},
+                "must sum to 1.0",
+            ),
+        )
+        for inlet, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    inlet_composition_property_rows(inlet)
 
 
 class InletConditionUpdateTest(unittest.TestCase):

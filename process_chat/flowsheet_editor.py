@@ -453,6 +453,84 @@ def inlet_condition_property_rows(inlet: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def inlet_composition_property_rows(inlet: Any) -> list[dict[str, Any]]:
+    """Return validated mole-fraction rows for one material inlet."""
+    if not isinstance(inlet, dict):
+        raise ValueError("Material inlet must be an object.")
+    inlet_id = str(inlet.get("id", "")).strip()
+    if not inlet_id:
+        raise ValueError("Material inlet requires a non-empty id.")
+    if inlet.get("composition_basis") != "mole_fraction":
+        raise ValueError(
+            f"Material inlet '{inlet_id}' requires mole-fraction composition."
+        )
+
+    composition = inlet.get("composition")
+    if not isinstance(composition, dict) or not composition:
+        raise ValueError(
+            f"Material inlet '{inlet_id}' requires a non-empty composition."
+        )
+
+    rows: list[dict[str, Any]] = []
+    component_keys: set[str] = set()
+    composition_total = 0.0
+    for component_name, raw_value in composition.items():
+        cleaned_component = str(component_name).strip()
+        if not cleaned_component:
+            raise ValueError(
+                f"Material inlet '{inlet_id}' has an empty component name."
+            )
+        component_key = cleaned_component.casefold()
+        if component_key in component_keys:
+            raise ValueError(
+                f"Material inlet '{inlet_id}' has duplicate component "
+                f"'{cleaned_component}'."
+            )
+        component_keys.add(component_key)
+
+        if isinstance(raw_value, bool):
+            raise ValueError(
+                f"Material inlet component '{cleaned_component}' must be numeric."
+            )
+        try:
+            mole_fraction = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Material inlet component '{cleaned_component}' must be numeric."
+            ) from error
+        if not math.isfinite(mole_fraction):
+            raise ValueError(
+                f"Material inlet component '{cleaned_component}' must be finite."
+            )
+        if not 0.0 <= mole_fraction <= 1.0:
+            raise ValueError(
+                f"Material inlet component '{cleaned_component}' must be "
+                "between 0 and 1 mol/mol."
+            )
+        composition_total += mole_fraction
+        rows.append(
+            {
+                "component": cleaned_component,
+                "mole_fraction": mole_fraction,
+                "unit": "mol/mol",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "format": "%.6f",
+            }
+        )
+
+    if not math.isclose(
+        composition_total,
+        1.0,
+        rel_tol=0.0,
+        abs_tol=1.0e-6,
+    ):
+        raise ValueError(
+            f"Material inlet '{inlet_id}' mole fractions must sum to 1.0."
+        )
+    return rows
+
+
 def update_inlet_conditions(
     inlets: list[Any],
     inlet_id: str,
