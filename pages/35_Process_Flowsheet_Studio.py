@@ -47,6 +47,7 @@ _EDITOR_SYMBOL_NAMES = (
     "graph_connection_rows",
     "graph_history_status",
     "graph_port_rows",
+    "inlet_composition_property_rows",
     "inlet_condition_property_rows",
     "inline_unit_catalog",
     "inline_unit_catalog_rows",
@@ -59,6 +60,8 @@ _EDITOR_SYMBOL_NAMES = (
     "remove_inline_unit",
     "rename_inline_unit",
     "undo_graph_history",
+    "update_inlet_composition",
+    "update_inlet_conditions",
     "update_inline_unit_properties",
     "validate_catalog_unit",
 )
@@ -2650,6 +2653,143 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 st.error(f"Graph history navigation failed: {history_error}")
             else:
                 st.rerun()
+
+        secondary_inlets = [
+            inlet
+            for inlet in spec["inlets"]
+            if isinstance(inlet, dict)
+            and str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID
+        ]
+        if secondary_inlets:
+            st.divider()
+            st.markdown("#### Manage secondary inlets")
+            st.caption(
+                "Each inlet reuses the shared EOS and component registry while "
+                "retaining independent conditions and molar composition. The "
+                "primary inlet remains available in the fluid basis above."
+            )
+            secondary_inlet_map = {
+                str(inlet["id"]).strip(): inlet
+                for inlet in secondary_inlets
+            }
+            selected_inlet_id = st.selectbox(
+                "Material inlet",
+                options=list(secondary_inlet_map),
+                format_func=lambda value: (
+                    f"{secondary_inlet_map[value]['name']} · {value}"
+                ),
+                key=(
+                    "flowsheet_secondary_inlet_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            selected_inlet = secondary_inlet_map[selected_inlet_id]
+            st.markdown("##### Operating conditions")
+            condition_rows = inlet_condition_property_rows(selected_inlet)
+            condition_updates: dict[str, float] = {}
+            condition_columns = st.columns(len(condition_rows))
+            for column, row in zip(condition_columns, condition_rows):
+                condition_updates[row["key"]] = column.number_input(
+                    f"{row['label']} [{row['unit']}]",
+                    min_value=float(row["minimum"]),
+                    max_value=float(row["maximum"]),
+                    value=float(row["value"]),
+                    step=float(row["step"]),
+                    format=row["format"],
+                    key=(
+                        "flowsheet_inlet_condition_"
+                        f"{selected_inlet_id}_{row['key']}_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+
+            st.markdown("##### Molar composition")
+            st.caption(
+                "Component identities belong to the shared fluid package. "
+                "Entered fractions are normalized when saved."
+            )
+            composition_rows = inlet_composition_property_rows(
+                selected_inlet
+            )
+            composition_table = st.data_editor(
+                pd.DataFrame(composition_rows)[
+                    ["component", "mole_fraction"]
+                ],
+                num_rows="fixed",
+                use_container_width=True,
+                hide_index=True,
+                disabled=["component"],
+                column_config={
+                    "component": st.column_config.TextColumn(
+                        "Shared component",
+                    ),
+                    "mole_fraction": st.column_config.NumberColumn(
+                        "Mole fraction [mol/mol]",
+                        min_value=0.0,
+                        max_value=1.0,
+                        format="%.6f",
+                    ),
+                },
+                key=(
+                    "flowsheet_inlet_composition_"
+                    f"{selected_inlet_id}_{graph_widget_revision}"
+                ),
+            )
+            entered_total = pd.to_numeric(
+                composition_table["mole_fraction"],
+                errors="coerce",
+            ).sum()
+            st.caption(f"Entered mole-fraction sum: {entered_total:.6f}")
+            save_inlet_properties = st.button(
+                "Save inlet properties",
+                use_container_width=True,
+                key=(
+                    "flowsheet_save_inlet_properties_"
+                    f"{selected_inlet_id}_{graph_widget_revision}"
+                ),
+            )
+            if save_inlet_properties:
+                try:
+                    composition_updates = {
+                        str(row["component"]): row["mole_fraction"]
+                        for row in composition_table.to_dict("records")
+                    }
+                    inlets = update_inlet_conditions(
+                        spec["inlets"],
+                        selected_inlet_id,
+                        condition_updates,
+                    )
+                    inlets = update_inlet_composition(
+                        inlets,
+                        selected_inlet_id,
+                        composition_updates,
+                    )
+                    candidate_draft = create_graph_draft(
+                        spec["units"],
+                        spec["connections"],
+                        inlets,
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except (KeyError, TypeError, ValueError) as edit_error:
+                    st.error(f"Inlet property update failed: {edit_error}")
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Updated conditions and composition for "
+                            f"'{selected_inlet['name']}'. Run NeqSim to solve "
+                            "the revised graph."
+                        ),
+                    )
+                    st.rerun()
 
         st.divider()
         st.markdown("#### Connect and disconnect ports")
