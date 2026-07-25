@@ -134,6 +134,12 @@ def _kpi_value(result: Any, name: str) -> Optional[float]:
 
 def aggregate_material_balance(result: Any) -> Dict[str, Optional[float]]:
     """Aggregate solved feed/product rows with KPI compatibility fallback."""
+    raw = getattr(result, "raw", {})
+    material_balance_applicable = (
+        raw.get("material_balance_applicable")
+        if isinstance(raw, dict)
+        else None
+    )
     rows = material_boundary_rows(result)
     feed_rows = [row for row in rows if row["role"] == "feed"]
     product_rows = [row for row in rows if row["role"] == "product"]
@@ -148,9 +154,14 @@ def aggregate_material_balance(result: Any) -> Dict[str, Optional[float]]:
         if product_rows
         else _kpi_value(result, "material_product_flow_kg_hr")
     )
-    imbalance_pct = _kpi_value(result, "mass_balance_pct")
+    imbalance_pct = (
+        None
+        if material_balance_applicable is False
+        else _kpi_value(result, "mass_balance_pct")
+    )
     if (
-        imbalance_pct is None
+        material_balance_applicable is not False
+        and imbalance_pct is None
         and feed_flow is not None
         and product_flow is not None
         and feed_flow > 0.0

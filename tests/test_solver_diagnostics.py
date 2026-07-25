@@ -208,6 +208,43 @@ class _FallbackTurboExpander:
         return self._expander_outlet
 
 
+class _FallbackEjector:
+    def __init__(self, motive_inlet, suction_inlet, outlet):
+        self._motive_inlet = motive_inlet
+        self._suction_inlet = suction_inlet
+        self._outlet = outlet
+
+    def getClass(self):
+        return _JavaClass("Ejector")
+
+    def getMotiveStream(self):
+        return self._motive_inlet
+
+    def getSuctionStream(self):
+        return self._suction_inlet
+
+    def getOutletStream(self):
+        return self._outlet
+
+
+class _FallbackTank:
+    def __init__(self, gas_outlet, liquid_outlet):
+        self._gas_outlet = gas_outlet
+        self._liquid_outlet = liquid_outlet
+
+    def getClass(self):
+        return _JavaClass("Tank")
+
+    def getName(self):
+        return "storage tank"
+
+    def getGasOutStream(self):
+        return self._gas_outlet
+
+    def getLiquidOutStream(self):
+        return self._liquid_outlet
+
+
 class _FallbackProcessModel:
     def __init__(self, processes):
         self._processes = processes
@@ -715,6 +752,42 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
+    def test_connectivity_crosses_process_model_children(self):
+        feed = _FallbackStream("feed", 100.0)
+        child_boundary = _FallbackStream("child boundary", 100.0)
+        product = _FallbackStream("product", 100.0)
+        process_model = _FallbackProcessModel(
+            [
+                _FallbackProcess(
+                    [feed, _FallbackHeater(feed, child_boundary)]
+                ),
+                _FallbackProcess(
+                    [_FallbackHeater(child_boundary, product)]
+                ),
+            ]
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = process_model
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (feed, child_boundary, product)
+        }
+        model._is_process_model = True
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [("feed", "feed"), ("product", "product")],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
     def test_connectivity_discovers_parallel_terminal_branches(self):
         feed = _FallbackStream("feed", 200.0)
         branch_a = _FallbackStream("branch a", 100.0)
@@ -904,6 +977,91 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             ["gas feed", "solvent feed"],
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_discovers_ejector_motive_and_suction_feeds(self):
+        motive_feed = _FallbackStream("motive feed", 100.0)
+        heated_motive = _FallbackStream("heated motive", 100.0)
+        suction_feed = _FallbackStream("suction feed", 25.0)
+        product = _FallbackStream("ejector product", 125.0)
+        heater = _FallbackHeater(motive_feed, heated_motive)
+        ejector = _FallbackEjector(
+            heated_motive,
+            suction_feed,
+            product,
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [motive_feed, heater, suction_feed, ejector]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                motive_feed,
+                heated_motive,
+                suction_feed,
+                product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["motive feed", "suction feed"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_opaque_tank_connectivity_marks_closure_unknown(self):
+        feed = _FallbackStream("feed", 100.0)
+        tank_inlet = _FallbackStream("tank inlet", 100.0)
+        gas_product = _FallbackStream("gas product", 70.0)
+        liquid_product = _FallbackStream("liquid product", 30.0)
+        heater = _FallbackHeater(feed, tank_inlet)
+        tank = _FallbackTank(gas_product, liquid_product)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess([feed, heater, tank])
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                tank_inlet,
+                gas_product,
+                liquid_product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertFalse(result.raw["material_balance_applicable"])
+        self.assertNotIn("mass_balance_pct", result.kpis)
+        self.assertIsNone(
+            aggregate_material_balance(result)["imbalance_pct"]
+        )
+        mass_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "mass_balance"
+        )
+        self.assertEqual(mass_constraint.status, "UNKNOWN")
+        self.assertIn("storage tank", mass_constraint.detail)
+        component_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "component_balance"
+        )
+        self.assertEqual(component_constraint.status, "UNKNOWN")
 
     def test_connectivity_discovers_feed_after_upstream_equipment(self):
         feed_a = _FallbackStream("feed a", 100.0)
