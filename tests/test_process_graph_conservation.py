@@ -248,12 +248,49 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     self.assertTrue(
                         math.isfinite(row["molar_flow_mol_sec"])
                     )
+                    self.assertEqual(
+                        set(row["component_molar_flows_mol_sec"]),
+                        {"methane", "ethane"},
+                    )
+                    self.assertAlmostEqual(
+                        sum(
+                            row[
+                                "component_molar_flows_mol_sec"
+                            ].values()
+                        ),
+                        row["molar_flow_mol_sec"],
+                        delta=max(
+                            1.0e-9 * row["molar_flow_mol_sec"],
+                            1.0e-9,
+                        ),
+                    )
                 mass_constraint = next(
                     constraint
                     for constraint in result.constraints
                     if constraint.name == "mass_balance"
                 )
                 self.assertEqual(mass_constraint.status, "OK")
+                component_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "component_balance"
+                )
+                self.assertEqual(component_constraint.status, "OK")
+                self.assertEqual(
+                    result.kpis["component_balance_count"].value,
+                    2.0,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertEqual(
+                    [
+                        row["component"]
+                        for row in result.raw["component_balances"]
+                    ],
+                    ["ethane", "methane"],
+                )
                 self.assertFalse(
                     [
                         constraint

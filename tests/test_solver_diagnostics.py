@@ -13,22 +13,31 @@ from process_chat.process_model import (
 )
 from process_chat.solver_diagnostics import (
     aggregate_material_balance,
+    aggregate_validation_status,
+    component_balance_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
 )
 
 
 class _FallbackStream:
-    def __init__(self, name, mass_flow=None, hash_code=None):
+    def __init__(
+        self,
+        name,
+        mass_flow=None,
+        hash_code=None,
+        class_name="Stream",
+    ):
         self._name = name
         self._mass_flow = mass_flow
         self._hash_code = hash_code
+        self._class_name = class_name
 
     def hashCode(self):
         return self._hash_code if self._hash_code is not None else id(self)
 
     def getClass(self):
-        return _JavaClass("Stream")
+        return _JavaClass(self._class_name)
 
     def getName(self):
         return self._name
@@ -53,6 +62,15 @@ class _FallbackStream:
         return 45.0
 
 
+class _FallbackAliasedStream(_FallbackStream):
+    def __init__(self, name, mass_flow, fluid_reference):
+        super().__init__(name, mass_flow)
+        self._fluid_reference = fluid_reference
+
+    def getFluid(self):
+        return self._fluid_reference
+
+
 class _FallbackProcess:
     def __init__(self, units=None):
         self._units = units or []
@@ -72,6 +90,218 @@ class _JavaClass:
 class _FallbackEquipment:
     def getClass(self):
         return _JavaClass("Mixer")
+
+
+class _FallbackHeatExchanger:
+    def __init__(self, outlets):
+        self._outlets = outlets
+
+    def getClass(self):
+        return _JavaClass("HeatExchanger")
+
+    def getName(self):
+        return "terminal exchanger"
+
+    def getOutletStreams(self):
+        return self._outlets
+
+    def getOutletStream(self):
+        return self._outlets[0]
+
+
+class _FallbackTerminalMixer(_FallbackEquipment):
+    def __init__(self, outlet, inlets=None):
+        self._outlet = outlet
+        self._inlets = inlets or []
+
+    def getOutletStream(self):
+        return self._outlet
+
+    def getInletStreams(self):
+        return self._inlets
+
+
+class _FallbackHeater:
+    def __init__(self, inlet, outlet):
+        self._inlet = inlet
+        self._outlet = outlet
+
+    def getClass(self):
+        return _JavaClass("Heater")
+
+    def getInletStream(self):
+        return self._inlet
+
+    def getOutletStream(self):
+        return self._outlet
+
+
+class _FallbackSplitter:
+    def __init__(self, inlet, outlets):
+        self._inlet = inlet
+        self._outlets = outlets
+
+    def getClass(self):
+        return _JavaClass("Splitter")
+
+    def getInletStreams(self):
+        return [self._inlet]
+
+    def getOutletStreams(self):
+        return self._outlets
+
+
+class _FallbackAbsorber:
+    def __init__(self, gas_inlet, solvent_inlet, outlet):
+        self._gas_inlet = gas_inlet
+        self._solvent_inlet = solvent_inlet
+        self._outlet = outlet
+
+    def getClass(self):
+        return _JavaClass("SimpleTEGAbsorber")
+
+    def getInStream(self):
+        return self._gas_inlet
+
+    def getSolventInStream(self):
+        return self._solvent_inlet
+
+    def getOutletStream(self):
+        return self._outlet
+
+
+class _FallbackTurboExpander:
+    def __init__(
+        self,
+        compressor_inlet,
+        expander_inlet,
+        compressor_outlet,
+        expander_outlet,
+    ):
+        self._compressor_inlet = compressor_inlet
+        self._expander_inlet = expander_inlet
+        self._compressor_outlet = compressor_outlet
+        self._expander_outlet = expander_outlet
+
+    def getClass(self):
+        return _JavaClass("TurboExpanderCompressor")
+
+    def getName(self):
+        return "terminal turbo-expander"
+
+    def getInletStreams(self):
+        return [self._expander_inlet]
+
+    def getCompressorFeedStream(self):
+        return self._compressor_inlet
+
+    def getExpanderFeedStream(self):
+        return self._expander_inlet
+
+    def getOutletStream(self):
+        return self._compressor_outlet
+
+    def getCompressorOutletStream(self):
+        return self._compressor_outlet
+
+    def getExpanderOutletStream(self):
+        return self._expander_outlet
+
+
+class _FallbackEjector:
+    def __init__(self, motive_inlet, suction_inlet, outlet):
+        self._motive_inlet = motive_inlet
+        self._suction_inlet = suction_inlet
+        self._outlet = outlet
+
+    def getClass(self):
+        return _JavaClass("Ejector")
+
+    def getMotiveStream(self):
+        return self._motive_inlet
+
+    def getSuctionStream(self):
+        return self._suction_inlet
+
+    def getOutletStream(self):
+        return self._outlet
+
+
+class _FallbackTank:
+    def __init__(self, gas_outlet, liquid_outlet):
+        self._gas_outlet = gas_outlet
+        self._liquid_outlet = liquid_outlet
+
+    def getClass(self):
+        return _JavaClass("Tank")
+
+    def getName(self):
+        return "storage tank"
+
+    def getGasOutStream(self):
+        return self._gas_outlet
+
+    def getLiquidOutStream(self):
+        return self._liquid_outlet
+
+
+class _FallbackProcessModel:
+    def __init__(self, processes):
+        self._processes = processes
+
+    def getAllProcesses(self):
+        return self._processes
+
+
+class _FallbackReactiveEquipment:
+    def __init__(self, class_name="GibbsReactor"):
+        self._class_name = class_name
+
+    def getClass(self):
+        return _JavaClass(self._class_name)
+
+    def getName(self):
+        return self._class_name
+
+
+class _FallbackUnknownEquipment(_FallbackReactiveEquipment):
+    def __init__(self):
+        super().__init__("CustomNativeEquipment")
+
+
+class _FallbackDistillationColumn(_FallbackReactiveEquipment):
+    def __init__(self, reactive):
+        super().__init__("DistillationColumn")
+        self._reactive = reactive
+
+    def isReactive(self):
+        return self._reactive
+
+
+class ValidationSummaryTest(unittest.TestCase):
+    """Preserve incomplete validation as a non-passing aggregate state."""
+
+    def test_status_precedence_preserves_unknown_checks(self):
+        self.assertEqual(aggregate_validation_status([]), "OK")
+        self.assertEqual(aggregate_validation_status(["OK"]), "OK")
+        self.assertEqual(
+            aggregate_validation_status(["OK", "UNKNOWN"]),
+            "UNKNOWN",
+        )
+        self.assertEqual(
+            aggregate_validation_status(["UNKNOWN", "WARN"]),
+            "WARN",
+        )
+        self.assertEqual(
+            aggregate_validation_status(["WARN", "VIOLATION"]),
+            "VIOLATION",
+        )
+
+    def test_unrecognized_status_is_incomplete(self):
+        self.assertEqual(
+            aggregate_validation_status(["OK", "not-reported"]),
+            "UNKNOWN",
+        )
 
 
 def _result(rows=None, **kpi_values):
@@ -135,6 +365,799 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             solved_feed_flow_kg_hr(result, 60_000.0),
             100_000.0,
         )
+
+    def test_aggregates_component_feed_and_product_closure(self):
+        rows = [
+            {
+                "role": "feed",
+                "stream_name": "dry gas",
+                "mass_flow_kg_hr": 60_000,
+                "molar_flow_mol_sec": 100.0,
+                "component_molar_flows_mol_sec": {
+                    "methane": 95.0,
+                    "ethane": 5.0,
+                },
+            },
+            {
+                "role": "feed",
+                "stream_name": "rich gas",
+                "mass_flow_kg_hr": 40_000,
+                "molar_flow_mol_sec": 50.0,
+                "component_molar_flows_mol_sec": {
+                    "methane": 40.0,
+                    "ethane": 10.0,
+                },
+            },
+            {
+                "role": "product",
+                "stream_name": "mixed product",
+                "mass_flow_kg_hr": 100_000,
+                "molar_flow_mol_sec": 150.0,
+                "component_molar_flows_mol_sec": {
+                    "methane": 135.0,
+                    "ethane": 15.0,
+                },
+            },
+        ]
+
+        balances = component_balance_rows(_result(rows))
+
+        self.assertEqual(
+            [row["component"] for row in balances],
+            ["ethane", "methane"],
+        )
+        for row in balances:
+            self.assertEqual(
+                row["feed_molar_flow_mol_sec"],
+                row["product_molar_flow_mol_sec"],
+            )
+            self.assertEqual(row["residual_molar_flow_mol_sec"], 0.0)
+            self.assertEqual(row["imbalance_pct"], 0.0)
+
+    def test_component_balance_preserves_legacy_and_rejects_gaps(self):
+        legacy = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "legacy feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                }
+            ]
+        )
+        self.assertEqual(component_balance_rows(legacy), [])
+
+        current_without_components = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": None,
+                    "component_molar_flows_mol_sec": None,
+                }
+            ]
+        )
+        current_without_components.raw[
+            "component_balance_applicable"
+        ] = True
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            component_balance_rows(current_without_components)
+
+        incomplete = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                    "component_molar_flows_mol_sec": {},
+                },
+                {
+                    "role": "product",
+                    "stream_name": "product",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                    "component_molar_flows_mol_sec": {"methane": 1.0},
+                },
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            component_balance_rows(incomplete)
+
+        missing_molar_flow = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": None,
+                    "component_molar_flows_mol_sec": None,
+                },
+                {
+                    "role": "product",
+                    "stream_name": "product",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                    "component_molar_flows_mol_sec": {"methane": 1.0},
+                },
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            component_balance_rows(missing_molar_flow)
+
+        only_feed = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "component_molar_flows_mol_sec": {
+                        "methane": 1.0,
+                    },
+                }
+            ]
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "feed and product boundaries",
+        ):
+            component_balance_rows(only_feed)
+
+        malformed = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "component_molar_flows_mol_sec": {
+                        "methane": -1.0,
+                    },
+                }
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            component_balance_rows(malformed)
+
+    def test_reactive_process_marks_species_closure_not_applicable(self):
+        feed = _FallbackStream("feed", 100.0)
+        product = _FallbackStream("product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, _FallbackReactiveEquipment(), product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {"feed": feed, "product": product}
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertFalse(result.raw["component_balance_applicable"])
+        self.assertEqual(result.raw["component_balances"], [])
+        self.assertEqual(component_balance_rows(result), [])
+        component_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "component_balance"
+        )
+        self.assertEqual(component_constraint.status, "UNKNOWN")
+        self.assertIn("not applicable", component_constraint.detail)
+        self.assertNotIn("component_balance_max_pct", result.kpis)
+
+    def test_species_changing_equipment_is_reactive(self):
+        for class_name in (
+            "GasTurbine",
+            "CombustionEngine",
+            "FuelCell",
+            "H2SScavenger",
+            "SimpleAbsorber",
+            "FurnaceBurner",
+            "SyngasBurnerZone",
+            "BiomassGasifier",
+            "AutothermalReformer",
+            "CatalyticTubeReformer",
+            "ReformerFurnace",
+            "ReactiveTray",
+        ):
+            with self.subTest(class_name=class_name):
+                self.assertEqual(
+                    NeqSimProcessModel._component_balance_exclusion_names(
+                        [_FallbackReactiveEquipment(class_name)]
+                    ),
+                    [class_name],
+                )
+
+    def test_only_reactive_distillation_columns_change_species(self):
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackDistillationColumn(True)]
+            ),
+            ["DistillationColumn"],
+        )
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackDistillationColumn(False)]
+            ),
+            [],
+        )
+
+    def test_unclassified_native_equipment_disables_species_closure(self):
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackUnknownEquipment()]
+            ),
+            [
+                "CustomNativeEquipment "
+                "(unclassified CustomNativeEquipment)"
+            ],
+        )
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackEquipment()]
+            ),
+            [],
+        )
+
+    def test_supported_conserving_equipment_enables_species_closure(self):
+        class_names = (
+            "TurboExpanderCompressor",
+            "GasScrubberSimple",
+            "Hydrocyclone",
+            "CheckValve",
+            "WaterStripperColumn",
+            "AdiabaticTwoPhasePipe",
+            "SimpleTPoutPipeline",
+            "MembraneSeparator",
+            "WellFlow",
+            "SimpleFlowLine",
+            "EquilibriumStream",
+        )
+        for class_name in class_names:
+            with self.subTest(class_name=class_name):
+                self.assertEqual(
+                    NeqSimProcessModel._component_balance_exclusion_names(
+                        [_FallbackReactiveEquipment(class_name)]
+                    ),
+                    [],
+                )
+
+    def test_material_boundary_discovery_accepts_stream_subclasses(self):
+        for class_name in ("Stream", "EquilibriumStream", "WellStream"):
+            with self.subTest(class_name=class_name):
+                feed = _FallbackStream(
+                    "feed",
+                    100.0,
+                    class_name=class_name,
+                )
+                product = _FallbackStream(
+                    "product",
+                    100.0,
+                    class_name=class_name,
+                )
+                units = [feed, _FallbackEquipment(), product]
+
+                self.assertEqual(
+                    NeqSimProcessModel._leading_material_feed_streams(
+                        units
+                    ),
+                    [feed],
+                )
+                self.assertEqual(
+                    NeqSimProcessModel._trailing_material_product_streams(
+                        units
+                    ),
+                    [product],
+                )
+
+    def test_fallback_enumerates_all_heat_exchanger_products(self):
+        feed_a = _FallbackStream("feed a", 100.0)
+        feed_b = _FallbackStream("feed b", 100.0)
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 100.0)
+        exchanger = _FallbackHeatExchanger([product_a, product_b])
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess([feed_a, feed_b, exchanger])
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed a": feed_a,
+            "feed b": feed_b,
+            "product a": product_a,
+            "product b": product_b,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [
+                ("feed", "feed a"),
+                ("feed", "feed b"),
+                ("product", "product a"),
+                ("product", "product b"),
+            ],
+        )
+        self.assertEqual(
+            result.kpis["material_product_count"].value,
+            2.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_fallback_enumerates_both_turbo_expander_products(self):
+        feed_a = _FallbackStream("compressor feed", 100.0)
+        feed_b = _FallbackStream("expander feed", 100.0)
+        product_a = _FallbackStream("compressor product", 100.0)
+        product_b = _FallbackStream("expander product", 100.0)
+        turbo_expander = _FallbackTurboExpander(
+            feed_a,
+            feed_b,
+            product_a,
+            product_b,
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed_a, feed_b, turbo_expander]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "compressor feed": feed_a,
+            "expander feed": feed_b,
+            "compressor product": product_a,
+            "expander product": product_b,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["compressor product", "expander product"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_fallback_discovers_products_for_each_child_process(self):
+        feed_a = _FallbackStream("feed a", 100.0)
+        feed_b = _FallbackStream("feed b", 100.0)
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 100.0)
+        process_model = _FallbackProcessModel(
+            [
+                _FallbackProcess(
+                    [feed_a, _FallbackTerminalMixer(product_a)]
+                ),
+                _FallbackProcess(
+                    [feed_b, _FallbackTerminalMixer(product_b)]
+                ),
+            ]
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = process_model
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed a": feed_a,
+            "feed b": feed_b,
+            "product a": product_a,
+            "product b": product_b,
+        }
+        model._is_process_model = True
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [
+                ("feed", "feed a"),
+                ("feed", "feed b"),
+                ("product", "product a"),
+                ("product", "product b"),
+            ],
+        )
+        self.assertEqual(
+            result.kpis["material_product_count"].value,
+            2.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_crosses_process_model_children(self):
+        feed = _FallbackStream("feed", 100.0)
+        child_boundary = _FallbackStream("child boundary", 100.0)
+        product = _FallbackStream("product", 100.0)
+        process_model = _FallbackProcessModel(
+            [
+                _FallbackProcess(
+                    [
+                        feed,
+                        _FallbackHeater(feed, child_boundary),
+                        child_boundary,
+                    ]
+                ),
+                _FallbackProcess(
+                    [_FallbackHeater(child_boundary, product)]
+                ),
+            ]
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = process_model
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (feed, child_boundary, product)
+        }
+        model._is_process_model = True
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [("feed", "feed"), ("product", "product")],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_discovers_parallel_terminal_branches(self):
+        feed = _FallbackStream("feed", 200.0)
+        branch_a = _FallbackStream("branch a", 100.0)
+        branch_b = _FallbackStream("branch b", 100.0)
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 100.0)
+        splitter = _FallbackSplitter(feed, [branch_a, branch_b])
+        heater_a = _FallbackHeater(branch_a, product_a)
+        heater_b = _FallbackHeater(branch_b, product_b)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, splitter, heater_a, heater_b]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                branch_a,
+                branch_b,
+                product_a,
+                product_b,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["product a", "product b"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_explicit_product_alias_preserves_implicit_peer_branch(self):
+        feed = _FallbackStream("feed", 200.0)
+        branch_a = _FallbackStream("branch a", 100.0)
+        branch_b = _FallbackStream("branch b", 100.0)
+        product_a_fluid = object()
+        raw_product_a = _FallbackAliasedStream(
+            "raw product a",
+            100.0,
+            product_a_fluid,
+        )
+        explicit_product_a = _FallbackAliasedStream(
+            "named product a",
+            100.0,
+            product_a_fluid,
+        )
+        product_b = _FallbackStream("product b", 100.0)
+        splitter = _FallbackSplitter(feed, [branch_a, branch_b])
+        heater_a = _FallbackHeater(branch_a, raw_product_a)
+        heater_b = _FallbackHeater(branch_b, product_b)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed,
+                splitter,
+                heater_a,
+                heater_b,
+                explicit_product_a,
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                branch_a,
+                branch_b,
+                raw_product_a,
+                explicit_product_a,
+                product_b,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["named product a", "product b"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_matches_intermediate_stream_fluid_alias(self):
+        feed = _FallbackStream("feed", 100.0)
+        intermediate_fluid = object()
+        raw_intermediate = _FallbackAliasedStream(
+            "raw intermediate",
+            100.0,
+            intermediate_fluid,
+        )
+        named_intermediate = _FallbackAliasedStream(
+            "named intermediate",
+            100.0,
+            intermediate_fluid,
+        )
+        product = _FallbackStream("product", 100.0)
+        heater = _FallbackHeater(feed, raw_intermediate)
+        compressor = _FallbackTerminalMixer(
+            product,
+            [named_intermediate],
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, heater, named_intermediate, compressor]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                raw_intermediate,
+                named_intermediate,
+                product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [("feed", "feed"), ("product", "product")],
+        )
+        self.assertEqual(
+            result.kpis["material_feed_flow_kg_hr"].value,
+            100.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_discovers_absorber_solvent_feed(self):
+        gas_feed = _FallbackStream("gas feed", 100.0)
+        heated_gas = _FallbackStream("heated gas", 100.0)
+        solvent_feed = _FallbackStream("solvent feed", 25.0)
+        product = _FallbackStream("absorber product", 125.0)
+        heater = _FallbackHeater(gas_feed, heated_gas)
+        absorber = _FallbackAbsorber(
+            heated_gas,
+            solvent_feed,
+            product,
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [gas_feed, heater, solvent_feed, absorber]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                gas_feed,
+                heated_gas,
+                solvent_feed,
+                product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["gas feed", "solvent feed"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_discovers_ejector_motive_and_suction_feeds(self):
+        motive_feed = _FallbackStream("motive feed", 100.0)
+        heated_motive = _FallbackStream("heated motive", 100.0)
+        suction_feed = _FallbackStream("suction feed", 25.0)
+        product = _FallbackStream("ejector product", 125.0)
+        heater = _FallbackHeater(motive_feed, heated_motive)
+        ejector = _FallbackEjector(
+            heated_motive,
+            suction_feed,
+            product,
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [motive_feed, heater, suction_feed, ejector]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                motive_feed,
+                heated_motive,
+                suction_feed,
+                product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["motive feed", "suction feed"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_opaque_tank_connectivity_marks_closure_unknown(self):
+        feed = _FallbackStream("feed", 100.0)
+        tank_inlet = _FallbackStream("tank inlet", 100.0)
+        gas_product = _FallbackStream("gas product", 70.0)
+        liquid_product = _FallbackStream("liquid product", 30.0)
+        heater = _FallbackHeater(feed, tank_inlet)
+        tank = _FallbackTank(gas_product, liquid_product)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess([feed, heater, tank])
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                tank_inlet,
+                gas_product,
+                liquid_product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertFalse(result.raw["material_balance_applicable"])
+        self.assertNotIn("mass_balance_pct", result.kpis)
+        self.assertIsNone(
+            aggregate_material_balance(result)["imbalance_pct"]
+        )
+        mass_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "mass_balance"
+        )
+        self.assertEqual(mass_constraint.status, "UNKNOWN")
+        self.assertIn("storage tank", mass_constraint.detail)
+        component_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "component_balance"
+        )
+        self.assertEqual(component_constraint.status, "UNKNOWN")
+
+    def test_connectivity_discovers_feed_after_upstream_equipment(self):
+        feed_a = _FallbackStream("feed a", 100.0)
+        heated_feed = _FallbackStream("heated feed", 100.0)
+        feed_b = _FallbackStream("feed b", 100.0)
+        product = _FallbackStream("product", 200.0)
+        heater = _FallbackHeater(feed_a, heated_feed)
+        mixer = _FallbackTerminalMixer(
+            product,
+            [heated_feed, feed_b],
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed_a, heater, feed_b, mixer]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed_a,
+                heated_feed,
+                feed_b,
+                product,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["feed a", "feed b"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_missing_current_component_data_returns_unknown(self):
+        feed = _FallbackStream("feed", 100.0)
+        product = _FallbackStream("product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, _FallbackEquipment(), product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {"feed": feed, "product": product}
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertFalse(result.raw["component_balance_applicable"])
+        self.assertEqual(result.raw["component_balances"], [])
+        self.assertEqual(component_balance_rows(result), [])
+        component_constraint = next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "component_balance"
+        )
+        self.assertEqual(component_constraint.status, "UNKNOWN")
+        self.assertIn("unavailable", component_constraint.detail)
+        self.assertIn("incomplete", component_constraint.detail)
+        self.assertNotIn("component_balance_max_pct", result.kpis)
 
     def test_uses_solver_kpis_before_legacy_feed_fallback(self):
         result = _result(
