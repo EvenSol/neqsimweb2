@@ -386,6 +386,15 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         tracker.add("feed", second_stream)
         self.assertTrue(tracker.contains("feed", second_stream))
 
+    def test_reference_tracker_rejects_invalid_roles(self):
+        tracker = _MaterialBoundaryIdentityTracker()
+        stream = _FallbackStream("feed", 1.0)
+
+        with self.assertRaisesRegex(ValueError, "feed or product"):
+            tracker.contains("utility", stream)
+        with self.assertRaisesRegex(ValueError, "feed or product"):
+            tracker.add("utility", stream)
+
 
 if __name__ == "__main__":
     unittest.main()
