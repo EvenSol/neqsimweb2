@@ -276,6 +276,47 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 100.0)
 
+    def test_boundary_counts_include_only_successful_records(self):
+        feed = _FallbackStream("feed", 100.0)
+        broken_feed = _FallbackStream("broken feed")
+        product = _FallbackStream("product", 100.0)
+        broken_product = _FallbackStream("broken product")
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed,
+                broken_feed,
+                _FallbackEquipment(),
+                product,
+                broken_product,
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed": feed,
+            "broken feed": broken_feed,
+            "product": product,
+            "broken product": broken_product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        summary = aggregate_material_balance(result)
+        self.assertEqual(summary["feed_count"], 1.0)
+        self.assertEqual(summary["product_count"], 1.0)
+        self.assertEqual(
+            result.kpis["material_feed_count"].value,
+            1.0,
+        )
+        self.assertEqual(
+            result.kpis["material_product_count"].value,
+            1.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

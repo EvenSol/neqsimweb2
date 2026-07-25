@@ -1944,18 +1944,6 @@ class NeqSimProcessModel:
                         feed_details.append(f"{name}={flow:.0f}")
                     except Exception:
                         pass
-                if feed_streams:
-                    kpis["material_feed_count"] = KPI(
-                        "material_feed_count",
-                        float(len(feed_streams)),
-                        "count",
-                    )
-                    kpis["material_feed_flow_kg_hr"] = KPI(
-                        "material_feed_flow_kg_hr",
-                        feed_flow,
-                        "kg/hr",
-                    )
-
                 terminal_stream_units = [
                     stream
                     for process_units in unit_groups
@@ -1985,16 +1973,6 @@ class NeqSimProcessModel:
                                 product_details.append(f"{sname}=0 (no flow)")
                         except Exception:
                             pass
-                    kpis["material_product_count"] = KPI(
-                        "material_product_count",
-                        float(len(terminal_stream_units)),
-                        "count",
-                    )
-                    kpis["material_product_flow_kg_hr"] = KPI(
-                        "material_product_flow_kg_hr",
-                        product_flow,
-                        "kg/hr",
-                    )
                 else:
                     # Fallback: use the last non-utility unit's ALL outlets
                     last = None
@@ -2094,6 +2072,39 @@ class NeqSimProcessModel:
                             continue
                         flow = record["mass_flow_kg_hr"]
                         product_flow += flow
+
+            feed_boundary_count = sum(
+                1
+                for boundary in material_boundaries
+                if boundary["role"] == "feed"
+            )
+            product_boundary_count = sum(
+                1
+                for boundary in material_boundaries
+                if boundary["role"] == "product"
+            )
+            if feed_boundary_count:
+                kpis["material_feed_count"] = KPI(
+                    "material_feed_count",
+                    float(feed_boundary_count),
+                    "count",
+                )
+                kpis["material_feed_flow_kg_hr"] = KPI(
+                    "material_feed_flow_kg_hr",
+                    feed_flow,
+                    "kg/hr",
+                )
+            if product_boundary_count:
+                kpis["material_product_count"] = KPI(
+                    "material_product_count",
+                    float(product_boundary_count),
+                    "count",
+                )
+                kpis["material_product_flow_kg_hr"] = KPI(
+                    "material_product_flow_kg_hr",
+                    product_flow,
+                    "kg/hr",
+                )
 
             if feed_flow > 0:
                 balance_pct = abs(feed_flow - product_flow) / feed_flow * 100
