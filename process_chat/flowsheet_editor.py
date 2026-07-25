@@ -453,6 +453,51 @@ def inlet_condition_property_rows(inlet: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def update_inlet_conditions(
+    inlets: list[Any],
+    inlet_id: str,
+    condition_updates: Any,
+) -> list[dict[str, Any]]:
+    """Transactionally update one inlet's independent operating conditions."""
+    if not isinstance(inlets, list):
+        raise ValueError("Graph inlets must be an array.")
+    if not isinstance(condition_updates, dict):
+        raise ValueError("Material inlet condition updates must be an object.")
+
+    cleaned_inlet_id = str(inlet_id).strip()
+    copied_inlets = copy.deepcopy(inlets)
+    matches = [
+        index
+        for index, inlet in enumerate(copied_inlets)
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == cleaned_inlet_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown material inlet '{cleaned_inlet_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Material inlet id '{cleaned_inlet_id}' is duplicated.")
+
+    unknown_updates = sorted(
+        set(condition_updates) - set(_INLET_CONDITION_PROPERTIES)
+    )
+    if unknown_updates:
+        raise ValueError(
+            f"Material inlet '{cleaned_inlet_id}' has unsupported condition "
+            f"'{unknown_updates[0]}'."
+        )
+
+    selected_inlet = copied_inlets[matches[0]]
+    updated_inlet = {
+        **selected_inlet,
+        **copy.deepcopy(condition_updates),
+    }
+    property_rows = inlet_condition_property_rows(updated_inlet)
+    for row in property_rows:
+        updated_inlet[row["key"]] = row["value"]
+    copied_inlets[matches[0]] = updated_inlet
+    return copied_inlets
+
+
 def _slugify(value: str) -> str:
     """Convert a user-facing name to a stable graph-id stem."""
     slug = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
