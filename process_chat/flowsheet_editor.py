@@ -267,6 +267,18 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
     },
 }
 
+_PROCESS_UNIT_PROPERTY_DEFINITIONS: dict[str, dict[str, Any]] = {
+    unit_type: {
+        "default_params": definition["default_params"],
+        "properties": definition["properties"],
+    }
+    for unit_type, definition in _INLINE_UNIT_CATALOG.items()
+}
+_PROCESS_UNIT_PROPERTY_DEFINITIONS["separator"] = {
+    "default_params": {},
+    "properties": {},
+}
+
 
 def inline_unit_catalog() -> dict[str, dict[str, Any]]:
     """Return an isolated copy of units safe for inline graph insertion."""
@@ -286,21 +298,21 @@ def inline_unit_catalog_rows() -> list[dict[str, Any]]:
     ]
 
 
-def inline_unit_property_rows(
+def process_unit_property_rows(
     unit_type: str,
     params: Any = None,
 ) -> list[dict[str, Any]]:
-    """Return deterministic explicit-unit property rows for one catalog unit."""
+    """Return deterministic explicit-unit property rows for one process unit."""
     cleaned_type = str(unit_type).strip().lower()
-    definition = _INLINE_UNIT_CATALOG.get(cleaned_type)
+    definition = _PROCESS_UNIT_PROPERTY_DEFINITIONS.get(cleaned_type)
     if definition is None:
-        raise ValueError(f"Unsupported inline unit type '{cleaned_type}'.")
+        raise ValueError(f"Unsupported process unit type '{cleaned_type}'.")
     if params is None:
         selected_params = definition["default_params"]
     elif isinstance(params, dict):
         selected_params = params
     else:
-        raise ValueError("Inline unit params must be an object.")
+        raise ValueError("Process unit params must be an object.")
 
     property_keys = set(definition["properties"])
     parameter_keys = set(selected_params)
@@ -308,11 +320,11 @@ def inline_unit_property_rows(
     unknown = sorted(parameter_keys - property_keys)
     if missing:
         raise ValueError(
-            f"Inline unit '{cleaned_type}' is missing property '{missing[0]}'."
+            f"Process unit '{cleaned_type}' is missing property '{missing[0]}'."
         )
     if unknown:
         raise ValueError(
-            f"Inline unit '{cleaned_type}' has unsupported property "
+            f"Process unit '{cleaned_type}' has unsupported property "
             f"'{unknown[0]}'."
         )
 
@@ -320,18 +332,18 @@ def inline_unit_property_rows(
     for key, metadata in definition["properties"].items():
         raw_value = selected_params[key]
         if isinstance(raw_value, bool):
-            raise ValueError(f"Inline unit property '{key}' must be numeric.")
+            raise ValueError(f"Process unit property '{key}' must be numeric.")
         try:
             value = float(raw_value)
         except (TypeError, ValueError) as error:
             raise ValueError(
-                f"Inline unit property '{key}' must be numeric."
+                f"Process unit property '{key}' must be numeric."
             ) from error
         if not math.isfinite(value):
-            raise ValueError(f"Inline unit property '{key}' must be finite.")
+            raise ValueError(f"Process unit property '{key}' must be finite.")
         if value < metadata["minimum"] or value > metadata["maximum"]:
             raise ValueError(
-                f"Inline unit property '{key}' must be between "
+                f"Process unit property '{key}' must be between "
                 f"{metadata['minimum']} and {metadata['maximum']} "
                 f"{metadata['unit']}."
             )
@@ -348,6 +360,17 @@ def inline_unit_property_rows(
             }
         )
     return rows
+
+
+def inline_unit_property_rows(
+    unit_type: str,
+    params: Any = None,
+) -> list[dict[str, Any]]:
+    """Return explicit-unit rows for a unit allowed in the inline palette."""
+    cleaned_type = str(unit_type).strip().lower()
+    if cleaned_type not in _INLINE_UNIT_CATALOG:
+        raise ValueError(f"Unsupported inline unit type '{cleaned_type}'.")
+    return process_unit_property_rows(cleaned_type, params)
 
 
 def _slugify(value: str) -> str:
