@@ -812,7 +812,8 @@ def build_graph_draft_dot(
                 f"Graph preview connection '{connection_id}' uses undeclared "
                 f"{connection_type}_in port '{target_port}'."
             )
-        connected_outputs.add((source_id, source_port))
+        if connection_type == "material":
+            connected_outputs.add((source_id, source_port))
         rendered_connections.append(
             (
                 connection,
