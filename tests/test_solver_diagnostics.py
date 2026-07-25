@@ -87,6 +87,11 @@ class _FallbackReactiveEquipment:
         return self._class_name
 
 
+class _FallbackUnknownEquipment(_FallbackReactiveEquipment):
+    def __init__(self):
+        super().__init__("CustomNativeEquipment")
+
+
 class ValidationSummaryTest(unittest.TestCase):
     """Preserve incomplete validation as a non-passing aggregate state."""
 
@@ -295,6 +300,24 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             component_balance_rows(missing_molar_flow)
 
+        only_feed = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "component_molar_flows_mol_sec": {
+                        "methane": 1.0,
+                    },
+                }
+            ]
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "feed and product boundaries",
+        ):
+            component_balance_rows(only_feed)
+
         malformed = _result(
             [
                 {
@@ -334,7 +357,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             if constraint.name == "component_balance"
         )
         self.assertEqual(component_constraint.status, "UNKNOWN")
-        self.assertIn("reactive flowsheets", component_constraint.detail)
+        self.assertIn("not applicable", component_constraint.detail)
         self.assertNotIn("component_balance_max_pct", result.kpis)
 
     def test_species_changing_equipment_is_reactive(self):
@@ -346,14 +369,35 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             "FurnaceBurner",
             "SyngasBurnerZone",
             "BiomassGasifier",
+            "AutothermalReformer",
+            "CatalyticTubeReformer",
+            "ReformerFurnace",
+            "ReactiveTray",
         ):
             with self.subTest(class_name=class_name):
                 self.assertEqual(
-                    NeqSimProcessModel._reactive_unit_names(
+                    NeqSimProcessModel._component_balance_exclusion_names(
                         [_FallbackReactiveEquipment(class_name)]
                     ),
                     [class_name],
                 )
+
+    def test_unclassified_native_equipment_disables_species_closure(self):
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackUnknownEquipment()]
+            ),
+            [
+                "CustomNativeEquipment "
+                "(unclassified CustomNativeEquipment)"
+            ],
+        )
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackEquipment()]
+            ),
+            [],
+        )
 
     def test_missing_current_component_data_returns_unknown(self):
         feed = _FallbackStream("feed", 100.0)

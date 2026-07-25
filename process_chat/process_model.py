@@ -33,6 +33,8 @@ _SPECIES_CHANGING_UNIT_CLASSES = {
 _SPECIES_CHANGING_UNIT_TOKENS = (
     "burner",
     "gasifier",
+    "reformer",
+    "reactive",
     "reactor",
     "electrolyzer",
     "flare",
@@ -40,6 +42,44 @@ _SPECIES_CHANGING_UNIT_TOKENS = (
     "fuelcell",
     "scavenger",
 )
+_SPECIES_CONSERVING_UNIT_CLASSES = {
+    "absorber",
+    "adiabaticpipe",
+    "adjuster",
+    "aircooler",
+    "calculator",
+    "componentsplitter",
+    "compressor",
+    "controlvalve",
+    "cooler",
+    "distillationcolumn",
+    "ejector",
+    "esppump",
+    "expander",
+    "filter",
+    "gasscrubber",
+    "heater",
+    "heatexchanger",
+    "mixer",
+    "multistreamheatexchanger",
+    "pipebeggsandbrills",
+    "pipeline",
+    "pump",
+    "recycle",
+    "separator",
+    "setpoint",
+    "simpleabsorber",
+    "simpletegabsorber",
+    "splitter",
+    "stream",
+    "tank",
+    "threephaseseparator",
+    "throttlingvalve",
+    "twophaseseparator",
+    "valve",
+    "watercooler",
+    "wellstream",
+}
 
 
 class _MaterialBoundaryIdentityTracker:
@@ -987,29 +1027,38 @@ class NeqSimProcessModel:
         return products
 
     @staticmethod
-    def _reactive_unit_names(units: List[Any]) -> List[str]:
-        """Return units that make species-level boundary closure inapplicable."""
-        reactive_units: List[str] = []
+    def _component_balance_exclusion_names(
+        units: List[Any],
+    ) -> List[str]:
+        """Return species-changing or unclassified native equipment."""
+        excluded_units: List[str] = []
         for unit in units:
             try:
                 unit_class = str(unit.getClass().getSimpleName())
             except Exception:
                 continue
             normalized_class = unit_class.lower()
-            if (
-                normalized_class not in _SPECIES_CHANGING_UNIT_CLASSES
-                and not any(
+            species_changing = (
+                normalized_class in _SPECIES_CHANGING_UNIT_CLASSES
+                or any(
                     token in normalized_class
                     for token in _SPECIES_CHANGING_UNIT_TOKENS
                 )
+            )
+            if (
+                not species_changing
+                and normalized_class in _SPECIES_CONSERVING_UNIT_CLASSES
             ):
                 continue
             try:
                 unit_name = str(unit.getName()).strip()
             except Exception:
                 unit_name = ""
-            reactive_units.append(unit_name or unit_class)
-        return reactive_units
+            label = unit_name or unit_class
+            if not species_changing:
+                label = f"{label} (unclassified {unit_class})"
+            excluded_units.append(label)
+        return excluded_units
 
     @staticmethod
     def _material_boundary_component_flows(
@@ -2266,16 +2315,18 @@ class NeqSimProcessModel:
                     f"imbalance={balance_pct:.2f}%"
                 ))
 
-            reactive_units = self._reactive_unit_names(all_units)
-            component_balance_applicable = not reactive_units
-            if reactive_units:
+            excluded_units = self._component_balance_exclusion_names(
+                all_units
+            )
+            component_balance_applicable = not excluded_units
+            if excluded_units:
                 constraints.append(
                     ConstraintStatus(
                         "component_balance",
                         "UNKNOWN",
                         "Species-level boundary closure is not applicable "
-                        "to reactive flowsheets. Reactive units: "
-                        f"{', '.join(reactive_units)}.",
+                        "to species-changing or unclassified equipment. "
+                        f"Units: {', '.join(excluded_units)}.",
                     )
                 )
             else:

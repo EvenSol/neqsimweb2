@@ -199,6 +199,16 @@ def component_balance_rows(result: Any) -> List[Dict[str, float | str]]:
                 "component flows are unavailable."
             )
         return []
+    positive_roles = {
+        row["role"]
+        for row in rows
+        if row["mass_flow_kg_hr"] > 0.0
+    }
+    if positive_roles != {"feed", "product"}:
+        raise ValueError(
+            "Component boundary diagnostics require positive-flow "
+            "feed and product boundaries."
+        )
     for index, (row, component_map) in enumerate(
         zip(rows, component_maps)
     ):
