@@ -18,6 +18,7 @@ from process_chat.flowsheet_editor import (
     graph_port_rows,
     inline_unit_catalog,
     inline_unit_catalog_rows,
+    inline_unit_property_rows,
     insert_inline_unit_on_connection,
     material_connection_rows,
     record_graph_history,
@@ -68,6 +69,64 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(unit["ports"]["material_in"], ["in"])
         self.assertEqual(unit["params"]["outlet_temperature_C"], 35.0)
         validate_catalog_unit(unit)
+
+    def test_property_metadata_has_explicit_units_and_valid_defaults(self):
+        catalog = inline_unit_catalog()
+
+        for unit_type, definition in catalog.items():
+            with self.subTest(unit_type=unit_type):
+                rows = inline_unit_property_rows(
+                    unit_type,
+                    definition["default_params"],
+                )
+                self.assertEqual(
+                    [row["key"] for row in rows],
+                    list(definition["default_params"]),
+                )
+                self.assertTrue(all(row["label"] for row in rows))
+                self.assertTrue(all(row["unit"] for row in rows))
+                self.assertTrue(
+                    all(
+                        row["minimum"] <= row["value"] <= row["maximum"]
+                        for row in rows
+                    )
+                )
+
+        pressure_row = inline_unit_property_rows("compressor")[0]
+        self.assertEqual(pressure_row["unit"], "bara (absolute)")
+        self.assertEqual(pressure_row["format"], "%.2f")
+
+    def test_property_metadata_rejects_invalid_parameter_shapes(self):
+        invalid_cases = (
+            (
+                "compressor",
+                {"outlet_pressure_bara": 80.0},
+                "missing property 'isentropic_efficiency'",
+            ),
+            (
+                "valve",
+                {"outlet_pressure_bara": 40.0, "unknown": 1.0},
+                "unsupported property 'unknown'",
+            ),
+            (
+                "pump",
+                {"outlet_pressure_bara": 80.0, "efficiency": True},
+                "property 'efficiency' must be numeric",
+            ),
+            (
+                "pipeline",
+                {
+                    "length": 1000.0,
+                    "diameter": 0.0,
+                    "roughness": 1.0e-5,
+                },
+                "property 'diameter' must be between",
+            ),
+        )
+        for unit_type, params, message in invalid_cases:
+            with self.subTest(unit_type=unit_type, message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    inline_unit_property_rows(unit_type, params)
 
     def test_invalid_catalog_requests_fail_explicitly(self):
         for unit_type, name, message in (

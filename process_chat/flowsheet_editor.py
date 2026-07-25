@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from typing import Any
 
@@ -11,6 +12,25 @@ from typing import Any
 GRAPH_DRAFT_SCHEMA_VERSION = 1
 GRAPH_HISTORY_SCHEMA_VERSION = 1
 MAX_GRAPH_HISTORY_ENTRIES = 50
+
+
+def _number_property(
+    label: str,
+    unit: str,
+    minimum: float,
+    maximum: float,
+    step: float,
+    display_format: str,
+) -> dict[str, Any]:
+    """Define one explicit-unit numeric property for editor presentation."""
+    return {
+        "label": label,
+        "unit": unit,
+        "minimum": minimum,
+        "maximum": maximum,
+        "step": step,
+        "format": display_format,
+    }
 
 
 _GRAPH_NODE_STYLES = {
@@ -40,6 +60,24 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             "outlet_pressure_bara": 80.0,
             "isentropic_efficiency": 0.78,
         },
+        "properties": {
+            "outlet_pressure_bara": _number_property(
+                "Outlet pressure",
+                "bara (absolute)",
+                1.0,
+                500.0,
+                1.0,
+                "%.2f",
+            ),
+            "isentropic_efficiency": _number_property(
+                "Isentropic efficiency",
+                "-",
+                0.01,
+                1.0,
+                0.01,
+                "%.3f",
+            ),
+        },
     },
     "cooler": {
         "label": "Cooler",
@@ -52,6 +90,24 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "default_params": {
             "outlet_temperature_C": 35.0,
             "pressure_drop_bar": 0.0,
+        },
+        "properties": {
+            "outlet_temperature_C": _number_property(
+                "Outlet temperature",
+                "°C",
+                -100.0,
+                300.0,
+                1.0,
+                "%.2f",
+            ),
+            "pressure_drop_bar": _number_property(
+                "Pressure drop",
+                "bar",
+                0.0,
+                200.0,
+                0.1,
+                "%.3f",
+            ),
         },
     },
     "heater": {
@@ -66,6 +122,24 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             "outlet_temperature_C": 50.0,
             "pressure_drop_bar": 0.0,
         },
+        "properties": {
+            "outlet_temperature_C": _number_property(
+                "Outlet temperature",
+                "°C",
+                -100.0,
+                500.0,
+                1.0,
+                "%.2f",
+            ),
+            "pressure_drop_bar": _number_property(
+                "Pressure drop",
+                "bar",
+                0.0,
+                200.0,
+                0.1,
+                "%.3f",
+            ),
+        },
     },
     "valve": {
         "label": "Valve",
@@ -77,6 +151,16 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         },
         "default_params": {
             "outlet_pressure_bara": 40.0,
+        },
+        "properties": {
+            "outlet_pressure_bara": _number_property(
+                "Outlet pressure",
+                "bara (absolute)",
+                0.01,
+                500.0,
+                1.0,
+                "%.2f",
+            ),
         },
     },
     "pump": {
@@ -91,6 +175,24 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             "outlet_pressure_bara": 80.0,
             "efficiency": 0.75,
         },
+        "properties": {
+            "outlet_pressure_bara": _number_property(
+                "Outlet pressure",
+                "bara (absolute)",
+                0.01,
+                1000.0,
+                1.0,
+                "%.2f",
+            ),
+            "efficiency": _number_property(
+                "Efficiency",
+                "-",
+                0.01,
+                1.0,
+                0.01,
+                "%.3f",
+            ),
+        },
     },
     "expander": {
         "label": "Expander",
@@ -103,6 +205,24 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "default_params": {
             "outlet_pressure_bara": 30.0,
             "isentropic_efficiency": 0.80,
+        },
+        "properties": {
+            "outlet_pressure_bara": _number_property(
+                "Outlet pressure",
+                "bara (absolute)",
+                0.01,
+                500.0,
+                1.0,
+                "%.2f",
+            ),
+            "isentropic_efficiency": _number_property(
+                "Isentropic efficiency",
+                "-",
+                0.01,
+                1.0,
+                0.01,
+                "%.3f",
+            ),
         },
     },
     "pipeline": {
@@ -117,6 +237,32 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             "length": 1000.0,
             "diameter": 0.30,
             "roughness": 1.0e-5,
+        },
+        "properties": {
+            "length": _number_property(
+                "Length",
+                "m",
+                0.01,
+                10_000_000.0,
+                10.0,
+                "%.2f",
+            ),
+            "diameter": _number_property(
+                "Internal diameter",
+                "m",
+                0.001,
+                10.0,
+                0.01,
+                "%.4f",
+            ),
+            "roughness": _number_property(
+                "Absolute roughness",
+                "m",
+                0.0,
+                0.1,
+                1.0e-6,
+                "%.7f",
+            ),
         },
     },
 }
@@ -138,6 +284,70 @@ def inline_unit_catalog_rows() -> list[dict[str, Any]]:
         }
         for unit_type, definition in _INLINE_UNIT_CATALOG.items()
     ]
+
+
+def inline_unit_property_rows(
+    unit_type: str,
+    params: Any = None,
+) -> list[dict[str, Any]]:
+    """Return deterministic explicit-unit property rows for one catalog unit."""
+    cleaned_type = str(unit_type).strip().lower()
+    definition = _INLINE_UNIT_CATALOG.get(cleaned_type)
+    if definition is None:
+        raise ValueError(f"Unsupported inline unit type '{cleaned_type}'.")
+    if params is None:
+        selected_params = definition["default_params"]
+    elif isinstance(params, dict):
+        selected_params = params
+    else:
+        raise ValueError("Inline unit params must be an object.")
+
+    property_keys = set(definition["properties"])
+    parameter_keys = set(selected_params)
+    missing = sorted(property_keys - parameter_keys)
+    unknown = sorted(parameter_keys - property_keys)
+    if missing:
+        raise ValueError(
+            f"Inline unit '{cleaned_type}' is missing property '{missing[0]}'."
+        )
+    if unknown:
+        raise ValueError(
+            f"Inline unit '{cleaned_type}' has unsupported property "
+            f"'{unknown[0]}'."
+        )
+
+    rows: list[dict[str, Any]] = []
+    for key, metadata in definition["properties"].items():
+        raw_value = selected_params[key]
+        if isinstance(raw_value, bool):
+            raise ValueError(f"Inline unit property '{key}' must be numeric.")
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Inline unit property '{key}' must be numeric."
+            ) from error
+        if not math.isfinite(value):
+            raise ValueError(f"Inline unit property '{key}' must be finite.")
+        if value < metadata["minimum"] or value > metadata["maximum"]:
+            raise ValueError(
+                f"Inline unit property '{key}' must be between "
+                f"{metadata['minimum']} and {metadata['maximum']} "
+                f"{metadata['unit']}."
+            )
+        rows.append(
+            {
+                "key": key,
+                "label": metadata["label"],
+                "unit": metadata["unit"],
+                "value": value,
+                "minimum": metadata["minimum"],
+                "maximum": metadata["maximum"],
+                "step": metadata["step"],
+                "format": metadata["format"],
+            }
+        )
+    return rows
 
 
 def _slugify(value: str) -> str:
@@ -202,6 +412,7 @@ def validate_catalog_unit(unit: Any) -> None:
         )
     if not isinstance(unit.get("params"), dict):
         raise ValueError(f"Inline unit '{unit_id}' params must be an object.")
+    inline_unit_property_rows(unit_type, unit["params"])
 
 
 def _connection_index(
