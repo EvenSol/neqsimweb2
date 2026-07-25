@@ -531,6 +531,83 @@ def inlet_composition_property_rows(inlet: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def update_inlet_composition(
+    inlets: list[Any],
+    inlet_id: str,
+    composition: Any,
+) -> list[dict[str, Any]]:
+    """Transactionally replace one inlet's normalized mole fractions."""
+    if not isinstance(inlets, list):
+        raise ValueError("Graph inlets must be an array.")
+    if not isinstance(composition, dict):
+        raise ValueError("Material inlet composition must be an object.")
+
+    cleaned_inlet_id = str(inlet_id).strip()
+    copied_inlets = copy.deepcopy(inlets)
+    matches = [
+        index
+        for index, inlet in enumerate(copied_inlets)
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == cleaned_inlet_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown material inlet '{cleaned_inlet_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Material inlet id '{cleaned_inlet_id}' is duplicated.")
+
+    selected_inlet = copied_inlets[matches[0]]
+    current_rows = inlet_composition_property_rows(selected_inlet)
+    component_order = [row["component"] for row in current_rows]
+    if set(composition) != set(component_order):
+        raise ValueError(
+            f"Material inlet '{cleaned_inlet_id}' composition must match its "
+            "shared component registry exactly."
+        )
+
+    entered_values: dict[str, float] = {}
+    entered_total = 0.0
+    for component_name in component_order:
+        raw_value = composition[component_name]
+        if isinstance(raw_value, bool):
+            raise ValueError(
+                f"Material inlet component '{component_name}' must be numeric."
+            )
+        try:
+            mole_fraction = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Material inlet component '{component_name}' must be numeric."
+            ) from error
+        if not math.isfinite(mole_fraction):
+            raise ValueError(
+                f"Material inlet component '{component_name}' must be finite."
+            )
+        if not 0.0 <= mole_fraction <= 1.0:
+            raise ValueError(
+                f"Material inlet component '{component_name}' must be "
+                "between 0 and 1 mol/mol."
+            )
+        entered_values[component_name] = mole_fraction
+        entered_total += mole_fraction
+
+    if entered_total <= 0.0:
+        raise ValueError(
+            f"Material inlet '{cleaned_inlet_id}' composition total must be "
+            "positive."
+        )
+    normalized_composition = {
+        component_name: entered_values[component_name] / entered_total
+        for component_name in component_order
+    }
+    updated_inlet = {
+        **selected_inlet,
+        "composition": normalized_composition,
+    }
+    inlet_composition_property_rows(updated_inlet)
+    copied_inlets[matches[0]] = updated_inlet
+    return copied_inlets
+
+
 def update_inlet_conditions(
     inlets: list[Any],
     inlet_id: str,
