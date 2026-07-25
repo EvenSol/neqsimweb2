@@ -174,8 +174,7 @@ def component_balance_rows(result: Any) -> List[Dict[str, float | str]]:
         zip(rows, component_maps)
     ):
         if (
-            row["molar_flow_mol_sec"] is not None
-            and row["molar_flow_mol_sec"] > 0.0
+            row["mass_flow_kg_hr"] > 0.0
             and not component_map
         ):
             raise ValueError(

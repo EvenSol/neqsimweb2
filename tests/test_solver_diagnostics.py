@@ -227,6 +227,27 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             component_balance_rows(incomplete)
 
+        missing_molar_flow = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "feed",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": None,
+                    "component_molar_flows_mol_sec": None,
+                },
+                {
+                    "role": "product",
+                    "stream_name": "product",
+                    "mass_flow_kg_hr": 1.0,
+                    "molar_flow_mol_sec": 1.0,
+                    "component_molar_flows_mol_sec": {"methane": 1.0},
+                },
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            component_balance_rows(missing_molar_flow)
+
         malformed = _result(
             [
                 {
