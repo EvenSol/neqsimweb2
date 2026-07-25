@@ -1134,6 +1134,7 @@ class NeqSimProcessModel:
             "getExpanderInletStream",
             "getCompressorFeedStream",
             "getExpanderFeedStream",
+            "getSolventInStream",
         ):
             if not hasattr(unit, method_name):
                 continue
@@ -1167,6 +1168,8 @@ class NeqSimProcessModel:
         """Discover external sources and terminal sinks from native ports."""
         consumed = _MaterialBoundaryIdentityTracker()
         produced = _MaterialBoundaryIdentityTracker()
+        consumed_fluids = _MaterialBoundaryIdentityTracker()
+        produced_fluids = _MaterialBoundaryIdentityTracker()
         stream_units: List[Any] = []
         equipment_outlets: List[Tuple[Any, str]] = []
 
@@ -1182,23 +1185,45 @@ class NeqSimProcessModel:
                 continue
             for stream in NeqSimProcessModel._material_inlet_streams(unit):
                 consumed.add("feed", stream)
+                fluid = NeqSimProcessModel._material_fluid_reference(
+                    stream
+                )
+                if fluid is not None:
+                    consumed_fluids.add("feed", fluid)
             for stream, label in (
                 NeqSimProcessModel._fallback_material_outlet_streams(unit)
             ):
                 produced.add("product", stream)
+                fluid = NeqSimProcessModel._material_fluid_reference(
+                    stream
+                )
+                if fluid is not None:
+                    produced_fluids.add("product", fluid)
                 equipment_outlets.append((stream, label))
 
-        feeds = [
-            stream
-            for stream in stream_units
-            if consumed.contains("feed", stream)
-            and not produced.contains("product", stream)
-        ]
-        products = [
-            (stream, label)
-            for stream, label in equipment_outlets
-            if not consumed.contains("feed", stream)
-        ]
+        feeds = []
+        for stream in stream_units:
+            fluid = NeqSimProcessModel._material_fluid_reference(stream)
+            is_consumed = consumed.contains("feed", stream) or (
+                fluid is not None
+                and consumed_fluids.contains("feed", fluid)
+            )
+            is_produced = produced.contains("product", stream) or (
+                fluid is not None
+                and produced_fluids.contains("product", fluid)
+            )
+            if is_consumed and not is_produced:
+                feeds.append(stream)
+
+        products = []
+        for stream, label in equipment_outlets:
+            fluid = NeqSimProcessModel._material_fluid_reference(stream)
+            is_consumed = consumed.contains("feed", stream) or (
+                fluid is not None
+                and consumed_fluids.contains("feed", fluid)
+            )
+            if not is_consumed:
+                products.append((stream, label))
         return feeds, products
 
     @staticmethod
