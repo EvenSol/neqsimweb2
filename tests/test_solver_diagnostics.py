@@ -269,11 +269,14 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(
             [
-                row["mass_flow_kg_hr"]
+                (
+                    row["mass_flow_kg_hr"],
+                    row["molar_flow_mol_sec"],
+                )
                 for row in result.raw["material_boundaries"]
                 if row["role"] == "product"
             ],
-            [0.0],
+            [(0.0, 0.0)],
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 100.0)
 

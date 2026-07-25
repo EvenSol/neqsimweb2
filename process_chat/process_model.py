@@ -933,7 +933,10 @@ class NeqSimProcessModel:
             raise ValueError(
                 f"Solved {role} boundary '{name}' has a non-finite mass flow."
             )
-        if abs(mass_flow) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+        is_no_flow = (
+            abs(mass_flow) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR
+        )
+        if is_no_flow:
             mass_flow = 0.0
 
         record: Dict[str, Any] = {
@@ -955,6 +958,8 @@ class NeqSimProcessModel:
                 continue
             if math.isfinite(value):
                 record[key] = value
+        if is_no_flow:
+            record["molar_flow_mol_sec"] = 0.0
         return record
 
     @staticmethod
