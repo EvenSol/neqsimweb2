@@ -35,8 +35,10 @@ sys.path.insert(0, _PROJECT_ROOT)
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
 from process_chat.solver_diagnostics import (  # noqa: E402
+    aggregate_energy_balance,
     aggregate_validation_status,
     component_balance_rows,
+    energy_transfer_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
 )
@@ -1815,6 +1817,7 @@ def _material_boundary_dataframe(result: Any) -> pd.DataFrame:
         "Temperature [°C]",
         "Pressure [bara]",
         "Molar flow [mol/s]",
+        "Enthalpy flow [kW]",
     ]
     records = [
         {
@@ -1824,6 +1827,7 @@ def _material_boundary_dataframe(result: Any) -> pd.DataFrame:
             "Temperature [°C]": row["temperature_C"],
             "Pressure [bara]": row["pressure_bara"],
             "Molar flow [mol/s]": row["molar_flow_mol_sec"],
+            "Enthalpy flow [kW]": row["enthalpy_flow_kW"],
         }
         for row in material_boundary_rows(result)
     ]
@@ -1854,6 +1858,61 @@ def _component_balance_dataframe(result: Any) -> pd.DataFrame:
             "Imbalance [%]": row["imbalance_pct"],
         }
         for row in component_balance_rows(result)
+    ]
+    return pd.DataFrame(records, columns=columns)
+
+
+def _energy_balance_dataframe(result: Any) -> pd.DataFrame:
+    """Build an explicit-unit system energy-closure summary."""
+    columns = ["Term", "Value", "Unit"]
+    summary = aggregate_energy_balance(result)
+    if summary["applicable"] is not True:
+        return pd.DataFrame(columns=columns)
+    records = [
+        {
+            "Term": "Feed material enthalpy",
+            "Value": summary["feed_enthalpy_kW"],
+            "Unit": "kW",
+        },
+        {
+            "Term": "Product material enthalpy",
+            "Value": summary["product_enthalpy_kW"],
+            "Unit": "kW",
+        },
+        {
+            "Term": "Signed external energy transfer",
+            "Value": summary["external_energy_transfer_kW"],
+            "Unit": "kW",
+        },
+        {
+            "Term": "Closure residual",
+            "Value": summary["residual_kW"],
+            "Unit": "kW",
+        },
+        {
+            "Term": "Relative imbalance",
+            "Value": summary["imbalance_pct"],
+            "Unit": "%",
+        },
+    ]
+    return pd.DataFrame(records, columns=columns)
+
+
+def _energy_transfer_dataframe(result: Any) -> pd.DataFrame:
+    """Build a signed shaft-work and heat-transfer table."""
+    columns = ["Unit", "Type", "Transfer", "Energy transfer [kW]"]
+    records = [
+        {
+            "Unit": row["unit_name"],
+            "Type": row["unit_type"],
+            "Transfer": (
+                "Shaft work"
+                if row["transfer_kind"] == "shaft_work"
+                else "Heat"
+            ),
+            "Energy transfer [kW]": row["energy_transfer_kW"],
+        }
+        for row in energy_transfer_rows(result)
     ]
     return pd.DataFrame(records, columns=columns)
 
@@ -2189,6 +2248,8 @@ def _engineering_workbook_bytes(
     )
     material_boundary_table = _material_boundary_dataframe(result)
     component_balance_table = _component_balance_dataframe(result)
+    energy_balance_table = _energy_balance_dataframe(result)
+    energy_transfer_table = _energy_transfer_dataframe(result)
     sheet_frames = {
         "Case Summary": case_summary,
         "KPIs": kpi_table,
@@ -2201,6 +2262,8 @@ def _engineering_workbook_bytes(
         "Inlet Build Specs": inlet_fluid_spec_table,
         "Material Balance": material_boundary_table,
         "Component Balance": component_balance_table,
+        "Energy Balance": energy_balance_table,
+        "Energy Transfers": energy_transfer_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -4013,6 +4076,8 @@ if results_are_current and has_stored_result:
     constraint_table = _constraint_dataframe(result)
     material_boundary_table = _material_boundary_dataframe(result)
     component_balance_table = _component_balance_dataframe(result)
+    energy_balance_table = _energy_balance_dataframe(result)
+    energy_transfer_table = _energy_transfer_dataframe(result)
     with validation_tab:
         status_counts = constraint_table["status"].value_counts()
         profile_counts = pressure_profile_table["Status"].value_counts()
@@ -4058,6 +4123,7 @@ if results_are_current and has_stored_result:
                         "Temperature [°C]": "{:.3f}",
                         "Pressure [bara]": "{:.4f}",
                         "Molar flow [mol/s]": "{:,.6f}",
+                        "Enthalpy flow [kW]": "{:+,.6f}",
                     },
                     na_rep="—",
                 ),
@@ -4066,7 +4132,8 @@ if results_are_current and has_stored_result:
             )
             st.caption(
                 "Feed and product rows are native solved streams. "
-                "Mass flow is aggregated across every listed boundary."
+                "Mass and enthalpy flow are aggregated across every "
+                "listed boundary."
             )
         st.markdown("#### Component balance")
         if component_balance_table.empty:
@@ -4092,6 +4159,38 @@ if results_are_current and has_stored_result:
                 "Component flows are aggregated across every solved "
                 "feed and product boundary. Relative imbalance uses a "
                 "1e-9 mol/s absolute scale floor for trace components."
+            )
+        st.markdown("#### System energy balance")
+        if energy_balance_table.empty:
+            st.info(
+                "System energy closure is unavailable for this result. "
+                "The validation table identifies unaudited or unreadable "
+                "equipment when applicable."
+            )
+        else:
+            st.dataframe(
+                energy_balance_table.style.format(
+                    {"Value": "{:+,.9g}"},
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            if not energy_transfer_table.empty:
+                st.caption("Audited external energy transfers")
+                st.dataframe(
+                    energy_transfer_table.style.format(
+                        {"Energy transfer [kW]": "{:+,.6f}"},
+                        na_rep="—",
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            st.caption(
+                "Closure uses product enthalpy minus feed enthalpy minus "
+                "signed external transfer. Positive shaft work or heat "
+                "adds energy to the material system; negative values "
+                "remove energy."
             )
         st.markdown("#### Solved pressure profile")
         st.dataframe(
@@ -4134,7 +4233,8 @@ if results_are_current and has_stored_result:
             )
         st.caption(
             "Validation level: NeqSim convergence evidence, pressure ordering, "
-            "composition normalization, mass balance, and engineering bounds."
+            "composition normalization, material, component and audited "
+            "energy closure, and engineering bounds."
         )
 
     st.subheader("3. Reproducible deliverables")
