@@ -6,6 +6,7 @@ import math
 import unittest
 
 from process_chat.process_builder import ProcessBuilder
+from process_chat.solver_diagnostics import aggregate_energy_balance
 
 
 class MultiInletMixerConservationTest(unittest.TestCase):
@@ -112,6 +113,96 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             graph_spec,
             inlet_specs,
             ["dry-gas", "rich-gas", "feed-mixer"],
+        )
+        return builder, model
+
+    @staticmethod
+    def _build_compression_cooling_case(flow_scale: float):
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 30.0,
+                    "total_flow": 100_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        graph_spec = {
+            "name": "Native compression energy benchmark",
+            "units": [
+                {
+                    "id": "compressor",
+                    "name": "compressor",
+                    "type": "compressor",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {
+                        "outlet_pressure_bara": 60.0,
+                        "isentropic_efficiency": 0.80,
+                    },
+                },
+                {
+                    "id": "cooler",
+                    "name": "cooler",
+                    "type": "cooler",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {
+                        "outlet_temperature_C": 30.0,
+                        "pressure_drop_bar": 0.5,
+                    },
+                },
+            ],
+            "connections": [
+                {
+                    "id": "feed-to-compressor",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "compressor",
+                        "port": "in",
+                    },
+                },
+                {
+                    "id": "compressor-to-cooler",
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "compressor",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cooler",
+                        "port": "in",
+                    },
+                },
+            ],
+        }
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", "compressor", "cooler"],
         )
         return builder, model
 
@@ -248,6 +339,9 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     self.assertTrue(
                         math.isfinite(row["molar_flow_mol_sec"])
                     )
+                    self.assertTrue(
+                        math.isfinite(row["enthalpy_flow_kW"])
+                    )
                     self.assertEqual(
                         set(row["component_molar_flows_mol_sec"]),
                         {"methane", "ethane"},
@@ -276,6 +370,27 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     if constraint.name == "component_balance"
                 )
                 self.assertEqual(component_constraint.status, "OK")
+                energy_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "energy_balance"
+                )
+                self.assertEqual(energy_constraint.status, "OK")
+                self.assertIs(
+                    result.raw["energy_balance_applicable"],
+                    True,
+                )
+                self.assertEqual(result.raw["energy_transfers"], [])
+                energy_summary = aggregate_energy_balance(result)
+                self.assertIs(energy_summary["applicable"], True)
+                self.assertLess(
+                    energy_summary["imbalance_pct"],
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
                 self.assertEqual(
                     result.kpis["component_balance_count"].value,
                     2.0,
@@ -341,6 +456,70 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 self.assertLess(
                     clone_result.kpis["mass_balance_pct"].value,
                     1.0e-6,
+                )
+                self.assertLess(
+                    clone_result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+
+    def test_native_signed_work_heat_and_nearby_point(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                _, model = self._build_compression_cooling_case(
+                    flow_scale
+                )
+                result = model.run(timeout_ms=180_000)
+                summary = aggregate_energy_balance(result)
+                transfers = result.raw["energy_transfers"]
+
+                self.assertEqual(
+                    [
+                        (
+                            row["unit_type"],
+                            row["transfer_kind"],
+                        )
+                        for row in transfers
+                    ],
+                    [
+                        ("Compressor", "shaft_work"),
+                        ("Cooler", "heat"),
+                    ],
+                )
+                self.assertGreater(
+                    transfers[0]["energy_transfer_kW"],
+                    0.0,
+                )
+                self.assertLess(
+                    transfers[1]["energy_transfer_kW"],
+                    0.0,
+                )
+                self.assertAlmostEqual(
+                    summary["external_energy_transfer_kW"],
+                    (
+                        summary["product_enthalpy_kW"]
+                        - summary["feed_enthalpy_kW"]
+                    ),
+                    delta=max(
+                        abs(summary["product_enthalpy_kW"]) * 1.0e-8,
+                        1.0e-6,
+                    ),
+                )
+                self.assertLess(summary["imbalance_pct"], 1.0e-6)
+                energy_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "energy_balance"
+                )
+                self.assertEqual(energy_constraint.status, "OK")
+                print(
+                    "native compression energy benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    "work="
+                    f"{transfers[0]['energy_transfer_kW']:.3f} kW",
+                    "heat="
+                    f"{transfers[1]['energy_transfer_kW']:.3f} kW",
+                    "energy="
+                    f"{summary['imbalance_pct']:.3e}%",
                 )
 
 
