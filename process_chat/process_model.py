@@ -957,6 +957,22 @@ class NeqSimProcessModel:
                 record[key] = value
         return record
 
+    @staticmethod
+    def _material_boundary_identity(stream: Any) -> Tuple[str, int]:
+        """Return a reference-identity token for a native or Python stream."""
+        try:
+            import jpype
+
+            if jpype.isJVMStarted():
+                java_system = jpype.JClass("java.lang.System")
+                return (
+                    "java",
+                    int(java_system.identityHashCode(stream)),
+                )
+        except Exception:
+            pass
+        return ("python", id(stream))
+
     def get_diagram_dot(
         self,
         style: str = "HYSYS",
@@ -1894,11 +1910,10 @@ class NeqSimProcessModel:
                 fallback_name: str,
             ) -> Optional[Dict[str, Any]]:
                 """Record one native boundary identity once per material role."""
-                try:
-                    stream_id = int(stream.hashCode())
-                except Exception:
-                    stream_id = id(stream)
-                boundary_id = (role, stream_id)
+                boundary_id = (
+                    role,
+                    self._material_boundary_identity(stream),
+                )
                 if boundary_id in seen_material_boundary_ids:
                     return None
                 record = self._material_boundary_record(

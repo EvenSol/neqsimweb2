@@ -15,12 +15,13 @@ from process_chat.solver_diagnostics import (
 
 
 class _FallbackStream:
-    def __init__(self, name, mass_flow=None):
+    def __init__(self, name, mass_flow=None, hash_code=None):
         self._name = name
         self._mass_flow = mass_flow
+        self._hash_code = hash_code
 
     def hashCode(self):
-        return id(self)
+        return self._hash_code if self._hash_code is not None else id(self)
 
     def getClass(self):
         return _JavaClass("Stream")
@@ -315,6 +316,38 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             result.kpis["material_product_count"].value,
             1.0,
         )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_distinct_streams_survive_native_hash_collisions(self):
+        first_feed = _FallbackStream("feed", 40.0, hash_code=17)
+        second_feed = _FallbackStream("feed", 60.0, hash_code=17)
+        product = _FallbackStream("product", 100.0, hash_code=23)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                first_feed,
+                second_feed,
+                _FallbackEquipment(),
+                product,
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed one": first_feed,
+            "feed two": second_feed,
+            "product": product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        summary = aggregate_material_balance(result)
+        self.assertEqual(summary["feed_count"], 2.0)
+        self.assertEqual(summary["feed_flow_kg_hr"], 100.0)
+        self.assertEqual(summary["product_count"], 1.0)
+        self.assertEqual(summary["product_flow_kg_hr"], 100.0)
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
 
