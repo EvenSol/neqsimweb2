@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import unittest
+import weakref
 from types import SimpleNamespace
 
 from process_chat.process_model import (
@@ -394,6 +395,17 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             tracker.contains("utility", stream)
         with self.assertRaisesRegex(ValueError, "feed or product"):
             tracker.add("utility", stream)
+
+    def test_reference_tracker_retains_fallback_streams(self):
+        tracker = _MaterialBoundaryIdentityTracker()
+        stream = _FallbackStream("feed", 1.0)
+        stream_reference = weakref.ref(stream)
+
+        tracker.add("feed", stream)
+        del stream
+
+        self.assertIsNotNone(stream_reference())
+        self.assertTrue(tracker.contains("feed", stream_reference()))
 
 
 if __name__ == "__main__":
