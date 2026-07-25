@@ -139,6 +139,28 @@ class LocalSymbolImportTest(unittest.TestCase):
         self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
         self.assertFalse(hasattr(flowsheet_editor, removed_name))
 
+    def test_failed_refresh_restores_requested_namespace(self):
+        original_disconnect = flowsheet_editor.disconnect_graph_connection
+        del flowsheet_editor.connect_graph_ports
+
+        with mock.patch(
+            "process_chat.runtime_imports.importlib.reload",
+            side_effect=RuntimeError("reload failed"),
+        ) as reload_module:
+            with self.assertRaisesRegex(RuntimeError, "reload failed"):
+                import_local_symbols(
+                    "process_chat.flowsheet_editor",
+                    ("connect_graph_ports", "disconnect_graph_connection"),
+                    project_root=self.project_root,
+                )
+
+        self.assertFalse(hasattr(flowsheet_editor, "connect_graph_ports"))
+        self.assertIs(
+            flowsheet_editor.disconnect_graph_connection,
+            original_disconnect,
+        )
+        reload_module.assert_called_once_with(flowsheet_editor)
+
     def test_refuses_to_refresh_module_outside_project(self):
         outside_module = types.ModuleType("outside_project_module")
         outside_module.__file__ = "/tmp/outside_project_module.py"
