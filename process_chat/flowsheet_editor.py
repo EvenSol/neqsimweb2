@@ -1280,6 +1280,7 @@ def remove_inline_unit(
 def create_graph_draft(
     units: list[Any],
     connections: list[Any],
+    inlets: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Create an isolated, versioned draft from case graph arrays."""
     if not isinstance(units, list):
@@ -1289,6 +1290,27 @@ def create_graph_draft(
 
     copied_units = copy.deepcopy(units)
     copied_connections = copy.deepcopy(connections)
+    copied_inlets = copy.deepcopy(inlets)
+    if copied_inlets is not None:
+        if not isinstance(copied_inlets, list):
+            raise ValueError("Graph draft inlets must be an array.")
+        inlet_ids: set[str] = set()
+        for index, inlet in enumerate(copied_inlets):
+            if not isinstance(inlet, dict):
+                raise ValueError(
+                    f"Graph draft inlet {index} must be an object."
+                )
+            inlet_id = str(inlet.get("id", "")).strip()
+            if not inlet_id:
+                raise ValueError(
+                    f"Graph draft inlet {index} requires an id."
+                )
+            if inlet_id in inlet_ids:
+                raise ValueError(
+                    f"Graph draft inlet id '{inlet_id}' is duplicated."
+                )
+            inlet_ids.add(inlet_id)
+
     unit_ids: set[str] = set()
     for index, unit in enumerate(copied_units):
         if not isinstance(unit, dict):
@@ -1335,11 +1357,14 @@ def create_graph_draft(
                         f"{endpoint_name} requires {field_name}."
                     )
 
-    return {
+    draft = {
         "schema_version": GRAPH_DRAFT_SCHEMA_VERSION,
         "units": copied_units,
         "connections": copied_connections,
     }
+    if copied_inlets is not None:
+        draft["inlets"] = copied_inlets
+    return draft
 
 
 def apply_graph_draft(
@@ -1358,10 +1383,13 @@ def apply_graph_draft(
     validated = create_graph_draft(
         draft.get("units"),
         draft.get("connections"),
+        draft.get("inlets") if "inlets" in draft else None,
     )
     updated_case = copy.deepcopy(case_spec)
     updated_case["units"] = validated["units"]
     updated_case["connections"] = validated["connections"]
+    if "inlets" in validated:
+        updated_case["inlets"] = validated["inlets"]
     return updated_case
 
 
@@ -1389,6 +1417,7 @@ def _validated_graph_history(history: Any) -> dict[str, Any]:
             create_graph_draft(
                 entry.get("units"),
                 entry.get("connections"),
+                entry.get("inlets") if "inlets" in entry else None,
             )
         )
 
@@ -1407,11 +1436,12 @@ def _validated_graph_history(history: Any) -> dict[str, Any]:
 def create_graph_history(
     units: list[Any],
     connections: list[Any],
+    inlets: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Create a history timeline containing one isolated graph revision."""
     return {
         "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
-        "entries": [create_graph_draft(units, connections)],
+        "entries": [create_graph_draft(units, connections, inlets)],
         "cursor": 0,
     }
 
@@ -1420,6 +1450,7 @@ def record_graph_history(
     history: Any,
     units: list[Any],
     connections: list[Any],
+    inlets: list[Any] | None = None,
     max_entries: int = MAX_GRAPH_HISTORY_ENTRIES,
 ) -> dict[str, Any]:
     """Append one graph revision and discard any abandoned redo branch."""
@@ -1431,7 +1462,7 @@ def record_graph_history(
         raise ValueError("Graph history limit must be an integer of at least 2.")
 
     updated = _validated_graph_history(history)
-    candidate = create_graph_draft(units, connections)
+    candidate = create_graph_draft(units, connections, inlets)
     if updated["entries"][updated["cursor"]] == candidate:
         return updated
 
@@ -1497,20 +1528,15 @@ def build_graph_draft_dot(
     amber paths, and each unconnected material output is shown as an explicit
     product boundary. Internal DOT node ids never contain user-provided text.
     """
-    if not isinstance(inlets, list):
-        raise ValueError("Graph preview inlets must be an array.")
-    validated_draft = create_graph_draft(units, connections)
+    validated_draft = create_graph_draft(units, connections, inlets)
+    validated_inlets = validated_draft["inlets"]
     validated_units = validated_draft["units"]
     validated_connections = validated_draft["connections"]
 
     node_ids: dict[tuple[str, str], str] = {}
     inlet_records: list[tuple[str, dict[str, Any], str]] = []
-    for index, inlet in enumerate(copy.deepcopy(inlets)):
-        if not isinstance(inlet, dict):
-            raise ValueError(f"Graph preview inlet {index} must be an object.")
-        inlet_id = str(inlet.get("id", "")).strip()
-        if not inlet_id:
-            raise ValueError(f"Graph preview inlet {index} requires an id.")
+    for index, inlet in enumerate(validated_inlets):
+        inlet_id = str(inlet["id"]).strip()
         key = ("inlet", inlet_id)
         if key in node_ids:
             raise ValueError(f"Graph preview inlet id '{inlet_id}' is duplicated.")
