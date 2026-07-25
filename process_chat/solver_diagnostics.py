@@ -14,6 +14,8 @@ _BOUNDARY_NUMERIC_FIELDS = (
     "enthalpy_flow_kW",
 )
 _COMPONENT_BALANCE_ABSOLUTE_TOL_MOL_SEC = 1.0e-9
+_ENERGY_BALANCE_SCALE_FLOOR_KW = 1.0e-9
+_ENERGY_TRANSFER_KINDS = {"shaft_work", "heat"}
 _VALIDATION_STATUSES = {"OK", "WARN", "VIOLATION", "UNKNOWN"}
 
 
@@ -276,6 +278,151 @@ def component_balance_rows(result: Any) -> List[Dict[str, float | str]]:
             }
         )
     return balance_rows
+
+
+def energy_transfer_rows(result: Any) -> List[Dict[str, float | str]]:
+    """Return validated signed external-energy transfers from a solve."""
+    raw = getattr(result, "raw", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Solver result raw diagnostics must be an object.")
+    source_rows = raw.get("energy_transfers", [])
+    if source_rows is None:
+        return []
+    if not isinstance(source_rows, list):
+        raise ValueError("Energy transfer diagnostics must be an array.")
+
+    rows: List[Dict[str, float | str]] = []
+    for index, source_row in enumerate(source_rows):
+        if not isinstance(source_row, dict):
+            raise ValueError(
+                f"Energy transfer row {index} must be an object."
+            )
+        unit_name = str(source_row.get("unit_name", "")).strip()
+        unit_type = str(source_row.get("unit_type", "")).strip()
+        transfer_kind = str(
+            source_row.get("transfer_kind", "")
+        ).strip().lower()
+        if not unit_name or not unit_type:
+            raise ValueError(
+                f"Energy transfer row {index} requires unit name and type."
+            )
+        if transfer_kind not in _ENERGY_TRANSFER_KINDS:
+            raise ValueError(
+                f"Energy transfer row {index} has an invalid kind."
+            )
+        try:
+            energy_transfer_kW = float(
+                source_row.get("energy_transfer_kW")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Energy transfer row {index} must be numeric."
+            ) from exc
+        if not math.isfinite(energy_transfer_kW):
+            raise ValueError(
+                f"Energy transfer row {index} must be finite."
+            )
+        rows.append(
+            {
+                "unit_name": unit_name,
+                "unit_type": unit_type,
+                "transfer_kind": transfer_kind,
+                "energy_transfer_kW": energy_transfer_kW,
+            }
+        )
+    return rows
+
+
+def aggregate_energy_balance(result: Any) -> Dict[str, Any]:
+    """Aggregate material enthalpy and signed external-energy closure.
+
+    Positive external transfer adds energy to the material system. The
+    residual is ``products - feeds - external transfer``.
+    """
+    raw = getattr(result, "raw", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Solver result raw diagnostics must be an object.")
+    applicable = raw.get("energy_balance_applicable")
+    if applicable not in {None, True, False}:
+        raise ValueError(
+            "Energy balance applicability must be true, false, or null."
+        )
+
+    rows = material_boundary_rows(result)
+    transfers = energy_transfer_rows(result)
+    if applicable is False:
+        return {
+            "applicable": False,
+            "feed_enthalpy_kW": None,
+            "product_enthalpy_kW": None,
+            "external_energy_transfer_kW": None,
+            "residual_kW": None,
+            "imbalance_pct": None,
+            "transfer_count": float(len(transfers)),
+        }
+    if not rows:
+        if applicable is True:
+            raise ValueError(
+                "Energy boundary diagnostics are incomplete: "
+                "no solved material boundaries are available."
+            )
+        return {
+            "applicable": None,
+            "feed_enthalpy_kW": None,
+            "product_enthalpy_kW": None,
+            "external_energy_transfer_kW": None,
+            "residual_kW": None,
+            "imbalance_pct": None,
+            "transfer_count": float(len(transfers)),
+        }
+
+    positive_rows = [
+        row for row in rows if row["mass_flow_kg_hr"] > 0.0
+    ]
+    positive_roles = {row["role"] for row in positive_rows}
+    if positive_roles != {"feed", "product"}:
+        raise ValueError(
+            "Energy boundary diagnostics require positive-flow "
+            "feed and product boundaries."
+        )
+    for index, row in enumerate(positive_rows):
+        if row["enthalpy_flow_kW"] is None:
+            raise ValueError(
+                "Energy boundary diagnostics are incomplete for "
+                f"positive-flow row {index}."
+            )
+
+    feed_enthalpy = sum(
+        float(row["enthalpy_flow_kW"])
+        for row in positive_rows
+        if row["role"] == "feed"
+    )
+    product_enthalpy = sum(
+        float(row["enthalpy_flow_kW"])
+        for row in positive_rows
+        if row["role"] == "product"
+    )
+    external_transfer = sum(
+        float(row["energy_transfer_kW"])
+        for row in transfers
+    )
+    residual = product_enthalpy - feed_enthalpy - external_transfer
+    scale = max(
+        abs(feed_enthalpy),
+        abs(product_enthalpy),
+        abs(external_transfer),
+        _ENERGY_BALANCE_SCALE_FLOOR_KW,
+    )
+    imbalance_pct = abs(residual) / scale * 100.0
+    return {
+        "applicable": True if applicable is True else applicable,
+        "feed_enthalpy_kW": feed_enthalpy,
+        "product_enthalpy_kW": product_enthalpy,
+        "external_energy_transfer_kW": external_transfer,
+        "residual_kW": residual,
+        "imbalance_pct": imbalance_pct,
+        "transfer_count": float(len(transfers)),
+    }
 
 
 def solved_feed_flow_kg_hr(

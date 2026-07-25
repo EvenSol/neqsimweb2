@@ -25,6 +25,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
 _COMPONENT_BALANCE_OK_PCT = 0.01
 _COMPONENT_BALANCE_WARN_PCT = 1.0
+_ENERGY_BALANCE_OK_PCT = 0.01
+_ENERGY_BALANCE_WARN_PCT = 1.0
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
     "stream",
@@ -104,6 +106,40 @@ _SPECIES_CONSERVING_UNIT_CLASSES = {
     "waterstrippercolumn",
     "wellflow",
     "wellstream",
+}
+_ENERGY_BALANCE_ADIABATIC_UNIT_CLASSES = {
+    "adjuster",
+    "calculator",
+    "checkvalve",
+    "componentsplitter",
+    "controlvalve",
+    "equilibriumstream",
+    "filter",
+    "gasscrubber",
+    "gasscrubbersimple",
+    "mixer",
+    "recycle",
+    "separator",
+    "setpoint",
+    "splitter",
+    "stream",
+    "threephaseseparator",
+    "throttlingvalve",
+    "twophaseseparator",
+    "valve",
+    "wellstream",
+}
+_ENERGY_BALANCE_POWER_UNIT_CLASSES = {
+    "compressor",
+    "esppump",
+    "expander",
+    "pump",
+}
+_ENERGY_BALANCE_DUTY_UNIT_CLASSES = {
+    "aircooler",
+    "cooler",
+    "heater",
+    "watercooler",
 }
 
 
@@ -1370,6 +1406,66 @@ class NeqSimProcessModel:
         return excluded_units
 
     @staticmethod
+    def _system_energy_transfers(
+        units: List[Any],
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Return audited signed energy transfers and excluded equipment."""
+        transfers: List[Dict[str, Any]] = []
+        excluded_units: List[str] = []
+        for unit in units:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            normalized_class = unit_class.lower()
+            try:
+                unit_name = str(unit.getName()).strip()
+            except Exception:
+                unit_name = ""
+            label = unit_name or unit_class
+
+            if normalized_class in _ENERGY_BALANCE_ADIABATIC_UNIT_CLASSES:
+                continue
+            if normalized_class in _ENERGY_BALANCE_POWER_UNIT_CLASSES:
+                getter_names = ("getPower",)
+                transfer_kind = "shaft_work"
+            elif normalized_class in _ENERGY_BALANCE_DUTY_UNIT_CLASSES:
+                getter_names = ("getDuty", "getEnergyInput")
+                transfer_kind = "heat"
+            else:
+                excluded_units.append(
+                    f"{label} (unaudited {unit_class})"
+                )
+                continue
+
+            energy_transfer_w = None
+            for getter_name in getter_names:
+                if not hasattr(unit, getter_name):
+                    continue
+                try:
+                    candidate = float(getattr(unit, getter_name)())
+                except Exception:
+                    continue
+                if math.isfinite(candidate):
+                    energy_transfer_w = candidate
+                    if candidate != 0.0 or getter_name == getter_names[-1]:
+                        break
+            if energy_transfer_w is None:
+                excluded_units.append(
+                    f"{label} ({transfer_kind} unavailable)"
+                )
+                continue
+            transfers.append(
+                {
+                    "unit_name": label,
+                    "unit_type": unit_class,
+                    "transfer_kind": transfer_kind,
+                    "energy_transfer_kW": energy_transfer_w / 1000.0,
+                }
+            )
+        return transfers, excluded_units
+
+    @staticmethod
     def _material_boundary_component_flows(
         stream: Any,
         total_molar_flow: Optional[float],
@@ -2404,8 +2500,10 @@ class NeqSimProcessModel:
         # the last non-utility unit's ALL outlets.
         material_boundaries: List[Dict[str, Any]] = []
         component_balances: List[Dict[str, Any]] = []
+        energy_transfers: List[Dict[str, Any]] = []
         material_balance_applicable: Optional[bool] = None
         component_balance_applicable: Optional[bool] = None
+        energy_balance_applicable: Optional[bool] = None
         try:
             material_boundary_identities = _MaterialBoundaryIdentityTracker()
 
@@ -2770,6 +2868,99 @@ class NeqSimProcessModel:
                         f"{len(component_balances)} components checked.",
                     )
                 )
+
+            energy_transfers, energy_excluded_units = (
+                self._system_energy_transfers(all_units)
+            )
+            energy_balance_applicable = not energy_excluded_units
+            if energy_excluded_units:
+                constraints.append(
+                    ConstraintStatus(
+                        "energy_balance",
+                        "UNKNOWN",
+                        "System energy closure is unavailable for unaudited "
+                        "or unreadable equipment: "
+                        f"{', '.join(energy_excluded_units)}.",
+                    )
+                )
+            else:
+                from .solver_diagnostics import aggregate_energy_balance
+
+                try:
+                    energy_summary = aggregate_energy_balance(
+                        ModelRunResult(
+                            kpis={},
+                            constraints=[],
+                            raw={
+                                "material_boundaries": material_boundaries,
+                                "energy_transfers": energy_transfers,
+                                "energy_balance_applicable": True,
+                            },
+                        )
+                    )
+                except ValueError as exc:
+                    energy_balance_applicable = False
+                    constraints.append(
+                        ConstraintStatus(
+                            "energy_balance",
+                            "UNKNOWN",
+                            f"Energy balance unavailable: {exc}",
+                        )
+                    )
+                else:
+                    for name, unit, summary_key in (
+                        (
+                            "material_feed_enthalpy_kW",
+                            "kW",
+                            "feed_enthalpy_kW",
+                        ),
+                        (
+                            "material_product_enthalpy_kW",
+                            "kW",
+                            "product_enthalpy_kW",
+                        ),
+                        (
+                            "external_energy_transfer_kW",
+                            "kW",
+                            "external_energy_transfer_kW",
+                        ),
+                        (
+                            "energy_balance_residual_kW",
+                            "kW",
+                            "residual_kW",
+                        ),
+                        (
+                            "energy_balance_pct",
+                            "%",
+                            "imbalance_pct",
+                        ),
+                    ):
+                        kpis[name] = KPI(
+                            name,
+                            float(energy_summary[summary_key]),
+                            unit,
+                        )
+                    energy_imbalance = float(
+                        energy_summary["imbalance_pct"]
+                    )
+                    energy_status = (
+                        "OK"
+                        if energy_imbalance < _ENERGY_BALANCE_OK_PCT
+                        else "WARN"
+                        if energy_imbalance < _ENERGY_BALANCE_WARN_PCT
+                        else "VIOLATION"
+                    )
+                    constraints.append(
+                        ConstraintStatus(
+                            "energy_balance",
+                            energy_status,
+                            "Products - feeds - external transfer="
+                            f"{energy_summary['residual_kW']:+.6g} kW; "
+                            f"relative imbalance={energy_imbalance:.6g}%. "
+                            "Positive external transfer adds energy to "
+                            "the material system.",
+                        )
+                    )
         except Exception:
             pass
 
@@ -2784,6 +2975,8 @@ class NeqSimProcessModel:
                 "material_balance_applicable": material_balance_applicable,
                 "component_balances": component_balances,
                 "component_balance_applicable": component_balance_applicable,
+                "energy_transfers": energy_transfers,
+                "energy_balance_applicable": energy_balance_applicable,
             }
         )
 
