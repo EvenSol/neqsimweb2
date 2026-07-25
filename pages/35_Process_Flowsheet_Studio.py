@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from process_chat.flowsheet_editor import (  # noqa: E402
     apply_graph_draft,
+    build_graph_draft_dot,
     create_graph_draft,
     create_graph_history,
     graph_history_status,
@@ -2423,6 +2424,30 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
     }
 
     with st.expander("Edit flowsheet graph", expanded=False):
+        st.markdown("#### Draft flowsheet")
+        st.caption(
+            "Automatically laid out from the active inlet, unit, port, and "
+            "connection schema before NeqSim execution."
+        )
+        try:
+            draft_dot = build_graph_draft_dot(
+                spec["inlets"],
+                spec["units"],
+                spec["connections"],
+            )
+        except ValueError as preview_error:
+            st.error(f"Draft flowsheet preview failed: {preview_error}")
+        else:
+            st.graphviz_chart(
+                draft_dot,
+                use_container_width=True,
+            )
+            st.caption(
+                "Blue solid paths are material streams; amber dashed paths "
+                "are energy links. Oval nodes mark inlet and product boundaries."
+            )
+
+        st.divider()
         graph_history = _graph_history_for_spec(spec)
         history_status = graph_history_status(graph_history)
         st.markdown("#### Edit history")
@@ -2807,6 +2832,7 @@ with st.expander("Model scope and assumptions", expanded=False):
 - A deterministic execution plan orders acyclic multi-inlet graphs and dependencies.
 - Each inlet compiles to an independent ProcessBuilder fluid definition with explicit units.
 - Inline equipment edits persist as an unsolved graph draft and are included in JSON cases.
+- The active draft graph is automatically laid out before NeqSim execution.
 - Cyclic graphs remain blocked until recycle and tear-stream solving is available.
 - Fluid validation supports multiple compatible inlets with independent conditions.
 - Pseudo-component names cannot carry conflicting molar mass or density data.
