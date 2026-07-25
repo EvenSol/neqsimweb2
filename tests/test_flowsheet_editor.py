@@ -7,14 +7,19 @@ import unittest
 
 from process_chat.flowsheet_editor import (
     apply_graph_draft,
-    create_inline_unit_spec,
     create_graph_draft,
+    create_graph_history,
+    create_inline_unit_spec,
+    graph_history_status,
     inline_unit_catalog,
     inline_unit_catalog_rows,
     insert_inline_unit_on_connection,
     material_connection_rows,
+    record_graph_history,
+    redo_graph_history,
     remove_inline_unit,
     rename_inline_unit,
+    undo_graph_history,
     validate_catalog_unit,
 )
 
@@ -497,6 +502,152 @@ class GraphDraftLifecycleTest(unittest.TestCase):
         self.assertEqual(restored_case["units"], units)
         self.assertEqual(restored_case["connections"], connections)
         self.assertEqual(restored_case["name"], "starter")
+
+
+class GraphHistoryTest(unittest.TestCase):
+    """Validate bounded, branch-aware graph edit history."""
+
+    def setUp(self):
+        self.units = [
+            create_inline_unit_spec(
+                "cooler",
+                "Product Cooler",
+                set(),
+            )
+        ]
+        self.connections = [
+            {
+                "id": "feed-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "product-cooler",
+                    "port": "in",
+                },
+            }
+        ]
+
+    def _history_with_insert(self):
+        history = create_graph_history(self.units, self.connections)
+        units, connections, _ = insert_inline_unit_on_connection(
+            self.units,
+            self.connections,
+            "feed-to-cooler",
+            "valve",
+            "Product Valve",
+        )
+        return record_graph_history(history, units, connections)
+
+    def test_undo_and_redo_return_isolated_graph_revisions(self):
+        history = self._history_with_insert()
+        self.assertEqual(
+            graph_history_status(history),
+            {
+                "position": 2,
+                "total": 2,
+                "can_undo": True,
+                "can_redo": False,
+            },
+        )
+
+        undone, starter = undo_graph_history(history)
+        self.assertEqual(starter["units"], self.units)
+        self.assertTrue(graph_history_status(undone)["can_redo"])
+        redone, inserted = redo_graph_history(undone)
+        self.assertEqual(len(inserted["units"]), 2)
+        self.assertEqual(redone, history)
+
+        starter["units"][0]["name"] = "changed"
+        redone["entries"][0]["units"][0]["name"] = "also changed"
+        self.assertEqual(self.units[0]["name"], "Product Cooler")
+        self.assertEqual(
+            history["entries"][0]["units"][0]["name"],
+            "Product Cooler",
+        )
+
+    def test_record_after_undo_discards_abandoned_redo_branch(self):
+        inserted_history = self._history_with_insert()
+        undone, _ = undo_graph_history(inserted_history)
+        renamed_units = rename_inline_unit(
+            self.units,
+            "product-cooler",
+            "Export Cooler",
+        )
+        branched = record_graph_history(
+            undone,
+            renamed_units,
+            self.connections,
+        )
+
+        self.assertEqual(graph_history_status(branched)["total"], 2)
+        with self.assertRaisesRegex(ValueError, "no later revision"):
+            redo_graph_history(branched)
+        self.assertEqual(
+            branched["entries"][1]["units"][0]["name"],
+            "Export Cooler",
+        )
+
+    def test_duplicate_revisions_are_ignored_and_history_is_bounded(self):
+        history = create_graph_history(self.units, self.connections)
+        unchanged = record_graph_history(
+            history,
+            self.units,
+            self.connections,
+        )
+        self.assertEqual(unchanged, history)
+
+        for suffix in range(1, 5):
+            renamed_units = rename_inline_unit(
+                self.units,
+                "product-cooler",
+                f"Product Cooler {suffix}",
+            )
+            history = record_graph_history(
+                history,
+                renamed_units,
+                self.connections,
+                max_entries=3,
+            )
+        self.assertEqual(graph_history_status(history)["total"], 3)
+        self.assertEqual(
+            history["entries"][0]["units"][0]["name"],
+            "Product Cooler 2",
+        )
+        self.assertEqual(
+            history["entries"][2]["units"][0]["name"],
+            "Product Cooler 4",
+        )
+
+    def test_invalid_histories_and_limits_fail_explicitly(self):
+        history = create_graph_history(self.units, self.connections)
+        invalid_cases = (
+            (None, "must be an object"),
+            ({**history, "schema_version": 2}, "Unsupported graph history"),
+            ({**history, "entries": []}, "non-empty array"),
+            ({**history, "cursor": True}, "must be an integer"),
+            ({**history, "cursor": 2}, "outside the entry range"),
+        )
+        for invalid_history, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    graph_history_status(invalid_history)
+
+        for limit in (True, 1, 2.5):
+            with self.subTest(limit=limit):
+                with self.assertRaisesRegex(ValueError, "at least 2"):
+                    record_graph_history(
+                        history,
+                        self.units,
+                        self.connections,
+                        max_entries=limit,
+                    )
+        with self.assertRaisesRegex(ValueError, "no earlier revision"):
+            undo_graph_history(history)
 
 
 if __name__ == "__main__":
