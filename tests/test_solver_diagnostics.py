@@ -549,6 +549,27 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertIs(summary["applicable"], False)
         self.assertIsNone(summary["imbalance_pct"])
 
+    def test_legacy_boundaries_without_enthalpy_remain_unknown(self):
+        result = _result(
+            [
+                {
+                    "role": "feed",
+                    "stream_name": "legacy feed",
+                    "mass_flow_kg_hr": 100.0,
+                },
+                {
+                    "role": "product",
+                    "stream_name": "legacy product",
+                    "mass_flow_kg_hr": 100.0,
+                },
+            ]
+        )
+
+        summary = aggregate_energy_balance(result)
+
+        self.assertIsNone(summary["applicable"])
+        self.assertIsNone(summary["imbalance_pct"])
+
     def test_energy_transfer_extraction_avoids_pump_duty_double_count(self):
         class _FallbackPump:
             def getClass(self):

@@ -380,13 +380,29 @@ def aggregate_energy_balance(result: Any) -> Dict[str, Any]:
         row for row in rows if row["mass_flow_kg_hr"] > 0.0
     ]
     positive_roles = {row["role"] for row in positive_rows}
+    missing_positive_enthalpy = any(
+        row["enthalpy_flow_kW"] is None for row in positive_rows
+    )
+    if applicable is None and (
+        positive_roles != {"feed", "product"}
+        or missing_positive_enthalpy
+    ):
+        return {
+            "applicable": None,
+            "feed_enthalpy_kW": None,
+            "product_enthalpy_kW": None,
+            "external_energy_transfer_kW": None,
+            "residual_kW": None,
+            "imbalance_pct": None,
+            "transfer_count": float(len(transfers)),
+        }
     if positive_roles != {"feed", "product"}:
         raise ValueError(
             "Energy boundary diagnostics require positive-flow "
             "feed and product boundaries."
         )
     for index, row in enumerate(positive_rows):
-        if row["enthalpy_flow_kW"] is None:
+        if missing_positive_enthalpy and row["enthalpy_flow_kW"] is None:
             raise ValueError(
                 "Energy boundary diagnostics are incomplete for "
                 f"positive-flow row {index}."
