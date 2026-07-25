@@ -399,6 +399,29 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             [],
         )
 
+    def test_supported_conserving_equipment_enables_species_closure(self):
+        class_names = (
+            "TurboExpanderCompressor",
+            "GasScrubberSimple",
+            "Hydrocyclone",
+            "CheckValve",
+            "WaterStripperColumn",
+            "AdiabaticTwoPhasePipe",
+            "SimpleTPoutPipeline",
+            "MembraneSeparator",
+            "WellFlow",
+            "SimpleFlowLine",
+            "EquilibriumStream",
+        )
+        for class_name in class_names:
+            with self.subTest(class_name=class_name):
+                self.assertEqual(
+                    NeqSimProcessModel._component_balance_exclusion_names(
+                        [_FallbackReactiveEquipment(class_name)]
+                    ),
+                    [],
+                )
+
     def test_missing_current_component_data_returns_unknown(self):
         feed = _FallbackStream("feed", 100.0)
         product = _FallbackStream("product", 100.0)
