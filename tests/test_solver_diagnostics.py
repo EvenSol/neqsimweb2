@@ -242,6 +242,40 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
+    def test_no_flow_boundary_rows_match_solver_kpis(self):
+        feed = _FallbackStream("feed", 100.0)
+        trace_product = _FallbackStream("trace product", 0.005)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, _FallbackEquipment(), trace_product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed": feed,
+            "trace product": trace_product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        summary = aggregate_material_balance(result)
+        self.assertEqual(summary["product_flow_kg_hr"], 0.0)
+        self.assertEqual(
+            result.kpis["material_product_flow_kg_hr"].value,
+            0.0,
+        )
+        self.assertEqual(
+            [
+                row["mass_flow_kg_hr"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            [0.0],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

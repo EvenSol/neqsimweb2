@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
+_MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
+
+
 # ---------------------------------------------------------------------------
 # Ensure JVM starts with --add-opens flags for XStream / Java 17+ compat
 # ---------------------------------------------------------------------------
@@ -930,6 +933,8 @@ class NeqSimProcessModel:
             raise ValueError(
                 f"Solved {role} boundary '{name}' has a non-finite mass flow."
             )
+        if abs(mass_flow) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+            mass_flow = 0.0
 
         record: Dict[str, Any] = {
             "role": role,
@@ -1972,7 +1977,7 @@ class NeqSimProcessModel:
                                 continue
                             flow = record["mass_flow_kg_hr"]
                             sname = record["stream_name"]
-                            if abs(flow) > 0.01:
+                            if abs(flow) > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
                                 product_flow += flow
                                 product_details.append(f"{sname}={flow:.0f}")
                             else:
@@ -2013,7 +2018,7 @@ class NeqSimProcessModel:
                             if record is None:
                                 return 0.0
                             flow = record["mass_flow_kg_hr"]
-                            if abs(flow) > 0.01:
+                            if abs(flow) > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
                                 sname = record["stream_name"]
                                 product_flow += flow
                                 product_details.append(f"{sname}={flow:.0f}")
