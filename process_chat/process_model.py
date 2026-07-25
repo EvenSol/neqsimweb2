@@ -35,6 +35,11 @@ _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES = {
     "electrolyzer",
     "tank",
 }
+_MATERIAL_PRIVATE_INLET_FIELDS = {
+    "co2electrolyzer": ("inletStream",),
+    "electrolyzer": ("waterInlet",),
+    "tank": ("inletStreamMixer",),
+}
 _SPECIES_CHANGING_UNIT_CLASSES = {
     "fuelcell",
     "gasturbine",
@@ -1154,6 +1159,54 @@ class NeqSimProcessModel:
                 continue
             if stream is not None:
                 inlets.append(stream)
+
+        try:
+            unit_class = str(unit.getClass().getSimpleName()).lower()
+        except Exception:
+            unit_class = ""
+        for field_name in _MATERIAL_PRIVATE_INLET_FIELDS.get(
+            unit_class,
+            (),
+        ):
+            field_value = None
+            try:
+                field_value = getattr(unit, field_name)
+            except Exception:
+                pass
+            if field_value is None:
+                try:
+                    declaring_class = unit.getClass()
+                    while declaring_class is not None:
+                        try:
+                            field = declaring_class.getDeclaredField(
+                                field_name
+                            )
+                            field.setAccessible(True)
+                            field_value = field.get(unit)
+                            break
+                        except Exception:
+                            declaring_class = (
+                                declaring_class.getSuperclass()
+                            )
+                except Exception:
+                    pass
+            if field_value is None:
+                continue
+            try:
+                field_class = str(
+                    field_value.getClass().getSimpleName()
+                ).lower()
+            except Exception:
+                field_class = ""
+            if (
+                field_class in _MATERIAL_STREAM_UNIT_CLASSES
+                or hasattr(field_value, "getFluid")
+            ):
+                inlets.append(field_value)
+                continue
+            inlets.extend(
+                NeqSimProcessModel._material_inlet_streams(field_value)
+            )
 
         return inlets
 
@@ -2383,64 +2436,6 @@ class NeqSimProcessModel:
                 connected_feeds, connected_products = (
                     self._connectivity_material_boundaries(all_units)
                 )
-                if connectivity_unsafe_units:
-                    # Suppress only outlets upstream of an opaque inlet in
-                    # the same child process. Readable unsafe-unit products
-                    # and products from independent child processes remain
-                    # reportable while closure is explicitly unavailable.
-                    suspect_products = _MaterialBoundaryIdentityTracker()
-                    suspect_product_fluids = (
-                        _MaterialBoundaryIdentityTracker()
-                    )
-                    for process_units in unit_groups:
-                        unsafe_indices = []
-                        for index, unit in enumerate(process_units):
-                            try:
-                                unit_class = str(
-                                    unit.getClass().getSimpleName()
-                                ).lower()
-                            except Exception:
-                                continue
-                            if (
-                                unit_class
-                                in _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES
-                            ):
-                                unsafe_indices.append(index)
-                        if not unsafe_indices:
-                            continue
-                        for upstream_unit in process_units[
-                            : max(unsafe_indices)
-                        ]:
-                            for stream, _ in (
-                                self._fallback_material_outlet_streams(
-                                    upstream_unit
-                                )
-                            ):
-                                suspect_products.add("product", stream)
-                                fluid = self._material_fluid_reference(
-                                    stream
-                                )
-                                if fluid is not None:
-                                    suspect_product_fluids.add(
-                                        "product",
-                                        fluid,
-                                    )
-                    filtered_products = []
-                    for stream, label in connected_products:
-                        fluid = self._material_fluid_reference(stream)
-                        if (
-                            suspect_products.contains("product", stream)
-                            or (
-                                fluid is not None
-                                and suspect_product_fluids.contains(
-                                    "product",
-                                    fluid,
-                                )
-                            )
-                        ):
-                            continue
-                        filtered_products.append((stream, label))
-                    connected_products = filtered_products
                 consumed_streams, consumed_fluids = (
                     self._material_consumption_trackers(all_units)
                 )
