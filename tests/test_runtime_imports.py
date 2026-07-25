@@ -110,6 +110,22 @@ class LocalSymbolImportTest(unittest.TestCase):
                         project_root=self.project_root,
                     )
 
+    def test_studio_page_uses_deployment_safe_editor_imports(self):
+        studio_path = (
+            self.project_root / "pages" / "35_Process_Flowsheet_Studio.py"
+        )
+        studio_source = studio_path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'import_local_symbols(\n'
+            '        "process_chat.flowsheet_editor",',
+            studio_source,
+        )
+        self.assertNotIn(
+            "from process_chat.flowsheet_editor import",
+            studio_source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
