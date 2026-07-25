@@ -517,7 +517,7 @@ def _validate_case_architecture(
     case_data: dict[str, Any],
     expected_fluid: dict[str, Any],
 ) -> None:
-    """Validate shared-fluid schema and the current single-inlet builder view."""
+    """Validate shared fluids and the primary-inlet builder projection."""
     if case_data["schema_version"] == LEGACY_CASE_SCHEMA_VERSION:
         return
 
@@ -567,11 +567,16 @@ def _validate_case_architecture(
             "Binary-interaction overrides are not yet supported by ProcessBuilder."
         )
 
-    if len(inlets) != 1:
-        raise ValueError("The current starter template requires exactly one inlet.")
-    inlet = inlets[0]
-    if str(inlet["id"]).strip() != PRIMARY_INLET_ID:
-        raise ValueError(f"The starter-template inlet id must be '{PRIMARY_INLET_ID}'.")
+    primary_inlets = [
+        inlet
+        for inlet in inlets
+        if str(inlet["id"]).strip() == PRIMARY_INLET_ID
+    ]
+    if len(primary_inlets) != 1:
+        raise ValueError(
+            f"The case requires exactly one primary inlet '{PRIMARY_INLET_ID}'."
+        )
+    inlet = primary_inlets[0]
     if inlet["fluid_package_id"] != package_id:
         raise ValueError("The inlet references an unknown fluid package.")
 
@@ -953,7 +958,32 @@ def _validate_case_graph(
                 f"'{expected_unit_id}'."
             )
     for unit_id, unit in indexed_units.items():
-        if unit_id not in expected_unit_map:
+        if unit_id in expected_unit_map:
+            continue
+        if str(unit.get("type", "")).strip().lower() == "mixer":
+            ports = unit.get("ports")
+            if not isinstance(ports, dict):
+                raise ValueError(f"Graph mixer '{unit_id}' requires ports.")
+            material_inputs = ports.get("material_in")
+            material_outputs = ports.get("material_out")
+            if (
+                not isinstance(material_inputs, list)
+                or len(material_inputs) < 2
+                or len(set(material_inputs)) != len(material_inputs)
+            ):
+                raise ValueError(
+                    f"Graph mixer '{unit_id}' requires at least two unique "
+                    "material input ports."
+                )
+            if material_outputs != ["out"]:
+                raise ValueError(
+                    f"Graph mixer '{unit_id}' requires material output port 'out'."
+                )
+            if unit.get("params", {}) != {}:
+                raise ValueError(
+                    f"Graph mixer '{unit_id}' does not accept operating params."
+                )
+        else:
             validate_catalog_unit(unit)
     _build_execution_plan(case_data)
 
@@ -1184,13 +1214,15 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         imported_draft = create_graph_draft(
             case_data["units"],
             case_data["connections"],
+            case_data["inlets"],
         )
         if (
-            imported_draft["units"] != canonical_spec["units"]
+            imported_draft["inlets"] != canonical_spec["inlets"]
+            or imported_draft["units"] != canonical_spec["units"]
             or imported_draft["connections"] != canonical_spec["connections"]
         ):
             graph_draft = imported_draft
-            canonical_spec = apply_graph_draft(
+            canonical_spec = _apply_studio_graph_draft(
                 canonical_spec,
                 imported_draft,
             )
@@ -1479,11 +1511,18 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     inlet_fluid_specs = _build_inlet_fluid_specs(spec)
     warnings: list[str] = []
     fluid = spec["fluid"]
-    if len(inlet_fluid_specs) != 1:
-        raise ValueError("The current starter solver requires exactly one inlet.")
-    if inlet_fluid_specs[0]["fluid_spec"] != fluid:
+    primary_inlet_specs = [
+        inlet_spec
+        for inlet_spec in inlet_fluid_specs
+        if inlet_spec["inlet_id"] == PRIMARY_INLET_ID
+    ]
+    if len(primary_inlet_specs) != 1:
         raise ValueError(
-            "The generic inlet definition conflicts with the ProcessBuilder fluid."
+            f"The case requires exactly one primary inlet '{PRIMARY_INLET_ID}'."
+        )
+    if primary_inlet_specs[0]["fluid_spec"] != fluid:
+        raise ValueError(
+            "The primary inlet conflicts with the ProcessBuilder fluid projection."
         )
     process = spec["process"]
 
@@ -2387,7 +2426,11 @@ def _graph_history_for_spec(spec: dict[str, Any]) -> dict[str, Any]:
     starter_units, starter_connections = _build_template_graph(
         spec["process"]
     )
-    history = create_graph_history(starter_units, starter_connections)
+    history = create_graph_history(
+        starter_units,
+        starter_connections,
+        spec["inlets"],
+    )
     if (
         spec["units"] != starter_units
         or spec["connections"] != starter_connections
@@ -2396,9 +2439,47 @@ def _graph_history_for_spec(spec: dict[str, Any]) -> dict[str, Any]:
             history,
             spec["units"],
             spec["connections"],
+            spec["inlets"],
         )
         st.session_state[GRAPH_HISTORY_STATE_KEY] = history
     return history
+
+
+def _apply_studio_graph_draft(
+    case_spec: dict[str, Any],
+    draft: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply graph edits while keeping the primary inlet tied to case controls."""
+    if not isinstance(case_spec, dict) or not isinstance(draft, dict):
+        return apply_graph_draft(case_spec, draft)
+    if "inlets" not in draft:
+        return apply_graph_draft(case_spec, draft)
+
+    refreshed_draft = json.loads(json.dumps(draft, allow_nan=False))
+    case_inlets = case_spec.get("inlets")
+    draft_inlets = refreshed_draft.get("inlets")
+    if not isinstance(case_inlets, list) or not isinstance(draft_inlets, list):
+        return apply_graph_draft(case_spec, refreshed_draft)
+    primary_case_inlets = [
+        inlet
+        for inlet in case_inlets
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == PRIMARY_INLET_ID
+    ]
+    primary_draft_indices = [
+        index
+        for index, inlet in enumerate(draft_inlets)
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == PRIMARY_INLET_ID
+    ]
+    if len(primary_case_inlets) != 1 or len(primary_draft_indices) != 1:
+        raise ValueError(
+            f"Graph drafts require exactly one primary inlet '{PRIMARY_INLET_ID}'."
+        )
+    refreshed_draft["inlets"][primary_draft_indices[0]] = json.loads(
+        json.dumps(primary_case_inlets[0], allow_nan=False)
+    )
+    return apply_graph_draft(case_spec, refreshed_draft)
 
 
 def _activate_graph_revision(
@@ -2408,7 +2489,7 @@ def _activate_graph_revision(
     notice: str,
 ) -> None:
     """Validate and activate one history revision without stale solve state."""
-    candidate_case = apply_graph_draft(spec, draft)
+    candidate_case = _apply_studio_graph_draft(spec, draft)
     _validate_case_graph(candidate_case, candidate_case["process"])
     starter_units, starter_connections = _build_template_graph(
         candidate_case["process"]
@@ -2436,6 +2517,7 @@ def _record_graph_revision(
         history,
         draft["units"],
         draft["connections"],
+        draft.get("inlets"),
     )
     _activate_graph_revision(spec, history, draft, notice)
 
@@ -2459,6 +2541,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
     graph_widget_revision = hashlib.sha256(
         json.dumps(
             {
+                "inlets": spec["inlets"],
                 "units": spec["units"],
                 "connections": spec["connections"],
             },
@@ -2615,8 +2698,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 candidate_draft = create_graph_draft(
                     spec["units"],
                     connections,
+                    spec["inlets"],
                 )
-                candidate_case = apply_graph_draft(
+                candidate_case = _apply_studio_graph_draft(
                     spec,
                     candidate_draft,
                 )
@@ -2679,8 +2763,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     candidate_draft = create_graph_draft(
                         spec["units"],
                         connections,
+                        spec["inlets"],
                     )
-                    candidate_case = apply_graph_draft(
+                    candidate_case = _apply_studio_graph_draft(
                         spec,
                         candidate_draft,
                     )
@@ -2789,8 +2874,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 candidate_draft = create_graph_draft(
                     units,
                     connections,
+                    spec["inlets"],
                 )
-                candidate_case = apply_graph_draft(
+                candidate_case = _apply_studio_graph_draft(
                     spec,
                     candidate_draft,
                 )
@@ -2901,8 +2987,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     candidate_draft = create_graph_draft(
                         units,
                         spec["connections"],
+                        spec["inlets"],
                     )
-                    candidate_case = apply_graph_draft(
+                    candidate_case = _apply_studio_graph_draft(
                         spec,
                         candidate_draft,
                     )
@@ -2934,8 +3021,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     candidate_draft = create_graph_draft(
                         units,
                         spec["connections"],
+                        spec["inlets"],
                     )
-                    candidate_case = apply_graph_draft(
+                    candidate_case = _apply_studio_graph_draft(
                         spec,
                         candidate_draft,
                     )
@@ -2967,8 +3055,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     candidate_draft = create_graph_draft(
                         units,
                         connections,
+                        spec["inlets"],
                     )
-                    candidate_case = apply_graph_draft(
+                    candidate_case = _apply_studio_graph_draft(
                         spec,
                         candidate_draft,
                     )
@@ -3016,6 +3105,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 starter_draft = create_graph_draft(
                     starter_units,
                     starter_connections,
+                    spec["inlets"],
                 )
                 _record_graph_revision(
                     spec,
@@ -3279,7 +3369,7 @@ else:
         )
         active_graph_draft = st.session_state.get(GRAPH_DRAFT_STATE_KEY)
         if active_graph_draft is not None:
-            draft_case_spec = apply_graph_draft(
+            draft_case_spec = _apply_studio_graph_draft(
                 draft_case_spec,
                 active_graph_draft,
             )
