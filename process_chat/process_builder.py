@@ -9,6 +9,7 @@ Supports:
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import tempfile
@@ -343,6 +344,584 @@ class ProcessBuilder:
     def build_log(self) -> List[str]:
         return list(self._build_log)
 
+    # -- Native fluid construction ------------------------------------------
+
+    def create_fluid_from_spec(self, fluid_spec: dict):
+        """Create a fresh NeqSim thermodynamic system from one fluid definition.
+
+        Temperature is expressed in degrees Celsius, pressure in absolute bara,
+        and flow uses the explicit flow_unit in the specification. Repeated
+        calls create independent native systems for separate process inlets.
+        """
+        if not isinstance(fluid_spec, dict):
+            raise ValueError("Fluid specification must be an object.")
+        return self._create_fluid(dict(fluid_spec))
+
+    def create_inlet_streams(
+        self,
+        inlet_specs: List[dict],
+    ) -> Dict[str, Any]:
+        """Create independent native stream objects for validated process inlets.
+
+        Each entry requires inlet_id, name, and a ProcessBuilder-compatible
+        fluid_spec. Returned streams are keyed by inlet id and are not attached
+        to a ProcessSystem, leaving graph execution responsible for ordering.
+        """
+        from neqsim import jneqsim
+
+        if not isinstance(inlet_specs, list) or not inlet_specs:
+            raise ValueError("Inlet specifications must be a non-empty array.")
+
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        streams: Dict[str, Any] = {}
+        stream_names: set[str] = set()
+        for inlet_index, inlet_spec in enumerate(inlet_specs):
+            if not isinstance(inlet_spec, dict):
+                raise ValueError(
+                    f"Inlet specification {inlet_index} must be an object."
+                )
+            inlet_id = str(inlet_spec.get("inlet_id", "")).strip()
+            stream_name = str(inlet_spec.get("name", "")).strip()
+            fluid_spec = inlet_spec.get("fluid_spec")
+            if not inlet_id:
+                raise ValueError(
+                    f"Inlet specification {inlet_index} requires inlet_id."
+                )
+            if not stream_name:
+                raise ValueError(f"Inlet '{inlet_id}' requires a stream name.")
+            if inlet_id in streams:
+                raise ValueError(f"Inlet id '{inlet_id}' is duplicated.")
+            if stream_name in stream_names:
+                raise ValueError(f"Inlet stream name '{stream_name}' is duplicated.")
+            if not isinstance(fluid_spec, dict):
+                raise ValueError(f"Inlet '{inlet_id}' requires a fluid_spec object.")
+
+            fluid = self.create_fluid_from_spec(fluid_spec)
+            streams[inlet_id] = StreamClass(stream_name, fluid)
+            stream_names.add(stream_name)
+        return streams
+
+    def resolve_material_output(
+        self,
+        endpoint: dict,
+        inlet_streams: Dict[str, Any],
+        unit_objects: Dict[str, Any],
+    ):
+        """Resolve one validated graph source endpoint to a native stream.
+
+        Inlets expose material port 'out'. Unit ports use explicit names:
+        'out'/'main', 'gas'/'vapor', 'liquid'/'oil', 'water'/'aqueous', or
+        indexed splitter ports such as 'out_0' and 'split_1'. Missing objects,
+        unsupported ports, failed getters, and null streams are reported
+        explicitly instead of silently falling back to another outlet.
+        """
+        if not isinstance(endpoint, dict):
+            raise ValueError("Material source endpoint must be an object.")
+        if not isinstance(inlet_streams, dict) or not isinstance(unit_objects, dict):
+            raise ValueError("Material source registries must be objects.")
+
+        source_kind = str(endpoint.get("kind", "")).strip().lower()
+        source_id = str(endpoint.get("id", "")).strip()
+        source_port = str(endpoint.get("port", "")).strip().lower()
+        if not source_id or not source_port:
+            raise ValueError("Material source endpoint requires id and port.")
+
+        if source_kind == "inlet":
+            if source_port != "out":
+                raise ValueError(
+                    f"Inlet '{source_id}' exposes only material output port 'out'."
+                )
+            if source_id not in inlet_streams:
+                raise ValueError(f"Unknown material inlet '{source_id}'.")
+            return inlet_streams[source_id]
+
+        if source_kind != "unit":
+            raise ValueError(
+                f"Unsupported material source kind '{source_kind or '<empty>'}'."
+            )
+        if source_id not in unit_objects:
+            raise ValueError(f"Unknown material unit '{source_id}'.")
+        unit = unit_objects[source_id]
+
+        indexed_port = re.fullmatch(r"(?:out|split)[_-]?(\d+)", source_port)
+        if indexed_port:
+            getter_names = ("getSplitStream",)
+            getter_args = (int(indexed_port.group(1)),)
+        else:
+            getter_args = ()
+            getter_names_by_port = {
+                "out": ("getOutletStream", "getOutStream", "getGasOutStream"),
+                "main": ("getOutletStream", "getOutStream", "getGasOutStream"),
+                "gas": ("getGasOutStream",),
+                "vapor": ("getGasOutStream",),
+                "liquid": ("getLiquidOutStream", "getOilOutStream"),
+                "oil": ("getOilOutStream", "getLiquidOutStream"),
+                "water": ("getWaterOutStream",),
+                "aqueous": ("getWaterOutStream",),
+            }
+            getter_names = getter_names_by_port.get(source_port)
+            if getter_names is None:
+                raise ValueError(
+                    f"Unsupported material output port '{source_port}' on "
+                    f"unit '{source_id}'."
+                )
+
+        last_error: Optional[Exception] = None
+        for getter_name in getter_names:
+            if not hasattr(unit, getter_name):
+                continue
+            try:
+                stream = getattr(unit, getter_name)(*getter_args)
+            except Exception as exc:
+                last_error = exc
+                continue
+            if stream is not None:
+                return stream
+
+        message = (
+            f"Unit '{source_id}' could not provide material output "
+            f"port '{source_port}'."
+        )
+        if last_error is not None:
+            raise ValueError(message) from last_error
+        raise ValueError(message)
+
+    @staticmethod
+    def _configure_graph_splitter(
+        unit: Any,
+        unit_id: str,
+        unit_spec: dict,
+    ) -> List[float]:
+        """Map declared indexed output ports to normalized native split factors."""
+        ports = unit_spec.get("ports")
+        if not isinstance(ports, dict):
+            raise ValueError(f"Splitter '{unit_id}' requires a ports object.")
+        material_outputs = ports.get("material_out")
+        if not isinstance(material_outputs, list) or len(material_outputs) < 2:
+            raise ValueError(
+                f"Splitter '{unit_id}' requires at least two material output ports."
+            )
+
+        params = unit_spec.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"Splitter '{unit_id}' params must be an object.")
+        raw_factors = params.get("split_factors")
+        if not isinstance(raw_factors, list):
+            raise ValueError(
+                f"Splitter '{unit_id}' requires a split_factors array."
+            )
+        if len(raw_factors) != len(material_outputs):
+            raise ValueError(
+                f"Splitter '{unit_id}' split_factors must match its "
+                "material output ports."
+            )
+
+        factors_by_index: Dict[int, float] = {}
+        for port_name, raw_factor in zip(material_outputs, raw_factors):
+            cleaned_port = str(port_name).strip().lower()
+            indexed_port = re.fullmatch(
+                r"(?:out|split)[_-]?(\d+)",
+                cleaned_port,
+            )
+            if indexed_port is None:
+                raise ValueError(
+                    f"Splitter '{unit_id}' output port '{cleaned_port}' "
+                    "must identify a native split index."
+                )
+            split_index = int(indexed_port.group(1))
+            if split_index in factors_by_index:
+                raise ValueError(
+                    f"Splitter '{unit_id}' maps multiple ports to split index "
+                    f"{split_index}."
+                )
+            if type(raw_factor) is bool:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split factors must be numeric."
+                )
+            try:
+                factor = float(raw_factor)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split factors must be numeric."
+                ) from exc
+            if not math.isfinite(factor) or factor < 0.0:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split factors must be finite and "
+                    "non-negative."
+                )
+            factors_by_index[split_index] = factor
+
+        expected_indices = set(range(len(material_outputs)))
+        if set(factors_by_index) != expected_indices:
+            raise ValueError(
+                f"Splitter '{unit_id}' output indices must be contiguous from "
+                f"0 to {len(material_outputs) - 1}."
+            )
+
+        total_factor = sum(factors_by_index.values())
+        if total_factor <= 0.0:
+            raise ValueError(
+                f"Splitter '{unit_id}' split factors must have a positive sum."
+            )
+        normalized_factors = [
+            factors_by_index[index] / total_factor
+            for index in range(len(material_outputs))
+        ]
+
+        if not hasattr(unit, "setSplitFactors"):
+            raise ValueError(
+                f"Splitter '{unit_id}' does not expose native setSplitFactors."
+            )
+        native_factors: Any = normalized_factors
+        try:
+            from jpype import JArray, JDouble
+        except ImportError:
+            pass
+        else:
+            native_factors = JArray(JDouble)(normalized_factors)
+        try:
+            unit.setSplitFactors(native_factors)
+        except Exception as exc:
+            raise ValueError(
+                f"Splitter '{unit_id}' could not apply native split factors."
+            ) from exc
+
+        return normalized_factors
+
+    def _add_terminal_material_streams(
+        self,
+        unit_specs: List[dict],
+        connections: List[dict],
+        inlet_streams: Dict[str, Any],
+        unit_objects: Dict[str, Any],
+        process_system: Any,
+        reserved_names: set[str],
+    ) -> Dict[str, Any]:
+        """Add named native streams for every unconnected material output port."""
+        from neqsim import jneqsim
+
+        connected_outputs: set[tuple[str, str]] = set()
+        for connection in connections:
+            source = connection["source"]
+            if str(source.get("kind", "")).strip().lower() != "unit":
+                continue
+            connected_outputs.add(
+                (
+                    str(source.get("id", "")).strip(),
+                    str(source.get("port", "")).strip().lower(),
+                )
+            )
+
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        terminal_streams: Dict[str, Any] = {}
+        used_names = set(reserved_names)
+        for unit_spec in unit_specs:
+            unit_id = str(unit_spec["id"]).strip()
+            unit_name = str(unit_spec["name"]).strip()
+            ports = unit_spec.get("ports")
+            if not isinstance(ports, dict):
+                raise ValueError(f"Unit '{unit_id}' requires a ports object.")
+            material_outputs = ports.get("material_out")
+            if not isinstance(material_outputs, list):
+                raise ValueError(
+                    f"Unit '{unit_id}' requires a material_out ports array."
+                )
+            for raw_port in material_outputs:
+                output_port = str(raw_port).strip().lower()
+                if not output_port:
+                    raise ValueError(
+                        f"Unit '{unit_id}' has an empty material output port."
+                    )
+                endpoint_key = (unit_id, output_port)
+                if endpoint_key in connected_outputs:
+                    continue
+
+                boundary_name = f"{unit_name} [{output_port}] product"
+                if boundary_name in used_names:
+                    raise ValueError(
+                        f"Terminal stream name '{boundary_name}' is duplicated."
+                    )
+                source_stream = self.resolve_material_output(
+                    {
+                        "kind": "unit",
+                        "id": unit_id,
+                        "port": output_port,
+                    },
+                    inlet_streams,
+                    unit_objects,
+                )
+                try:
+                    terminal_stream = StreamClass(boundary_name, source_stream)
+                    process_system.add(terminal_stream)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Could not create terminal stream for unit '{unit_id}' "
+                        f"port '{output_port}'."
+                    ) from exc
+
+                boundary_id = f"{unit_id}:{output_port}"
+                terminal_streams[boundary_id] = terminal_stream
+                used_names.add(boundary_name)
+                self._build_log.append(
+                    f"Added terminal product stream: {boundary_id}"
+                )
+
+        if not terminal_streams:
+            raise ValueError(
+                "Acyclic graph requires at least one unconnected material "
+                "output port."
+            )
+        return terminal_streams
+
+    def build_acyclic_graph(
+        self,
+        graph_spec: dict,
+        inlet_specs: List[dict],
+        execution_order: List[str],
+    ) -> NeqSimProcessModel:
+        """Build and solve a validated acyclic material-flow graph.
+
+        The graph specification contains unit nodes and explicit material
+        connections; inlet_specs contains ProcessBuilder-compatible independent
+        fluids. execution_order must list every inlet and unit once in dependency
+        order. Mixers may combine multiple upstream material streams. Energy
+        links and recycles remain explicit later solver stages and are rejected.
+        """
+        from neqsim import jneqsim
+
+        if not isinstance(graph_spec, dict):
+            raise ValueError("Graph specification must be an object.")
+        if not isinstance(inlet_specs, list) or not inlet_specs:
+            raise ValueError("Acyclic graph execution requires inlet specifications.")
+        if not isinstance(execution_order, list) or not execution_order:
+            raise ValueError("Acyclic graph execution requires an execution order.")
+
+        unit_specs = graph_spec.get("units")
+        connections = graph_spec.get("connections")
+        if not isinstance(unit_specs, list):
+            raise ValueError("Graph specification requires a units array.")
+        if not isinstance(connections, list):
+            raise ValueError("Graph specification requires a connections array.")
+
+        inlet_ids: list[str] = []
+        inlet_names: set[str] = set()
+        for inlet_index, inlet_spec in enumerate(inlet_specs):
+            if not isinstance(inlet_spec, dict):
+                raise ValueError(
+                    f"Inlet specification {inlet_index} must be an object."
+                )
+            inlet_id = str(inlet_spec.get("inlet_id", "")).strip()
+            inlet_name = str(inlet_spec.get("name", "")).strip()
+            if not inlet_id or not inlet_name:
+                raise ValueError(
+                    f"Inlet specification {inlet_index} requires inlet_id and name."
+                )
+            if inlet_id in inlet_ids:
+                raise ValueError(f"Inlet id '{inlet_id}' is duplicated.")
+            if inlet_name in inlet_names:
+                raise ValueError(f"Inlet stream name '{inlet_name}' is duplicated.")
+            inlet_ids.append(inlet_id)
+            inlet_names.add(inlet_name)
+
+        indexed_units: Dict[str, dict] = {}
+        unit_names: set[str] = set()
+        for unit_index, unit_spec in enumerate(unit_specs):
+            if not isinstance(unit_spec, dict):
+                raise ValueError(f"Unit specification {unit_index} must be an object.")
+            unit_id = str(unit_spec.get("id", "")).strip()
+            unit_name = str(unit_spec.get("name", "")).strip()
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if not unit_id or not unit_name or not unit_type:
+                raise ValueError(
+                    f"Unit specification {unit_index} requires id, name, and type."
+                )
+            if unit_id in indexed_units or unit_id in inlet_ids:
+                raise ValueError(f"Graph object id '{unit_id}' is duplicated.")
+            if unit_name in unit_names or unit_name in inlet_names:
+                raise ValueError(f"Process object name '{unit_name}' is duplicated.")
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError(f"Unit '{unit_id}' params must be an object.")
+            indexed_units[unit_id] = unit_spec
+            unit_names.add(unit_name)
+
+        expected_ids = [*inlet_ids, *indexed_units]
+        ordered_ids = [str(node_id).strip() for node_id in execution_order]
+        if any(not node_id for node_id in ordered_ids):
+            raise ValueError("Execution order cannot contain an empty object id.")
+        if len(ordered_ids) != len(set(ordered_ids)):
+            raise ValueError("Execution order object ids must be unique.")
+        if set(ordered_ids) != set(expected_ids):
+            missing = sorted(set(expected_ids).difference(ordered_ids))
+            unexpected = sorted(set(ordered_ids).difference(expected_ids))
+            details = []
+            if missing:
+                details.append(f"missing: {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected: {', '.join(unexpected)}")
+            raise ValueError(
+                "Execution order must contain every graph object once ("
+                + "; ".join(details)
+                + ")."
+            )
+
+        incoming_material: Dict[str, list[dict]] = {
+            unit_id: [] for unit_id in indexed_units
+        }
+        for connection_index, connection in enumerate(connections):
+            if not isinstance(connection, dict):
+                raise ValueError(
+                    f"Connection specification {connection_index} must be an object."
+                )
+            connection_type = str(connection.get("type", "")).strip().lower()
+            connection_id = str(connection.get("id", "")).strip()
+            if not connection_id:
+                raise ValueError(f"Connection {connection_index} requires an id.")
+            if connection_type != "material":
+                raise ValueError(
+                    f"Connection '{connection_id}' is not a material connection. "
+                    "Energy links require a later executor stage."
+                )
+            source = connection.get("source")
+            target = connection.get("target")
+            if not isinstance(source, dict) or not isinstance(target, dict):
+                raise ValueError(
+                    f"Connection '{connection_id}' requires source and target objects."
+                )
+            target_kind = str(target.get("kind", "")).strip().lower()
+            target_id = str(target.get("id", "")).strip()
+            if target_kind != "unit" or target_id not in indexed_units:
+                raise ValueError(
+                    f"Connection '{connection_id}' requires a known unit target."
+                )
+            incoming_material[target_id].append(connection)
+
+        process_name = str(graph_spec.get("name", "Graph Process")).strip()
+        self._process_name = process_name or "Graph Process"
+        self._spec = {
+            "name": self._process_name,
+            "graph": graph_spec,
+            "inlet_specs": inlet_specs,
+            "execution_order": list(ordered_ids),
+        }
+        self._build_log.clear()
+
+        inlet_streams = self.create_inlet_streams(inlet_specs)
+        ProcessSystem = jneqsim.process.processmodel.ProcessSystem
+        process_system = ProcessSystem()
+        unit_objects: Dict[str, Any] = {}
+
+        for node_id in ordered_ids:
+            if node_id in inlet_streams:
+                process_system.add(inlet_streams[node_id])
+                self._build_log.append(f"Added inlet stream: {node_id}")
+                continue
+
+            unit_spec = indexed_units[node_id]
+            unit_type = str(unit_spec["type"]).strip().lower()
+            incoming = sorted(
+                incoming_material[node_id],
+                key=lambda connection: (
+                    str(connection["target"].get("port", "")).strip(),
+                    str(connection["id"]).strip(),
+                ),
+            )
+            if not incoming:
+                raise ValueError(
+                    f"Unit '{node_id}' requires at least one material inlet."
+                )
+
+            if unit_type == "mixer":
+                if len(incoming) < 2:
+                    raise ValueError(
+                        f"Mixer '{node_id}' requires at least two material inlets."
+                    )
+                source_streams = [
+                    self.resolve_material_output(
+                        connection["source"],
+                        inlet_streams,
+                        unit_objects,
+                    )
+                    for connection in incoming
+                ]
+                unit = self._create_unit(
+                    str(unit_spec["name"]).strip(),
+                    unit_type,
+                    source_streams[0],
+                    dict(unit_spec.get("params", {})),
+                )
+                for connection, source_stream in zip(
+                    incoming[1:],
+                    source_streams[1:],
+                ):
+                    try:
+                        unit.addStream(source_stream)
+                    except Exception as exc:
+                        connection_id = str(connection["id"]).strip()
+                        raise ValueError(
+                            f"Mixer '{node_id}' could not add material connection "
+                            f"'{connection_id}'."
+                        ) from exc
+                self._build_log.append(
+                    f"Added graph mixer: {node_id} "
+                    f"({len(source_streams)} material inlets)"
+                )
+            else:
+                if len(incoming) != 1:
+                    raise ValueError(
+                        f"Unit '{node_id}' requires exactly one material inlet; "
+                        f"found {len(incoming)}."
+                    )
+                source_stream = self.resolve_material_output(
+                    incoming[0]["source"],
+                    inlet_streams,
+                    unit_objects,
+                )
+                unit = self._create_unit(
+                    str(unit_spec["name"]).strip(),
+                    unit_type,
+                    source_stream,
+                    dict(unit_spec.get("params", {})),
+                )
+                self._build_log.append(
+                    f"Added graph unit: {node_id} ({unit_type})"
+                )
+
+            if unit_type == "splitter":
+                split_factors = self._configure_graph_splitter(
+                    unit,
+                    node_id,
+                    unit_spec,
+                )
+                factor_summary = ", ".join(
+                    f"out_{index}={factor:.6f}"
+                    for index, factor in enumerate(split_factors)
+                )
+                self._build_log.append(
+                    f"Configured graph splitter: {node_id} ({factor_summary})"
+                )
+
+            process_system.add(unit)
+            unit_objects[node_id] = unit
+
+        self._add_terminal_material_streams(
+            unit_specs,
+            connections,
+            inlet_streams,
+            unit_objects,
+            process_system,
+            inlet_names.union(unit_names),
+        )
+        self._build_log.append("Running acyclic graph simulation...")
+        NeqSimProcessModel._run_until_converged(process_system)
+        NeqSimProcessModel._run_acyclic_mixer_energy_closure(process_system)
+        self._model = NeqSimProcessModel.from_process_system(
+            process_system,
+            enforce_acyclic_mixer_energy=True,
+        )
+        self._build_log.append("Acyclic graph built and converged successfully.")
+        return self._model
+
     # -- Build from spec ----------------------------------------------------
 
     def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
@@ -367,7 +946,7 @@ class ProcessBuilder:
             raise ValueError("Process spec must contain at least one step in 'process'.")
 
         # 1. Create the thermodynamic fluid
-        fluid = self._create_fluid(fluid_spec)
+        fluid = self.create_fluid_from_spec(fluid_spec)
         self._build_log.append(
             f"Created fluid: EOS={fluid_spec.get('eos_model', 'srk')}, "
             f"{len(fluid_spec.get('components', {}))} components"

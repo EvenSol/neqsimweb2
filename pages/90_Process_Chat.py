@@ -121,13 +121,19 @@ with st.sidebar:
                         st.session_state["process_model_bytes"] = file_bytes
                         st.session_state["process_model_name"] = uploaded_file.name
                         st.session_state["_loaded_file_key"] = file_key
-                        # Auto-generate DEXPI XML from the loaded model
+                        # Auto-generate DEXPI XML + real P&ID SVG from the loaded model
                         try:
-                            from process_chat.dexpi_integration import export_to_dexpi
-                            _dexpi_bytes = export_to_dexpi(model)
+                            from process_chat.dexpi_integration import export_and_render_dexpi
+                            _dexpi_bytes, _pid_svg, _dexpi_fname = export_and_render_dexpi(
+                                model, uploaded_file.name
+                            )
                             if _dexpi_bytes:
                                 st.session_state["dexpi_xml"] = _dexpi_bytes
-                                st.session_state["dexpi_filename"] = uploaded_file.name.rsplit('.', 1)[0] + ".dexpi.xml"
+                                st.session_state["dexpi_filename"] = _dexpi_fname
+                            if _pid_svg:
+                                st.session_state["dexpi_pid_svg"] = _pid_svg
+                            else:
+                                st.session_state.pop("dexpi_pid_svg", None)
                         except Exception:
                             pass
                         # Reset chat session when model changes
@@ -182,13 +188,19 @@ with st.sidebar:
                     st.session_state.pop("_builder_mode", None)
                     st.session_state.pop("chat_session", None)
                     st.session_state["chat_messages"] = []
-                    # Auto-generate DEXPI XML from loaded model
+                    # Auto-generate DEXPI XML + real P&ID SVG from loaded model
                     try:
-                        from process_chat.dexpi_integration import export_to_dexpi
-                        _dexpi_bytes = export_to_dexpi(model)
+                        from process_chat.dexpi_integration import export_and_render_dexpi
+                        _dexpi_bytes, _pid_svg, _dexpi_fname = export_and_render_dexpi(
+                            model, "test_process"
+                        )
                         if _dexpi_bytes:
                             st.session_state["dexpi_xml"] = _dexpi_bytes
-                            st.session_state["dexpi_filename"] = "test_process.dexpi.xml"
+                            st.session_state["dexpi_filename"] = _dexpi_fname
+                        if _pid_svg:
+                            st.session_state["dexpi_pid_svg"] = _pid_svg
+                        else:
+                            st.session_state.pop("dexpi_pid_svg", None)
                     except Exception:
                         pass
                     st.success("✓ Test process loaded")
@@ -2478,15 +2490,19 @@ if user_input:
                         st.session_state["process_model_name"] = (
                             st.session_state.get("process_model_name") or "Built Process"
                         )
-                        # Auto-generate DEXPI XML for the new model
+                        # Auto-generate DEXPI XML + real P&ID SVG for the new model
                         if not st.session_state.get("dexpi_xml"):
                             try:
-                                from process_chat.dexpi_integration import export_to_dexpi
-                                _dexpi_bytes = export_to_dexpi(session.model)
+                                from process_chat.dexpi_integration import export_and_render_dexpi
+                                _name = st.session_state.get("process_model_name", "process")
+                                _dexpi_bytes, _pid_svg, _dexpi_fname = export_and_render_dexpi(
+                                    session.model, _name
+                                )
                                 if _dexpi_bytes:
                                     st.session_state["dexpi_xml"] = _dexpi_bytes
-                                    _name = st.session_state.get("process_model_name", "process")
-                                    st.session_state["dexpi_filename"] = _name.rsplit('.', 1)[0] + ".dexpi.xml"
+                                    st.session_state["dexpi_filename"] = _dexpi_fname
+                                if _pid_svg:
+                                    st.session_state["dexpi_pid_svg"] = _pid_svg
                             except Exception:
                                 pass
 

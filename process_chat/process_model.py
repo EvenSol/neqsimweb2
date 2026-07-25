@@ -15,10 +15,145 @@ Provides:
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+_MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
+_COMPONENT_BALANCE_OK_PCT = 0.01
+_COMPONENT_BALANCE_WARN_PCT = 1.0
+_MATERIAL_STREAM_UNIT_CLASSES = {
+    "equilibriumstream",
+    "stream",
+    "wellstream",
+}
+_MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES = {
+    "tank",
+}
+_SPECIES_CHANGING_UNIT_CLASSES = {
+    "fuelcell",
+    "gasturbine",
+    "h2sscavenger",
+    "simpleabsorber",
+}
+_SPECIES_CHANGING_UNIT_TOKENS = (
+    "burner",
+    "gasifier",
+    "reformer",
+    "reactive",
+    "reactor",
+    "electrolyzer",
+    "flare",
+    "combust",
+    "fuelcell",
+    "scavenger",
+)
+_SPECIES_CONSERVING_UNIT_CLASSES = {
+    "absorber",
+    "adiabaticpipe",
+    "adiabatictwophasepipe",
+    "adjuster",
+    "aircooler",
+    "calculator",
+    "checkvalve",
+    "componentsplitter",
+    "compressor",
+    "controlvalve",
+    "cooler",
+    "distillationcolumn",
+    "ejector",
+    "equilibriumstream",
+    "esppump",
+    "expander",
+    "filter",
+    "gasscrubber",
+    "gasscrubbersimple",
+    "heater",
+    "heatexchanger",
+    "hydrocyclone",
+    "membraneseparator",
+    "mixer",
+    "multistreamheatexchanger",
+    "pipebeggsandbrills",
+    "pipeline",
+    "pump",
+    "recycle",
+    "separator",
+    "setpoint",
+    "simpleflowline",
+    "simpletegabsorber",
+    "simpletpoutpipeline",
+    "splitter",
+    "stream",
+    "threephaseseparator",
+    "throttlingvalve",
+    "turboexpandercompressor",
+    "twophaseseparator",
+    "valve",
+    "watercooler",
+    "waterstrippercolumn",
+    "wellflow",
+    "wellstream",
+}
+
+
+class _MaterialBoundaryIdentityTracker:
+    """Track native stream references without relying on collision-prone hashes."""
+
+    _ROLES = ("feed", "product")
+
+    def __init__(self) -> None:
+        self._python_streams = {
+            role: []
+            for role in self._ROLES
+        }
+        self._java_maps: Dict[str, Any] = {}
+        try:
+            import jpype
+
+            if jpype.isJVMStarted():
+                identity_map = jpype.JClass("java.util.IdentityHashMap")
+                self._java_maps = {
+                    role: identity_map()
+                    for role in self._ROLES
+                }
+        except Exception:
+            pass
+
+    def _validate_role(self, role: str) -> None:
+        if role not in self._ROLES:
+            raise ValueError(
+                "Material boundary identity role must be feed or product."
+            )
+
+    def contains(self, role: str, stream: Any) -> bool:
+        """Return whether this exact stream reference was recorded for a role."""
+        self._validate_role(role)
+        java_map = self._java_maps.get(role)
+        if java_map is not None:
+            try:
+                return bool(java_map.containsKey(stream))
+            except Exception:
+                pass
+        return any(
+            recorded_stream is stream
+            for recorded_stream in self._python_streams[role]
+        )
+
+    def add(self, role: str, stream: Any) -> None:
+        """Remember one exact native or Python stream reference for a role."""
+        self._validate_role(role)
+        java_map = self._java_maps.get(role)
+        if java_map is not None:
+            try:
+                java_map.put(stream, True)
+                return
+            except Exception:
+                pass
+        self._python_streams[role].append(stream)
 
 
 # ---------------------------------------------------------------------------
@@ -141,17 +276,27 @@ class NeqSimProcessModel:
     for the chat + what-if engine.
     """
 
-    def __init__(self, process_system, source_bytes: Optional[bytes] = None):
+    def __init__(
+        self,
+        process_system,
+        source_bytes: Optional[bytes] = None,
+        enforce_acyclic_mixer_energy: bool = False,
+    ):
         """
         Args:
             process_system: A NeqSim ProcessSystem **or ProcessModel** Java object.
             source_bytes: Original file bytes for clone-by-reload.
+            enforce_acyclic_mixer_energy: Recheck adiabatic mixer energy
+                closure after each acyclic graph execution.
         """
         self._proc = process_system
         self._source_bytes = source_bytes
         self._units: Dict[str, Any] = {}
         self._streams: Dict[str, Any] = {}
         self._is_process_model = self._detect_process_model(process_system)
+        self._enforce_acyclic_mixer_energy = bool(
+            enforce_acyclic_mixer_energy
+        )
         self._index_model_objects()
 
     # ----- ProcessModel detection -----
@@ -504,6 +649,70 @@ class NeqSimProcessModel:
             # Still zero — reset recycles and try again
             _reset_recycles(units)
 
+    @staticmethod
+    def _run_acyclic_mixer_energy_closure(
+        proc,
+        relative_tolerance: float = 1.0e-7,
+    ) -> None:
+        """Run an ordered graph pass and enforce adiabatic mixer closure."""
+        try:
+            units = list(proc.getUnitOperations())
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not inspect acyclic graph units for energy closure."
+            ) from exc
+
+        has_mixer = any(
+            str(unit.getClass().getSimpleName()) == "Mixer"
+            for unit in units
+        )
+        if not has_mixer:
+            return
+
+        from jpype import JClass
+        from neqsim import jneqsim
+
+        run_id = JClass("java.util.UUID").randomUUID()
+        operations_class = (
+            jneqsim.thermodynamicoperations.ThermodynamicOperations
+        )
+        for unit in units:
+            unit.run(run_id)
+            if str(unit.getClass().getSimpleName()) != "Mixer":
+                continue
+
+            target_enthalpy = float(unit.calcMixStreamEnthalpy())
+            outlet_system = unit.getOutletStream().getThermoSystem()
+            outlet_system.init(3)
+            actual_enthalpy = float(outlet_system.getEnthalpy())
+            energy_scale = max(abs(target_enthalpy), 1.0)
+            relative_error = abs(
+                actual_enthalpy - target_enthalpy
+            ) / energy_scale
+            if relative_error <= relative_tolerance:
+                continue
+
+            try:
+                operations_class(outlet_system).PHflash(target_enthalpy)
+                outlet_system.init(3)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Mixer '{unit.getName()}' could not close its "
+                    "adiabatic energy balance."
+                ) from exc
+
+            actual_enthalpy = float(outlet_system.getEnthalpy())
+            relative_error = abs(
+                actual_enthalpy - target_enthalpy
+            ) / energy_scale
+            if not math.isfinite(relative_error) or (
+                relative_error > relative_tolerance
+            ):
+                raise RuntimeError(
+                    f"Mixer '{unit.getName()}' energy balance did not "
+                    f"converge (relative residual {relative_error:.3e})."
+                )
+
     @classmethod
     def from_bytes(cls, file_bytes: bytes, filename: str = "process.neqsim") -> "NeqSimProcessModel":
         """Load a ProcessSystem from in-memory bytes (e.g. Streamlit file_uploader)."""
@@ -525,7 +734,11 @@ class NeqSimProcessModel:
                 pass
 
     @classmethod
-    def from_process_system(cls, process_system) -> "NeqSimProcessModel":
+    def from_process_system(
+        cls,
+        process_system,
+        enforce_acyclic_mixer_energy: bool = False,
+    ) -> "NeqSimProcessModel":
         """Wrap an existing ProcessSystem object (e.g. built in code)."""
         import neqsim
 
@@ -543,7 +756,11 @@ class NeqSimProcessModel:
             except OSError:
                 pass
 
-        return cls(process_system, source_bytes=file_bytes)
+        return cls(
+            process_system,
+            source_bytes=file_bytes,
+            enforce_acyclic_mixer_energy=enforce_acyclic_mixer_energy,
+        )
 
     # ----- Cloning -----
 
@@ -582,7 +799,17 @@ class NeqSimProcessModel:
                 "Cannot clone: no source bytes available. "
                 "Load from file or use from_process_system() to enable cloning."
             )
-        return NeqSimProcessModel.from_bytes(self._source_bytes)
+        clone = NeqSimProcessModel.from_bytes(self._source_bytes)
+        clone._enforce_acyclic_mixer_energy = (
+            self._enforce_acyclic_mixer_energy
+        )
+        if (
+            clone._enforce_acyclic_mixer_energy
+            and not clone._is_process_model
+        ):
+            clone._run_acyclic_mixer_energy_closure(clone._proc)
+            clone._index_model_objects()
+        return clone
 
     # ----- Introspection -----
 
@@ -756,6 +983,410 @@ class NeqSimProcessModel:
         :meth:`get_process_systems` instead.
         """
         return self._proc
+
+    def _process_unit_groups(self) -> List[List[Any]]:
+        """Return ordered unit-operation groups for material-boundary analysis."""
+        process_systems = (
+            self.get_process_systems() if self._is_process_model else [self._proc]
+        )
+        groups: List[List[Any]] = []
+        for process_system in process_systems:
+            try:
+                units = list(process_system.getUnitOperations())
+            except Exception:
+                try:
+                    units = list(process_system.getUnitOperationList())
+                except Exception:
+                    units = []
+            groups.append(units)
+        return groups
+
+    @staticmethod
+    def _leading_material_feed_streams(units: List[Any]) -> List[Any]:
+        """Return material-stream units preceding the first process equipment."""
+        utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
+        feeds: List[Any] = []
+        for unit in units:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                break
+            if unit_class.lower() in _MATERIAL_STREAM_UNIT_CLASSES:
+                feeds.append(unit)
+                continue
+            if unit_class in utility_types:
+                continue
+            break
+        return feeds
+
+    @staticmethod
+    def _trailing_material_product_streams(units: List[Any]) -> List[Any]:
+        """Return material-stream units following the final process equipment."""
+        utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
+        last_equipment_index = -1
+        for index, unit in enumerate(units):
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if (
+                unit_class.lower() not in _MATERIAL_STREAM_UNIT_CLASSES
+                and unit_class not in utility_types
+            ):
+                last_equipment_index = index
+        if last_equipment_index < 0:
+            return []
+
+        products: List[Any] = []
+        for unit in units[last_equipment_index + 1:]:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if unit_class.lower() in _MATERIAL_STREAM_UNIT_CLASSES:
+                products.append(unit)
+        return products
+
+    @staticmethod
+    def _fallback_material_outlet_streams(
+        unit: Any,
+    ) -> List[Tuple[Any, str]]:
+        """Return every discoverable material outlet on a terminal unit."""
+        outlets: List[Tuple[Any, str]] = []
+
+        if hasattr(unit, "getOutletStreams"):
+            try:
+                for index, stream in enumerate(unit.getOutletStreams()):
+                    if stream is not None:
+                        outlets.append((stream, f"out_{index}"))
+            except Exception:
+                pass
+
+        for method_name in ("getOutStream", "getSplitStream"):
+            if not hasattr(unit, method_name):
+                continue
+            for index in range(100):
+                try:
+                    stream = getattr(unit, method_name)(index)
+                except Exception:
+                    break
+                if stream is None:
+                    break
+                outlets.append((stream, f"out_{index}"))
+
+        for method_name, label in (
+            ("getOutletStream", "gas_out"),
+            ("getOutStream", "gas_out"),
+            ("getGasOutStream", "gas_out"),
+            ("getCompressorOutletStream", "compressor_out"),
+            ("getExpanderOutletStream", "expander_out"),
+            ("getOilOutStream", "oil"),
+            ("getLiquidOutStream", "liquid"),
+            ("getWaterOutStream", "water"),
+        ):
+            if not hasattr(unit, method_name):
+                continue
+            try:
+                stream = getattr(unit, method_name)()
+            except Exception:
+                continue
+            if stream is not None:
+                outlets.append((stream, label))
+
+        return outlets
+
+    @staticmethod
+    def _material_inlet_streams(unit: Any) -> List[Any]:
+        """Return every discoverable material inlet on a native unit."""
+        inlets: List[Any] = []
+
+        if hasattr(unit, "getInletStreams"):
+            try:
+                inlets.extend(
+                    stream
+                    for stream in unit.getInletStreams()
+                    if stream is not None
+                )
+            except Exception:
+                pass
+
+        for method_name in (
+            "getInStream",
+            "getFeedStream",
+            "getStream",
+            "getInputStream",
+        ):
+            if not hasattr(unit, method_name):
+                continue
+            for index in range(100):
+                try:
+                    stream = getattr(unit, method_name)(index)
+                except Exception:
+                    break
+                if stream is None:
+                    break
+                inlets.append(stream)
+
+        for method_name in (
+            "getInletStream",
+            "getInStream",
+            "getFeed",
+            "getFeedStream",
+            "getCompressorInletStream",
+            "getExpanderInletStream",
+            "getCompressorFeedStream",
+            "getExpanderFeedStream",
+            "getSolventInStream",
+            "getMotiveStream",
+            "getSuctionStream",
+        ):
+            if not hasattr(unit, method_name):
+                continue
+            try:
+                stream = getattr(unit, method_name)()
+            except Exception:
+                continue
+            if stream is not None:
+                inlets.append(stream)
+
+        return inlets
+
+    @staticmethod
+    def _material_fluid_reference(stream: Any) -> Optional[Any]:
+        """Return the native fluid identity used to recognize stream aliases."""
+        for method_name in ("getFluid", "getThermoSystem"):
+            if not hasattr(stream, method_name):
+                continue
+            try:
+                fluid = getattr(stream, method_name)()
+            except Exception:
+                continue
+            if fluid is not None:
+                return fluid
+        return None
+
+    @staticmethod
+    def _material_consumption_trackers(
+        units: List[Any],
+    ) -> Tuple[
+        _MaterialBoundaryIdentityTracker,
+        _MaterialBoundaryIdentityTracker,
+    ]:
+        """Return native stream and fluid identities consumed by equipment."""
+        consumed_streams = _MaterialBoundaryIdentityTracker()
+        consumed_fluids = _MaterialBoundaryIdentityTracker()
+        for unit in units:
+            try:
+                unit_class = str(
+                    unit.getClass().getSimpleName()
+                ).lower()
+            except Exception:
+                continue
+            if unit_class in _MATERIAL_STREAM_UNIT_CLASSES:
+                continue
+            for stream in NeqSimProcessModel._material_inlet_streams(unit):
+                consumed_streams.add("feed", stream)
+                fluid = NeqSimProcessModel._material_fluid_reference(
+                    stream
+                )
+                if fluid is not None:
+                    consumed_fluids.add("feed", fluid)
+        return consumed_streams, consumed_fluids
+
+    @staticmethod
+    def _connectivity_material_boundaries(
+        units: List[Any],
+    ) -> Tuple[List[Any], List[Tuple[Any, str]]]:
+        """Discover external sources and terminal sinks from native ports."""
+        consumed, consumed_fluids = (
+            NeqSimProcessModel._material_consumption_trackers(units)
+        )
+        produced = _MaterialBoundaryIdentityTracker()
+        produced_fluids = _MaterialBoundaryIdentityTracker()
+        stream_units: List[Any] = []
+        equipment_outlets: List[Tuple[Any, str]] = []
+
+        for unit in units:
+            try:
+                unit_class = str(
+                    unit.getClass().getSimpleName()
+                ).lower()
+            except Exception:
+                continue
+            if unit_class in _MATERIAL_STREAM_UNIT_CLASSES:
+                stream_units.append(unit)
+                continue
+            for stream, label in (
+                NeqSimProcessModel._fallback_material_outlet_streams(unit)
+            ):
+                produced.add("product", stream)
+                fluid = NeqSimProcessModel._material_fluid_reference(
+                    stream
+                )
+                if fluid is not None:
+                    produced_fluids.add("product", fluid)
+                equipment_outlets.append((stream, label))
+
+        feeds = []
+        for stream in stream_units:
+            fluid = NeqSimProcessModel._material_fluid_reference(stream)
+            is_consumed = consumed.contains("feed", stream) or (
+                fluid is not None
+                and consumed_fluids.contains("feed", fluid)
+            )
+            is_produced = produced.contains("product", stream) or (
+                fluid is not None
+                and produced_fluids.contains("product", fluid)
+            )
+            if is_consumed and not is_produced:
+                feeds.append(stream)
+
+        products = []
+        for stream, label in equipment_outlets:
+            fluid = NeqSimProcessModel._material_fluid_reference(stream)
+            is_consumed = consumed.contains("feed", stream) or (
+                fluid is not None
+                and consumed_fluids.contains("feed", fluid)
+            )
+            if not is_consumed:
+                products.append((stream, label))
+        return feeds, products
+
+    @staticmethod
+    def _component_balance_exclusion_names(
+        units: List[Any],
+    ) -> List[str]:
+        """Return species-changing or unclassified native equipment."""
+        excluded_units: List[str] = []
+        for unit in units:
+            try:
+                unit_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            normalized_class = unit_class.lower()
+            reactive_mode = False
+            if (
+                normalized_class == "distillationcolumn"
+                and hasattr(unit, "isReactive")
+            ):
+                try:
+                    reactive_mode = bool(unit.isReactive())
+                except Exception:
+                    pass
+            species_changing = (
+                reactive_mode
+                or normalized_class in _SPECIES_CHANGING_UNIT_CLASSES
+                or any(
+                    token in normalized_class
+                    for token in _SPECIES_CHANGING_UNIT_TOKENS
+                )
+            )
+            if (
+                not species_changing
+                and normalized_class in _SPECIES_CONSERVING_UNIT_CLASSES
+            ):
+                continue
+            try:
+                unit_name = str(unit.getName()).strip()
+            except Exception:
+                unit_name = ""
+            label = unit_name or unit_class
+            if not species_changing:
+                label = f"{label} (unclassified {unit_class})"
+            excluded_units.append(label)
+        return excluded_units
+
+    @staticmethod
+    def _material_boundary_component_flows(
+        stream: Any,
+        total_molar_flow: Optional[float],
+    ) -> Optional[Dict[str, float]]:
+        """Return solved overall component molar flows in mol/s when available."""
+        if total_molar_flow is None or not hasattr(stream, "getFluid"):
+            return None
+        try:
+            fluid = stream.getFluid()
+            phase = fluid.getPhase(0)
+            component_count = int(phase.getNumberOfComponents())
+        except Exception:
+            return None
+
+        component_flows: Dict[str, float] = {}
+        for index in range(component_count):
+            try:
+                component = phase.getComponent(index)
+                name = str(component.getName()).strip()
+                overall_fraction = float(component.getz())
+            except Exception:
+                return None
+            if (
+                not name
+                or name in component_flows
+                or not math.isfinite(overall_fraction)
+                or overall_fraction < -1.0e-12
+            ):
+                return None
+            component_flow = total_molar_flow * max(overall_fraction, 0.0)
+            if not math.isfinite(component_flow):
+                return None
+            component_flows[name] = component_flow
+        return component_flows
+
+    @staticmethod
+    def _material_boundary_record(
+        stream: Any,
+        role: str,
+        fallback_name: str,
+    ) -> Dict[str, Any]:
+        """Return one explicit-unit record for a solved material boundary."""
+        if role not in {"feed", "product"}:
+            raise ValueError("Material boundary role must be feed or product.")
+        try:
+            name = str(stream.getName()) if stream.getName() else fallback_name
+            mass_flow = float(stream.getFlowRate("kg/hr"))
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read solved {role} boundary '{fallback_name}'."
+            ) from exc
+        if not math.isfinite(mass_flow):
+            raise ValueError(
+                f"Solved {role} boundary '{name}' has a non-finite mass flow."
+            )
+        is_no_flow = (
+            abs(mass_flow) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR
+        )
+        if is_no_flow:
+            mass_flow = 0.0
+
+        record: Dict[str, Any] = {
+            "role": role,
+            "stream_name": name,
+            "mass_flow_kg_hr": mass_flow,
+            "temperature_C": None,
+            "pressure_bara": None,
+            "molar_flow_mol_sec": None,
+            "component_molar_flows_mol_sec": None,
+        }
+        for key, getter_name, unit in (
+            ("temperature_C", "getTemperature", "C"),
+            ("pressure_bara", "getPressure", "bara"),
+            ("molar_flow_mol_sec", "getFlowRate", "mol/sec"),
+        ):
+            try:
+                value = float(getattr(stream, getter_name)(unit))
+            except Exception:
+                continue
+            if math.isfinite(value):
+                record[key] = value
+        if is_no_flow:
+            record["molar_flow_mol_sec"] = 0.0
+        record["component_molar_flows_mol_sec"] = (
+            NeqSimProcessModel._material_boundary_component_flows(
+                stream,
+                record["molar_flow_mol_sec"],
+            )
+        )
+        return record
 
     def get_diagram_dot(
         self,
@@ -1482,6 +2113,8 @@ class NeqSimProcessModel:
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
             self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
+            if self._enforce_acyclic_mixer_energy:
+                self._run_acyclic_mixer_energy_closure(self._proc)
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
@@ -1499,6 +2132,8 @@ class NeqSimProcessModel:
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
             self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
+            if self._enforce_acyclic_mixer_energy:
+                self._run_acyclic_mixer_energy_closure(self._proc)
         self._index_model_objects()
 
     @staticmethod
@@ -1680,150 +2315,361 @@ class NeqSimProcessModel:
         # NeqSim convention for marking product streams like "export gas",
         # "export oil", "fuel gas").  If none are found, we fall back to
         # the last non-utility unit's ALL outlets.
+        material_boundaries: List[Dict[str, Any]] = []
+        component_balances: List[Dict[str, Any]] = []
+        material_balance_applicable: Optional[bool] = None
+        component_balance_applicable: Optional[bool] = None
         try:
-            # Collect all unit operations across all process systems
-            all_units = []
-            if self._is_process_model:
-                for ps in self.get_process_systems():
-                    try:
-                        all_units.extend(list(ps.getUnitOperations()))
-                    except Exception:
-                        pass
-            else:
+            material_boundary_identities = _MaterialBoundaryIdentityTracker()
+
+            def _record_material_boundary(
+                stream: Any,
+                role: str,
+                fallback_name: str,
+            ) -> Optional[Dict[str, Any]]:
+                """Record one native boundary identity once per material role."""
+                if material_boundary_identities.contains(role, stream):
+                    return None
+                record = self._material_boundary_record(
+                    stream,
+                    role,
+                    fallback_name,
+                )
+                material_boundary_identities.add(role, stream)
+                material_boundaries.append(record)
+                return record
+
+            unit_groups = self._process_unit_groups()
+            all_units = [
+                unit
+                for process_units in unit_groups
+                for unit in process_units
+            ]
+            connectivity_unsafe_units: List[str] = []
+            for unit in all_units:
                 try:
-                    all_units = list(self._proc.getUnitOperations())
+                    unit_class = str(
+                        unit.getClass().getSimpleName()
+                    )
                 except Exception:
-                    pass
+                    continue
+                if (
+                    unit_class.lower()
+                    not in _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES
+                ):
+                    continue
+                try:
+                    unit_name = str(unit.getName()).strip()
+                except Exception:
+                    unit_name = ""
+                connectivity_unsafe_units.append(
+                    unit_name or unit_class
+                )
+            material_balance_applicable = not connectivity_unsafe_units
             feed_flow = 0.0
+            feed_details = []
             product_flow = 0.0
             product_details = []  # for diagnostic output
 
             _utility_types = {"Recycle", "Adjuster", "Calculator", "SetPoint"}
 
             if all_units:
-                # Feed flow: first unit in the process
-                first = all_units[0]
-                try:
-                    feed_flow = float(first.getFlowRate("kg/hr"))
-                except Exception:
-                    for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
-                        if hasattr(first, m):
+                connected_feeds, connected_products = (
+                    self._connectivity_material_boundaries(all_units)
+                )
+                consumed_streams, consumed_fluids = (
+                    self._material_consumption_trackers(all_units)
+                )
+                feed_streams = connected_feeds or [
+                    stream
+                    for process_units in unit_groups
+                    for stream in self._leading_material_feed_streams(
+                        process_units
+                    )
+                ]
+                for stream in feed_streams:
+                    try:
+                        record = _record_material_boundary(
+                            stream,
+                            "feed",
+                            "feed",
+                        )
+                        if record is None:
+                            continue
+                        flow = record["mass_flow_kg_hr"]
+                        name = record["stream_name"]
+                        feed_flow += flow
+                        feed_details.append(f"{name}={flow:.0f}")
+                    except Exception:
+                        pass
+                def _add_outlet_flow(
+                    stream_obj: Any,
+                    label: str,
+                ) -> float:
+                    """Add a distinct product stream flow."""
+                    nonlocal product_flow
+                    record = _record_material_boundary(
+                        stream_obj,
+                        "product",
+                        label,
+                    )
+                    if record is None:
+                        return 0.0
+                    flow = record["mass_flow_kg_hr"]
+                    sname = record["stream_name"]
+                    if abs(flow) > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+                        product_flow += flow
+                        product_details.append(f"{sname}={flow:.0f}")
+                    else:
+                        product_details.append(f"{sname}=0 (no flow)")
+                    return flow
+
+                terminal_stream_units = [
+                    stream
+                    for process_units in unit_groups
+                    for stream in (
+                        self._trailing_material_product_streams(
+                            process_units
+                        )
+                    )
+                ]
+                explicit_product_fluids = (
+                    _MaterialBoundaryIdentityTracker()
+                )
+                for stream in terminal_stream_units:
+                    fluid = self._material_fluid_reference(stream)
+                    if (
+                        consumed_streams.contains("feed", stream)
+                        or (
+                            fluid is not None
+                            and consumed_fluids.contains("feed", fluid)
+                        )
+                    ):
+                        continue
+                    try:
+                        _add_outlet_flow(stream, "product")
+                    except Exception:
+                        continue
+                    if fluid is not None:
+                        explicit_product_fluids.add("product", fluid)
+
+                for stream, label in connected_products:
+                    fluid = self._material_fluid_reference(stream)
+                    if (
+                        fluid is not None
+                        and explicit_product_fluids.contains(
+                            "product",
+                            fluid,
+                        )
+                    ):
+                        continue
+                    try:
+                        _add_outlet_flow(stream, label)
+                    except Exception:
+                        pass
+
+                if not terminal_stream_units and not connected_products:
+                    # Compatibility fallback for native units whose ports
+                    # cannot be inspected through the supported interfaces.
+                    for process_units in unit_groups:
+                        last = None
+                        for unit in reversed(process_units):
                             try:
-                                feed_flow = float(getattr(first, m)().getFlowRate("kg/hr"))
+                                unit_class = str(
+                                    unit.getClass().getSimpleName()
+                                )
+                            except Exception:
+                                continue
+                            if unit_class not in _utility_types:
+                                last = unit
                                 break
-                            except Exception:
-                                pass
-
-                # --- Detect terminal product streams ---
-                # Find the last non-Stream, non-utility unit in process order.
-                # Any Stream-type unit appearing AFTER it is a terminal product.
-                last_equip_idx = -1
-                for i, u in enumerate(all_units):
-                    uclass = str(u.getClass().getSimpleName())
-                    if uclass != "Stream" and uclass not in _utility_types:
-                        last_equip_idx = i
-
-                terminal_stream_units = []
-                for i, u in enumerate(all_units):
-                    if i > last_equip_idx and i > 0:  # skip first unit (feed)
-                        uclass = str(u.getClass().getSimpleName())
-                        if uclass == "Stream":
-                            terminal_stream_units.append(u)
-
-                if terminal_stream_units:
-                    # Explicit terminal streams — use them as products
-                    for s in terminal_stream_units:
-                        try:
-                            flow = float(s.getFlowRate("kg/hr"))
-                            sname = str(s.getName()) if s.getName() else "product"
-                            if abs(flow) > 0.01:
-                                product_flow += flow
-                                product_details.append(f"{sname}={flow:.0f}")
-                            else:
-                                # Report 0-flow terminal streams for diagnostics
-                                product_details.append(f"{sname}=0 (no flow)")
-                        except Exception:
-                            pass
-                else:
-                    # Fallback: use the last non-utility unit's ALL outlets
-                    last = None
-                    for i in range(len(all_units) - 1, -1, -1):
-                        uclass = str(all_units[i].getClass().getSimpleName())
-                        if uclass not in _utility_types:
-                            last = all_units[i]
-                            break
-
-                    if last is not None:
-                        last_class = str(last.getClass().getSimpleName())
-                        seen_outlet_ids: set = set()
-
-                        def _add_outlet_flow(stream_obj, label: str) -> float:
-                            """Add stream flow if not already counted (dedup by hashCode)."""
-                            nonlocal product_flow
+                        if last is None:
+                            continue
+                        for stream, label in (
+                            self._fallback_material_outlet_streams(last)
+                        ):
                             try:
-                                sid = int(stream_obj.hashCode())
-                            except Exception:
-                                sid = id(stream_obj)
-                            if sid in seen_outlet_ids:
-                                return 0.0
-                            seen_outlet_ids.add(sid)
-                            flow = float(stream_obj.getFlowRate("kg/hr"))
-                            if abs(flow) > 0.01:
-                                sname = str(stream_obj.getName()) if stream_obj.getName() else label
-                                product_flow += flow
-                                product_details.append(f"{sname}={flow:.0f}")
-                            return flow
-
-                        # Gas outlet
-                        for m in ("getOutletStream", "getOutStream", "getGasOutStream"):
-                            if hasattr(last, m):
-                                try:
-                                    s = getattr(last, m)()
-                                    _add_outlet_flow(s, "gas_out")
-                                    break
-                                except Exception:
-                                    pass
-                        # Oil outlet (three-phase separators)
-                        if hasattr(last, "getOilOutStream"):
-                            try:
-                                _add_outlet_flow(last.getOilOutStream(), "oil")
-                            except Exception:
-                                pass
-                        # Liquid outlet
-                        if hasattr(last, "getLiquidOutStream"):
-                            try:
-                                _add_outlet_flow(last.getLiquidOutStream(), "liquid")
-                            except Exception:
-                                pass
-                        # Water outlet (three-phase separators)
-                        if hasattr(last, "getWaterOutStream"):
-                            try:
-                                _add_outlet_flow(last.getWaterOutStream(), "water")
+                                _add_outlet_flow(stream, label)
                             except Exception:
                                 pass
 
             # Fallback: match by stream name keywords
             if feed_flow == 0.0:
                 for name, s in self._streams.items():
-                    try:
-                        flow = float(s.getFlowRate("kg/hr"))
-                    except Exception:
-                        continue
                     lower = name.lower()
-                    if any(kw in lower for kw in ("feed", "inlet", "well", "input")):
+                    if any(
+                        keyword in lower
+                        for keyword in ("feed", "inlet", "well", "input")
+                    ):
+                        try:
+                            record = _record_material_boundary(
+                                s,
+                                "feed",
+                                name,
+                            )
+                        except ValueError:
+                            continue
+                        if record is None:
+                            continue
+                        flow = record["mass_flow_kg_hr"]
                         feed_flow += flow
-                    elif any(kw in lower for kw in ("export", "product", "outlet", "output", "fuel")):
+                    elif any(
+                        keyword in lower
+                        for keyword in (
+                            "export",
+                            "product",
+                            "outlet",
+                            "output",
+                            "fuel",
+                        )
+                    ):
+                        try:
+                            record = _record_material_boundary(
+                                s,
+                                "product",
+                                name,
+                            )
+                        except ValueError:
+                            continue
+                        if record is None:
+                            continue
+                        flow = record["mass_flow_kg_hr"]
                         product_flow += flow
 
-            if feed_flow > 0:
+            feed_boundary_count = sum(
+                1
+                for boundary in material_boundaries
+                if boundary["role"] == "feed"
+            )
+            product_boundary_count = sum(
+                1
+                for boundary in material_boundaries
+                if boundary["role"] == "product"
+            )
+            if feed_boundary_count:
+                kpis["material_feed_count"] = KPI(
+                    "material_feed_count",
+                    float(feed_boundary_count),
+                    "count",
+                )
+                kpis["material_feed_flow_kg_hr"] = KPI(
+                    "material_feed_flow_kg_hr",
+                    feed_flow,
+                    "kg/hr",
+                )
+            if product_boundary_count:
+                kpis["material_product_count"] = KPI(
+                    "material_product_count",
+                    float(product_boundary_count),
+                    "count",
+                )
+                kpis["material_product_flow_kg_hr"] = KPI(
+                    "material_product_flow_kg_hr",
+                    product_flow,
+                    "kg/hr",
+                )
+
+            if feed_flow > 0 and material_balance_applicable:
                 balance_pct = abs(feed_flow - product_flow) / feed_flow * 100
                 kpis["mass_balance_pct"] = KPI("mass_balance_pct", balance_pct, "%")
+                feed_detail_str = (
+                    ", ".join(feed_details)
+                    if feed_details
+                    else f"{feed_flow:.0f}"
+                )
                 detail_str = ", ".join(product_details) if product_details else f"{product_flow:.0f}"
                 status = "OK" if balance_pct < 1.0 else "WARN" if balance_pct < 5.0 else "VIOLATION"
                 constraints.append(ConstraintStatus(
                     "mass_balance", status,
-                    f"Feed={feed_flow:.0f} kg/hr, Products={product_flow:.0f} kg/hr ({detail_str}), imbalance={balance_pct:.2f}%"
+                    f"Feeds={feed_flow:.0f} kg/hr ({feed_detail_str}), "
+                    f"Products={product_flow:.0f} kg/hr ({detail_str}), "
+                    f"imbalance={balance_pct:.2f}%"
                 ))
+            elif feed_flow > 0 and connectivity_unsafe_units:
+                constraints.append(
+                    ConstraintStatus(
+                        "mass_balance",
+                        "UNKNOWN",
+                        "System material closure is unavailable because "
+                        "native inlet connectivity cannot be inspected for: "
+                        f"{', '.join(connectivity_unsafe_units)}.",
+                    )
+                )
+
+            excluded_units = self._component_balance_exclusion_names(
+                all_units
+            )
+            component_balance_applicable = not excluded_units
+            if excluded_units:
+                constraints.append(
+                    ConstraintStatus(
+                        "component_balance",
+                        "UNKNOWN",
+                        "Species-level boundary closure is not applicable "
+                        "to species-changing or unclassified equipment. "
+                        f"Units: {', '.join(excluded_units)}.",
+                    )
+                )
+            else:
+                from .solver_diagnostics import component_balance_rows
+
+                try:
+                    component_balances = component_balance_rows(
+                        ModelRunResult(
+                            kpis={},
+                            constraints=[],
+                            raw={
+                                "material_boundaries": material_boundaries,
+                                "component_balance_applicable": True,
+                            },
+                        )
+                    )
+                except ValueError as exc:
+                    component_balance_applicable = False
+                    component_balances = []
+                    constraints.append(
+                        ConstraintStatus(
+                            "component_balance",
+                            "UNKNOWN",
+                            "Component balance unavailable: "
+                            f"{exc}",
+                        )
+                    )
+            if component_balance_applicable and component_balances:
+                worst_component = max(
+                    component_balances,
+                    key=lambda row: float(row["imbalance_pct"]),
+                )
+                maximum_imbalance = float(
+                    worst_component["imbalance_pct"]
+                )
+                kpis["component_balance_count"] = KPI(
+                    "component_balance_count",
+                    float(len(component_balances)),
+                    "count",
+                )
+                kpis["component_balance_max_pct"] = KPI(
+                    "component_balance_max_pct",
+                    maximum_imbalance,
+                    "%",
+                )
+                component_status = (
+                    "OK"
+                    if maximum_imbalance < _COMPONENT_BALANCE_OK_PCT
+                    else "WARN"
+                    if maximum_imbalance < _COMPONENT_BALANCE_WARN_PCT
+                    else "VIOLATION"
+                )
+                constraints.append(
+                    ConstraintStatus(
+                        "component_balance",
+                        component_status,
+                        "Maximum component imbalance="
+                        f"{maximum_imbalance:.6g}% "
+                        f"({worst_component['component']}); "
+                        f"{len(component_balances)} components checked.",
+                    )
+                )
         except Exception:
             pass
 
@@ -1834,6 +2680,10 @@ class NeqSimProcessModel:
             raw={
                 "unit_names": list(self._units.keys()),
                 "stream_names": list(self._streams.keys()),
+                "material_boundaries": material_boundaries,
+                "material_balance_applicable": material_balance_applicable,
+                "component_balances": component_balances,
+                "component_balance_applicable": component_balance_applicable,
             }
         )
 
