@@ -15,12 +15,16 @@ from process_chat.solver_diagnostics import (
 
 
 class _FallbackStream:
-    def __init__(self, name, mass_flow=None):
+    def __init__(self, name, mass_flow=None, hash_code=None):
         self._name = name
         self._mass_flow = mass_flow
+        self._hash_code = hash_code
 
     def hashCode(self):
-        return id(self)
+        return self._hash_code if self._hash_code is not None else id(self)
+
+    def getClass(self):
+        return _JavaClass("Stream")
 
     def getName(self):
         return self._name
@@ -46,9 +50,24 @@ class _FallbackStream:
 
 
 class _FallbackProcess:
-    @staticmethod
-    def getUnitOperations():
-        return []
+    def __init__(self, units=None):
+        self._units = units or []
+
+    def getUnitOperations(self):
+        return self._units
+
+
+class _JavaClass:
+    def __init__(self, name):
+        self._name = name
+
+    def getSimpleName(self):
+        return self._name
+
+
+class _FallbackEquipment:
+    def getClass(self):
+        return _JavaClass("Mixer")
 
 
 def _result(rows=None, **kpi_values):
@@ -183,6 +202,152 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 ("product", "export product"),
             ],
         )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_name_fallback_deduplicates_existing_terminal_boundaries(self):
+        zero_feed = _FallbackStream("zero feed", 0.0)
+        backup_feed = _FallbackStream("backup feed", 100.0)
+        product = _FallbackStream("terminal product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [zero_feed, _FallbackEquipment(), product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "zero feed": zero_feed,
+            "backup feed": backup_feed,
+            "terminal product": product,
+            "product alias": product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        rows = result.raw["material_boundaries"]
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in rows
+            ],
+            [
+                ("feed", "zero feed"),
+                ("product", "terminal product"),
+                ("feed", "backup feed"),
+            ],
+        )
+        self.assertEqual(
+            aggregate_material_balance(result)["product_flow_kg_hr"],
+            100.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_no_flow_boundary_rows_match_solver_kpis(self):
+        feed = _FallbackStream("feed", 100.0)
+        trace_product = _FallbackStream("trace product", 0.005)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed, _FallbackEquipment(), trace_product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed": feed,
+            "trace product": trace_product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        summary = aggregate_material_balance(result)
+        self.assertEqual(summary["product_flow_kg_hr"], 0.0)
+        self.assertEqual(
+            result.kpis["material_product_flow_kg_hr"].value,
+            0.0,
+        )
+        self.assertEqual(
+            [
+                row["mass_flow_kg_hr"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            [0.0],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 100.0)
+
+    def test_boundary_counts_include_only_successful_records(self):
+        feed = _FallbackStream("feed", 100.0)
+        broken_feed = _FallbackStream("broken feed")
+        product = _FallbackStream("product", 100.0)
+        broken_product = _FallbackStream("broken product")
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed,
+                broken_feed,
+                _FallbackEquipment(),
+                product,
+                broken_product,
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed": feed,
+            "broken feed": broken_feed,
+            "product": product,
+            "broken product": broken_product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        summary = aggregate_material_balance(result)
+        self.assertEqual(summary["feed_count"], 1.0)
+        self.assertEqual(summary["product_count"], 1.0)
+        self.assertEqual(
+            result.kpis["material_feed_count"].value,
+            1.0,
+        )
+        self.assertEqual(
+            result.kpis["material_product_count"].value,
+            1.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_distinct_streams_survive_native_hash_collisions(self):
+        first_feed = _FallbackStream("feed", 40.0, hash_code=17)
+        second_feed = _FallbackStream("feed", 60.0, hash_code=17)
+        product = _FallbackStream("product", 100.0, hash_code=23)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                first_feed,
+                second_feed,
+                _FallbackEquipment(),
+                product,
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed one": first_feed,
+            "feed two": second_feed,
+            "product": product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        summary = aggregate_material_balance(result)
+        self.assertEqual(summary["feed_count"], 2.0)
+        self.assertEqual(summary["feed_flow_kg_hr"], 100.0)
+        self.assertEqual(summary["product_count"], 1.0)
+        self.assertEqual(summary["product_flow_kg_hr"], 100.0)
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
 
