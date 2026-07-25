@@ -337,8 +337,13 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertIn("reactive flowsheets", component_constraint.detail)
         self.assertNotIn("component_balance_max_pct", result.kpis)
 
-    def test_combustion_equipment_is_reactive(self):
-        for class_name in ("GasTurbine", "CombustionEngine"):
+    def test_species_changing_equipment_is_reactive(self):
+        for class_name in (
+            "GasTurbine",
+            "CombustionEngine",
+            "FuelCell",
+            "H2SScavenger",
+        ):
             with self.subTest(class_name=class_name):
                 self.assertEqual(
                     NeqSimProcessModel._reactive_unit_names(

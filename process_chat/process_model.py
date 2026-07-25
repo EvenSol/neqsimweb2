@@ -25,6 +25,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
 _COMPONENT_BALANCE_OK_PCT = 0.01
 _COMPONENT_BALANCE_WARN_PCT = 1.0
+_SPECIES_CHANGING_UNIT_CLASSES = {
+    "fuelcell",
+    "gasturbine",
+    "h2sscavenger",
+}
+_SPECIES_CHANGING_UNIT_TOKENS = (
+    "reactor",
+    "electrolyzer",
+    "flare",
+    "combust",
+)
 
 
 class _MaterialBoundaryIdentityTracker:
@@ -974,22 +985,19 @@ class NeqSimProcessModel:
     @staticmethod
     def _reactive_unit_names(units: List[Any]) -> List[str]:
         """Return units that make species-level boundary closure inapplicable."""
-        reactive_class_tokens = (
-            "reactor",
-            "electrolyzer",
-            "flare",
-            "gasturbine",
-            "combust",
-        )
         reactive_units: List[str] = []
         for unit in units:
             try:
                 unit_class = str(unit.getClass().getSimpleName())
             except Exception:
                 continue
-            if not any(
-                token in unit_class.lower()
-                for token in reactive_class_tokens
+            normalized_class = unit_class.lower()
+            if (
+                normalized_class not in _SPECIES_CHANGING_UNIT_CLASSES
+                and not any(
+                    token in normalized_class
+                    for token in _SPECIES_CHANGING_UNIT_TOKENS
+                )
             ):
                 continue
             try:
