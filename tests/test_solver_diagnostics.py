@@ -6,7 +6,10 @@ import math
 import unittest
 from types import SimpleNamespace
 
-from process_chat.process_model import NeqSimProcessModel
+from process_chat.process_model import (
+    NeqSimProcessModel,
+    _MaterialBoundaryIdentityTracker,
+)
 from process_chat.solver_diagnostics import (
     aggregate_material_balance,
     material_boundary_rows,
@@ -352,6 +355,36 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(summary["product_count"], 1.0)
         self.assertEqual(summary["product_flow_kg_hr"], 100.0)
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_native_reference_tracking_ignores_value_hash_equality(self):
+        from neqsim import jneqsim
+
+        first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
+        second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
+        first_fluid.addComponent("methane", 1.0)
+        second_fluid.addComponent("methane", 1.0)
+        first_stream = jneqsim.process.equipment.stream.Stream(
+            "feed",
+            first_fluid,
+        )
+        second_stream = jneqsim.process.equipment.stream.Stream(
+            "feed",
+            second_fluid,
+        )
+        tracker = _MaterialBoundaryIdentityTracker()
+
+        self.assertEqual(
+            int(first_stream.hashCode()),
+            int(second_stream.hashCode()),
+        )
+        self.assertTrue(first_stream.equals(second_stream))
+        self.assertFalse(tracker.contains("feed", first_stream))
+        tracker.add("feed", first_stream)
+        self.assertTrue(tracker.contains("feed", first_stream))
+        self.assertFalse(tracker.contains("feed", second_stream))
+        self.assertFalse(tracker.contains("product", first_stream))
+        tracker.add("feed", second_stream)
+        self.assertTrue(tracker.contains("feed", second_stream))
 
 
 if __name__ == "__main__":

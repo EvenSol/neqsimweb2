@@ -25,6 +25,51 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
 
 
+class _MaterialBoundaryIdentityTracker:
+    """Track native stream references without relying on collision-prone hashes."""
+
+    _ROLES = ("feed", "product")
+
+    def __init__(self) -> None:
+        self._python_ids = {
+            role: set()
+            for role in self._ROLES
+        }
+        self._java_maps: Dict[str, Any] = {}
+        try:
+            import jpype
+
+            if jpype.isJVMStarted():
+                identity_map = jpype.JClass("java.util.IdentityHashMap")
+                self._java_maps = {
+                    role: identity_map()
+                    for role in self._ROLES
+                }
+        except Exception:
+            pass
+
+    def contains(self, role: str, stream: Any) -> bool:
+        """Return whether this exact stream reference was recorded for a role."""
+        java_map = self._java_maps.get(role)
+        if java_map is not None:
+            try:
+                return bool(java_map.containsKey(stream))
+            except Exception:
+                pass
+        return id(stream) in self._python_ids[role]
+
+    def add(self, role: str, stream: Any) -> None:
+        """Remember one exact native or Python stream reference for a role."""
+        java_map = self._java_maps.get(role)
+        if java_map is not None:
+            try:
+                java_map.put(stream, True)
+                return
+            except Exception:
+                pass
+        self._python_ids[role].add(id(stream))
+
+
 # ---------------------------------------------------------------------------
 # Ensure JVM starts with --add-opens flags for XStream / Java 17+ compat
 # ---------------------------------------------------------------------------
@@ -962,22 +1007,6 @@ class NeqSimProcessModel:
             record["molar_flow_mol_sec"] = 0.0
         return record
 
-    @staticmethod
-    def _material_boundary_identity(stream: Any) -> Tuple[str, int]:
-        """Return a reference-identity token for a native or Python stream."""
-        try:
-            import jpype
-
-            if jpype.isJVMStarted():
-                java_system = jpype.JClass("java.lang.System")
-                return (
-                    "java",
-                    int(java_system.identityHashCode(stream)),
-                )
-        except Exception:
-            pass
-        return ("python", id(stream))
-
     def get_diagram_dot(
         self,
         style: str = "HYSYS",
@@ -1907,7 +1936,7 @@ class NeqSimProcessModel:
         # the last non-utility unit's ALL outlets.
         material_boundaries: List[Dict[str, Any]] = []
         try:
-            seen_material_boundary_ids: set = set()
+            material_boundary_identities = _MaterialBoundaryIdentityTracker()
 
             def _record_material_boundary(
                 stream: Any,
@@ -1915,18 +1944,14 @@ class NeqSimProcessModel:
                 fallback_name: str,
             ) -> Optional[Dict[str, Any]]:
                 """Record one native boundary identity once per material role."""
-                boundary_id = (
-                    role,
-                    self._material_boundary_identity(stream),
-                )
-                if boundary_id in seen_material_boundary_ids:
+                if material_boundary_identities.contains(role, stream):
                     return None
                 record = self._material_boundary_record(
                     stream,
                     role,
                     fallback_name,
                 )
-                seen_material_boundary_ids.add(boundary_id)
+                material_boundary_identities.add(role, stream)
                 material_boundaries.append(record)
                 return record
 
