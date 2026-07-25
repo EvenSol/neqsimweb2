@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 _MODULE_LOCKS: dict[str, threading.Lock] = {}
 _MODULE_LOCKS_GUARD = threading.Lock()
+_MISSING = object()
 
 
 def _module_lock(module_name: str) -> threading.Lock:
@@ -77,9 +78,19 @@ def import_local_symbols(
         if missing:
             _assert_local_module(module, Path(project_root))
             importlib.invalidate_caches()
+            previous_symbols = {
+                name: module.__dict__.get(name, _MISSING) for name in names
+            }
             for name in names:
                 module.__dict__.pop(name, None)
-            module = importlib.reload(module)
+            try:
+                module = importlib.reload(module)
+            except BaseException:
+                for name, value in previous_symbols.items():
+                    module.__dict__.pop(name, None)
+                    if value is not _MISSING:
+                        module.__dict__[name] = value
+                raise
             missing = [name for name in names if not hasattr(module, name)]
 
         if missing:
