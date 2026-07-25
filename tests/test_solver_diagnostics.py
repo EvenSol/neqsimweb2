@@ -27,11 +27,13 @@ class _FallbackStream:
         mass_flow=None,
         hash_code=None,
         class_name="Stream",
+        enthalpy_flow_w=None,
     ):
         self._name = name
         self._mass_flow = mass_flow
         self._hash_code = hash_code
         self._class_name = class_name
+        self._enthalpy_flow_w = enthalpy_flow_w
 
     def hashCode(self):
         return self._hash_code if self._hash_code is not None else id(self)
@@ -60,6 +62,23 @@ class _FallbackStream:
         if unit != "bara":
             raise ValueError(unit)
         return 45.0
+
+    def getFluid(self):
+        if self._enthalpy_flow_w is None:
+            raise RuntimeError("unreadable fluid")
+        return _FallbackFluid(self._enthalpy_flow_w)
+
+
+class _FallbackFluid:
+    def __init__(self, enthalpy_flow_w):
+        self._enthalpy_flow_w = enthalpy_flow_w
+
+    def init(self, level):
+        if level != 3:
+            raise ValueError(level)
+
+    def getEnthalpy(self):
+        return self._enthalpy_flow_w
 
 
 class _FallbackAliasedStream(_FallbackStream):
@@ -370,6 +389,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 "temperature_C": 20,
                 "pressure_bara": 45,
                 "molar_flow_mol_sec": 900,
+                "enthalpy_flow_kW": 1250,
             },
             {
                 "role": "feed",
@@ -378,6 +398,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 "temperature_C": 35,
                 "pressure_bara": 45,
                 "molar_flow_mol_sec": 500,
+                "enthalpy_flow_kW": 750,
             },
             {
                 "role": "product",
@@ -386,6 +407,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 "temperature_C": 25,
                 "pressure_bara": 45,
                 "molar_flow_mol_sec": 1400,
+                "enthalpy_flow_kW": 2000,
             },
         ]
         result = _result(
@@ -409,6 +431,34 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             solved_feed_flow_kg_hr(result, 60_000.0),
             100_000.0,
         )
+        self.assertEqual(rows[0]["enthalpy_flow_kW"], 1250.0)
+
+    def test_extracts_native_boundary_enthalpy_flow_in_kw(self):
+        record = NeqSimProcessModel._material_boundary_record(
+            _FallbackStream(
+                "warm feed",
+                100.0,
+                enthalpy_flow_w=1_250_000.0,
+            ),
+            "feed",
+            "feed",
+        )
+
+        self.assertEqual(record["enthalpy_flow_kW"], 1250.0)
+
+    def test_zero_flow_boundary_has_zero_enthalpy_flow(self):
+        record = NeqSimProcessModel._material_boundary_record(
+            _FallbackStream(
+                "empty product",
+                0.0,
+                enthalpy_flow_w=99_000.0,
+            ),
+            "product",
+            "product",
+        )
+
+        self.assertEqual(record["mass_flow_kg_hr"], 0.0)
+        self.assertEqual(record["enthalpy_flow_kW"], 0.0)
 
     def test_aggregates_component_feed_and_product_closure(self):
         rows = [

@@ -1438,6 +1438,7 @@ class NeqSimProcessModel:
             "temperature_C": None,
             "pressure_bara": None,
             "molar_flow_mol_sec": None,
+            "enthalpy_flow_kW": None,
             "component_molar_flows_mol_sec": None,
         }
         for key, getter_name, unit in (
@@ -1453,6 +1454,19 @@ class NeqSimProcessModel:
                 record[key] = value
         if is_no_flow:
             record["molar_flow_mol_sec"] = 0.0
+            record["enthalpy_flow_kW"] = 0.0
+        else:
+            try:
+                fluid = stream.getFluid()
+                fluid.init(3)
+                enthalpy_flow_kW = float(fluid.getEnthalpy()) / 1000.0
+            except Exception:
+                enthalpy_flow_kW = None
+            if (
+                enthalpy_flow_kW is not None
+                and math.isfinite(enthalpy_flow_kW)
+            ):
+                record["enthalpy_flow_kW"] = enthalpy_flow_kW
         record["component_molar_flows_mol_sec"] = (
             NeqSimProcessModel._material_boundary_component_flows(
                 stream,
