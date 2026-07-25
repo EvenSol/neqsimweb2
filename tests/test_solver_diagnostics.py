@@ -22,6 +22,9 @@ class _FallbackStream:
     def hashCode(self):
         return id(self)
 
+    def getClass(self):
+        return _JavaClass("Stream")
+
     def getName(self):
         return self._name
 
@@ -46,9 +49,24 @@ class _FallbackStream:
 
 
 class _FallbackProcess:
-    @staticmethod
-    def getUnitOperations():
-        return []
+    def __init__(self, units=None):
+        self._units = units or []
+
+    def getUnitOperations(self):
+        return self._units
+
+
+class _JavaClass:
+    def __init__(self, name):
+        self._name = name
+
+    def getSimpleName(self):
+        return self._name
+
+
+class _FallbackEquipment:
+    def getClass(self):
+        return _JavaClass("Mixer")
 
 
 def _result(rows=None, **kpi_values):
@@ -182,6 +200,45 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 ("feed", "backup feed"),
                 ("product", "export product"),
             ],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_name_fallback_deduplicates_existing_terminal_boundaries(self):
+        zero_feed = _FallbackStream("zero feed", 0.0)
+        backup_feed = _FallbackStream("backup feed", 100.0)
+        product = _FallbackStream("terminal product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [zero_feed, _FallbackEquipment(), product]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "zero feed": zero_feed,
+            "backup feed": backup_feed,
+            "terminal product": product,
+            "product alias": product,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        rows = result.raw["material_boundaries"]
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in rows
+            ],
+            [
+                ("feed", "zero feed"),
+                ("product", "terminal product"),
+                ("feed", "backup feed"),
+            ],
+        )
+        self.assertEqual(
+            aggregate_material_balance(result)["product_flow_kg_hr"],
+            100.0,
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
