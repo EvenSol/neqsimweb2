@@ -118,6 +118,27 @@ class LocalSymbolImportTest(unittest.TestCase):
 
         reload_module.assert_called_once_with(flowsheet_editor)
 
+    def test_removed_export_does_not_survive_refresh(self):
+        removed_name = "_removed_studio_export"
+        setattr(flowsheet_editor, removed_name, object())
+        self.addCleanup(
+            lambda: flowsheet_editor.__dict__.pop(removed_name, None)
+        )
+        del flowsheet_editor.connect_graph_ports
+
+        with self.assertRaisesRegex(
+            ImportError,
+            f"after refresh: {removed_name}",
+        ):
+            import_local_symbols(
+                "process_chat.flowsheet_editor",
+                ("connect_graph_ports", removed_name),
+                project_root=self.project_root,
+            )
+
+        self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
+        self.assertFalse(hasattr(flowsheet_editor, removed_name))
+
     def test_refuses_to_refresh_module_outside_project(self):
         outside_module = types.ModuleType("outside_project_module")
         outside_module.__file__ = "/tmp/outside_project_module.py"
