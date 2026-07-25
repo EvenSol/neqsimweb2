@@ -34,15 +34,24 @@ sys.path.insert(0, _PROJECT_ROOT)
 
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
-from process_chat.solver_diagnostics import (  # noqa: E402
-    aggregate_energy_balance,
-    aggregate_validation_status,
-    component_balance_rows,
-    energy_transfer_rows,
-    material_boundary_rows,
-    solved_feed_flow_kg_hr,
-)
 from theme import apply_theme, theme_toggle  # noqa: E402
+
+
+_SOLVER_DIAGNOSTIC_SYMBOL_NAMES = (
+    "aggregate_energy_balance",
+    "aggregate_validation_status",
+    "component_balance_rows",
+    "energy_transfer_rows",
+    "material_boundary_rows",
+    "solved_feed_flow_kg_hr",
+)
+globals().update(
+    import_local_symbols(
+        "process_chat.solver_diagnostics",
+        _SOLVER_DIAGNOSTIC_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+    )
+)
 
 
 _EDITOR_SYMBOL_NAMES = (
