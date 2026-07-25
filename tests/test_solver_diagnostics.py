@@ -841,6 +841,78 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                     "UNKNOWN",
                 )
 
+    def test_unsafe_child_preserves_independent_process_products(self):
+        unsafe_feed = _FallbackStream("unsafe feed", 100.0)
+        processed_feed = _FallbackStream("processed feed", 100.0)
+        hydrogen = _FallbackStream("hydrogen product", 40.0)
+        oxygen = _FallbackStream("oxygen product", 60.0)
+        safe_feed = _FallbackStream("safe feed", 50.0)
+        safe_product_fluid = object()
+        raw_safe_product = _FallbackAliasedStream(
+            "raw safe product",
+            50.0,
+            safe_product_fluid,
+        )
+        named_safe_product = _FallbackAliasedStream(
+            "safe product",
+            50.0,
+            safe_product_fluid,
+        )
+        process_model = _FallbackProcessModel(
+            [
+                _FallbackProcess(
+                    [
+                        unsafe_feed,
+                        _FallbackHeater(unsafe_feed, processed_feed),
+                        _FallbackElectrolyzer(hydrogen, oxygen),
+                    ]
+                ),
+                _FallbackProcess(
+                    [
+                        safe_feed,
+                        _FallbackHeater(
+                            safe_feed,
+                            raw_safe_product,
+                        ),
+                        named_safe_product,
+                    ]
+                ),
+            ]
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = process_model
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                unsafe_feed,
+                processed_feed,
+                hydrogen,
+                oxygen,
+                safe_feed,
+                raw_safe_product,
+                named_safe_product,
+            )
+        }
+        model._is_process_model = True
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["safe product", "hydrogen product", "oxygen product"],
+        )
+        self.assertFalse(result.raw["material_balance_applicable"])
+        self.assertIsNone(
+            aggregate_material_balance(result)["imbalance_pct"]
+        )
+
     def test_fallback_discovers_products_for_each_child_process(self):
         feed_a = _FallbackStream("feed a", 100.0)
         feed_b = _FallbackStream("feed b", 100.0)
