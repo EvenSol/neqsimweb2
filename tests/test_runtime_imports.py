@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -59,6 +61,44 @@ class LocalSymbolImportTest(unittest.TestCase):
 
         self.assertTrue(callable(symbols["connect_graph_ports"]))
         self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
+        reload_module.assert_called_once_with(flowsheet_editor)
+
+    def test_serializes_concurrent_refreshes_for_one_module(self):
+        del flowsheet_editor.connect_graph_ports
+        reload_started = threading.Event()
+        second_started = threading.Event()
+        release_reload = threading.Event()
+        actual_reload = importlib.reload
+
+        def delayed_reload(module):
+            reload_started.set()
+            self.assertTrue(release_reload.wait(timeout=5))
+            return actual_reload(module)
+
+        def import_symbols(started=None):
+            if started is not None:
+                started.set()
+            return import_local_symbols(
+                "process_chat.flowsheet_editor",
+                ("connect_graph_ports",),
+                project_root=self.project_root,
+            )
+
+        with mock.patch(
+            "process_chat.runtime_imports.importlib.reload",
+            side_effect=delayed_reload,
+        ) as reload_module:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(import_symbols)
+                self.assertTrue(reload_started.wait(timeout=5))
+                second = executor.submit(import_symbols, second_started)
+                self.assertTrue(second_started.wait(timeout=5))
+                release_reload.set()
+                results = (first.result(timeout=5), second.result(timeout=5))
+
+        self.assertTrue(
+            all(callable(result["connect_graph_ports"]) for result in results)
+        )
         reload_module.assert_called_once_with(flowsheet_editor)
 
     def test_missing_symbol_fails_after_one_refresh(self):

@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Iterable
+
+
+_MODULE_LOCKS: dict[str, threading.Lock] = {}
+_MODULE_LOCKS_GUARD = threading.Lock()
+
+
+def _module_lock(module_name: str) -> threading.Lock:
+    """Return the stable reload lock for one module name."""
+    with _MODULE_LOCKS_GUARD:
+        return _MODULE_LOCKS.setdefault(module_name, threading.Lock())
 
 
 def _validated_symbol_names(symbol_names: Iterable[str]) -> tuple[str, ...]:
@@ -61,18 +72,19 @@ def import_local_symbols(
     names = _validated_symbol_names(symbol_names)
 
     module = importlib.import_module(module_name)
-    missing = [name for name in names if not hasattr(module, name)]
-    if missing:
-        _assert_local_module(module, Path(project_root))
-        importlib.invalidate_caches()
-        module = importlib.reload(module)
+    with _module_lock(module_name):
         missing = [name for name in names if not hasattr(module, name)]
+        if missing:
+            _assert_local_module(module, Path(project_root))
+            importlib.invalidate_caches()
+            module = importlib.reload(module)
+            missing = [name for name in names if not hasattr(module, name)]
 
-    if missing:
-        missing_text = ", ".join(sorted(missing))
-        raise ImportError(
-            f"Module {module_name!r} does not provide required symbols "
-            f"after refresh: {missing_text}"
-        )
+        if missing:
+            missing_text = ", ".join(sorted(missing))
+            raise ImportError(
+                f"Module {module_name!r} does not provide required symbols "
+                f"after refresh: {missing_text}"
+            )
 
-    return {name: getattr(module, name) for name in names}
+        return {name: getattr(module, name) for name in names}
