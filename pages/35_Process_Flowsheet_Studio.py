@@ -49,6 +49,7 @@ _EDITOR_SYMBOL_NAMES = (
     "graph_port_rows",
     "inline_unit_catalog",
     "inline_unit_catalog_rows",
+    "inline_unit_property_rows",
     "insert_inline_unit_on_connection",
     "material_connection_rows",
     "record_graph_history",
@@ -56,6 +57,7 @@ _EDITOR_SYMBOL_NAMES = (
     "remove_inline_unit",
     "rename_inline_unit",
     "undo_graph_history",
+    "update_inline_unit_properties",
     "validate_catalog_unit",
 )
 globals().update(
@@ -2718,30 +2720,16 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             ),
         )
         st.caption("Initial properties and engineering units")
-        parameter_units = {
-            "outlet_pressure_bara": "bara (absolute)",
-            "isentropic_efficiency": "-",
-            "efficiency": "-",
-            "outlet_temperature_C": "°C",
-            "pressure_drop_bar": "bar",
-            "length": "m",
-            "diameter": "m",
-            "roughness": "m",
-        }
+        default_property_rows = inline_unit_property_rows(unit_type)
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "Property": property_name,
-                        "Value": property_value,
-                        "Unit": parameter_units.get(
-                            property_name,
-                            "explicit in property name",
-                        ),
+                        "Property": row["label"],
+                        "Value": row["value"],
+                        "Unit": row["unit"],
                     }
-                    for property_name, property_value in (
-                        selected_definition["default_params"].items()
-                    )
+                    for row in default_property_rows
                 ]
             ),
             use_container_width=True,
@@ -2826,6 +2814,43 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     "unchanged."
                 ),
             )
+            st.markdown("##### Operating properties")
+            st.caption(
+                "Values use the executable graph schema and explicit "
+                "engineering units."
+            )
+            property_rows = inline_unit_property_rows(
+                selected_unit["type"],
+                selected_unit["params"],
+            )
+            property_updates: dict[str, float] = {}
+            for row in property_rows:
+                property_updates[row["key"]] = st.number_input(
+                    f"{row['label']} [{row['unit']}]",
+                    min_value=float(row["minimum"]),
+                    max_value=float(row["maximum"]),
+                    value=float(row["value"]),
+                    step=float(row["step"]),
+                    format=row["format"],
+                    key=(
+                        "flowsheet_added_unit_property_"
+                        f"{selected_unit_id}_{row['key']}_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+            properties_changed = any(
+                property_updates[row["key"]] != row["value"]
+                for row in property_rows
+            )
+            save_properties = st.button(
+                "Save equipment properties",
+                disabled=not properties_changed,
+                use_container_width=True,
+                key=(
+                    "flowsheet_save_unit_properties_"
+                    f"{selected_unit_id}_{graph_widget_revision}"
+                ),
+            )
             lifecycle_cols = st.columns(2)
             rename_unit = lifecycle_cols[0].button(
                 "Rename equipment",
@@ -2846,6 +2871,39 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 use_container_width=True,
                 key=f"flowsheet_remove_unit_{selected_unit_id}",
             )
+
+            if save_properties:
+                try:
+                    units = update_inline_unit_properties(
+                        spec["units"],
+                        selected_unit_id,
+                        property_updates,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        spec["connections"],
+                    )
+                    candidate_case = apply_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(f"Equipment property update failed: {edit_error}")
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Updated operating properties for "
+                            f"'{selected_unit['name']}'. Run NeqSim to solve "
+                            "the revised graph."
+                        ),
+                    )
+                    st.rerun()
 
             if rename_unit:
                 try:
@@ -3004,9 +3062,14 @@ with st.expander("Model scope and assumptions", expanded=False):
 - Unit nodes expose material ports; connections identify source and target ports.
 - Material and energy ports can be connected or disconnected in the draft editor.
 - Graph validation enforces declared ports, direction, and single port occupancy.
-- A deterministic execution plan orders acyclic multi-inlet graphs and dependencies.
-- Each inlet compiles to an independent ProcessBuilder fluid definition with explicit units.
-- Inline equipment edits persist as an unsolved graph draft and are included in JSON cases.
+- A deterministic execution plan orders acyclic multi-inlet graphs and
+  dependencies.
+- Each inlet compiles to an independent ProcessBuilder fluid definition with
+  explicit units.
+- Inline equipment edits persist as an unsolved graph draft and are included in
+  JSON cases.
+- Added equipment properties are metadata-driven, bounded, and stored with
+  explicit units.
 - The active draft graph is automatically laid out before NeqSim execution.
 - Cyclic graphs remain blocked until recycle and tear-stream solving is available.
 - Fluid validation supports multiple compatible inlets with independent conditions.
