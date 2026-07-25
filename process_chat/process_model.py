@@ -31,8 +31,8 @@ class _MaterialBoundaryIdentityTracker:
     _ROLES = ("feed", "product")
 
     def __init__(self) -> None:
-        self._python_ids = {
-            role: set()
+        self._python_streams = {
+            role: []
             for role in self._ROLES
         }
         self._java_maps: Dict[str, Any] = {}
@@ -63,7 +63,10 @@ class _MaterialBoundaryIdentityTracker:
                 return bool(java_map.containsKey(stream))
             except Exception:
                 pass
-        return id(stream) in self._python_ids[role]
+        return any(
+            recorded_stream is stream
+            for recorded_stream in self._python_streams[role]
+        )
 
     def add(self, role: str, stream: Any) -> None:
         """Remember one exact native or Python stream reference for a role."""
@@ -75,7 +78,7 @@ class _MaterialBoundaryIdentityTracker:
                 return
             except Exception:
                 pass
-        self._python_ids[role].add(id(stream))
+        self._python_streams[role].append(stream)
 
 
 # ---------------------------------------------------------------------------
