@@ -2431,6 +2431,8 @@ class NeqSimProcessModel:
                     not in _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES
                 ):
                     continue
+                if self._material_inlet_streams(unit):
+                    continue
                 try:
                     unit_name = str(unit.getName()).strip()
                 except Exception:
