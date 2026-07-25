@@ -269,6 +269,15 @@ class _FallbackUnknownEquipment(_FallbackReactiveEquipment):
         super().__init__("CustomNativeEquipment")
 
 
+class _FallbackDistillationColumn(_FallbackReactiveEquipment):
+    def __init__(self, reactive):
+        super().__init__("DistillationColumn")
+        self._reactive = reactive
+
+    def isReactive(self):
+        return self._reactive
+
+
 class ValidationSummaryTest(unittest.TestCase):
     """Preserve incomplete validation as a non-passing aggregate state."""
 
@@ -543,6 +552,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             "CombustionEngine",
             "FuelCell",
             "H2SScavenger",
+            "SimpleAbsorber",
             "FurnaceBurner",
             "SyngasBurnerZone",
             "BiomassGasifier",
@@ -558,6 +568,20 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                     ),
                     [class_name],
                 )
+
+    def test_only_reactive_distillation_columns_change_species(self):
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackDistillationColumn(True)]
+            ),
+            ["DistillationColumn"],
+        )
+        self.assertEqual(
+            NeqSimProcessModel._component_balance_exclusion_names(
+                [_FallbackDistillationColumn(False)]
+            ),
+            [],
+        )
 
     def test_unclassified_native_equipment_disables_species_closure(self):
         self.assertEqual(

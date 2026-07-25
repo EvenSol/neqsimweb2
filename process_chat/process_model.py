@@ -37,6 +37,7 @@ _SPECIES_CHANGING_UNIT_CLASSES = {
     "fuelcell",
     "gasturbine",
     "h2sscavenger",
+    "simpleabsorber",
 }
 _SPECIES_CHANGING_UNIT_TOKENS = (
     "burner",
@@ -82,7 +83,6 @@ _SPECIES_CONSERVING_UNIT_CLASSES = {
     "recycle",
     "separator",
     "setpoint",
-    "simpleabsorber",
     "simpleflowline",
     "simpletegabsorber",
     "simpletpoutpipeline",
@@ -1264,8 +1264,18 @@ class NeqSimProcessModel:
             except Exception:
                 continue
             normalized_class = unit_class.lower()
+            reactive_mode = False
+            if (
+                normalized_class == "distillationcolumn"
+                and hasattr(unit, "isReactive")
+            ):
+                try:
+                    reactive_mode = bool(unit.isReactive())
+                except Exception:
+                    pass
             species_changing = (
-                normalized_class in _SPECIES_CHANGING_UNIT_CLASSES
+                reactive_mode
+                or normalized_class in _SPECIES_CHANGING_UNIT_CLASSES
                 or any(
                     token in normalized_class
                     for token in _SPECIES_CHANGING_UNIT_TOKENS
