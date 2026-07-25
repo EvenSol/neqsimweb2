@@ -34,6 +34,10 @@ sys.path.insert(0, _PROJECT_ROOT)
 
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
+from process_chat.solver_diagnostics import (  # noqa: E402
+    material_boundary_rows,
+    solved_feed_flow_kg_hr,
+)
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -1800,6 +1804,30 @@ def _constraint_dataframe(result: Any) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _material_boundary_dataframe(result: Any) -> pd.DataFrame:
+    """Build an explicit-unit feed/product table from solved boundaries."""
+    columns = [
+        "Role",
+        "Stream",
+        "Mass flow [kg/hr]",
+        "Temperature [°C]",
+        "Pressure [bara]",
+        "Molar flow [mol/s]",
+    ]
+    records = [
+        {
+            "Role": row["role"].title(),
+            "Stream": row["stream_name"],
+            "Mass flow [kg/hr]": row["mass_flow_kg_hr"],
+            "Temperature [°C]": row["temperature_C"],
+            "Pressure [bara]": row["pressure_bara"],
+            "Molar flow [mol/s]": row["molar_flow_mol_sec"],
+        }
+        for row in material_boundary_rows(result)
+    ]
+    return pd.DataFrame(records, columns=columns)
+
+
 def _kpi_value(result: Any, name: str) -> float | None:
     kpi = result.kpis.get(name)
     return float(kpi.value) if kpi is not None else None
@@ -1895,7 +1923,11 @@ def _engineering_workbook_bytes(
     total_power_kw = _kpi_value(result, "total_power_kW")
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
-    feed_tonnes_per_hour = float(fluid["total_flow"]) / 1000.0
+    feed_flow_kg_hr = solved_feed_flow_kg_hr(
+        result,
+        float(fluid["total_flow"]),
+    )
+    feed_tonnes_per_hour = feed_flow_kg_hr / 1000.0
     specific_energy = None
     if total_power_kw is not None and feed_tonnes_per_hour > 0.0:
         specific_energy = total_power_kw / feed_tonnes_per_hour
@@ -2004,6 +2036,7 @@ def _engineering_workbook_bytes(
         [
             ("Total compressor power", total_power_kw, "kW"),
             ("Total cooling duty magnitude", total_duty_kw, "kW"),
+            ("Solved aggregate feed flow", feed_flow_kg_hr, "kg/hr"),
             ("Specific compression energy", specific_energy, "kWh/t feed"),
             ("Total mass imbalance", mass_balance_pct, "%"),
         ],
@@ -2119,6 +2152,7 @@ def _engineering_workbook_bytes(
             ],
         }
     )
+    material_boundary_table = _material_boundary_dataframe(result)
     sheet_frames = {
         "Case Summary": case_summary,
         "KPIs": kpi_table,
@@ -2129,6 +2163,7 @@ def _engineering_workbook_bytes(
         "Connections": connection_table,
         "Execution Plan": execution_plan_table,
         "Inlet Build Specs": inlet_fluid_spec_table,
+        "Material Balance": material_boundary_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -2193,7 +2228,10 @@ def _case_history_record(
     total_power_kw = _kpi_value(result, "total_power_kW")
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
-    feed_flow_kg_hr = float(spec["fluid"]["total_flow"])
+    feed_flow_kg_hr = solved_feed_flow_kg_hr(
+        result,
+        float(spec["fluid"]["total_flow"]),
+    )
     feed_tonnes_per_hour = feed_flow_kg_hr / 1000.0
     specific_energy_kwh_t = None
     if total_power_kw is not None and feed_tonnes_per_hour > 0.0:
@@ -3721,7 +3759,11 @@ if results_are_current and has_stored_result:
     total_power_kw = _kpi_value(result, "total_power_kW")
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
-    feed_tonnes_per_hour = spec["fluid"]["total_flow"] / 1000.0
+    feed_flow_kg_hr = solved_feed_flow_kg_hr(
+        result,
+        float(spec["fluid"]["total_flow"]),
+    )
+    feed_tonnes_per_hour = feed_flow_kg_hr / 1000.0
     specific_energy = None
     if total_power_kw is not None and feed_tonnes_per_hour > 0.0:
         specific_energy = total_power_kw / feed_tonnes_per_hour
@@ -3932,6 +3974,7 @@ if results_are_current and has_stored_result:
             )
 
     constraint_table = _constraint_dataframe(result)
+    material_boundary_table = _material_boundary_dataframe(result)
     with validation_tab:
         status_counts = constraint_table["status"].value_counts()
         profile_counts = pressure_profile_table["Status"].value_counts()
@@ -3954,6 +3997,30 @@ if results_are_current and has_stored_result:
             use_container_width=True,
             hide_index=True,
         )
+        st.markdown("#### Solved material boundaries")
+        if material_boundary_table.empty:
+            st.info(
+                "This legacy result did not expose explicit material "
+                "boundary diagnostics."
+            )
+        else:
+            st.dataframe(
+                material_boundary_table.style.format(
+                    {
+                        "Mass flow [kg/hr]": "{:,.3f}",
+                        "Temperature [°C]": "{:.3f}",
+                        "Pressure [bara]": "{:.4f}",
+                        "Molar flow [mol/s]": "{:,.6f}",
+                    },
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                "Feed and product rows are native solved streams. "
+                "Mass flow is aggregated across every listed boundary."
+            )
         st.markdown("#### Solved pressure profile")
         st.dataframe(
             pressure_profile_table.style.format(
