@@ -8,6 +8,8 @@ from typing import Any
 
 
 GRAPH_DRAFT_SCHEMA_VERSION = 1
+GRAPH_HISTORY_SCHEMA_VERSION = 1
+MAX_GRAPH_HISTORY_ENTRIES = 50
 
 
 _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
@@ -566,6 +568,122 @@ def apply_graph_draft(
     updated_case["units"] = validated["units"]
     updated_case["connections"] = validated["connections"]
     return updated_case
+
+
+def _validated_graph_history(history: Any) -> dict[str, Any]:
+    """Return an isolated validated graph-history timeline."""
+    if not isinstance(history, dict):
+        raise ValueError("Graph history must be an object.")
+    if history.get("schema_version") != GRAPH_HISTORY_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported graph history schema version. Expected version 1."
+        )
+
+    entries = history.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("Graph history entries must be a non-empty array.")
+    validated_entries: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Graph history entry {index} must be an object.")
+        if entry.get("schema_version") != GRAPH_DRAFT_SCHEMA_VERSION:
+            raise ValueError(
+                f"Graph history entry {index} has an unsupported draft version."
+            )
+        validated_entries.append(
+            create_graph_draft(
+                entry.get("units"),
+                entry.get("connections"),
+            )
+        )
+
+    cursor = history.get("cursor")
+    if isinstance(cursor, bool) or not isinstance(cursor, int):
+        raise ValueError("Graph history cursor must be an integer.")
+    if cursor < 0 or cursor >= len(validated_entries):
+        raise ValueError("Graph history cursor is outside the entry range.")
+    return {
+        "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
+        "entries": validated_entries,
+        "cursor": cursor,
+    }
+
+
+def create_graph_history(
+    units: list[Any],
+    connections: list[Any],
+) -> dict[str, Any]:
+    """Create a history timeline containing one isolated graph revision."""
+    return {
+        "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
+        "entries": [create_graph_draft(units, connections)],
+        "cursor": 0,
+    }
+
+
+def record_graph_history(
+    history: Any,
+    units: list[Any],
+    connections: list[Any],
+    max_entries: int = MAX_GRAPH_HISTORY_ENTRIES,
+) -> dict[str, Any]:
+    """Append one graph revision and discard any abandoned redo branch."""
+    if (
+        isinstance(max_entries, bool)
+        or not isinstance(max_entries, int)
+        or max_entries < 2
+    ):
+        raise ValueError("Graph history limit must be an integer of at least 2.")
+
+    updated = _validated_graph_history(history)
+    candidate = create_graph_draft(units, connections)
+    if updated["entries"][updated["cursor"]] == candidate:
+        return updated
+
+    entries = updated["entries"][: updated["cursor"] + 1]
+    entries.append(candidate)
+    if len(entries) > max_entries:
+        entries = entries[-max_entries:]
+    return {
+        "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
+        "entries": entries,
+        "cursor": len(entries) - 1,
+    }
+
+
+def graph_history_status(history: Any) -> dict[str, Any]:
+    """Return presentation-ready position and navigation availability."""
+    validated = _validated_graph_history(history)
+    cursor = validated["cursor"]
+    total = len(validated["entries"])
+    return {
+        "position": cursor + 1,
+        "total": total,
+        "can_undo": cursor > 0,
+        "can_redo": cursor < total - 1,
+    }
+
+
+def undo_graph_history(
+    history: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Move back one revision and return isolated history and draft copies."""
+    updated = _validated_graph_history(history)
+    if updated["cursor"] == 0:
+        raise ValueError("Graph history has no earlier revision to undo.")
+    updated["cursor"] -= 1
+    return updated, copy.deepcopy(updated["entries"][updated["cursor"]])
+
+
+def redo_graph_history(
+    history: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Move forward one revision and return isolated history and draft copies."""
+    updated = _validated_graph_history(history)
+    if updated["cursor"] >= len(updated["entries"]) - 1:
+        raise ValueError("Graph history has no later revision to redo.")
+    updated["cursor"] += 1
+    return updated, copy.deepcopy(updated["entries"][updated["cursor"]])
 
 
 def material_connection_rows(
