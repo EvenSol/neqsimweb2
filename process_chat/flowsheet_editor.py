@@ -232,6 +232,360 @@ def _unique_connection_id(stem: str, existing_ids: set[str]) -> str:
     return connection_id
 
 
+def _graph_port_inventory(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+) -> dict[str, Any]:
+    """Validate graph ports and report their current connection occupancy."""
+    if not isinstance(inlets, list):
+        raise ValueError("Graph inlets must be an array.")
+    draft = create_graph_draft(units, connections)
+    copied_inlets = copy.deepcopy(inlets)
+    copied_units = draft["units"]
+    copied_connections = draft["connections"]
+
+    object_ids: set[str] = set()
+    sources: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    targets: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+
+    def add_port(
+        connection_type: str,
+        direction: str,
+        kind: str,
+        object_id: str,
+        object_name: str,
+        port: str,
+    ) -> None:
+        record = {
+            "connection_type": connection_type,
+            "direction": direction,
+            "kind": kind,
+            "id": object_id,
+            "name": object_name,
+            "port": port,
+        }
+        key = (connection_type, kind, object_id, port)
+        records = sources if direction == "source" else targets
+        if key in records:
+            raise ValueError(
+                f"Graph {connection_type} {direction} port "
+                f"'{object_id}:{port}' is duplicated."
+            )
+        records[key] = record
+
+    for index, inlet in enumerate(copied_inlets):
+        if not isinstance(inlet, dict):
+            raise ValueError(f"Graph inlet {index} must be an object.")
+        inlet_id = str(inlet.get("id", "")).strip()
+        if not inlet_id:
+            raise ValueError(f"Graph inlet {index} requires an id.")
+        if inlet_id in object_ids:
+            raise ValueError(f"Graph object id '{inlet_id}' is duplicated.")
+        object_ids.add(inlet_id)
+        inlet_name = str(inlet.get("name", inlet_id)).strip() or inlet_id
+        add_port(
+            "material",
+            "source",
+            "inlet",
+            inlet_id,
+            inlet_name,
+            "out",
+        )
+
+    for unit in copied_units:
+        unit_id = str(unit["id"]).strip()
+        if unit_id in object_ids:
+            raise ValueError(f"Graph object id '{unit_id}' is duplicated.")
+        object_ids.add(unit_id)
+        unit_name = str(unit.get("name", unit_id)).strip() or unit_id
+        ports = unit.get("ports")
+        if not isinstance(ports, dict):
+            raise ValueError(f"Graph unit '{unit_id}' requires ports.")
+        for connection_type in ("material", "energy"):
+            input_ports = ports.get(f"{connection_type}_in", [])
+            output_ports = ports.get(f"{connection_type}_out", [])
+            cleaned_by_direction: dict[str, list[str]] = {}
+            for direction, port_names in (
+                ("target", input_ports),
+                ("source", output_ports),
+            ):
+                if not isinstance(port_names, list):
+                    port_key = (
+                        f"{connection_type}_"
+                        f"{'in' if direction == 'target' else 'out'}"
+                    )
+                    raise ValueError(
+                        f"Graph unit '{unit_id}' {port_key} must be an array."
+                    )
+                cleaned_ports = [str(port).strip() for port in port_names]
+                if any(not port for port in cleaned_ports):
+                    raise ValueError(
+                        f"Graph unit '{unit_id}' has an empty "
+                        f"{connection_type} port."
+                    )
+                cleaned_by_direction[direction] = cleaned_ports
+                for port in cleaned_ports:
+                    add_port(
+                        connection_type,
+                        direction,
+                        "unit",
+                        unit_id,
+                        unit_name,
+                        port,
+                    )
+            ambiguous_ports = set(cleaned_by_direction["target"]).intersection(
+                cleaned_by_direction["source"]
+            )
+            if ambiguous_ports:
+                ambiguous_port = sorted(ambiguous_ports)[0]
+                raise ValueError(
+                    f"Graph unit '{unit_id}' {connection_type} port "
+                    f"'{ambiguous_port}' cannot be both input and output."
+                )
+
+    used_sources: set[tuple[str, str, str, str]] = set()
+    used_targets: set[tuple[str, str, str, str]] = set()
+    used_routes: set[
+        tuple[
+            tuple[str, str, str, str],
+            tuple[str, str, str, str],
+        ]
+    ] = set()
+    for connection in copied_connections:
+        connection_id = str(connection["id"]).strip()
+        connection_type = str(connection["type"]).strip()
+        source = connection["source"]
+        target = connection["target"]
+        source_key = (
+            connection_type,
+            str(source["kind"]).strip(),
+            str(source["id"]).strip(),
+            str(source["port"]).strip(),
+        )
+        target_key = (
+            connection_type,
+            str(target["kind"]).strip(),
+            str(target["id"]).strip(),
+            str(target["port"]).strip(),
+        )
+        if source_key not in sources:
+            raise ValueError(
+                f"Connection '{connection_id}' uses an undeclared "
+                f"{connection_type} output port."
+            )
+        if target_key not in targets:
+            raise ValueError(
+                f"Connection '{connection_id}' uses an undeclared "
+                f"{connection_type} input port."
+            )
+        if source_key[1:3] == target_key[1:3]:
+            raise ValueError(
+                f"Connection '{connection_id}' cannot connect a node to itself."
+            )
+        if source_key in used_sources:
+            raise ValueError(
+                f"Graph output port {source_key[2]}:{source_key[3]} "
+                "already has a connection."
+            )
+        if target_key in used_targets:
+            raise ValueError(
+                f"Graph input port {target_key[2]}:{target_key[3]} "
+                "already has a connection."
+            )
+        route_key = (source_key, target_key)
+        if route_key in used_routes:
+            raise ValueError(f"Connection route '{connection_id}' is duplicated.")
+        used_sources.add(source_key)
+        used_targets.add(target_key)
+        used_routes.add(route_key)
+
+    return {
+        "sources": sources,
+        "targets": targets,
+        "used_sources": used_sources,
+        "used_targets": used_targets,
+        "connections": copied_connections,
+    }
+
+
+def graph_port_rows(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    connection_type: str,
+    direction: str,
+    available_only: bool = False,
+) -> list[dict[str, Any]]:
+    """Return deterministic source or target port rows for graph editors."""
+    cleaned_type = str(connection_type).strip().lower()
+    if cleaned_type not in ("material", "energy"):
+        raise ValueError("Connection type must be material or energy.")
+    cleaned_direction = str(direction).strip().lower()
+    if cleaned_direction not in ("source", "target"):
+        raise ValueError("Port direction must be source or target.")
+    if not isinstance(available_only, bool):
+        raise ValueError("available_only must be a boolean.")
+
+    inventory = _graph_port_inventory(inlets, units, connections)
+    records = inventory[
+        "sources" if cleaned_direction == "source" else "targets"
+    ]
+    occupied = inventory[
+        "used_sources"
+        if cleaned_direction == "source"
+        else "used_targets"
+    ]
+    rows: list[dict[str, Any]] = []
+    for key, record in records.items():
+        if key[0] != cleaned_type:
+            continue
+        is_connected = key in occupied
+        if available_only and is_connected:
+            continue
+        row = copy.deepcopy(record)
+        row["connected"] = is_connected
+        row["endpoint"] = {
+            "kind": row["kind"],
+            "id": row["id"],
+            "port": row["port"],
+        }
+        row["label"] = (
+            f"{row['name']} · {row['kind']} {row['id']}:{row['port']}"
+        )
+        rows.append(row)
+    return rows
+
+
+def connect_graph_ports(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    connection_type: str,
+    source: Any,
+    target: Any,
+) -> tuple[list[dict[str, Any]], str]:
+    """Transactionally connect one available output port to one input port."""
+    cleaned_type = str(connection_type).strip().lower()
+    if cleaned_type not in ("material", "energy"):
+        raise ValueError("Connection type must be material or energy.")
+    inventory = _graph_port_inventory(inlets, units, connections)
+
+    normalized_endpoints: dict[str, dict[str, str]] = {}
+    endpoint_keys: dict[str, tuple[str, str, str, str]] = {}
+    for endpoint_name, endpoint in (("source", source), ("target", target)):
+        if not isinstance(endpoint, dict):
+            raise ValueError(f"Connection {endpoint_name} must be an object.")
+        normalized = {
+            field: str(endpoint.get(field, "")).strip()
+            for field in ("kind", "id", "port")
+        }
+        if not all(normalized.values()):
+            raise ValueError(
+                f"Connection {endpoint_name} requires kind, id, and port."
+            )
+        normalized_endpoints[endpoint_name] = normalized
+        endpoint_keys[endpoint_name] = (
+            cleaned_type,
+            normalized["kind"],
+            normalized["id"],
+            normalized["port"],
+        )
+
+    source_key = endpoint_keys["source"]
+    target_key = endpoint_keys["target"]
+    if source_key not in inventory["sources"]:
+        raise ValueError("Selected graph source is not a declared output port.")
+    if target_key not in inventory["targets"]:
+        raise ValueError("Selected graph target is not a declared input port.")
+    if source_key[1:3] == target_key[1:3]:
+        raise ValueError("A graph connection cannot connect a node to itself.")
+    if source_key in inventory["used_sources"]:
+        raise ValueError(
+            f"Graph output port {source_key[2]}:{source_key[3]} "
+            "already has a connection."
+        )
+    if target_key in inventory["used_targets"]:
+        raise ValueError(
+            f"Graph input port {target_key[2]}:{target_key[3]} "
+            "already has a connection."
+        )
+
+    copied_connections = inventory["connections"]
+    existing_ids = {
+        str(connection["id"]).strip()
+        for connection in copied_connections
+    }
+    connection_id = _unique_connection_id(
+        (
+            f"{cleaned_type}-{source_key[2]}-{source_key[3]}-to-"
+            f"{target_key[2]}-{target_key[3]}"
+        ),
+        existing_ids,
+    )
+    copied_connections.append(
+        {
+            "id": connection_id,
+            "type": cleaned_type,
+            "source": normalized_endpoints["source"],
+            "target": normalized_endpoints["target"],
+        }
+    )
+    _graph_port_inventory(inlets, units, copied_connections)
+    return copied_connections, connection_id
+
+
+def disconnect_graph_connection(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    connection_id: str,
+) -> list[dict[str, Any]]:
+    """Transactionally remove one explicit material or energy connection."""
+    inventory = _graph_port_inventory(inlets, units, connections)
+    copied_connections = inventory["connections"]
+    cleaned_connection_id = str(connection_id).strip()
+    selected_index = _connection_index(
+        copied_connections,
+        cleaned_connection_id,
+    )
+    copied_connections.pop(selected_index)
+    _graph_port_inventory(inlets, units, copied_connections)
+    return copied_connections
+
+
+def graph_connection_rows(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+) -> list[dict[str, str]]:
+    """Return deterministic labels for all removable graph connections."""
+    inventory = _graph_port_inventory(inlets, units, connections)
+    rows: list[dict[str, str]] = []
+    for connection in inventory["connections"]:
+        connection_id = str(connection["id"]).strip()
+        connection_type = str(connection["type"]).strip()
+        source = connection["source"]
+        target = connection["target"]
+        source_label = (
+            f"{str(source['id']).strip()}:{str(source['port']).strip()}"
+        )
+        target_label = (
+            f"{str(target['id']).strip()}:{str(target['port']).strip()}"
+        )
+        rows.append(
+            {
+                "id": connection_id,
+                "type": connection_type,
+                "label": (
+                    f"{connection_type.upper()} · "
+                    f"{source_label} → {target_label}"
+                ),
+            }
+        )
+    return rows
+
+
 def insert_inline_unit_on_connection(
     units: list[Any],
     connections: list[Any],
