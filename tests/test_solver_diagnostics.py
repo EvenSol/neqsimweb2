@@ -1322,6 +1322,19 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
 
         self.assertFalse(result.raw["material_balance_applicable"])
         self.assertNotIn("mass_balance_pct", result.kpis)
+        self.assertNotIn("material_product_count", result.kpis)
+        self.assertNotIn("material_product_flow_kg_hr", result.kpis)
+        self.assertEqual(
+            [
+                row
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            [],
+        )
+        self.assertIsNone(
+            aggregate_material_balance(result)["imbalance_pct"]
+        )
         mass_constraint = next(
             constraint
             for constraint in result.constraints
@@ -1329,6 +1342,29 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(mass_constraint.status, "UNKNOWN")
         self.assertIn("storage tank", mass_constraint.detail)
+
+    def test_unresolved_connectivity_skips_named_product_fallback(self):
+        gas_product = _FallbackStream("gas product", 70.0)
+        liquid_product = _FallbackStream("liquid product", 30.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [_FallbackTank(gas_product, liquid_product)]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (gas_product, liquid_product)
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertFalse(result.raw["material_balance_applicable"])
+        self.assertNotIn("material_product_count", result.kpis)
+        self.assertNotIn("material_product_flow_kg_hr", result.kpis)
+        self.assertEqual(result.raw["material_boundaries"], [])
 
     def test_connectivity_discovers_feed_after_upstream_equipment(self):
         feed_a = _FallbackStream("feed a", 100.0)
