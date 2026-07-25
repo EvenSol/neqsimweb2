@@ -2263,16 +2263,28 @@ class NeqSimProcessModel:
             else:
                 from .solver_diagnostics import component_balance_rows
 
-                component_balances = component_balance_rows(
-                    ModelRunResult(
-                        kpis={},
-                        constraints=[],
-                        raw={
-                            "material_boundaries": material_boundaries,
-                            "component_balance_applicable": True,
-                        },
+                try:
+                    component_balances = component_balance_rows(
+                        ModelRunResult(
+                            kpis={},
+                            constraints=[],
+                            raw={
+                                "material_boundaries": material_boundaries,
+                                "component_balance_applicable": True,
+                            },
+                        )
                     )
-                )
+                except ValueError as exc:
+                    component_balance_applicable = False
+                    component_balances = []
+                    constraints.append(
+                        ConstraintStatus(
+                            "component_balance",
+                            "UNKNOWN",
+                            "Component balance unavailable: "
+                            f"{exc}",
+                        )
+                    )
             if component_balance_applicable and component_balances:
                 worst_component = max(
                     component_balances,

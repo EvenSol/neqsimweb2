@@ -156,19 +156,31 @@ def aggregate_material_balance(result: Any) -> Dict[str, Optional[float]]:
 def component_balance_rows(result: Any) -> List[Dict[str, float | str]]:
     """Return component feed/product closure rows from solved boundaries."""
     raw = getattr(result, "raw", {})
-    if (
-        isinstance(raw, dict)
-        and raw.get("component_balance_applicable") is False
-    ):
+    component_balance_applicable = (
+        raw.get("component_balance_applicable")
+        if isinstance(raw, dict)
+        else None
+    )
+    if component_balance_applicable is False:
         return []
     rows = material_boundary_rows(result)
     if not rows:
+        if component_balance_applicable is True:
+            raise ValueError(
+                "Component boundary diagnostics are incomplete: "
+                "no solved material boundaries are available."
+            )
         return []
     component_maps = [
         row["component_molar_flows_mol_sec"]
         for row in rows
     ]
     if all(component_map is None for component_map in component_maps):
+        if component_balance_applicable is True:
+            raise ValueError(
+                "Component boundary diagnostics are incomplete: "
+                "component flows are unavailable."
+            )
         return []
     for index, (row, component_map) in enumerate(
         zip(rows, component_maps)
