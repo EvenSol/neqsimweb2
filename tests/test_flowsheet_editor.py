@@ -26,6 +26,7 @@ from process_chat.flowsheet_editor import (
     remove_inline_unit,
     rename_inline_unit,
     undo_graph_history,
+    update_inline_unit_properties,
     validate_catalog_unit,
 )
 
@@ -353,6 +354,67 @@ class InlineUnitLifecycleTest(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     rename_inline_unit(units, unit_id, new_name)
+
+    def test_property_update_is_normalized_and_input_safe(self):
+        updated = update_inline_unit_properties(
+            self.units,
+            "product-cooler",
+            {
+                "outlet_temperature_C": 42,
+                "pressure_drop_bar": 1,
+            },
+        )
+
+        self.assertEqual(
+            updated[0]["params"],
+            {
+                "outlet_temperature_C": 42.0,
+                "pressure_drop_bar": 1.0,
+            },
+        )
+        self.assertEqual(
+            self.units[0]["params"],
+            {
+                "outlet_temperature_C": 35.0,
+                "pressure_drop_bar": 0.0,
+            },
+        )
+        validate_catalog_unit(updated[0])
+
+    def test_property_update_rejects_invalid_requests_without_mutation(self):
+        invalid_cases = (
+            ("missing", {}, "Unknown graph unit"),
+            (
+                "product-cooler",
+                {"outlet_temperature_C": float("nan")},
+                "must be finite",
+            ),
+            (
+                "product-cooler",
+                {"pressure_drop_bar": -0.1},
+                "must be between",
+            ),
+            (
+                "product-cooler",
+                {"unknown": 1.0},
+                "unsupported property",
+            ),
+            (
+                "product-cooler",
+                [],
+                "updates must be an object",
+            ),
+        )
+        original = json.loads(json.dumps(self.units))
+        for unit_id, updates, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    update_inline_unit_properties(
+                        self.units,
+                        unit_id,
+                        updates,
+                    )
+        self.assertEqual(self.units, original)
 
     def test_remove_restores_original_route_without_mutating_inputs(self):
         units, connections, inserted_id = self._insert_valve()
