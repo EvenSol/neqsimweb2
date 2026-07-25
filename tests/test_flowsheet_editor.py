@@ -30,6 +30,7 @@ from process_chat.flowsheet_editor import (
     remove_inline_unit,
     rename_inline_unit,
     undo_graph_history,
+    update_inlet_composition,
     update_inlet_conditions,
     update_inline_unit_properties,
     update_process_unit_properties,
@@ -390,6 +391,143 @@ class InletConditionUpdateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicated"):
             update_inlet_conditions(duplicated, "feed-a", {})
         self.assertEqual(self.inlets[0]["pressure_bara"], 50.0)
+
+
+class InletCompositionUpdateTest(unittest.TestCase):
+    """Validate isolated normalized composition updates for graph inlets."""
+
+    def setUp(self):
+        self.inlets = [
+            {
+                "id": "feed-a",
+                "name": "feed A",
+                "fluid_package_id": "base-fluid",
+                "composition": {"methane": 0.90, "ethane": 0.10},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 25.0,
+                "pressure_bara": 50.0,
+                "total_flow": 60_000.0,
+                "flow_unit": "kg/hr",
+            },
+            {
+                "id": "feed-b",
+                "name": "feed B",
+                "fluid_package_id": "base-fluid",
+                "composition": {"methane": 0.80, "ethane": 0.20},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 35.0,
+                "pressure_bara": 45.0,
+                "total_flow": 40_000.0,
+                "flow_unit": "kg/hr",
+            },
+        ]
+
+    def test_updates_one_inlet_without_changing_peer_or_conditions(self):
+        updated = update_inlet_composition(
+            self.inlets,
+            "feed-b",
+            {"methane": 0.70, "ethane": 0.30},
+        )
+
+        self.assertEqual(updated[0], self.inlets[0])
+        self.assertEqual(
+            updated[1]["composition"],
+            {"methane": 0.70, "ethane": 0.30},
+        )
+        self.assertEqual(updated[1]["temperature_C"], 35.0)
+        self.assertEqual(updated[1]["pressure_bara"], 45.0)
+        self.assertEqual(updated[1]["total_flow"], 40_000.0)
+        self.assertEqual(
+            updated[1]["fluid_package_id"],
+            self.inlets[1]["fluid_package_id"],
+        )
+        self.assertEqual(
+            self.inlets[1]["composition"],
+            {"methane": 0.80, "ethane": 0.20},
+        )
+
+    def test_normalizes_entered_fractions_in_registry_order(self):
+        updated = update_inlet_composition(
+            self.inlets,
+            "feed-a",
+            {"ethane": "0.4", "methane": "0.6"},
+        )
+
+        self.assertEqual(
+            list(updated[0]["composition"]),
+            ["methane", "ethane"],
+        )
+        self.assertAlmostEqual(updated[0]["composition"]["methane"], 0.6)
+        self.assertAlmostEqual(updated[0]["composition"]["ethane"], 0.4)
+        self.assertIsInstance(
+            updated[0]["composition"]["methane"],
+            float,
+        )
+
+        normalized = update_inlet_composition(
+            self.inlets,
+            "feed-a",
+            {"methane": 0.45, "ethane": 0.05},
+        )
+        self.assertAlmostEqual(
+            sum(normalized[0]["composition"].values()),
+            1.0,
+        )
+        self.assertAlmostEqual(
+            normalized[0]["composition"]["methane"],
+            0.9,
+        )
+
+    def test_invalid_updates_fail_without_mutating_inputs(self):
+        invalid_cases = (
+            ("missing", {}, "Unknown material inlet"),
+            ("feed-a", [], "composition must be an object"),
+            (
+                "feed-a",
+                {"methane": 1.0},
+                "shared component registry exactly",
+            ),
+            (
+                "feed-a",
+                {"methane": True, "ethane": 0.0},
+                "must be numeric",
+            ),
+            (
+                "feed-a",
+                {"methane": float("nan"), "ethane": 0.0},
+                "must be finite",
+            ),
+            (
+                "feed-a",
+                {"methane": 1.1, "ethane": -0.1},
+                "between 0 and 1",
+            ),
+            (
+                "feed-a",
+                {"methane": 0.0, "ethane": 0.0},
+                "total must be positive",
+            ),
+        )
+        for inlet_id, composition, message in invalid_cases:
+            with self.subTest(inlet_id=inlet_id, message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    update_inlet_composition(
+                        self.inlets,
+                        inlet_id,
+                        composition,
+                    )
+
+        duplicated = [self.inlets[0], copy.deepcopy(self.inlets[0])]
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            update_inlet_composition(
+                duplicated,
+                "feed-a",
+                {"methane": 0.90, "ethane": 0.10},
+            )
+        self.assertEqual(
+            self.inlets[0]["composition"],
+            {"methane": 0.90, "ethane": 0.10},
+        )
 
 
 class InlineInsertionTest(unittest.TestCase):
