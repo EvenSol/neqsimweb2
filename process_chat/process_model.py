@@ -1166,13 +1166,42 @@ class NeqSimProcessModel:
         return None
 
     @staticmethod
+    def _material_consumption_trackers(
+        units: List[Any],
+    ) -> Tuple[
+        _MaterialBoundaryIdentityTracker,
+        _MaterialBoundaryIdentityTracker,
+    ]:
+        """Return native stream and fluid identities consumed by equipment."""
+        consumed_streams = _MaterialBoundaryIdentityTracker()
+        consumed_fluids = _MaterialBoundaryIdentityTracker()
+        for unit in units:
+            try:
+                unit_class = str(
+                    unit.getClass().getSimpleName()
+                ).lower()
+            except Exception:
+                continue
+            if unit_class in _MATERIAL_STREAM_UNIT_CLASSES:
+                continue
+            for stream in NeqSimProcessModel._material_inlet_streams(unit):
+                consumed_streams.add("feed", stream)
+                fluid = NeqSimProcessModel._material_fluid_reference(
+                    stream
+                )
+                if fluid is not None:
+                    consumed_fluids.add("feed", fluid)
+        return consumed_streams, consumed_fluids
+
+    @staticmethod
     def _connectivity_material_boundaries(
         units: List[Any],
     ) -> Tuple[List[Any], List[Tuple[Any, str]]]:
         """Discover external sources and terminal sinks from native ports."""
-        consumed = _MaterialBoundaryIdentityTracker()
+        consumed, consumed_fluids = (
+            NeqSimProcessModel._material_consumption_trackers(units)
+        )
         produced = _MaterialBoundaryIdentityTracker()
-        consumed_fluids = _MaterialBoundaryIdentityTracker()
         produced_fluids = _MaterialBoundaryIdentityTracker()
         stream_units: List[Any] = []
         equipment_outlets: List[Tuple[Any, str]] = []
@@ -1187,13 +1216,6 @@ class NeqSimProcessModel:
             if unit_class in _MATERIAL_STREAM_UNIT_CLASSES:
                 stream_units.append(unit)
                 continue
-            for stream in NeqSimProcessModel._material_inlet_streams(unit):
-                consumed.add("feed", stream)
-                fluid = NeqSimProcessModel._material_fluid_reference(
-                    stream
-                )
-                if fluid is not None:
-                    consumed_fluids.add("feed", fluid)
             for stream, label in (
                 NeqSimProcessModel._fallback_material_outlet_streams(unit)
             ):
@@ -2345,6 +2367,9 @@ class NeqSimProcessModel:
                 connected_feeds, connected_products = (
                     self._connectivity_material_boundaries(all_units)
                 )
+                consumed_streams, consumed_fluids = (
+                    self._material_consumption_trackers(all_units)
+                )
                 feed_streams = connected_feeds or [
                     stream
                     for process_units in unit_groups
@@ -2402,11 +2427,19 @@ class NeqSimProcessModel:
                     _MaterialBoundaryIdentityTracker()
                 )
                 for stream in terminal_stream_units:
+                    fluid = self._material_fluid_reference(stream)
+                    if (
+                        consumed_streams.contains("feed", stream)
+                        or (
+                            fluid is not None
+                            and consumed_fluids.contains("feed", fluid)
+                        )
+                    ):
+                        continue
                     try:
                         _add_outlet_flow(stream, "product")
                     except Exception:
                         continue
-                    fluid = self._material_fluid_reference(stream)
                     if fluid is not None:
                         explicit_product_fluids.add("product", fluid)
 

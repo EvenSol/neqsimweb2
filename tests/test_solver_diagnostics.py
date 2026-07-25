@@ -759,7 +759,11 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         process_model = _FallbackProcessModel(
             [
                 _FallbackProcess(
-                    [feed, _FallbackHeater(feed, child_boundary)]
+                    [
+                        feed,
+                        _FallbackHeater(feed, child_boundary),
+                        child_boundary,
+                    ]
                 ),
                 _FallbackProcess(
                     [_FallbackHeater(child_boundary, product)]
