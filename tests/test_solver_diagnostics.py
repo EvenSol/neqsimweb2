@@ -100,6 +100,43 @@ class _FallbackHeatExchanger:
         return self._outlets[0]
 
 
+class _FallbackTerminalMixer(_FallbackEquipment):
+    def __init__(self, outlet):
+        self._outlet = outlet
+
+    def getOutletStream(self):
+        return self._outlet
+
+
+class _FallbackTurboExpander:
+    def __init__(self, compressor_outlet, expander_outlet):
+        self._compressor_outlet = compressor_outlet
+        self._expander_outlet = expander_outlet
+
+    def getClass(self):
+        return _JavaClass("TurboExpanderCompressor")
+
+    def getName(self):
+        return "terminal turbo-expander"
+
+    def getOutletStream(self):
+        return self._compressor_outlet
+
+    def getCompressorOutletStream(self):
+        return self._compressor_outlet
+
+    def getExpanderOutletStream(self):
+        return self._expander_outlet
+
+
+class _FallbackProcessModel:
+    def __init__(self, processes):
+        self._processes = processes
+
+    def getAllProcesses(self):
+        return self._processes
+
+
 class _FallbackReactiveEquipment:
     def __init__(self, class_name="GibbsReactor"):
         self._class_name = class_name
@@ -491,6 +528,87 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             "product b": product_b,
         }
         model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                (row["role"], row["stream_name"])
+                for row in result.raw["material_boundaries"]
+            ],
+            [
+                ("feed", "feed a"),
+                ("feed", "feed b"),
+                ("product", "product a"),
+                ("product", "product b"),
+            ],
+        )
+        self.assertEqual(
+            result.kpis["material_product_count"].value,
+            2.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_fallback_enumerates_both_turbo_expander_products(self):
+        feed_a = _FallbackStream("compressor feed", 100.0)
+        feed_b = _FallbackStream("expander feed", 100.0)
+        product_a = _FallbackStream("compressor product", 100.0)
+        product_b = _FallbackStream("expander product", 100.0)
+        turbo_expander = _FallbackTurboExpander(product_a, product_b)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [feed_a, feed_b, turbo_expander]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "compressor feed": feed_a,
+            "expander feed": feed_b,
+            "compressor product": product_a,
+            "expander product": product_b,
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["compressor product", "expander product"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_fallback_discovers_products_for_each_child_process(self):
+        feed_a = _FallbackStream("feed a", 100.0)
+        feed_b = _FallbackStream("feed b", 100.0)
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 100.0)
+        process_model = _FallbackProcessModel(
+            [
+                _FallbackProcess(
+                    [feed_a, _FallbackTerminalMixer(product_a)]
+                ),
+                _FallbackProcess(
+                    [feed_b, _FallbackTerminalMixer(product_b)]
+                ),
+            ]
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = process_model
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            "feed a": feed_a,
+            "feed b": feed_b,
+            "product a": product_a,
+            "product b": product_b,
+        }
+        model._is_process_model = True
         model._enforce_acyclic_mixer_energy = False
 
         result = model._extract_results()

@@ -1076,6 +1076,8 @@ class NeqSimProcessModel:
             ("getOutletStream", "gas_out"),
             ("getOutStream", "gas_out"),
             ("getGasOutStream", "gas_out"),
+            ("getCompressorOutletStream", "compressor_out"),
+            ("getExpanderOutletStream", "expander_out"),
             ("getOilOutStream", "oil"),
             ("getLiquidOutStream", "liquid"),
             ("getWaterOutStream", "water"),
@@ -2201,71 +2203,64 @@ class NeqSimProcessModel:
                         feed_details.append(f"{name}={flow:.0f}")
                     except Exception:
                         pass
-                terminal_stream_units = [
-                    stream
-                    for process_units in unit_groups
-                    for stream in self._trailing_material_product_streams(
-                        process_units
+                def _add_outlet_flow(
+                    stream_obj: Any,
+                    label: str,
+                ) -> float:
+                    """Add a distinct product stream flow."""
+                    nonlocal product_flow
+                    record = _record_material_boundary(
+                        stream_obj,
+                        "product",
+                        label,
                     )
-                ]
+                    if record is None:
+                        return 0.0
+                    flow = record["mass_flow_kg_hr"]
+                    sname = record["stream_name"]
+                    if abs(flow) > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+                        product_flow += flow
+                        product_details.append(f"{sname}={flow:.0f}")
+                    else:
+                        product_details.append(f"{sname}=0 (no flow)")
+                    return flow
 
-                if terminal_stream_units:
-                    # Explicit terminal streams — use them as products
-                    for s in terminal_stream_units:
-                        try:
-                            record = _record_material_boundary(
-                                s,
-                                "product",
-                                "product",
-                            )
-                            if record is None:
-                                continue
-                            flow = record["mass_flow_kg_hr"]
-                            sname = record["stream_name"]
-                            if abs(flow) > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
-                                product_flow += flow
-                                product_details.append(f"{sname}={flow:.0f}")
-                            else:
-                                # Report 0-flow terminal streams for diagnostics
-                                product_details.append(f"{sname}=0 (no flow)")
-                        except Exception:
-                            pass
-                else:
-                    # Fallback: use the last non-utility unit's ALL outlets
-                    last = None
-                    for i in range(len(all_units) - 1, -1, -1):
-                        uclass = str(all_units[i].getClass().getSimpleName())
-                        if uclass not in _utility_types:
-                            last = all_units[i]
-                            break
-
-                    if last is not None:
-                        last_class = str(last.getClass().getSimpleName())
-
-                        def _add_outlet_flow(stream_obj, label: str) -> float:
-                            """Add a distinct fallback product stream flow."""
-                            nonlocal product_flow
-                            record = _record_material_boundary(
-                                stream_obj,
-                                "product",
-                                label,
-                            )
-                            if record is None:
-                                return 0.0
-                            flow = record["mass_flow_kg_hr"]
-                            if abs(flow) > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
-                                sname = record["stream_name"]
-                                product_flow += flow
-                                product_details.append(f"{sname}={flow:.0f}")
-                            return flow
-
-                        for stream, label in (
-                            self._fallback_material_outlet_streams(last)
-                        ):
+                for process_units in unit_groups:
+                    terminal_stream_units = (
+                        self._trailing_material_product_streams(
+                            process_units
+                        )
+                    )
+                    if terminal_stream_units:
+                        for stream in terminal_stream_units:
                             try:
-                                _add_outlet_flow(stream, label)
+                                _add_outlet_flow(stream, "product")
                             except Exception:
                                 pass
+                        continue
+
+                    # Discover every outlet on this child process's final
+                    # non-utility unit when no explicit product stream exists.
+                    last = None
+                    for unit in reversed(process_units):
+                        try:
+                            unit_class = str(
+                                unit.getClass().getSimpleName()
+                            )
+                        except Exception:
+                            continue
+                        if unit_class not in _utility_types:
+                            last = unit
+                            break
+                    if last is None:
+                        continue
+                    for stream, label in (
+                        self._fallback_material_outlet_streams(last)
+                    ):
+                        try:
+                            _add_outlet_flow(stream, label)
+                        except Exception:
+                            pass
 
             # Fallback: match by stream name keywords
             if feed_flow == 0.0:
