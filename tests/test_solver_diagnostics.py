@@ -62,6 +62,15 @@ class _FallbackStream:
         return 45.0
 
 
+class _FallbackAliasedStream(_FallbackStream):
+    def __init__(self, name, mass_flow, fluid_reference):
+        super().__init__(name, mass_flow)
+        self._fluid_reference = fluid_reference
+
+    def getFluid(self):
+        return self._fluid_reference
+
+
 class _FallbackProcess:
     def __init__(self, units=None):
         self._units = units or []
@@ -143,7 +152,15 @@ class _FallbackSplitter:
 
 
 class _FallbackTurboExpander:
-    def __init__(self, compressor_outlet, expander_outlet):
+    def __init__(
+        self,
+        compressor_inlet,
+        expander_inlet,
+        compressor_outlet,
+        expander_outlet,
+    ):
+        self._compressor_inlet = compressor_inlet
+        self._expander_inlet = expander_inlet
         self._compressor_outlet = compressor_outlet
         self._expander_outlet = expander_outlet
 
@@ -152,6 +169,15 @@ class _FallbackTurboExpander:
 
     def getName(self):
         return "terminal turbo-expander"
+
+    def getInletStreams(self):
+        return [self._expander_inlet]
+
+    def getCompressorFeedStream(self):
+        return self._compressor_inlet
+
+    def getExpanderFeedStream(self):
+        return self._expander_inlet
 
     def getOutletStream(self):
         return self._compressor_outlet
@@ -589,7 +615,12 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         feed_b = _FallbackStream("expander feed", 100.0)
         product_a = _FallbackStream("compressor product", 100.0)
         product_b = _FallbackStream("expander product", 100.0)
-        turbo_expander = _FallbackTurboExpander(product_a, product_b)
+        turbo_expander = _FallbackTurboExpander(
+            feed_a,
+            feed_b,
+            product_a,
+            product_b,
+        )
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         model._proc = _FallbackProcess(
             [feed_a, feed_b, turbo_expander]
@@ -702,6 +733,63 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 if row["role"] == "product"
             ],
             ["product a", "product b"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_explicit_product_alias_preserves_implicit_peer_branch(self):
+        feed = _FallbackStream("feed", 200.0)
+        branch_a = _FallbackStream("branch a", 100.0)
+        branch_b = _FallbackStream("branch b", 100.0)
+        product_a_fluid = object()
+        raw_product_a = _FallbackAliasedStream(
+            "raw product a",
+            100.0,
+            product_a_fluid,
+        )
+        explicit_product_a = _FallbackAliasedStream(
+            "named product a",
+            100.0,
+            product_a_fluid,
+        )
+        product_b = _FallbackStream("product b", 100.0)
+        splitter = _FallbackSplitter(feed, [branch_a, branch_b])
+        heater_a = _FallbackHeater(branch_a, raw_product_a)
+        heater_b = _FallbackHeater(branch_b, product_b)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed,
+                splitter,
+                heater_a,
+                heater_b,
+                explicit_product_a,
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                feed,
+                branch_a,
+                branch_b,
+                raw_product_a,
+                explicit_product_a,
+                product_b,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "product"
+            ],
+            ["named product a", "product b"],
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 

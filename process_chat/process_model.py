@@ -1132,6 +1132,8 @@ class NeqSimProcessModel:
             "getFeedStream",
             "getCompressorInletStream",
             "getExpanderInletStream",
+            "getCompressorFeedStream",
+            "getExpanderFeedStream",
         ):
             if not hasattr(unit, method_name):
                 continue
@@ -1143,6 +1145,20 @@ class NeqSimProcessModel:
                 inlets.append(stream)
 
         return inlets
+
+    @staticmethod
+    def _material_fluid_reference(stream: Any) -> Optional[Any]:
+        """Return the native fluid identity used to recognize stream aliases."""
+        for method_name in ("getFluid", "getThermoSystem"):
+            if not hasattr(stream, method_name):
+                continue
+            try:
+                fluid = getattr(stream, method_name)()
+            except Exception:
+                continue
+            if fluid is not None:
+                return fluid
+        return None
 
     @staticmethod
     def _connectivity_material_boundaries(
@@ -2336,20 +2352,40 @@ class NeqSimProcessModel:
                             process_units
                         )
                     )
+                    explicit_product_fluids = (
+                        _MaterialBoundaryIdentityTracker()
+                    )
                     if terminal_stream_units:
                         for stream in terminal_stream_units:
                             try:
                                 _add_outlet_flow(stream, "product")
                             except Exception:
-                                pass
-                        continue
+                                continue
+                            fluid = self._material_fluid_reference(stream)
+                            if fluid is not None:
+                                explicit_product_fluids.add(
+                                    "product",
+                                    fluid,
+                                )
 
                     if connected_products:
                         for stream, label in connected_products:
+                            fluid = self._material_fluid_reference(stream)
+                            if (
+                                fluid is not None
+                                and explicit_product_fluids.contains(
+                                    "product",
+                                    fluid,
+                                )
+                            ):
+                                continue
                             try:
                                 _add_outlet_flow(stream, label)
                             except Exception:
                                 pass
+                        continue
+
+                    if terminal_stream_units:
                         continue
 
                     # Compatibility fallback for native units whose ports
