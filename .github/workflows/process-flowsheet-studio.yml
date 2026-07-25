@@ -6,9 +6,11 @@ on:
       - "pages/35_Process_Flowsheet_Studio.py"
       - "process_chat/process_builder.py"
       - "process_chat/flowsheet_editor.py"
+      - "process_chat/runtime_imports.py"
       - "process_chat/process_model.py"
       - "tests/test_flowsheet_editor.py"
       - "tests/test_process_graph_conservation.py"
+      - "tests/test_runtime_imports.py"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
 
@@ -37,9 +39,13 @@ jobs:
             pages/35_Process_Flowsheet_Studio.py \
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
+            process_chat/runtime_imports.py \
             process_chat/process_model.py \
             tests/test_flowsheet_editor.py \
-            tests/test_process_graph_conservation.py
+            tests/test_process_graph_conservation.py \
+            tests/test_runtime_imports.py
+      - name: Run deployment-safe import regression tests
+        run: python tests/test_runtime_imports.py -v
       - name: Run draft graph editor regression tests
         run: python tests/test_flowsheet_editor.py -v
       - name: Run native multi-inlet conservation benchmark

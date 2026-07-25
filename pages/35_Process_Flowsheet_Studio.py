@@ -29,31 +29,42 @@ _JVM_OPENS = (
 if "add-opens" not in os.environ.get("JAVA_TOOL_OPTIONS", ""):
     os.environ["JAVA_TOOL_OPTIONS"] = _JVM_OPENS
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_ROOT)
 
-from process_chat.flowsheet_editor import (  # noqa: E402
-    apply_graph_draft,
-    build_graph_draft_dot,
-    connect_graph_ports,
-    create_graph_draft,
-    create_graph_history,
-    disconnect_graph_connection,
-    graph_connection_rows,
-    graph_history_status,
-    graph_port_rows,
-    inline_unit_catalog,
-    inline_unit_catalog_rows,
-    insert_inline_unit_on_connection,
-    material_connection_rows,
-    record_graph_history,
-    redo_graph_history,
-    remove_inline_unit,
-    rename_inline_unit,
-    undo_graph_history,
-    validate_catalog_unit,
-)
+from process_chat.runtime_imports import import_local_symbols  # noqa: E402
 from process_chat.process_builder import ProcessBuilder  # noqa: E402
 from theme import apply_theme, theme_toggle  # noqa: E402
+
+
+_EDITOR_SYMBOL_NAMES = (
+    "apply_graph_draft",
+    "build_graph_draft_dot",
+    "connect_graph_ports",
+    "create_graph_draft",
+    "create_graph_history",
+    "disconnect_graph_connection",
+    "graph_connection_rows",
+    "graph_history_status",
+    "graph_port_rows",
+    "inline_unit_catalog",
+    "inline_unit_catalog_rows",
+    "insert_inline_unit_on_connection",
+    "material_connection_rows",
+    "record_graph_history",
+    "redo_graph_history",
+    "remove_inline_unit",
+    "rename_inline_unit",
+    "undo_graph_history",
+    "validate_catalog_unit",
+)
+globals().update(
+    import_local_symbols(
+        "process_chat.flowsheet_editor",
+        _EDITOR_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+    )
+)
 
 
 PAGE_TITLE = "Process Flowsheet Studio"
@@ -3690,4 +3701,3 @@ if results_are_current and has_stored_result:
         "This solved process is also available in the current session under "
         "Process Chat for natural-language what-if analysis."
     )
-
