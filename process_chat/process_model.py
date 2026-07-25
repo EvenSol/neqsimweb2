@@ -31,6 +31,8 @@ _MATERIAL_STREAM_UNIT_CLASSES = {
     "wellstream",
 }
 _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES = {
+    "co2electrolyzer",
+    "electrolyzer",
     "tank",
 }
 _SPECIES_CHANGING_UNIT_CLASSES = {
@@ -2381,6 +2383,12 @@ class NeqSimProcessModel:
                 connected_feeds, connected_products = (
                     self._connectivity_material_boundaries(all_units)
                 )
+                if connectivity_unsafe_units:
+                    # Do not expose upstream outlets as terminal products
+                    # when a downstream native inlet cannot be inspected.
+                    # The terminal-unit fallback still reports its readable
+                    # outlets while closure remains explicitly unavailable.
+                    connected_products = []
                 consumed_streams, consumed_fluids = (
                     self._material_consumption_trackers(all_units)
                 )

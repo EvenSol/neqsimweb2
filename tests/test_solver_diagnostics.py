@@ -772,6 +772,10 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         for equipment_type, product_names in cases:
             with self.subTest(equipment=equipment_type.__name__):
                 feed = _FallbackStream("feed", 100.0)
+                processed_feed = _FallbackStream(
+                    "processed feed",
+                    100.0,
+                )
                 first_product = _FallbackStream(
                     product_names[0],
                     40.0,
@@ -784,14 +788,18 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                     first_product,
                     second_product,
                 )
+                heater = _FallbackHeater(feed, processed_feed)
                 model = NeqSimProcessModel.__new__(NeqSimProcessModel)
-                model._proc = _FallbackProcess([feed, equipment])
+                model._proc = _FallbackProcess(
+                    [feed, heater, equipment]
+                )
                 model._source_bytes = None
                 model._units = {}
                 model._streams = {
                     stream.getName(): stream
                     for stream in (
                         feed,
+                        processed_feed,
                         first_product,
                         second_product,
                     )
@@ -810,9 +818,19 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                     list(product_names),
                 )
                 self.assertEqual(
-                    result.kpis["mass_balance_pct"].value,
-                    0.0,
+                    result.raw["material_balance_applicable"],
+                    False,
                 )
+                self.assertNotIn("mass_balance_pct", result.kpis)
+                self.assertIsNone(
+                    aggregate_material_balance(result)["imbalance_pct"]
+                )
+                mass_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "mass_balance"
+                )
+                self.assertEqual(mass_constraint.status, "UNKNOWN")
                 component_constraint = next(
                     constraint
                     for constraint in result.constraints
