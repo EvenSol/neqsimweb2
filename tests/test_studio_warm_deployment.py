@@ -131,6 +131,20 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertIn("Add equipment node", button_labels)
         self.assertIn("Connect selected ports", button_labels)
 
+    def test_mixer_insertion_exposes_second_source_and_solve_readiness(self):
+        app = self._run_studio()
+
+        self.assertIn(
+            "Second mixer inlet",
+            {selectbox.label for selectbox in app.selectbox},
+        )
+        self.assertTrue(
+            any(
+                "must be connected before solving" in str(markdown.value)
+                for markdown in app.markdown
+            )
+        )
+
     def test_palette_routes_multi_port_units_through_standalone_workflow(self):
         app = self._run_studio()
         selectboxes = {
