@@ -292,18 +292,29 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "properties": {},
     },
     "splitter": {
-        "label": "Splitter (equal default)",
+        "label": "Splitter",
         "category": "Flow routing",
         "description": (
-            "Divide one material stream between two branch outlets; "
-            "new nodes default to an equal allocation."
+            "Divide one material stream between two branch outlets with an "
+            "editable out_0 flow fraction."
         ),
         "ports": {
             "material_in": ["in"],
             "material_out": ["out_0", "out_1"],
         },
-        "default_params": {},
-        "properties": {},
+        "default_params": {
+            "split_factor": 0.5,
+        },
+        "properties": {
+            "split_factor": _number_property(
+                "Outlet out_0 flow fraction",
+                "-",
+                0.0,
+                1.0,
+                0.01,
+                "%.3f",
+            ),
+        },
     },
 }
 
@@ -372,9 +383,45 @@ def process_unit_property_rows(
     if params is None:
         selected_params = definition["default_params"]
     elif isinstance(params, dict):
-        selected_params = params
+        selected_params = copy.deepcopy(params)
     else:
         raise ValueError("Process unit params must be an object.")
+
+    if cleaned_type == "splitter" and "split_factors" in selected_params:
+        if "split_factor" in selected_params:
+            raise ValueError(
+                "Process splitter has conflicting split_factor and "
+                "split_factors properties."
+            )
+        raw_factors = selected_params.pop("split_factors")
+        if not isinstance(raw_factors, list) or len(raw_factors) != 2:
+            raise ValueError(
+                "Process splitter split_factors must contain exactly two values."
+            )
+        factors: list[float] = []
+        for raw_factor in raw_factors:
+            if isinstance(raw_factor, bool):
+                raise ValueError(
+                    "Process splitter split_factors must be numeric."
+                )
+            try:
+                factor = float(raw_factor)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "Process splitter split_factors must be numeric."
+                ) from error
+            if not math.isfinite(factor) or factor < 0.0:
+                raise ValueError(
+                    "Process splitter split_factors must be finite and "
+                    "non-negative."
+                )
+            factors.append(factor)
+        factor_total = sum(factors)
+        if factor_total <= 0.0:
+            raise ValueError(
+                "Process splitter split_factors must have a positive sum."
+            )
+        selected_params["split_factor"] = factors[0] / factor_total
 
     property_keys = set(definition["properties"])
     parameter_keys = set(selected_params)
@@ -1617,8 +1664,14 @@ def update_process_unit_properties(
         raise ValueError(
             f"Process unit '{cleaned_unit_id}' params must be an object."
         )
+    retained_params = copy.deepcopy(current_params)
+    if (
+        str(selected_unit.get("type", "")).strip().lower() == "splitter"
+        and "split_factor" in property_updates
+    ):
+        retained_params.pop("split_factors", None)
     updated_params = {
-        **current_params,
+        **retained_params,
         **copy.deepcopy(property_updates),
     }
     property_rows = process_unit_property_rows(
