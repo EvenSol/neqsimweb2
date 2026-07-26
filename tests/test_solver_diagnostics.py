@@ -7,6 +7,8 @@ import unittest
 import weakref
 from types import SimpleNamespace
 
+from tests import test_process_graph_conservation as graph_conservation
+
 from process_chat.process_model import (
     NeqSimProcessModel,
     _MaterialBoundaryIdentityTracker,
@@ -15,12 +17,14 @@ from process_chat.solver_diagnostics import (
     aggregate_convergence,
     aggregate_energy_balance,
     aggregate_material_balance,
+    aggregate_unit_balances,
     aggregate_validation_status,
     component_balance_rows,
     convergence_rows,
     energy_transfer_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
+    unit_balance_rows,
 )
 
 
@@ -587,6 +591,226 @@ class ConvergenceDiagnosticsTest(unittest.TestCase):
                     product_flow,
                     1000.0 * flow_scale,
                     delta=0.2,
+                )
+
+
+class UnitBalanceDiagnosticsTest(unittest.TestCase):
+    """Validate the strict per-unit material and energy closure contract."""
+
+    @staticmethod
+    def _result(diagnostics):
+        return SimpleNamespace(
+            raw={"unit_balance_diagnostics": diagnostics},
+            kpis={},
+        )
+
+    @staticmethod
+    def _row():
+        return {
+            "process_system": "gas plant",
+            "unit_name": "feed mixer",
+            "unit_type": "Mixer",
+            "inlet_count": 2,
+            "outlet_count": 1,
+            "inlet_mass_flow_kg_hr": 100000.0,
+            "outlet_mass_flow_kg_hr": 100000.0,
+            "mass_residual_kg_hr": 0.0,
+            "mass_imbalance_pct": 0.0,
+            "inlet_enthalpy_kW": -15000.0,
+            "outlet_enthalpy_kW": -15000.0,
+            "external_energy_transfer_kW": 0.0,
+            "energy_residual_kW": 0.0,
+            "energy_imbalance_pct": 0.0,
+        }
+
+    def test_legacy_and_empty_diagnostics_remain_explicit(self):
+        legacy = aggregate_unit_balances(SimpleNamespace(raw={}))
+        self.assertIsNone(legacy["applicable"])
+        self.assertIsNone(legacy["coverage_complete"])
+        self.assertIsNone(legacy["unit_count"])
+
+        empty = self._result(
+            {
+                "applicable": False,
+                "coverage_complete": True,
+                "rows": [],
+                "excluded_units": [],
+            }
+        )
+        summary = aggregate_unit_balances(empty)
+        self.assertFalse(summary["applicable"])
+        self.assertTrue(summary["coverage_complete"])
+        self.assertEqual(summary["unit_count"], 0.0)
+
+    def test_rows_are_isolated_and_aggregate_partial_coverage(self):
+        diagnostics = {
+            "applicable": True,
+            "coverage_complete": False,
+            "rows": [self._row()],
+            "excluded_units": ["column (DistillationColumn)"],
+        }
+        result = self._result(diagnostics)
+
+        rows = unit_balance_rows(result)
+        summary = aggregate_unit_balances(result)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["inlet_count"], 2)
+        self.assertEqual(summary["unit_count"], 1.0)
+        self.assertEqual(summary["energy_unit_count"], 1.0)
+        self.assertEqual(summary["max_mass_imbalance_pct"], 0.0)
+        self.assertEqual(summary["max_energy_imbalance_pct"], 0.0)
+        self.assertEqual(
+            summary["excluded_units"],
+            ["column (DistillationColumn)"],
+        )
+        rows[0]["unit_name"] = "changed"
+        self.assertEqual(
+            diagnostics["rows"][0]["unit_name"],
+            "feed mixer",
+        )
+
+    def test_allows_mass_only_rows(self):
+        row = self._row()
+        for field_name in (
+            "inlet_enthalpy_kW",
+            "outlet_enthalpy_kW",
+            "external_energy_transfer_kW",
+            "energy_residual_kW",
+            "energy_imbalance_pct",
+        ):
+            row[field_name] = None
+        result = self._result(
+            {
+                "applicable": True,
+                "coverage_complete": True,
+                "rows": [row],
+                "excluded_units": [],
+            }
+        )
+
+        summary = aggregate_unit_balances(result)
+
+        self.assertEqual(summary["energy_unit_count"], 0.0)
+        self.assertIsNone(summary["max_energy_imbalance_pct"])
+
+    def test_rejects_incomplete_or_conflicting_diagnostics(self):
+        incomplete = self._row()
+        incomplete["energy_residual_kW"] = None
+        with self.assertRaisesRegex(ValueError, "incomplete energy"):
+            unit_balance_rows(
+                self._result(
+                    {
+                        "applicable": True,
+                        "coverage_complete": True,
+                        "rows": [incomplete],
+                        "excluded_units": [],
+                    }
+                )
+            )
+
+        with self.assertRaisesRegex(ValueError, "coverage state conflicts"):
+            aggregate_unit_balances(
+                self._result(
+                    {
+                        "applicable": True,
+                        "coverage_complete": True,
+                        "rows": [self._row()],
+                        "excluded_units": ["unknown unit"],
+                    }
+                )
+            )
+
+        with self.assertRaisesRegex(ValueError, "applicability conflicts"):
+            aggregate_unit_balances(
+                self._result(
+                    {
+                        "applicable": False,
+                        "coverage_complete": True,
+                        "rows": [self._row()],
+                        "excluded_units": [],
+                    }
+                )
+            )
+
+    def test_native_closure_and_nearby_operating_points(self):
+        benchmark = (
+            graph_conservation.MultiInletMixerConservationTest
+        )
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(
+                case="two-inlet mixer",
+                flow_scale=flow_scale,
+            ):
+                _, model = benchmark._build_case(flow_scale)
+                result = model.run(timeout_ms=180_000)
+                rows = unit_balance_rows(result)
+                summary = aggregate_unit_balances(result)
+
+                self.assertEqual(
+                    [
+                        (
+                            row["unit_name"],
+                            row["inlet_count"],
+                            row["outlet_count"],
+                        )
+                        for row in rows
+                    ],
+                    [("feed mixer", 2, 1)],
+                )
+                self.assertTrue(summary["coverage_complete"])
+                self.assertLess(
+                    summary["max_mass_imbalance_pct"],
+                    1.0e-6,
+                )
+                self.assertLess(
+                    summary["max_energy_imbalance_pct"],
+                    1.0e-6,
+                )
+
+            with self.subTest(
+                case="compression and cooling",
+                flow_scale=flow_scale,
+            ):
+                _, model = benchmark._build_compression_cooling_case(
+                    flow_scale
+                )
+                result = model.run(timeout_ms=180_000)
+                rows = unit_balance_rows(result)
+                summary = aggregate_unit_balances(result)
+
+                self.assertEqual(
+                    [row["unit_name"] for row in rows],
+                    ["compressor", "cooler"],
+                )
+                self.assertGreater(
+                    rows[0]["external_energy_transfer_kW"],
+                    0.0,
+                )
+                self.assertLess(
+                    rows[1]["external_energy_transfer_kW"],
+                    0.0,
+                )
+                self.assertTrue(summary["coverage_complete"])
+                self.assertLess(
+                    summary["max_mass_imbalance_pct"],
+                    1.0e-6,
+                )
+                self.assertLess(
+                    summary["max_energy_imbalance_pct"],
+                    1.0e-6,
+                )
+                unit_constraints = {
+                    item.name: item.status
+                    for item in result.constraints
+                    if item.name.startswith("unit_")
+                }
+                self.assertEqual(
+                    unit_constraints,
+                    {
+                        "unit_mass_balance": "OK",
+                        "unit_energy_balance": "OK",
+                    },
                 )
 
 
