@@ -513,6 +513,10 @@ class ProcessBuilder:
                     f"Splitter '{unit_id}' legacy split_factor requires "
                     "exactly two material output ports."
                 )
+            if type(params["split_factor"]) is bool:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split_factor must be numeric."
+                )
             try:
                 legacy_factor = float(params["split_factor"])
             except (TypeError, ValueError) as exc:
