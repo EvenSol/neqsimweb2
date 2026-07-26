@@ -3853,6 +3853,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         spec["units"],
                         selected_unit_id,
                         renamed_unit_name,
+                        {
+                            str(inlet["name"]).strip()
+                            for inlet in spec["inlets"]
+                            if isinstance(inlet, dict)
+                        },
                     )
                     candidate_draft = create_graph_draft(
                         units,

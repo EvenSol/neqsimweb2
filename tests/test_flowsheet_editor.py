@@ -893,6 +893,13 @@ class InlineUnitLifecycleTest(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     rename_inline_unit(units, unit_id, new_name)
+        with self.assertRaisesRegex(ValueError, "already in use"):
+            rename_inline_unit(
+                units,
+                inserted_id,
+                "Satellite Feed",
+                {"satellite feed"},
+            )
 
     def test_property_update_is_normalized_and_input_safe(self):
         updated = update_inline_unit_properties(

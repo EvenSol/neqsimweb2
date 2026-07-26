@@ -1423,6 +1423,7 @@ def rename_inline_unit(
     units: list[Any],
     unit_id: str,
     new_name: str,
+    reserved_names: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Rename one catalog unit without changing its stable graph identity."""
     if not isinstance(units, list):
@@ -1458,6 +1459,11 @@ def rename_inline_unit(
             raise ValueError(
                 f"Equipment name '{cleaned_name}' is already in use."
             )
+    if cleaned_name.casefold() in {
+        str(reserved_name).strip().casefold()
+        for reserved_name in (reserved_names or set())
+    }:
+        raise ValueError(f"Equipment name '{cleaned_name}' is already in use.")
 
     selected_unit = copied_units[matches[0]]
     validate_catalog_unit(selected_unit)
