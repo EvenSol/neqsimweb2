@@ -7,6 +7,7 @@ import json
 import unittest
 
 from process_chat.flowsheet_editor import (
+    add_catalog_unit,
     apply_graph_draft,
     build_graph_draft_dot,
     clone_material_inlet,
@@ -80,6 +81,43 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(unit["ports"]["material_in"], ["in"])
         self.assertEqual(unit["params"]["outlet_temperature_C"], 35.0)
         validate_catalog_unit(unit)
+
+    def test_adds_standalone_unit_for_later_port_connection(self):
+        units = [
+            {
+                "id": "inlet-scrubber",
+                "name": "Inlet scrubber",
+                "type": "separator",
+            }
+        ]
+        updated, unit_id = add_catalog_unit(
+            units,
+            "pump",
+            "Condensate Pump",
+            {"condensate-pump"},
+        )
+
+        self.assertEqual(unit_id, "condensate-pump-2")
+        self.assertEqual(updated[-1]["type"], "pump")
+        self.assertEqual(updated[-1]["ports"]["material_in"], ["in"])
+        self.assertEqual(updated[-1]["ports"]["material_out"], ["out"])
+        self.assertEqual(updated[-1]["params"]["efficiency"], 0.75)
+        self.assertEqual(len(units), 1)
+
+    def test_standalone_unit_rejects_duplicate_names_without_mutation(self):
+        units = [
+            {
+                "id": "pump",
+                "name": "Condensate Pump",
+                "type": "pump",
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            add_catalog_unit(units, "pump", " condensate pump ")
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            add_catalog_unit(units, "column", "Stabilizer")
+        self.assertEqual(len(units), 1)
 
     def test_property_metadata_has_explicit_units_and_valid_defaults(self):
         catalog = inline_unit_catalog()
