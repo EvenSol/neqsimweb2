@@ -1711,6 +1711,7 @@ def insert_inline_unit_on_connection(
     unit_type: str,
     unit_name: str,
     reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     """Transactionally insert one catalog unit into a material connection.
 
@@ -1773,9 +1774,12 @@ def insert_inline_unit_on_connection(
     existing_object_ids.update(
         str(reserved_id).strip() for reserved_id in (reserved_ids or set())
     )
+    cleaned_name = str(unit_name).strip()
+    if cleaned_name.casefold() in _normalized_name_keys(reserved_names):
+        raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
     new_unit = create_inline_unit_spec(
         unit_type,
-        unit_name,
+        cleaned_name,
         existing_object_ids,
     )
     validate_catalog_unit(new_unit)

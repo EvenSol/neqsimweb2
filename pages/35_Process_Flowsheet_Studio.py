@@ -3295,8 +3295,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         ).encode("utf-8")
     ).hexdigest()[:12]
     protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
-    protected_unit_names = _graph_name_set(
-        _build_template_graph(spec["process"])[0]
+    starter_template_units = _build_template_graph(spec["process"])[0]
+    protected_unit_names = _graph_name_set(starter_template_units)
+    protected_unit_name_keys = _graph_name_set(
+        starter_template_units,
+        casefold=True,
     )
     added_units = [
         unit
@@ -3500,7 +3503,25 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         f"{graph_widget_revision}"
                     ),
                 )
-                resolved_mixer_name = mixer_name.strip() or "Feed mixer"
+                requested_mixer_name = mixer_name.strip() or "Feed mixer"
+                existing_mixer_names = _graph_name_set(
+                    spec["units"],
+                    casefold=True,
+                )
+                existing_mixer_names.update(
+                    _graph_name_set(spec["inlets"], casefold=True)
+                )
+                existing_mixer_names.update(protected_unit_name_keys)
+                resolved_mixer_name = requested_mixer_name
+                mixer_name_suffix = 2
+                while (
+                    resolved_mixer_name.casefold()
+                    in existing_mixer_names
+                ):
+                    resolved_mixer_name = (
+                        f"{requested_mixer_name} {mixer_name_suffix}"
+                    )
+                    mixer_name_suffix += 1
                 secondary_source_candidates = [
                     row
                     for row in all_material_sources
@@ -3576,6 +3597,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             reorganize_connection_id,
                             resolved_mixer_name,
                             protected_unit_ids,
+                            protected_unit_names,
                         )
                         secondary_connection_id = None
                         if selected_secondary_source is not None:
@@ -3725,6 +3747,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 existing_names.update(
                     _graph_name_set(spec["inlets"], casefold=True)
                 )
+                existing_names.update(protected_unit_name_keys)
                 resolved_name = requested_name
                 name_suffix = 2
                 while resolved_name.casefold() in existing_names:
@@ -3764,7 +3787,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                         if isinstance(inlet, dict)
                                     ),
                                 },
-                                _graph_name_set(spec["inlets"]),
+                                protected_unit_names.union(
+                                    _graph_name_set(spec["inlets"])
+                                ),
                             )
                         except ValueError as replacement_blocker:
                             st.warning(
@@ -3836,6 +3861,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                             if isinstance(inlet, dict)
                                         ),
                                     },
+                                    protected_unit_names.union(
+                                        _graph_name_set(spec["inlets"])
+                                    ),
                                 )
                             )
                             action_notice = (
@@ -3860,7 +3888,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                             if isinstance(inlet, dict)
                                         ),
                                     },
-                                    _graph_name_set(spec["inlets"]),
+                                    protected_unit_names.union(
+                                        _graph_name_set(spec["inlets"])
+                                    ),
                                 )
                             )
                             replaced_label = _graph_object_name(
@@ -4451,6 +4481,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         extend_type,
                         extend_name,
                         protected_unit_ids,
+                        protected_unit_names,
                     )
                 )
                 candidate_draft = create_graph_draft(
@@ -4529,7 +4560,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         and str(inlet.get("id", "")).strip()
                     ),
                 }
-                reserved_names = _graph_name_set(spec["inlets"])
+                reserved_names = protected_unit_names.union(
+                    _graph_name_set(spec["inlets"])
+                )
                 units, new_unit_id = add_catalog_unit(
                     spec["units"],
                     standalone_type,
@@ -4803,6 +4836,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 existing_names.update(
                     _graph_name_set(spec["inlets"], casefold=True)
                 )
+                existing_names.update(protected_unit_name_keys)
                 resolved_name = requested_name
                 name_suffix = 2
                 while resolved_name.casefold() in existing_names:
@@ -4824,6 +4858,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                 and str(inlet.get("id", "")).strip()
                             ),
                         },
+                        protected_unit_names.union(
+                            _graph_name_set(spec["inlets"])
+                        ),
                     )
                 )
                 candidate_draft = create_graph_draft(

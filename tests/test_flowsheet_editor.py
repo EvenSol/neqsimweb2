@@ -1103,6 +1103,24 @@ class InlineInsertionTest(unittest.TestCase):
         self.assertEqual(new_unit_id, "compressor-stage-1-2")
         self.assertEqual(new_units[0]["id"], "compressor-stage-1-2")
 
+    def test_insert_rejects_removed_starter_names_without_mutation(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "name .* is duplicated"):
+            insert_inline_unit_on_connection(
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "cooler",
+                "Compressor Stage 1",
+                {"compressor-stage-1"},
+                {"compressor stage 1"},
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
+
     def test_invalid_path_requests_fail_without_partial_edits(self):
         invalid_cases = (
             ("missing", self.connections, "Unknown graph connection"),
@@ -1666,12 +1684,25 @@ class MixerPathInsertionTest(unittest.TestCase):
             self.units,
             self.connections,
             "feed-to-compressor",
-            "Compressor Stage 1",
+            "Compressor-Stage-1",
             {"compressor-stage-1"},
+            {"Compressor Stage 1"},
         )
 
         self.assertEqual(mixer_id, "compressor-stage-1-2")
         self.assertEqual(units[0]["id"], "compressor-stage-1-2")
+
+    def test_insert_mixer_rejects_removed_starter_names(self):
+        with self.assertRaisesRegex(ValueError, "name .* is duplicated"):
+            insert_mixer_on_connection(
+                self.inlets,
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "compressor stage 1",
+                {"compressor-stage-1"},
+                {"Compressor Stage 1"},
+            )
 
     def test_invalid_insertions_leave_graph_unchanged(self):
         invalid_cases = (
