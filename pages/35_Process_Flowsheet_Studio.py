@@ -513,6 +513,41 @@ def _secondary_inlet_map(
     return result
 
 
+def _unconnected_unit_map(
+    units: list[Any],
+    connections: list[Any],
+    candidate_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Return candidate units that have no material or energy references."""
+    referenced_unit_ids: set[str] = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        for endpoint_name in ("source", "target"):
+            endpoint = connection.get(endpoint_name)
+            if (
+                isinstance(endpoint, dict)
+                and str(endpoint.get("kind", "")).strip() == "unit"
+            ):
+                endpoint_id = str(endpoint.get("id", "")).strip()
+                if endpoint_id:
+                    referenced_unit_ids.add(endpoint_id)
+
+    cleaned_candidate_ids = {
+        str(candidate_id).strip()
+        for candidate_id in candidate_ids
+        if str(candidate_id).strip()
+    }
+    return {
+        unit_id: unit
+        for unit in units
+        if isinstance(unit, dict)
+        and (unit_id := str(unit.get("id", "")).strip())
+        in cleaned_candidate_ids
+        and unit_id not in referenced_unit_ids
+    }
+
+
 def _bounded_float(
     value: Any,
     field_name: str,
@@ -3354,6 +3389,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
     added_unit_map = {
         str(unit["id"]).strip(): unit for unit in added_units
     }
+    disconnected_starter_unit_map = _unconnected_unit_map(
+        spec["units"],
+        spec["connections"],
+        protected_unit_ids,
+    )
 
     with st.expander("Edit flowsheet graph", expanded=False):
         st.markdown("#### Draft flowsheet")
@@ -5220,6 +5260,74 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"Removed '{selected_unit['name']}' and updated "
                             "its explicit material routes. Run NeqSim to solve "
                             "the updated graph."
+                        ),
+                    )
+                    st.rerun()
+
+        if disconnected_starter_unit_map:
+            st.divider()
+            st.markdown("#### Remove disconnected starter equipment")
+            st.caption(
+                "A starter operation becomes removable after every material "
+                "and energy path to it has been disconnected. Its reserved "
+                "identity remains unavailable to other graph objects."
+            )
+            starter_unit_id = st.selectbox(
+                "Disconnected starter equipment",
+                options=list(disconnected_starter_unit_map),
+                format_func=lambda value: (
+                    f"{disconnected_starter_unit_map[value]['name']} · "
+                    f"{disconnected_starter_unit_map[value]['type']} · {value}"
+                ),
+                key="flowsheet_disconnected_starter_unit",
+            )
+            starter_unit = disconnected_starter_unit_map[starter_unit_id]
+            confirm_starter_removal = st.checkbox(
+                "Confirm starter equipment removal",
+                key=f"flowsheet_confirm_remove_starter_{starter_unit_id}",
+                help=(
+                    "Removal deletes only the already-disconnected node. "
+                    "Reconnect the remaining open material ports before solving."
+                ),
+            )
+            remove_starter_unit = st.button(
+                "Remove disconnected starter equipment",
+                disabled=not confirm_starter_removal,
+                use_container_width=True,
+                key=f"flowsheet_remove_starter_{starter_unit_id}",
+            )
+            if remove_starter_unit:
+                try:
+                    units, connections = remove_inline_unit(
+                        spec["units"],
+                        spec["connections"],
+                        starter_unit_id,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        connections,
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"Starter equipment removal failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Removed disconnected starter equipment "
+                            f"'{starter_unit['name']}'. Reconnect the remaining "
+                            "open ports before running NeqSim."
                         ),
                     )
                     st.rerun()
