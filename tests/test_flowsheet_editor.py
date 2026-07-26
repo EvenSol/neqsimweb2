@@ -35,6 +35,7 @@ from process_chat.flowsheet_editor import (
     remove_material_inlet,
     remove_inline_unit,
     replace_inline_unit,
+    replace_inline_unit_type,
     reroute_graph_connection,
     rename_material_inlet,
     rename_inline_unit,
@@ -1328,6 +1329,67 @@ class InlineUnitLifecycleTest(unittest.TestCase):
                         unit_id,
                         updates,
                     )
+        self.assertEqual(self.units, original)
+
+    def test_replace_preserves_identity_routes_and_resets_properties(self):
+        units, connections, inserted_id = self._insert_valve()
+        selected = next(unit for unit in units if unit["id"] == inserted_id)
+        selected["params"]["outlet_pressure_bara"] = 25.0
+        selected["editor_note"] = "keep this draft annotation"
+        original_units = copy.deepcopy(units)
+        original_connections = copy.deepcopy(connections)
+
+        replaced = replace_inline_unit_type(
+            units,
+            inserted_id,
+            "heater",
+        )
+
+        replacement = next(
+            unit for unit in replaced if unit["id"] == inserted_id
+        )
+        self.assertEqual(replacement["id"], "product-valve")
+        self.assertEqual(replacement["name"], "Product Valve")
+        self.assertEqual(replacement["type"], "heater")
+        self.assertEqual(
+            replacement["params"],
+            {
+                "outlet_temperature_C": 50.0,
+                "pressure_drop_bar": 0.0,
+            },
+        )
+        self.assertEqual(
+            replacement["editor_note"],
+            "keep this draft annotation",
+        )
+        self.assertEqual(connections, original_connections)
+        self.assertEqual(units, original_units)
+        validate_catalog_unit(replacement)
+
+    def test_replace_rejects_unsafe_requests_without_mutation(self):
+        original = copy.deepcopy(self.units)
+        invalid_cases = (
+            ("missing", "heater", "Unknown graph unit"),
+            ("product-cooler", "cooler", "already type"),
+            ("product-cooler", "unknown", "Unsupported inline unit type"),
+            ("product-cooler", "separator", "ports differ"),
+        )
+        for unit_id, replacement_type, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    replace_inline_unit_type(
+                        self.units,
+                        unit_id,
+                        replacement_type,
+                    )
+
+        duplicated = [*self.units, copy.deepcopy(self.units[0])]
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            replace_inline_unit_type(
+                duplicated,
+                "product-cooler",
+                "heater",
+            )
         self.assertEqual(self.units, original)
 
 
