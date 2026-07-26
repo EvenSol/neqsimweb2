@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import subprocess
@@ -9,6 +10,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from typing import Any
 
 import process_chat.flowsheet_editor as flowsheet_editor
 import process_chat.solver_diagnostics as solver_diagnostics
@@ -61,6 +63,28 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             details = "\n".join(str(item.value) for item in app.exception)
             self.fail(f"Studio raised exceptions after warm reload:\n{details}")
         return app
+
+    def _load_studio_function(self, function_name):
+        studio_path = (
+            self.project_root / "pages" / "35_Process_Flowsheet_Studio.py"
+        )
+        tree = ast.parse(studio_path.read_text(encoding="utf-8"))
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == function_name
+        )
+        namespace = {"Any": Any}
+        exec(
+            compile(
+                ast.Module(body=[function], type_ignores=[]),
+                str(studio_path),
+                "exec",
+            ),
+            namespace,
+        )
+        return namespace[function_name]
 
     def test_page_recovers_stale_editor_module(self):
         del flowsheet_editor.connect_graph_ports
@@ -133,6 +157,27 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         _flush_standalone_output(BrokenStream(), HealthyStream())
 
         self.assertEqual(flushed, [True])
+
+    def test_zero_coverage_is_not_reported_as_not_applicable(self):
+        coverage_label = self._load_studio_function(
+            "_unit_balance_coverage_label"
+        )
+        zero_coverage = {
+            "applicable": False,
+            "coverage_complete": False,
+            "energy_unit_count": 0.0,
+            "energy_coverage_complete": False,
+        }
+        no_candidates = {
+            **zero_coverage,
+            "coverage_complete": True,
+        }
+
+        self.assertEqual(
+            coverage_label(zero_coverage),
+            "Material unavailable; energy not audited",
+        )
+        self.assertEqual(coverage_label(no_candidates), "Not applicable")
 
     def test_solved_page_reports_and_exports_unit_closure(self):
         app = self._run_studio()

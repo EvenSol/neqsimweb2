@@ -2046,7 +2046,11 @@ def _unit_balance_coverage_label(summary: dict[str, Any]) -> str:
     if summary["applicable"] is None:
         return "Not recorded"
     if summary["applicable"] is False:
-        return "Not applicable"
+        return (
+            "Not applicable"
+            if summary["coverage_complete"]
+            else "Material unavailable; energy not audited"
+        )
     material_label = (
         "Material complete"
         if summary["coverage_complete"]
@@ -4442,10 +4446,25 @@ if results_are_current and has_stored_result:
                 "per-unit closure diagnostics."
             )
         elif unit_balance_summary["applicable"] is False:
-            st.info(
-                "No supported unit operation exposed both inlet and "
-                "outlet material ports for a closure audit."
-            )
+            if unit_balance_summary["coverage_complete"]:
+                st.info(
+                    "No supported unit operation exposed both inlet and "
+                    "outlet material ports for a closure audit."
+                )
+            else:
+                st.warning(
+                    "Per-unit closure evidence is unavailable because "
+                    "every candidate unit was excluded from the material "
+                    "balance audit."
+                )
+                if unit_balance_summary["excluded_units"]:
+                    st.caption(
+                        "Unaudited equipment: "
+                        + ", ".join(
+                            unit_balance_summary["excluded_units"]
+                        )
+                        + "."
+                    )
         else:
             if unit_balance_summary["coverage_complete"]:
                 st.success(
