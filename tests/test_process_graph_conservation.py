@@ -15,6 +15,7 @@ from process_chat.flowsheet_editor import (
     record_graph_history,
     redo_graph_history,
     replace_inline_unit,
+    replace_inline_unit_type,
     undo_graph_history,
     update_inline_unit_properties,
 )
@@ -1234,6 +1235,128 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 self.assertLess(
                     clone_result.kpis["energy_balance_pct"].value,
                     1.0e-6,
+                )
+
+    def test_native_replaced_valve_conserves_at_nearby_points(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                units, unit_id = add_catalog_unit(
+                    [],
+                    "cooler",
+                    "export conditioning",
+                )
+                units = replace_inline_unit_type(
+                    units,
+                    unit_id,
+                    "valve",
+                )
+                graph_spec = {
+                    "name": "Native replaced-equipment benchmark",
+                    "units": units,
+                    "connections": [
+                        {
+                            "id": "feed-to-export-conditioning",
+                            "type": "material",
+                            "source": {
+                                "kind": "inlet",
+                                "id": "feed",
+                                "port": "out",
+                            },
+                            "target": {
+                                "kind": "unit",
+                                "id": unit_id,
+                                "port": "in",
+                            },
+                        }
+                    ],
+                }
+                inlet_specs = [
+                    {
+                        "inlet_id": "feed",
+                        "name": "feed",
+                        "fluid_spec": {
+                            "eos_model": "srk",
+                            "mixing_rule": 2,
+                            "components": {
+                                "methane": 0.90,
+                                "ethane": 0.10,
+                            },
+                            "composition_basis": "mole_fraction",
+                            "temperature_C": 25.0,
+                            "pressure_bara": 45.0,
+                            "total_flow": 20_000.0 * flow_scale,
+                            "flow_unit": "kg/hr",
+                        },
+                    }
+                ]
+                builder = ProcessBuilder()
+                model = builder.build_acyclic_graph(
+                    graph_spec,
+                    inlet_specs,
+                    ["feed", unit_id],
+                )
+                result = model.run(timeout_ms=180_000)
+                process_units = list(
+                    model.get_process().getUnitOperations()
+                )
+                valve = next(
+                    unit
+                    for unit in process_units
+                    if str(unit.getName()) == "export conditioning"
+                )
+
+                self.assertEqual(graph_spec["units"][0]["id"], unit_id)
+                self.assertEqual(graph_spec["units"][0]["type"], "valve")
+                self.assertEqual(
+                    graph_spec["units"][0]["params"],
+                    {"outlet_pressure_bara": 40.0},
+                )
+                self.assertAlmostEqual(
+                    float(valve.getOutletStream().getPressure("bara")),
+                    40.0,
+                    delta=0.05,
+                )
+                expected_flow = 20_000.0 * flow_scale
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertFalse(
+                    [
+                        constraint
+                        for constraint in result.constraints
+                        if constraint.status == "VIOLATION"
+                    ]
+                )
+                self.assertIn(
+                    "Acyclic graph built and converged successfully.",
+                    builder.build_log,
+                )
+                self.assertEqual(
+                    json.loads(json.dumps(graph_spec, allow_nan=False)),
+                    graph_spec,
+                )
+                print(
+                    "native replaced-valve benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"feed={expected_flow:.1f} kg/hr",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                 )
 
     def test_native_separator_liquid_routes_to_pump_and_closes(self):
