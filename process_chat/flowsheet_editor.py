@@ -731,6 +731,7 @@ def rename_material_inlet(
     inlets: list[Any],
     inlet_id: str,
     name: str,
+    reserved_names: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Rename one inlet without changing its stable graph identity."""
     if not isinstance(inlets, list):
@@ -759,6 +760,10 @@ def rename_material_inlet(
         for index, inlet in enumerate(copied_inlets)
         if index != matches[0] and isinstance(inlet, dict)
     }
+    peer_names.update(
+        str(reserved_name).strip().casefold()
+        for reserved_name in (reserved_names or set())
+    )
     if cleaned_name.casefold() in peer_names:
         raise ValueError(f"Material inlet name '{cleaned_name}' is duplicated.")
 
