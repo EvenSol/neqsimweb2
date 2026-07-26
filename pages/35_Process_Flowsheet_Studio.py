@@ -328,6 +328,26 @@ def _graph_object_name(record: dict[str, Any], fallback_id: str) -> str:
     return str(raw_name).strip() or clean_fallback
 
 
+def _secondary_inlet_map(
+    inlets: list[Any],
+    primary_inlet_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Return addressable secondary inlets without trusting imported IDs."""
+    if not isinstance(inlets, list):
+        return {}
+
+    clean_primary_id = str(primary_inlet_id).strip()
+    result: dict[str, dict[str, Any]] = {}
+    for inlet in inlets:
+        if not isinstance(inlet, dict):
+            continue
+        inlet_id = str(inlet.get("id", "")).strip()
+        if not inlet_id or inlet_id == clean_primary_id:
+            continue
+        result[inlet_id] = inlet
+    return result
+
+
 def _bounded_float(
     value: Any,
     field_name: str,
@@ -3165,13 +3185,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 )
                 st.rerun()
 
-        secondary_inlets = [
-            inlet
-            for inlet in spec["inlets"]
-            if isinstance(inlet, dict)
-            and str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID
-        ]
-        if secondary_inlets:
+        secondary_inlet_map = _secondary_inlet_map(
+            spec["inlets"],
+            PRIMARY_INLET_ID,
+        )
+        if secondary_inlet_map:
             st.divider()
             st.markdown("#### Manage secondary inlets")
             st.caption(
@@ -3179,10 +3197,6 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 "retaining independent conditions and molar composition. The "
                 "primary inlet remains available in the fluid basis above."
             )
-            secondary_inlet_map = {
-                str(inlet["id"]).strip(): inlet
-                for inlet in secondary_inlets
-            }
             selected_inlet_id = st.selectbox(
                 "Material inlet",
                 options=list(secondary_inlet_map),
