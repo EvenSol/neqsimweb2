@@ -341,7 +341,10 @@ def _secondary_inlet_map(
     for inlet in inlets:
         if not isinstance(inlet, dict):
             continue
-        inlet_id = str(inlet.get("id", "")).strip()
+        raw_inlet_id = inlet.get("id")
+        if raw_inlet_id is None:
+            continue
+        inlet_id = str(raw_inlet_id).strip()
         if not inlet_id or inlet_id == clean_primary_id:
             continue
         result[inlet_id] = inlet
