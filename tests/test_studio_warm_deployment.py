@@ -164,6 +164,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 secondary,
                 {"name": "Missing id"},
                 {"id": "   ", "name": "Blank id"},
+                {"id": None, "name": "Null id"},
                 None,
             ],
             "feed-gas",
