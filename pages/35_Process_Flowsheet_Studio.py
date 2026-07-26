@@ -59,8 +59,10 @@ globals().update(
 
 
 _EDITOR_SYMBOL_NAMES = (
+    "add_catalog_unit",
     "apply_graph_draft",
     "build_graph_draft_dot",
+    "clone_material_inlet",
     "connect_graph_ports",
     "create_graph_draft",
     "create_graph_history",
@@ -78,7 +80,9 @@ _EDITOR_SYMBOL_NAMES = (
     "process_unit_property_rows",
     "record_graph_history",
     "redo_graph_history",
+    "remove_material_inlet",
     "remove_inline_unit",
+    "rename_material_inlet",
     "rename_inline_unit",
     "undo_graph_history",
     "update_inlet_composition",
@@ -3073,6 +3077,83 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             else:
                 st.rerun()
 
+        st.divider()
+        st.markdown("#### Add an independent feed stream")
+        st.caption(
+            "Clone a compatible inlet from the shared fluid package, then edit "
+            "its own temperature, pressure, flow, and molar composition below. "
+            "The new feed starts with an available material outlet port."
+        )
+        inlet_map = {
+            str(inlet["id"]).strip(): inlet
+            for inlet in spec["inlets"]
+            if isinstance(inlet, dict)
+            and str(inlet.get("id", "")).strip()
+        }
+        feed_cols = st.columns(2)
+        source_inlet_id = feed_cols[0].selectbox(
+            "Copy fluid basis and conditions from",
+            options=list(inlet_map),
+            format_func=lambda value: (
+                f"{inlet_map[value]['name']} · {value}"
+            ),
+            key=f"flowsheet_new_feed_source_{graph_widget_revision}",
+        )
+        new_feed_name = feed_cols[1].text_input(
+            "New feed name",
+            value="New feed",
+            max_chars=80,
+            key=f"flowsheet_new_feed_name_{graph_widget_revision}",
+        )
+        add_feed = st.button(
+            "Add feed stream",
+            use_container_width=True,
+            key=f"flowsheet_add_feed_{graph_widget_revision}",
+        )
+        if add_feed:
+            try:
+                inlets, new_inlet_id = clone_material_inlet(
+                    spec["inlets"],
+                    source_inlet_id,
+                    new_feed_name,
+                    {
+                        str(unit["id"]).strip()
+                        for unit in spec["units"]
+                        if isinstance(unit, dict)
+                    },
+                    {
+                        str(unit["name"]).strip()
+                        for unit in spec["units"]
+                        if isinstance(unit, dict)
+                    },
+                )
+                candidate_draft = create_graph_draft(
+                    spec["units"],
+                    spec["connections"],
+                    inlets,
+                )
+                candidate_case = _apply_studio_graph_draft(
+                    spec,
+                    candidate_draft,
+                )
+                _validate_case_graph(
+                    candidate_case,
+                    candidate_case["process"],
+                )
+            except ValueError as edit_error:
+                st.error(f"Feed creation failed: {edit_error}")
+            else:
+                _record_graph_revision(
+                    spec,
+                    candidate_draft,
+                    (
+                        f"Added independent feed '{new_feed_name.strip()}' "
+                        f"with id '{new_inlet_id}'. Edit its conditions, then "
+                        "connect its available outlet port."
+                    ),
+                )
+                st.rerun()
+
         secondary_inlets = [
             inlet
             for inlet in spec["inlets"]
@@ -3224,6 +3305,163 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         ),
                     )
                     st.rerun()
+
+            st.markdown("##### Feed lifecycle")
+            lifecycle_cols = st.columns(2)
+            renamed_inlet = lifecycle_cols[0].text_input(
+                "Rename selected feed",
+                value=str(selected_inlet["name"]),
+                max_chars=80,
+                key=(
+                    "flowsheet_rename_inlet_"
+                    f"{selected_inlet_id}_{graph_widget_revision}"
+                ),
+            )
+            rename_inlet = lifecycle_cols[0].button(
+                "Rename feed",
+                use_container_width=True,
+                key=(
+                    "flowsheet_rename_inlet_button_"
+                    f"{selected_inlet_id}_{graph_widget_revision}"
+                ),
+            )
+            confirm_feed_removal = lifecycle_cols[1].checkbox(
+                "Confirm unconnected feed removal",
+                key=(
+                    "flowsheet_confirm_remove_inlet_"
+                    f"{selected_inlet_id}_{graph_widget_revision}"
+                ),
+            )
+            remove_inlet = lifecycle_cols[1].button(
+                "Remove feed",
+                disabled=not confirm_feed_removal,
+                use_container_width=True,
+                key=(
+                    "flowsheet_remove_inlet_"
+                    f"{selected_inlet_id}_{graph_widget_revision}"
+                ),
+            )
+            if rename_inlet or remove_inlet:
+                try:
+                    if rename_inlet:
+                        inlets = rename_material_inlet(
+                            spec["inlets"],
+                            selected_inlet_id,
+                            renamed_inlet,
+                        )
+                        lifecycle_notice = (
+                            f"Renamed feed '{selected_inlet['name']}' to "
+                            f"'{renamed_inlet.strip()}'."
+                        )
+                    else:
+                        inlets = remove_material_inlet(
+                            spec["inlets"],
+                            spec["connections"],
+                            selected_inlet_id,
+                            {PRIMARY_INLET_ID},
+                        )
+                        lifecycle_notice = (
+                            f"Removed unconnected feed "
+                            f"'{selected_inlet['name']}'."
+                        )
+                    candidate_draft = create_graph_draft(
+                        spec["units"],
+                        spec["connections"],
+                        inlets,
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(f"Feed lifecycle update failed: {edit_error}")
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        lifecycle_notice
+                        + " Run NeqSim to solve the revised graph.",
+                    )
+                    st.rerun()
+
+        st.divider()
+        st.markdown("#### Add standalone equipment")
+        st.caption(
+            "Create an unconnected native equipment node, then route any "
+            "available feed or phase outlet into it using the port controls "
+            "below. This supports branches such as separator liquid to pump."
+        )
+        standalone_cols = st.columns(2)
+        standalone_type = standalone_cols[0].selectbox(
+            "Standalone equipment type",
+            options=list(catalog),
+            format_func=lambda value: (
+                f"{catalog[value]['label']} · "
+                f"{catalog[value]['category']}"
+            ),
+            key=f"flowsheet_standalone_type_{graph_widget_revision}",
+        )
+        standalone_name = standalone_cols[1].text_input(
+            "Standalone equipment name",
+            value=f"New {catalog[standalone_type]['label']}",
+            max_chars=80,
+            key=f"flowsheet_standalone_name_{graph_widget_revision}",
+        )
+        add_standalone = st.button(
+            "Add equipment node",
+            use_container_width=True,
+            key=f"flowsheet_add_standalone_{graph_widget_revision}",
+        )
+        if add_standalone:
+            try:
+                reserved_ids = {
+                    str(inlet["id"]).strip()
+                    for inlet in spec["inlets"]
+                    if isinstance(inlet, dict)
+                }
+                reserved_names = {
+                    str(inlet["name"]).strip()
+                    for inlet in spec["inlets"]
+                    if isinstance(inlet, dict)
+                }
+                units, new_unit_id = add_catalog_unit(
+                    spec["units"],
+                    standalone_type,
+                    standalone_name,
+                    reserved_ids,
+                    reserved_names,
+                )
+                candidate_draft = create_graph_draft(
+                    units,
+                    spec["connections"],
+                    spec["inlets"],
+                )
+                candidate_case = _apply_studio_graph_draft(
+                    spec,
+                    candidate_draft,
+                )
+                _validate_case_graph(
+                    candidate_case,
+                    candidate_case["process"],
+                )
+            except ValueError as edit_error:
+                st.error(f"Equipment creation failed: {edit_error}")
+            else:
+                _record_graph_revision(
+                    spec,
+                    candidate_draft,
+                    (
+                        f"Added standalone {standalone_type} "
+                        f"'{standalone_name.strip()}' with id '{new_unit_id}'. "
+                        "Connect an available source port to its inlet before "
+                        "running NeqSim."
+                    ),
+                )
+                st.rerun()
 
         st.divider()
         st.markdown("#### Connect and disconnect ports")

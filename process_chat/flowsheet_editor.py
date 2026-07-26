@@ -663,6 +663,8 @@ def clone_material_inlet(
     inlets: list[Any],
     source_inlet_id: str,
     name: str,
+    reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Clone one compatible feed into a new independently editable inlet."""
     if not isinstance(inlets, list) or not inlets:
@@ -692,6 +694,10 @@ def clone_material_inlet(
         for inlet in copied_inlets
         if isinstance(inlet, dict)
     }
+    inlet_names.update(
+        str(reserved_name).strip().casefold()
+        for reserved_name in (reserved_names or set())
+    )
     if cleaned_name.casefold() in inlet_names:
         raise ValueError(f"Material inlet name '{cleaned_name}' is duplicated.")
 
@@ -700,6 +706,9 @@ def clone_material_inlet(
         for inlet in copied_inlets
         if isinstance(inlet, dict)
     }
+    existing_ids.update(
+        str(reserved_id).strip() for reserved_id in (reserved_ids or set())
+    )
     id_stem = _slugify(cleaned_name)
     inlet_id = id_stem
     suffix = 2
@@ -848,6 +857,7 @@ def add_catalog_unit(
     unit_type: str,
     name: str,
     reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Add one unconnected catalog unit for subsequent explicit port routing."""
     if not isinstance(units, list):
@@ -868,6 +878,10 @@ def add_catalog_unit(
         for unit in copied_units
         if isinstance(unit, dict)
     }
+    existing_names.update(
+        str(reserved_name).strip().casefold()
+        for reserved_name in (reserved_names or set())
+    )
     if cleaned_name.casefold() in existing_names:
         raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
 
