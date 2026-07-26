@@ -129,6 +129,24 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertIn("Add equipment node", button_labels)
         self.assertIn("Connect selected ports", button_labels)
 
+    def test_graph_object_name_falls_back_for_legacy_records(self):
+        graph_object_name = self._load_studio_function(
+            "_graph_object_name"
+        )
+
+        self.assertEqual(
+            graph_object_name({"id": "feed-a", "name": "Feed A"}, "feed-a"),
+            "Feed A",
+        )
+        self.assertEqual(
+            graph_object_name({"id": "feed-a"}, "feed-a"),
+            "feed-a",
+        )
+        self.assertEqual(
+            graph_object_name({"id": "feed-a", "name": " "}, "feed-a"),
+            "feed-a",
+        )
+
     def test_standalone_no_test_selection_returns_five(self):
         studio_test_path = Path(__file__).resolve()
         completed = subprocess.run(
