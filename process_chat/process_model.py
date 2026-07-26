@@ -1500,7 +1500,12 @@ class NeqSimProcessModel:
         """Capture explicit-port mass and energy closure for each unit."""
         rows: List[Dict[str, Any]] = []
         excluded_units: List[str] = []
-        control_unit_classes = {"adjuster", "calculator", "setpoint"}
+        control_unit_classes = {
+            "adjuster",
+            "calculator",
+            "recycle",
+            "setpoint",
+        }
         process_name_counts: Dict[str, int] = {}
 
         for process_index, process_system in enumerate(
