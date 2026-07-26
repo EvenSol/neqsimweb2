@@ -151,6 +151,26 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             "feed-a",
         )
 
+    def test_secondary_inlet_map_ignores_missing_and_blank_ids(self):
+        secondary_inlet_map = self._load_studio_function(
+            "_secondary_inlet_map"
+        )
+        primary = {"id": "feed-gas", "name": "Primary"}
+        secondary = {"id": "liquid-feed", "name": "Liquid feed"}
+
+        result = secondary_inlet_map(
+            [
+                primary,
+                secondary,
+                {"name": "Missing id"},
+                {"id": "   ", "name": "Blank id"},
+                None,
+            ],
+            "feed-gas",
+        )
+
+        self.assertEqual(result, {"liquid-feed": secondary})
+
     def test_standalone_no_test_selection_returns_five(self):
         studio_test_path = Path(__file__).resolve()
         completed = subprocess.run(
