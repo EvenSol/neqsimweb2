@@ -3692,6 +3692,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             "source",
             available_only=True,
         )
+        extendable_types = [
+            unit_type
+            for unit_type, definition in catalog.items()
+            if len(definition["ports"].get("material_in", [])) == 1
+        ]
         extend_cols = st.columns(3)
         if extend_source_rows:
             extend_source_index = extend_cols[0].selectbox(
@@ -3705,7 +3710,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             extend_source_index = None
         extend_type = extend_cols[1].selectbox(
             "Next equipment",
-            options=list(catalog),
+            options=extendable_types,
             format_func=lambda value: catalog[value]["label"],
             key=f"flowsheet_extend_type_{graph_widget_revision}",
         )
@@ -3765,7 +3770,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         st.caption(
             "Create an unconnected native equipment node, then route any "
             "available feed or phase outlet into it using the port controls "
-            "below. This supports branches such as separator liquid to pump."
+            "below. Add mixers here, then connect independent feeds to their "
+            "separate inlet ports. This also supports branches such as "
+            "separator liquid to pump."
         )
         standalone_cols = st.columns(2)
         standalone_type = standalone_cols[0].selectbox(
