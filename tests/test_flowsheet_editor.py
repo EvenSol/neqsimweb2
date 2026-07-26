@@ -1091,7 +1091,7 @@ class InlineInsertionTest(unittest.TestCase):
                 connections,
                 "feed-to-compressor",
                 "cooler",
-                "Feed Cooler",
+                "Feed-Cooler",
             )
         )
         self.assertEqual(new_unit_id, "feed-cooler-2")
@@ -1100,6 +1100,22 @@ class InlineInsertionTest(unittest.TestCase):
             "feed-cooler-2-to-compressor-1-2",
         )
         self.assertEqual(len(new_units), 3)
+
+    def test_insert_rejects_existing_unit_name_without_mutation(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "name .* is duplicated"):
+            insert_inline_unit_on_connection(
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "cooler",
+                "COMPRESSOR 1",
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
 
     def test_insert_reserves_unconnected_inlet_ids(self):
         new_units, _, new_unit_id = insert_inline_unit_on_connection(

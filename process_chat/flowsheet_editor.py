@@ -1801,7 +1801,13 @@ def insert_inline_unit_on_connection(
         str(reserved_id).strip() for reserved_id in (reserved_ids or set())
     )
     cleaned_name = str(unit_name).strip()
-    if cleaned_name.casefold() in _normalized_name_keys(reserved_names):
+    existing_name_keys = _normalized_name_keys(
+        unit.get("name")
+        for unit in copied_units
+        if isinstance(unit, dict)
+    )
+    existing_name_keys.update(_normalized_name_keys(reserved_names))
+    if cleaned_name.casefold() in existing_name_keys:
         raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
     new_unit = create_inline_unit_spec(
         unit_type,
