@@ -485,7 +485,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         return builder, model, history, graph_spec
 
     @staticmethod
-    def _build_palette_splitter_branches_case(flow_scale: float):
+    def _build_palette_splitter_branches_case(
+        flow_scale: float,
+        split_factor: float = 0.5,
+    ):
         inlet_specs = [
             {
                 "inlet_id": "mixed-feed",
@@ -541,6 +544,18 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             connections,
             editor_inlets,
         )
+        if split_factor != 0.5:
+            units = update_inline_unit_properties(
+                units,
+                splitter_id,
+                {"split_factor": split_factor},
+            )
+            history = record_graph_history(
+                history,
+                units,
+                connections,
+                editor_inlets,
+            )
         units, connections, pump_id, _ = extend_material_path(
             editor_inlets,
             units,
@@ -596,7 +611,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         graph_spec = json.loads(
             json.dumps(
                 {
-                    "name": "Palette-built equal splitter benchmark",
+                    "name": "Palette-built editable splitter benchmark",
                     "units": units,
                     "connections": connections,
                 },
@@ -1231,7 +1246,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     for unit in persisted["units"]
                     if unit["id"] == "product-split"
                 )
-                self.assertEqual(splitter["params"], {})
+                self.assertEqual(
+                    splitter["params"],
+                    {"split_factor": 0.5},
+                )
                 history, pump_only_draft = undo_graph_history(history)
                 self.assertEqual(
                     [unit["id"] for unit in pump_only_draft["units"]],
@@ -1247,6 +1265,123 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     "native palette equal-split benchmark:",
                     f"scale={flow_scale:.2f}",
                     f"feed={expected_flow:.1f} kg/hr",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+
+    def test_palette_edited_unequal_split_round_trip_and_close(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model, history, graph_spec = (
+                    self._build_palette_splitter_branches_case(
+                        flow_scale,
+                        split_factor=0.3,
+                    )
+                )
+                result = model.run(timeout_ms=180_000)
+                expected_flow = 20_000.0 * flow_scale
+                product_flows = sorted(
+                    row["mass_flow_kg_hr"]
+                    for row in result.raw["material_boundaries"]
+                    if row["role"] == "product"
+                )
+                self.assertEqual(len(product_flows), 2)
+                self.assertAlmostEqual(
+                    product_flows[0],
+                    expected_flow * 0.3,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertAlmostEqual(
+                    product_flows[1],
+                    expected_flow * 0.7,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                for constraint_name in (
+                    "mass_balance",
+                    "component_balance",
+                    "energy_balance",
+                ):
+                    constraint = next(
+                        constraint
+                        for constraint in result.constraints
+                        if constraint.name == constraint_name
+                    )
+                    self.assertEqual(constraint.status, "OK")
+                self.assertIn(
+                    "Configured graph splitter: product-split "
+                    "(out_0=0.300000, out_1=0.700000)",
+                    builder.build_log,
+                )
+
+                persisted = json.loads(
+                    json.dumps(graph_spec, allow_nan=False)
+                )
+                splitter = next(
+                    unit
+                    for unit in persisted["units"]
+                    if unit["id"] == "product-split"
+                )
+                self.assertEqual(
+                    splitter["params"],
+                    {"split_factor": 0.3},
+                )
+
+                history, pump_only_draft = undo_graph_history(history)
+                self.assertEqual(
+                    [unit["id"] for unit in pump_only_draft["units"]],
+                    ["product-split", "branch-pump"],
+                )
+                history, split_only_draft = undo_graph_history(history)
+                self.assertEqual(
+                    [unit["id"] for unit in split_only_draft["units"]],
+                    ["product-split"],
+                )
+                self.assertEqual(
+                    split_only_draft["units"][0]["params"],
+                    {"split_factor": 0.3},
+                )
+                history, default_draft = undo_graph_history(history)
+                self.assertEqual(
+                    default_draft["units"][0]["params"],
+                    {"split_factor": 0.5},
+                )
+                history, edited_draft = redo_graph_history(history)
+                self.assertEqual(
+                    edited_draft["units"][0]["params"],
+                    {"split_factor": 0.3},
+                )
+                history, _ = redo_graph_history(history)
+                history, final_draft = redo_graph_history(history)
+                self.assertEqual(final_draft["units"], graph_spec["units"])
+                self.assertEqual(
+                    final_draft["connections"],
+                    graph_spec["connections"],
+                )
+                print(
+                    "native palette unequal-split benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"feed={expected_flow:.1f} kg/hr",
+                    f"branches={product_flows[0]:.1f}/"
+                    f"{product_flows[1]:.1f} kg/hr",
                     f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
                     "components="
                     f"{result.kpis['component_balance_max_pct'].value:.3e}%",
