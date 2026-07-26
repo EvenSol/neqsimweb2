@@ -460,6 +460,30 @@ class StarterUnitProjectionTest(unittest.TestCase):
                 ],
             )
 
+    def test_rejects_names_that_shadow_omitted_starter_units(self):
+        replacement = create_inline_unit_spec(
+            "valve",
+            "stage 1 compressor",
+            {"stage-1-compressor", "intercooler"},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "Graph unit name .* conflicts with a starter-template",
+        ):
+            validate_starter_unit_projection(
+                [replacement],
+                self.expected,
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "Graph inlet name .* conflicts with a starter-template",
+        ):
+            validate_starter_unit_projection(
+                [],
+                self.expected,
+                [{"id": "feed", "name": "INTERCOOLER"}],
+            )
+
 
 class InletConditionMetadataTest(unittest.TestCase):
     """Validate explicit-unit metadata for reusable material inlets."""

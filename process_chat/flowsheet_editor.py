@@ -1050,22 +1050,42 @@ def validate_starter_unit_projection(
         indexed_units[unit_id] = unit
 
     expected_ids: set[str] = set()
+    expected_name_keys: set[str] = set()
     for index, expected_unit in enumerate(expected_units):
         if not isinstance(expected_unit, dict):
             raise ValueError(f"Starter unit {index} must be an object.")
         expected_unit_id = str(expected_unit.get("id", "")).strip()
+        expected_unit_name = str(expected_unit.get("name", "")).strip()
         if not expected_unit_id:
             raise ValueError(f"Starter unit {index} requires an id.")
+        if not expected_unit_name:
+            raise ValueError(f"Starter unit {index} requires a name.")
         if expected_unit_id in expected_ids:
             raise ValueError(
                 f"Starter unit id '{expected_unit_id}' is duplicated."
             )
+        expected_name_key = expected_unit_name.casefold()
+        if expected_name_key in expected_name_keys:
+            raise ValueError(
+                f"Starter unit name '{expected_unit_name}' is duplicated."
+            )
         expected_ids.add(expected_unit_id)
+        expected_name_keys.add(expected_name_key)
         retained_unit = indexed_units.get(expected_unit_id)
         if retained_unit is not None and retained_unit != expected_unit:
             raise ValueError(
                 "Graph units conflict with the starter-template projection at "
                 f"'{expected_unit_id}'."
+            )
+
+    for unit_id, unit in indexed_units.items():
+        if unit_id in expected_ids:
+            continue
+        unit_name = str(unit.get("name", "")).strip()
+        if unit_name.casefold() in expected_name_keys:
+            raise ValueError(
+                f"Graph unit name '{unit_name}' conflicts with a "
+                "starter-template unit identity."
             )
 
     if inlets is not None:
@@ -1080,6 +1100,12 @@ def validate_starter_unit_projection(
             if inlet_id in expected_ids:
                 raise ValueError(
                     f"Graph inlet id '{inlet_id}' conflicts with a "
+                    "starter-template unit identity."
+                )
+            inlet_name = str(inlet.get("name", "")).strip()
+            if inlet_name.casefold() in expected_name_keys:
+                raise ValueError(
+                    f"Graph inlet name '{inlet_name}' conflicts with a "
                     "starter-template unit identity."
                 )
 

@@ -5011,7 +5011,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         spec["units"],
                         selected_unit_id,
                         renamed_unit_name,
-                        _graph_name_set(spec["inlets"]),
+                        protected_unit_names.union(
+                            _graph_name_set(spec["inlets"])
+                        ),
                     )
                     candidate_draft = create_graph_draft(
                         units,
