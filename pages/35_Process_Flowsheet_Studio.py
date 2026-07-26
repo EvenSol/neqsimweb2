@@ -3800,8 +3800,10 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 "Confirm removal",
                 key=f"flowsheet_confirm_remove_{selected_unit_id}",
                 help=(
-                    "Removal reconnects the unit's single incoming and outgoing "
-                    "material path. Branches and energy links are protected."
+                    "Removal deletes an unconnected node, releases the source "
+                    "feeding a terminal node, or reconnects one simple incoming "
+                    "and outgoing material path. Branches and energy links are "
+                    "protected."
                 ),
             )
             remove_unit = lifecycle_cols[1].button(
@@ -3906,9 +3908,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         spec,
                         candidate_draft,
                         (
-                            f"Removed '{selected_unit['name']}' and reconnected "
-                            "its material path. Run NeqSim to solve the "
-                            "updated graph."
+                            f"Removed '{selected_unit['name']}' and updated "
+                            "its explicit material routes. Run NeqSim to solve "
+                            "the updated graph."
                         ),
                     )
                     st.rerun()

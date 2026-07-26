@@ -1538,12 +1538,13 @@ def remove_inline_unit(
     connections: list[Any],
     unit_id: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Remove one inline catalog unit and reconnect its material path.
+    """Remove one added catalog unit and update its material path safely.
 
-    Removal is deliberately limited to a unit with exactly one ``in`` material
-    connection and one ``out`` material connection. Energy links, branches, or
-    any other references must be removed explicitly in a later graph editor.
-    Inputs are never mutated.
+    An unconnected unit is deleted directly. A terminal unit with one incoming
+    ``in`` connection is deleted with that connection. A unit with one incoming
+    ``in`` and one outgoing ``out`` connection is removed by reconnecting the
+    surrounding path. Energy links, branches, or any other references must be
+    removed explicitly. Inputs are never mutated.
     """
     if not isinstance(units, list):
         raise ValueError("Graph units must be an array.")
@@ -1611,10 +1612,18 @@ def remove_inline_unit(
             + ", ".join(unsupported_references)
             + "."
         )
+    if not incoming_indices and not outgoing_indices:
+        copied_units.pop(unit_matches[0])
+        return copied_units, copied_connections
+    if len(incoming_indices) == 1 and not outgoing_indices:
+        copied_connections.pop(incoming_indices[0])
+        copied_units.pop(unit_matches[0])
+        return copied_units, copied_connections
     if len(incoming_indices) != 1 or len(outgoing_indices) != 1:
         raise ValueError(
-            f"Inline unit '{cleaned_unit_id}' requires exactly one incoming "
-            "and one outgoing material connection."
+            f"Inline unit '{cleaned_unit_id}' requires no connections, one "
+            "terminal incoming connection, or exactly one incoming and one "
+            "outgoing material connection."
         )
 
     incoming_index = incoming_indices[0]

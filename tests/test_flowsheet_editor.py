@@ -972,6 +972,43 @@ class InlineUnitLifecycleTest(unittest.TestCase):
             any(unit["id"] == inserted_id for unit in units)
         )
 
+    def test_remove_unconnected_and_terminal_standalone_units(self):
+        units, pump_id = add_catalog_unit(
+            self.units,
+            "pump",
+            "Condensate pump",
+        )
+        unconnected_units, unconnected_connections = remove_inline_unit(
+            units,
+            self.connections,
+            pump_id,
+        )
+        self.assertEqual(unconnected_units, self.units)
+        self.assertEqual(unconnected_connections, self.connections)
+
+        terminal_connection = {
+            "id": "cooler-to-pump",
+            "type": "material",
+            "source": {
+                "kind": "unit",
+                "id": "product-cooler",
+                "port": "out",
+            },
+            "target": {
+                "kind": "unit",
+                "id": pump_id,
+                "port": "in",
+            },
+        }
+        terminal_units, terminal_connections = remove_inline_unit(
+            units,
+            [*self.connections, terminal_connection],
+            pump_id,
+        )
+        self.assertEqual(terminal_units, self.units)
+        self.assertEqual(terminal_connections, self.connections)
+        self.assertEqual(len(units), len(self.units) + 1)
+
     def test_remove_rejects_branches_and_nonmaterial_references(self):
         units, connections, inserted_id = self._insert_valve()
         branch = {
@@ -1003,7 +1040,7 @@ class InlineUnitLifecycleTest(unittest.TestCase):
             },
         }
         for extra_connection, message in (
-            (branch, "requires exactly one incoming"),
+            (branch, "requires no connections"),
             (energy_link, "has unsupported connections"),
         ):
             with self.subTest(message=message):
