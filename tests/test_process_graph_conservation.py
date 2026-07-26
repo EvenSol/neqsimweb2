@@ -11,6 +11,7 @@ from process_chat.flowsheet_editor import (
     connect_graph_ports,
     create_graph_history,
     extend_material_path,
+    insert_mixer_on_connection,
     record_graph_history,
     redo_graph_history,
     undo_graph_history,
@@ -485,6 +486,156 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         return builder, model, history, graph_spec
 
     @staticmethod
+    def _build_reorganized_original_process(flow_scale: float):
+        inlet_specs = [
+            {
+                "inlet_id": "main-feed",
+                "name": "main feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 30.0,
+                    "total_flow": 12_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            },
+            {
+                "inlet_id": "satellite-feed",
+                "name": "satellite feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.75,
+                        "ethane": 0.25,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 35.0,
+                    "pressure_bara": 30.0,
+                    "total_flow": 8_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            },
+        ]
+        editor_inlets = [
+            {
+                "id": inlet["inlet_id"],
+                "name": inlet["name"],
+                **inlet["fluid_spec"],
+            }
+            for inlet in inlet_specs
+        ]
+        units, compressor_id = add_catalog_unit(
+            [],
+            "compressor",
+            "export compressor",
+            {"main-feed", "satellite-feed"},
+            {"main feed", "satellite feed"},
+        )
+        units = update_inline_unit_properties(
+            units,
+            compressor_id,
+            {
+                "outlet_pressure_bara": 60.0,
+                "isentropic_efficiency": 0.78,
+            },
+        )
+        connections, feed_connection_id = connect_graph_ports(
+            editor_inlets,
+            units,
+            [],
+            "material",
+            {"kind": "inlet", "id": "main-feed", "port": "out"},
+            {"kind": "unit", "id": compressor_id, "port": "in"},
+        )
+        units, connections, cooler_id, _ = extend_material_path(
+            editor_inlets,
+            units,
+            connections,
+            {"kind": "unit", "id": compressor_id, "port": "out"},
+            "cooler",
+            "export cooler",
+        )
+        units = update_inline_unit_properties(
+            units,
+            cooler_id,
+            {
+                "outlet_temperature_C": 35.0,
+                "pressure_drop_bar": 0.5,
+            },
+        )
+        original_units = json.loads(json.dumps(units, allow_nan=False))
+        original_connections = json.loads(
+            json.dumps(connections, allow_nan=False)
+        )
+        history = create_graph_history(
+            original_units,
+            original_connections,
+            editor_inlets,
+        )
+        units, connections, mixer_id, _ = insert_mixer_on_connection(
+            editor_inlets,
+            units,
+            connections,
+            feed_connection_id,
+            "feed mixer",
+        )
+        connections, _ = connect_graph_ports(
+            editor_inlets,
+            units,
+            connections,
+            "material",
+            {
+                "kind": "inlet",
+                "id": "satellite-feed",
+                "port": "out",
+            },
+            {"kind": "unit", "id": mixer_id, "port": "in_1"},
+        )
+        history = record_graph_history(
+            history,
+            units,
+            connections,
+            editor_inlets,
+        )
+        graph_spec = json.loads(
+            json.dumps(
+                {
+                    "name": "Reorganized original compression process",
+                    "units": units,
+                    "connections": connections,
+                },
+                allow_nan=False,
+            )
+        )
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            [
+                "main-feed",
+                "satellite-feed",
+                mixer_id,
+                compressor_id,
+                cooler_id,
+            ],
+        )
+        return (
+            builder,
+            model,
+            history,
+            graph_spec,
+            original_units,
+            original_connections,
+        )
+
+    @staticmethod
     def _build_palette_splitter_branches_case(
         flow_scale: float,
         split_factor: float = 0.5,
@@ -719,6 +870,75 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "(out_0=0.500000, out_1=0.500000)",
             builder.build_log,
         )
+
+    def test_native_reorganized_original_process_closes_at_nearby_point(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                (
+                    builder,
+                    model,
+                    history,
+                    graph_spec,
+                    original_units,
+                    original_connections,
+                ) = self._build_reorganized_original_process(flow_scale)
+                result = model.run(timeout_ms=180_000)
+                expected_flow = 20_000.0 * flow_scale
+                product_flows = [
+                    row["mass_flow_kg_hr"]
+                    for row in result.raw["material_boundaries"]
+                    if row["role"] == "product"
+                ]
+
+                self.assertEqual(len(product_flows), 1)
+                self.assertAlmostEqual(
+                    product_flows[0],
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertIn(
+                    "Acyclic graph built and converged successfully.",
+                    builder.build_log,
+                )
+                persisted = json.loads(
+                    json.dumps(graph_spec, allow_nan=False)
+                )
+                self.assertEqual(persisted, graph_spec)
+
+                history, restored = undo_graph_history(history)
+                self.assertEqual(restored["units"], original_units)
+                self.assertEqual(
+                    restored["connections"],
+                    original_connections,
+                )
+                history, redone = redo_graph_history(history)
+                self.assertEqual(redone["units"], graph_spec["units"])
+                self.assertEqual(
+                    redone["connections"],
+                    graph_spec["connections"],
+                )
+                print(
+                    "native intuitive reorganization benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"feed={expected_flow:.1f} kg/hr",
+                    f"product={product_flows[0]:.1f} kg/hr",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
 
     def test_native_two_inlet_mass_energy_and_nearby_point(self):
         for flow_scale in (1.0, 1.05):
