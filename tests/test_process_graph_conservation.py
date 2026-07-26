@@ -488,6 +488,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
     def _build_palette_splitter_branches_case(
         flow_scale: float,
         split_factor: float = 0.5,
+        persisted_split_params: dict | None = None,
     ):
         inlet_specs = [
             {
@@ -556,6 +557,11 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 connections,
                 editor_inlets,
             )
+        if persisted_split_params is not None:
+            splitter = next(
+                unit for unit in units if unit["id"] == splitter_id
+            )
+            splitter["params"] = dict(persisted_split_params)
         units, connections, pump_id, _ = extend_material_path(
             editor_inlets,
             units,
@@ -650,6 +656,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ({}, [0.5, 0.5]),
             ({"split_factor": 0.2}, [0.2, 0.8]),
             ({"split_factors": [3.0, 1.0]}, [0.75, 0.25]),
+            ({"split_factors": [1.0e308, 1.0e308]}, [0.5, 0.5]),
         ):
             with self.subTest(params=params):
                 splitter = RecordingSplitter()
@@ -681,6 +688,37 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                         "product-split",
                         unit_spec(params, outputs),
                     )
+
+    def test_native_imported_extreme_split_weights_close_equally(self):
+        builder, model, _, _ = (
+            self._build_palette_splitter_branches_case(
+                1.0,
+                persisted_split_params={
+                    "split_factors": [1.0e308, 1.0e308],
+                },
+            )
+        )
+        result = model.run(timeout_ms=180_000)
+        product_flows = sorted(
+            row["mass_flow_kg_hr"]
+            for row in result.raw["material_boundaries"]
+            if row["role"] == "product"
+        )
+
+        self.assertEqual(len(product_flows), 2)
+        self.assertAlmostEqual(product_flows[0], 10_000.0, delta=0.02)
+        self.assertAlmostEqual(product_flows[1], 10_000.0, delta=0.02)
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+        self.assertIn(
+            "Configured graph splitter: product-split "
+            "(out_0=0.500000, out_1=0.500000)",
+            builder.build_log,
+        )
 
     def test_native_two_inlet_mass_energy_and_nearby_point(self):
         for flow_scale in (1.0, 1.05):
