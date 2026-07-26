@@ -1359,6 +1359,27 @@ class GraphDraftLifecycleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "both an inlet and a unit"):
             apply_graph_draft(case_spec, legacy_draft)
 
+    def test_null_draft_inlets_cannot_bypass_retained_inlet_validation(self):
+        malformed_draft = create_graph_draft(
+            self.units,
+            self.connections,
+        )
+        malformed_draft["inlets"] = None
+        case_spec = {
+            "schema_version": 3,
+            "inlets": [
+                {"id": "product-cooler", "name": "Conflicting feed"}
+            ],
+            "units": [],
+            "connections": [],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Graph draft inlets must be an array",
+        ):
+            apply_graph_draft(case_spec, malformed_draft)
+
     def test_material_connection_rows_ignore_energy_links(self):
         rows = material_connection_rows(
             [
