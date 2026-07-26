@@ -121,6 +121,14 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             callable(solver_diagnostics.aggregate_energy_balance)
         )
 
+    def test_page_exposes_feed_and_standalone_equipment_creation(self):
+        app = self._run_studio()
+        button_labels = {button.label for button in app.button}
+
+        self.assertIn("Add feed stream", button_labels)
+        self.assertIn("Add equipment node", button_labels)
+        self.assertIn("Connect selected ports", button_labels)
+
     def test_standalone_no_test_selection_returns_five(self):
         studio_test_path = Path(__file__).resolve()
         completed = subprocess.run(

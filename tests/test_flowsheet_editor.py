@@ -95,6 +95,7 @@ class UnitCatalogTest(unittest.TestCase):
             "pump",
             "Condensate Pump",
             {"condensate-pump"},
+            {"Feed"},
         )
 
         self.assertEqual(unit_id, "condensate-pump-2")
@@ -117,6 +118,13 @@ class UnitCatalogTest(unittest.TestCase):
             add_catalog_unit(units, "pump", " condensate pump ")
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             add_catalog_unit(units, "column", "Stabilizer")
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            add_catalog_unit(
+                units,
+                "pump",
+                "Feed",
+                reserved_names={"feed"},
+            )
         self.assertEqual(len(units), 1)
 
     def test_property_metadata_has_explicit_units_and_valid_defaults(self):
@@ -599,6 +607,7 @@ class MaterialInletLifecycleTest(unittest.TestCase):
             with_first,
             "feed",
             "Tie in Feed",
+            {"tie-in-feed"},
         )
 
         self.assertEqual(first_id, "tie-in-feed")
@@ -655,6 +664,13 @@ class MaterialInletLifecycleTest(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     clone_material_inlet(self.inlets, source_id, name)
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            clone_material_inlet(
+                self.inlets,
+                "feed",
+                "Pump",
+                reserved_names={"pump"},
+            )
 
         with self.assertRaisesRegex(ValueError, "at least one"):
             remove_material_inlet(self.inlets, [], "feed")
@@ -1695,6 +1711,61 @@ class GraphPortConnectionTest(unittest.TestCase):
             "energy-utility-duty-to-heater-duty",
         )
         self.assertEqual(updated[-1]["type"], "energy")
+
+    def test_connects_separator_liquid_to_new_standalone_pump(self):
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet separator",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["gas", "liquid"],
+                },
+            }
+        ]
+        units, pump_id = add_catalog_unit(
+            units,
+            "pump",
+            "Condensate pump",
+            {"feed"},
+        )
+        connections = [
+            {
+                "id": "feed-to-separator",
+                "type": "material",
+                "source": {"kind": "inlet", "id": "feed", "port": "out"},
+                "target": {"kind": "unit", "id": "separator", "port": "in"},
+            }
+        ]
+
+        updated, connection_id = connect_graph_ports(
+            [{"id": "feed", "name": "Feed"}],
+            units,
+            connections,
+            "material",
+            {"kind": "unit", "id": "separator", "port": "liquid"},
+            {"kind": "unit", "id": pump_id, "port": "in"},
+        )
+
+        self.assertEqual(
+            connection_id,
+            "material-separator-liquid-to-condensate-pump-in",
+        )
+        self.assertEqual(updated[-1]["source"]["port"], "liquid")
+        self.assertEqual(updated[-1]["target"]["id"], pump_id)
+        available_sources = graph_port_rows(
+            [{"id": "feed", "name": "Feed"}],
+            units,
+            updated,
+            "material",
+            "source",
+            available_only=True,
+        )
+        self.assertNotIn(
+            ("separator", "liquid"),
+            {(row["id"], row["port"]) for row in available_sources},
+        )
 
     def test_rejects_occupied_undeclared_and_self_connections(self):
         invalid_cases = (
