@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import math
 import unittest
 
+from process_chat.flowsheet_editor import (
+    create_graph_history,
+    extend_material_path,
+    record_graph_history,
+    redo_graph_history,
+    undo_graph_history,
+    update_inline_unit_properties,
+)
 from process_chat.process_builder import ProcessBuilder
 from process_chat.solver_diagnostics import aggregate_energy_balance
 
@@ -227,71 +236,117 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 },
             }
         ]
-        graph_spec = {
-            "name": "Separator liquid routing benchmark",
-            "units": [
-                {
+        editor_inlets = [
+            {
+                "id": inlet["inlet_id"],
+                "name": inlet["name"],
+                **inlet["fluid_spec"],
+            }
+            for inlet in inlet_specs
+        ]
+        units = [
+            {
+                "id": "inlet-separator",
+                "name": "inlet separator",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["gas", "liquid"],
+                },
+                "params": {},
+            }
+        ]
+        connections = [
+            {
+                "id": "well-fluid-to-separator",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "well-fluid",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
                     "id": "inlet-separator",
-                    "name": "inlet separator",
-                    "type": "separator",
-                    "ports": {
-                        "material_in": ["in"],
-                        "material_out": ["gas", "liquid"],
-                    },
-                    "params": {},
+                    "port": "in",
                 },
+            }
+        ]
+        history = create_graph_history(units, connections, editor_inlets)
+        units, connections, pump_id, _ = extend_material_path(
+            editor_inlets,
+            units,
+            connections,
+            {
+                "kind": "unit",
+                "id": "inlet-separator",
+                "port": "liquid",
+            },
+            "pump",
+            "condensate pump",
+        )
+        units = update_inline_unit_properties(
+            units,
+            pump_id,
+            {
+                "outlet_pressure_bara": 40.0,
+                "efficiency": 0.75,
+            },
+        )
+        history = record_graph_history(
+            history,
+            units,
+            connections,
+            editor_inlets,
+        )
+        units, connections, heater_id, _ = extend_material_path(
+            editor_inlets,
+            units,
+            connections,
+            {
+                "kind": "unit",
+                "id": pump_id,
+                "port": "out",
+            },
+            "heater",
+            "condensate heater",
+        )
+        units = update_inline_unit_properties(
+            units,
+            heater_id,
+            {
+                "outlet_temperature_C": 60.0,
+                "pressure_drop_bar": 0.5,
+            },
+        )
+        history = record_graph_history(
+            history,
+            units,
+            connections,
+            editor_inlets,
+        )
+        graph_spec = json.loads(
+            json.dumps(
                 {
-                    "id": "condensate-pump",
-                    "name": "condensate pump",
-                    "type": "pump",
-                    "ports": {
-                        "material_in": ["in"],
-                        "material_out": ["out"],
-                    },
-                    "params": {
-                        "outlet_pressure_bara": 40.0,
-                        "efficiency": 0.75,
-                    },
+                    "name": "Separator liquid routing benchmark",
+                    "units": units,
+                    "connections": connections,
                 },
-            ],
-            "connections": [
-                {
-                    "id": "well-fluid-to-separator",
-                    "type": "material",
-                    "source": {
-                        "kind": "inlet",
-                        "id": "well-fluid",
-                        "port": "out",
-                    },
-                    "target": {
-                        "kind": "unit",
-                        "id": "inlet-separator",
-                        "port": "in",
-                    },
-                },
-                {
-                    "id": "separator-liquid-to-pump",
-                    "type": "material",
-                    "source": {
-                        "kind": "unit",
-                        "id": "inlet-separator",
-                        "port": "liquid",
-                    },
-                    "target": {
-                        "kind": "unit",
-                        "id": "condensate-pump",
-                        "port": "in",
-                    },
-                },
-            ],
-        }
+                allow_nan=False,
+            )
+        )
         builder = ProcessBuilder()
         model = builder.build_acyclic_graph(
             graph_spec,
             inlet_specs,
-            ["well-fluid", "inlet-separator", "condensate-pump"],
+            [
+                "well-fluid",
+                "inlet-separator",
+                "condensate-pump",
+                "condensate-heater",
+            ],
         )
-        return builder, model
+        return builder, model, history
 
     def test_native_two_inlet_mass_energy_and_nearby_point(self):
         for flow_scale in (1.0, 1.05):
@@ -552,16 +607,19 @@ class MultiInletMixerConservationTest(unittest.TestCase):
     def test_native_separator_liquid_routes_to_pump_and_closes(self):
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
-                builder, model = self._build_separator_liquid_pump_case(
-                    flow_scale
+                builder, model, history = (
+                    self._build_separator_liquid_pump_case(
+                        flow_scale
+                    )
                 )
                 result = model.run(timeout_ms=180_000)
                 units = list(model.get_process().getUnitOperations())
                 names = [str(unit.getName()) for unit in units]
 
                 self.assertIn("condensate pump", names)
+                self.assertIn("condensate heater", names)
                 self.assertIn("inlet separator [gas] product", names)
-                self.assertIn("condensate pump [out] product", names)
+                self.assertIn("condensate heater [out] product", names)
                 pump = next(
                     unit
                     for unit in units
@@ -574,6 +632,21 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 self.assertAlmostEqual(
                     float(pump.getOutletStream().getPressure("bara")),
                     40.0,
+                    delta=0.05,
+                )
+                heater = next(
+                    unit
+                    for unit in units
+                    if str(unit.getName()) == "condensate heater"
+                )
+                self.assertAlmostEqual(
+                    float(heater.getOutletStream().getTemperature("C")),
+                    60.0,
+                    delta=0.05,
+                )
+                self.assertAlmostEqual(
+                    float(heater.getOutletStream().getPressure("bara")),
+                    39.5,
                     delta=0.05,
                 )
 
@@ -606,15 +679,44 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     if constraint.name == "component_balance"
                 )
                 self.assertEqual(component_constraint.status, "OK")
+                energy_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "energy_balance"
+                )
+                self.assertEqual(energy_constraint.status, "OK")
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
                 self.assertIn(
                     "Added graph unit: condensate-pump (pump)",
                     builder.build_log,
                 )
+                self.assertIn(
+                    "Added graph unit: condensate-heater (heater)",
+                    builder.build_log,
+                )
+                history, pump_draft = undo_graph_history(history)
+                self.assertEqual(
+                    [unit["id"] for unit in pump_draft["units"]],
+                    ["inlet-separator", "condensate-pump"],
+                )
+                history, final_draft = redo_graph_history(history)
+                self.assertEqual(
+                    [unit["id"] for unit in final_draft["units"]],
+                    [
+                        "inlet-separator",
+                        "condensate-pump",
+                        "condensate-heater",
+                    ],
+                )
                 print(
-                    "native separator-liquid benchmark:",
+                    "native separator-liquid chain benchmark:",
                     f"scale={flow_scale:.2f}",
                     f"feed={expected_flow:.1f} kg/hr",
                     f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                     f"components={component_constraint.status.lower()}",
                 )
 
