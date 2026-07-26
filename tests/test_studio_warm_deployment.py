@@ -146,4 +146,11 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    program = unittest.main(exit=False)
+    try:
+        import jpype
+
+        if jpype.isJVMStarted():
+            jpype.shutdownJVM()
+    finally:
+        raise SystemExit(not program.result.wasSuccessful())
