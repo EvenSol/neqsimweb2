@@ -1774,6 +1774,8 @@ def apply_graph_draft(
         raise ValueError(
             "Unsupported graph draft schema version. Expected version 1."
         )
+    if "inlets" in draft and draft["inlets"] is None:
+        raise ValueError("Graph draft inlets must be an array.")
     retained_or_draft_inlets = (
         draft.get("inlets")
         if "inlets" in draft
