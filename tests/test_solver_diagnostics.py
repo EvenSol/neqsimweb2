@@ -797,6 +797,37 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
                 )
             )
 
+    def test_rejects_booleans_in_numeric_closure_fields(self):
+        numeric_fields = (
+            "inlet_mass_flow_kg_hr",
+            "outlet_mass_flow_kg_hr",
+            "mass_residual_kg_hr",
+            "mass_imbalance_pct",
+            "inlet_enthalpy_kW",
+            "outlet_enthalpy_kW",
+            "external_energy_transfer_kW",
+            "energy_residual_kW",
+            "energy_imbalance_pct",
+        )
+        for field_name in numeric_fields:
+            with self.subTest(field_name=field_name):
+                row = self._row()
+                row[field_name] = True
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"field '{field_name}' must be numeric",
+                ):
+                    unit_balance_rows(
+                        self._result(
+                            {
+                                "applicable": True,
+                                "coverage_complete": True,
+                                "rows": [row],
+                                "excluded_units": [],
+                            }
+                        )
+                    )
+
     def test_native_closure_and_nearby_operating_points(self):
         benchmark = (
             graph_conservation.MultiInletMixerConservationTest
