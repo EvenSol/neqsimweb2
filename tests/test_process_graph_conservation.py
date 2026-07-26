@@ -616,6 +616,57 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         return builder, model, history, graph_spec
 
+    def test_splitter_defaults_preserve_explicit_legacy_settings(self):
+        from neqsim import jneqsim as _jneqsim  # noqa: F401
+
+        class RecordingSplitter:
+            def setSplitFactors(self, values):
+                self.values = [float(value) for value in values]
+
+        def unit_spec(params, outputs=None):
+            return {
+                "ports": {
+                    "material_out": outputs or ["out_0", "out_1"],
+                },
+                "params": params,
+            }
+
+        for params, expected in (
+            ({}, [0.5, 0.5]),
+            ({"split_factor": 0.2}, [0.2, 0.8]),
+            ({"split_factors": [3.0, 1.0]}, [0.75, 0.25]),
+        ):
+            with self.subTest(params=params):
+                splitter = RecordingSplitter()
+                actual = ProcessBuilder._configure_graph_splitter(
+                    splitter,
+                    "product-split",
+                    unit_spec(params),
+                )
+                self.assertEqual(actual, expected)
+                self.assertEqual(splitter.values, expected)
+
+        for params, message in (
+            ({"split_factors": None}, "requires a split_factors array"),
+            ({"split_factor": True}, "split_factor must be numeric"),
+            (
+                {"split_factor": 0.2},
+                "legacy split_factor requires exactly two",
+            ),
+        ):
+            with self.subTest(params=params, message=message):
+                outputs = (
+                    ["out_0", "out_1", "out_2"]
+                    if "exactly two" in message
+                    else None
+                )
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._configure_graph_splitter(
+                        RecordingSplitter(),
+                        "product-split",
+                        unit_spec(params, outputs),
+                    )
+
     def test_native_two_inlet_mass_energy_and_nearby_point(self):
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
