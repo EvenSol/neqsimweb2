@@ -3295,6 +3295,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         ).encode("utf-8")
     ).hexdigest()[:12]
     protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
+    protected_unit_names = _graph_name_set(
+        _build_template_graph(spec["process"])[0]
+    )
     added_units = [
         unit
         for unit in spec["units"]
@@ -4095,12 +4098,17 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     source_inlet_id,
                     new_feed_name,
                     {
-                        str(unit.get("id", "")).strip()
-                        for unit in spec["units"]
-                        if isinstance(unit, dict)
-                        and str(unit.get("id", "")).strip()
+                        *protected_unit_ids,
+                        *(
+                            str(unit.get("id", "")).strip()
+                            for unit in spec["units"]
+                            if isinstance(unit, dict)
+                            and str(unit.get("id", "")).strip()
+                        ),
                     },
-                    _graph_name_set(spec["units"]).union(
+                    protected_unit_names.union(
+                        _graph_name_set(spec["units"])
+                    ).union(
                         _terminal_material_stream_names(
                             spec["units"],
                             spec["connections"],
@@ -4327,7 +4335,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["inlets"],
                             selected_inlet_id,
                             renamed_inlet,
-                            _graph_name_set(spec["units"]).union(
+                            protected_unit_names.union(
+                                _graph_name_set(spec["units"])
+                            ).union(
                                 _terminal_material_stream_names(
                                     spec["units"],
                                     spec["connections"],

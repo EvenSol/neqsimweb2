@@ -860,6 +860,32 @@ class MaterialInletLifecycleTest(unittest.TestCase):
                 {"condensate pump"},
             )
 
+    def test_clone_and_rename_reserve_omitted_starter_identities(self):
+        inlets, inlet_id = clone_material_inlet(
+            self.inlets,
+            "feed",
+            "Compressor-Stage-1",
+            {"compressor-stage-1"},
+            {"Compressor Stage 1"},
+        )
+
+        self.assertEqual(inlet_id, "compressor-stage-1-2")
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            clone_material_inlet(
+                self.inlets,
+                "feed",
+                "Compressor Stage 1",
+                {"compressor-stage-1"},
+                {"Compressor Stage 1"},
+            )
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            rename_material_inlet(
+                inlets,
+                inlet_id,
+                "Compressor Stage 1",
+                {"Compressor Stage 1"},
+            )
+
     def test_null_legacy_feed_names_do_not_create_false_collisions(self):
         legacy_inlet = {
             **copy.deepcopy(self.inlets[0]),
