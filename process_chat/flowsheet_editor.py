@@ -1699,6 +1699,121 @@ def insert_inline_unit_on_connection(
     return copied_units, copied_connections, new_unit["id"]
 
 
+def insert_mixer_on_connection(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    connection_id: str,
+    unit_name: str,
+    reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str]:
+    """Insert a mixer without disconnecting the selected downstream process.
+
+    The selected material source is connected to ``in_0`` and the mixer
+    outlet is connected to the original target in one validated transaction.
+    ``in_1`` remains available for another feed or process outlet.
+    """
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+    copied_connections = copy.deepcopy(connections)
+    cleaned_connection_id = str(connection_id).strip()
+    selected_index = _connection_index(
+        copied_connections,
+        cleaned_connection_id,
+    )
+    selected_connection = copied_connections[selected_index]
+    if str(selected_connection["type"]).strip().lower() != "material":
+        raise ValueError("A mixer can only be inserted in a material path.")
+    inventory = _graph_port_inventory(inlets, units, copied_connections)
+    copied_connections = inventory["connections"]
+    selected_connection = copied_connections[selected_index]
+
+    copied_units, mixer_id = add_catalog_unit(
+        units,
+        "mixer",
+        unit_name,
+        {
+            str(inlet.get("id", "")).strip()
+            for inlet in inlets
+            if isinstance(inlet, dict) and str(inlet.get("id", "")).strip()
+        }.union(
+            str(reserved_id).strip()
+            for reserved_id in (reserved_ids or set())
+            if str(reserved_id).strip()
+        ),
+        {
+            str(inlet.get("name", "")).strip()
+            for inlet in inlets
+            if isinstance(inlet, dict) and str(inlet.get("name", "")).strip()
+        }.union(
+            str(reserved_name).strip()
+            for reserved_name in (reserved_names or set())
+            if str(reserved_name).strip()
+        ),
+    )
+    mixer = next(
+        unit
+        for unit in copied_units
+        if str(unit.get("id", "")).strip() == mixer_id
+    )
+    material_inputs = mixer["ports"].get("material_in", [])
+    material_outputs = mixer["ports"].get("material_out", [])
+    if material_inputs != ["in_0", "in_1"] or material_outputs != ["out"]:
+        raise ValueError(
+            "Mixer catalog ports must provide in_0, in_1, and out."
+        )
+
+    copied_units.remove(mixer)
+    original_target = copy.deepcopy(selected_connection["target"])
+    target_id = str(original_target["id"]).strip()
+    target_index = next(
+        (
+            index
+            for index, unit in enumerate(copied_units)
+            if isinstance(unit, dict)
+            and str(unit.get("id", "")).strip() == target_id
+        ),
+        len(copied_units),
+    )
+    copied_units.insert(target_index, mixer)
+
+    selected_connection["target"] = {
+        "kind": "unit",
+        "id": mixer_id,
+        "port": "in_0",
+    }
+    existing_connection_ids = {
+        str(connection.get("id", "")).strip()
+        for connection in copied_connections
+    }
+    downstream_connection_id = _unique_connection_id(
+        f"{mixer_id}-out-to-{target_id}",
+        existing_connection_ids,
+    )
+    copied_connections.insert(
+        selected_index + 1,
+        {
+            "id": downstream_connection_id,
+            "type": "material",
+            "source": {
+                "kind": "unit",
+                "id": mixer_id,
+                "port": "out",
+            },
+            "target": original_target,
+        },
+    )
+    _graph_port_inventory(inlets, copied_units, copied_connections)
+    _validate_acyclic_material_connections(copied_connections)
+    return (
+        copied_units,
+        copied_connections,
+        mixer_id,
+        downstream_connection_id,
+    )
+
+
 def rename_inline_unit(
     units: list[Any],
     unit_id: str,
