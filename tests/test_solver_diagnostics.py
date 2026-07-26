@@ -12,10 +12,12 @@ from process_chat.process_model import (
     _MaterialBoundaryIdentityTracker,
 )
 from process_chat.solver_diagnostics import (
+    aggregate_convergence,
     aggregate_energy_balance,
     aggregate_material_balance,
     aggregate_validation_status,
     component_balance_rows,
+    convergence_rows,
     energy_transfer_rows,
     material_boundary_rows,
     solved_feed_flow_kg_hr,
@@ -367,6 +369,225 @@ class ValidationSummaryTest(unittest.TestCase):
             aggregate_validation_status(["OK", "not-reported"]),
             "UNKNOWN",
         )
+
+
+class ConvergenceDiagnosticsTest(unittest.TestCase):
+    """Validate strict adapters and native iterative-unit evidence."""
+
+    @staticmethod
+    def _convergence_result(diagnostics):
+        return SimpleNamespace(
+            raw={"convergence_diagnostics": diagnostics},
+            kpis={},
+        )
+
+    @staticmethod
+    def _build_native_recycle_case(flow_scale):
+        from neqsim import jneqsim
+
+        equipment = jneqsim.process.equipment
+        fluid = jneqsim.thermo.system.SystemSrkEos(298.15, 30.0)
+        fluid.addComponent("methane", 0.9)
+        fluid.addComponent("ethane", 0.1)
+        fluid.setMixingRule(2)
+
+        feed = equipment.stream.Stream("fresh feed", fluid)
+        feed.setFlowRate(1000.0 * flow_scale, "kg/hr")
+        recycle_guess = feed.clone("recycle guess")
+        recycle_guess.setFlowRate(100.0 * flow_scale, "kg/hr")
+        mixer = equipment.mixer.Mixer("feed mixer")
+        mixer.addStream(feed)
+        mixer.addStream(recycle_guess)
+        compressor = equipment.compressor.Compressor(
+            "compressor",
+            mixer.getOutletStream(),
+        )
+        compressor.setOutletPressure(50.0, "bara")
+        cooler = equipment.heatexchanger.Cooler(
+            "cooler",
+            compressor.getOutletStream(),
+        )
+        cooler.setOutTemperature(303.15)
+        splitter = equipment.splitter.Splitter(
+            "splitter",
+            cooler.getOutletStream(),
+        )
+        splitter.setSplitFactors([0.1, 0.9])
+        recycle = equipment.util.Recycle("gas recycle")
+        recycle.addStream(splitter.getSplitStream(0))
+        recycle.setOutletStream(recycle_guess)
+        recycle.setTolerance(1.0e-4)
+        recycle.setMaxIterations(50)
+
+        process = jneqsim.process.processmodel.ProcessSystem()
+        for unit in (
+            feed,
+            recycle_guess,
+            mixer,
+            compressor,
+            cooler,
+            splitter,
+            recycle,
+        ):
+            process.add(unit)
+        return NeqSimProcessModel(process), splitter
+
+    def test_legacy_and_feed_forward_state_remain_explicit(self):
+        legacy = SimpleNamespace(raw={})
+        self.assertEqual(
+            aggregate_convergence(legacy),
+            {
+                "applicable": None,
+                "converged": None,
+                "unit_count": None,
+                "unconverged_count": None,
+                "max_iterations": None,
+                "suggestions": [],
+            },
+        )
+
+        feed_forward = self._convergence_result(
+            {
+                "applicable": False,
+                "converged": None,
+                "rows": [],
+                "suggestions": [],
+            }
+        )
+        self.assertEqual(convergence_rows(feed_forward), [])
+        self.assertIs(
+            aggregate_convergence(feed_forward)["applicable"],
+            False,
+        )
+
+    def test_rows_are_isolated_and_aggregate_unconverged_units(self):
+        diagnostics = {
+            "applicable": True,
+            "converged": False,
+            "rows": [
+                {
+                    "process_system": "gas plant",
+                    "unit_name": "gas recycle",
+                    "unit_type": "recycle",
+                    "converged": False,
+                    "iterations": 10,
+                    "max_iterations": 10,
+                    "dominant_error": "flow",
+                    "acceleration_method": "DIRECT_SUBSTITUTION",
+                    "flow_error": 0.1,
+                    "flow_tolerance": 0.01,
+                },
+                {
+                    "process_system": "gas plant",
+                    "unit_name": "pressure adjuster",
+                    "unit_type": "adjuster",
+                    "converged": True,
+                    "iterations": None,
+                    "error": 0.001,
+                    "tolerance": 0.01,
+                },
+            ],
+            "suggestions": ["Improve the recycle initial estimate."],
+        }
+        result = self._convergence_result(diagnostics)
+
+        rows = convergence_rows(result)
+        summary = aggregate_convergence(result)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["dominant_error"], "flow")
+        self.assertEqual(summary["converged"], False)
+        self.assertEqual(summary["unit_count"], 2.0)
+        self.assertEqual(summary["unconverged_count"], 1.0)
+        self.assertEqual(summary["max_iterations"], 10.0)
+        rows[0]["unit_name"] = "changed"
+        self.assertEqual(
+            diagnostics["rows"][0]["unit_name"],
+            "gas recycle",
+        )
+
+    def test_rejects_conflicting_or_duplicate_unit_state(self):
+        conflicting = self._convergence_result(
+            {
+                "applicable": True,
+                "converged": True,
+                "rows": [
+                    {
+                        "process_system": "main",
+                        "unit_name": "recycle",
+                        "unit_type": "recycle",
+                        "converged": False,
+                    }
+                ],
+                "suggestions": [],
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            aggregate_convergence(conflicting)
+
+        duplicate_row = {
+            "process_system": "main",
+            "unit_name": "recycle",
+            "unit_type": "recycle",
+            "converged": True,
+        }
+        duplicate = self._convergence_result(
+            {
+                "applicable": True,
+                "converged": True,
+                "rows": [duplicate_row, dict(duplicate_row)],
+                "suggestions": [],
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            convergence_rows(duplicate)
+
+    def test_native_recycle_convergence_and_nearby_flow(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                model, splitter = self._build_native_recycle_case(
+                    flow_scale
+                )
+                result = model.run(timeout_ms=180_000)
+
+                rows = convergence_rows(result)
+                summary = aggregate_convergence(result)
+                constraint = next(
+                    item
+                    for item in result.constraints
+                    if item.name == "convergence"
+                )
+
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["unit_name"], "gas recycle")
+                self.assertTrue(rows[0]["converged"])
+                self.assertEqual(rows[0]["iterations"], 3)
+                self.assertLess(
+                    rows[0]["flow_error"],
+                    rows[0]["flow_tolerance"],
+                )
+                self.assertEqual(rows[0]["dominant_error"], "flow")
+                self.assertEqual(
+                    rows[0]["acceleration_method"],
+                    "DIRECT_SUBSTITUTION",
+                )
+                self.assertTrue(summary["converged"])
+                self.assertEqual(summary["max_iterations"], 3.0)
+                self.assertEqual(constraint.status, "OK")
+                self.assertEqual(
+                    result.kpis[
+                        "convergence_unconverged_count"
+                    ].value,
+                    0.0,
+                )
+                product_flow = float(
+                    splitter.getSplitStream(1).getFlowRate("kg/hr")
+                )
+                self.assertAlmostEqual(
+                    product_flow,
+                    1000.0 * flow_scale,
+                    delta=0.2,
+                )
 
 
 def _result(rows=None, **kpi_values):
