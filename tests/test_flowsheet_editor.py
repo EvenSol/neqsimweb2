@@ -1275,6 +1275,20 @@ class GraphDraftLifecycleTest(unittest.TestCase):
         self.assertEqual(updated["inlets"], case_spec["inlets"])
         self.assertNotIn("inlets", legacy_draft)
 
+    def test_legacy_draft_rejects_unit_id_retained_by_case_inlet(self):
+        legacy_draft = create_graph_draft(self.units, self.connections)
+        case_spec = {
+            "schema_version": 3,
+            "inlets": [
+                {"id": "product-cooler", "name": "Conflicting feed"}
+            ],
+            "units": [],
+            "connections": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "both an inlet and a unit"):
+            apply_graph_draft(case_spec, legacy_draft)
+
     def test_material_connection_rows_ignore_energy_links(self):
         rows = material_connection_rows(
             [
