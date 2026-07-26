@@ -1604,6 +1604,26 @@ class InlineUnitReplacementTest(unittest.TestCase):
                 "Export Cooler",
             )
 
+    def test_full_replacement_always_allocates_a_fresh_graph_identity(self):
+        units, connections, replacement_id = replace_inline_unit(
+            self.units,
+            self.connections,
+            "original-compressor",
+            "compressor",
+            "Original Compressor",
+        )
+
+        self.assertEqual(replacement_id, "original-compressor-2")
+        self.assertEqual(units[0]["id"], replacement_id)
+        self.assertEqual(
+            connections[0]["target"]["id"],
+            replacement_id,
+        )
+        self.assertEqual(
+            connections[1]["source"]["id"],
+            replacement_id,
+        )
+
     def test_replace_rejects_non_inline_catalog_port_shapes(self):
         original_units = copy.deepcopy(self.units)
         original_connections = copy.deepcopy(self.connections)
