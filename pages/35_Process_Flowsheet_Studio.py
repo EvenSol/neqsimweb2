@@ -84,6 +84,7 @@ _EDITOR_SYMBOL_NAMES = (
     "redo_graph_history",
     "remove_material_inlet",
     "remove_inline_unit",
+    "replace_inline_unit",
     "reroute_graph_connection",
     "rename_material_inlet",
     "rename_inline_unit",
@@ -3468,8 +3469,18 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 f"{current_target_label}"
             )
 
-            insert_mixer_tab, reconnect_tab = st.tabs(
-                ["Insert mixer here", "Reconnect this path"]
+            (
+                insert_mixer_tab,
+                equipment_tab,
+                reconnect_tab,
+                disconnect_tab,
+            ) = st.tabs(
+                [
+                    "Insert mixer",
+                    "Equipment",
+                    "Reconnect",
+                    "Disconnect",
+                ]
             )
             with insert_mixer_tab:
                 st.caption(
@@ -3622,6 +3633,230 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         )
                         st.rerun()
 
+            with equipment_tab:
+                st.caption(
+                    "Insert new equipment into this path or replace its "
+                    "downstream unit without manually rebuilding adjacent "
+                    "connections."
+                )
+                inline_insert_types = [
+                    unit_type
+                    for unit_type, definition in catalog.items()
+                    if definition["ports"].get("material_in") == ["in"]
+                    and definition["ports"].get("material_out") == ["out"]
+                ]
+                equipment_action = st.radio(
+                    "Equipment action",
+                    options=[
+                        "Insert equipment in this path",
+                        "Replace downstream equipment",
+                    ],
+                    horizontal=True,
+                    key=(
+                        "flowsheet_reorganize_equipment_action_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                reorganize_unit_type = st.selectbox(
+                    "Equipment type",
+                    options=inline_insert_types,
+                    format_func=lambda value: (
+                        f"{catalog[value]['label']} · "
+                        f"{catalog[value]['category']}"
+                    ),
+                    key=(
+                        "flowsheet_reorganize_equipment_type_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                reorganize_definition = catalog[reorganize_unit_type]
+                reorganize_unit_name = st.text_input(
+                    "Equipment name",
+                    value=f"New {reorganize_definition['label']}",
+                    max_chars=80,
+                    key=(
+                        "flowsheet_reorganize_equipment_name_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                requested_name = (
+                    reorganize_unit_name.strip()
+                    or f"New {reorganize_definition['label']}"
+                )
+                downstream_unit = None
+                if str(current_target.get("kind", "")).strip() == "unit":
+                    downstream_unit = next(
+                        (
+                            unit
+                            for unit in spec["units"]
+                            if (
+                                isinstance(unit, dict)
+                                and str(unit.get("id", "")).strip()
+                                == str(current_target.get("id", "")).strip()
+                            )
+                        ),
+                        None,
+                    )
+                if equipment_action == "Replace downstream equipment":
+                    retained_name_records = [
+                        unit
+                        for unit in spec["units"]
+                        if (
+                            not isinstance(downstream_unit, dict)
+                            or str(unit.get("id", "")).strip()
+                            != str(downstream_unit.get("id", "")).strip()
+                        )
+                    ]
+                else:
+                    retained_name_records = spec["units"]
+                existing_names = _graph_name_set(
+                    retained_name_records,
+                    casefold=True,
+                )
+                existing_names.update(
+                    _graph_name_set(spec["inlets"], casefold=True)
+                )
+                resolved_name = requested_name
+                name_suffix = 2
+                while resolved_name.casefold() in existing_names:
+                    resolved_name = f"{requested_name} {name_suffix}"
+                    name_suffix += 1
+
+                if equipment_action == "Insert equipment in this path":
+                    st.markdown(
+                        f"**Preview:** {current_source_label} → "
+                        f"{resolved_name}:in → {resolved_name}:out → "
+                        f"{current_target_label}"
+                    )
+                    equipment_button_label = (
+                        "Insert equipment and preserve downstream path"
+                    )
+                    equipment_action_ready = True
+                else:
+                    if downstream_unit is None:
+                        st.warning(
+                            "This path does not terminate at equipment. Select "
+                            "a path whose downstream endpoint is a unit."
+                        )
+                        equipment_action_ready = False
+                    else:
+                        downstream_name = _graph_object_name(
+                            downstream_unit,
+                            str(downstream_unit.get("id", "")).strip(),
+                        )
+                        st.markdown(
+                            f"**Preview:** replace {downstream_name} with "
+                            f"{resolved_name}; retain its upstream and "
+                            "downstream material paths."
+                        )
+                        equipment_action_ready = True
+                    equipment_button_label = (
+                        "Replace equipment and preserve surrounding path"
+                    )
+
+                st.caption("Initial properties and engineering units")
+                default_property_rows = inline_unit_property_rows(
+                    reorganize_unit_type
+                )
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Property": row["label"],
+                                "Value": row["value"],
+                                "Unit": row["unit"],
+                            }
+                            for row in default_property_rows
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                change_equipment = st.button(
+                    equipment_button_label,
+                    disabled=not equipment_action_ready,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_reorganize_change_equipment_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                if change_equipment:
+                    try:
+                        if (
+                            equipment_action
+                            == "Insert equipment in this path"
+                        ):
+                            units, connections, changed_unit_id = (
+                                insert_inline_unit_on_connection(
+                                    spec["units"],
+                                    spec["connections"],
+                                    reorganize_connection_id,
+                                    reorganize_unit_type,
+                                    resolved_name,
+                                    {
+                                        str(inlet.get("id", "")).strip()
+                                        for inlet in spec["inlets"]
+                                        if isinstance(inlet, dict)
+                                    },
+                                )
+                            )
+                            action_notice = (
+                                f"Inserted '{resolved_name}' "
+                                f"({changed_unit_id}) in "
+                                f"'{reorganize_connection_id}' while "
+                                "preserving the downstream process."
+                            )
+                        else:
+                            units, connections, changed_unit_id = (
+                                replace_inline_unit(
+                                    spec["units"],
+                                    spec["connections"],
+                                    str(downstream_unit["id"]).strip(),
+                                    reorganize_unit_type,
+                                    resolved_name,
+                                    {
+                                        *protected_unit_ids,
+                                        *(
+                                            str(inlet.get("id", "")).strip()
+                                            for inlet in spec["inlets"]
+                                            if isinstance(inlet, dict)
+                                        ),
+                                    },
+                                    _graph_name_set(spec["inlets"]),
+                                )
+                            )
+                            action_notice = (
+                                f"Replaced '{downstream_unit['name']}' with "
+                                f"'{resolved_name}' ({changed_unit_id}) while "
+                                "preserving its surrounding material path."
+                            )
+                        candidate_draft = create_graph_draft(
+                            units,
+                            connections,
+                            spec["inlets"],
+                        )
+                        candidate_case = _apply_studio_graph_draft(
+                            spec,
+                            candidate_draft,
+                        )
+                        _validate_case_graph(
+                            candidate_case,
+                            candidate_case["process"],
+                        )
+                    except ValueError as edit_error:
+                        st.error(
+                            "Equipment change failed without changing the "
+                            f"draft: {edit_error}"
+                        )
+                    else:
+                        _record_graph_revision(
+                            spec,
+                            candidate_draft,
+                            action_notice + " Run NeqSim to solve this revision.",
+                        )
+                        st.rerun()
+
             with reconnect_tab:
                 st.caption(
                     "Replace the selected path's source and target together. "
@@ -3707,6 +3942,70 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                 f"{replacement_source['label']} → "
                                 f"{replacement_target['label']}. Run NeqSim "
                                 "to solve the reorganized graph."
+                            ),
+                        )
+                        st.rerun()
+
+            with disconnect_tab:
+                st.caption(
+                    "Remove only this explicit path. Both endpoints remain "
+                    "available for a new connection, and undo restores the "
+                    "original route."
+                )
+                st.markdown(
+                    f"**Preview:** remove {current_source_label} → "
+                    f"{current_target_label}"
+                )
+                confirm_disconnect = st.checkbox(
+                    "I understand this leaves an unsolved graph draft",
+                    key=(
+                        "flowsheet_reorganize_confirm_disconnect_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                disconnect_path = st.button(
+                    "Disconnect this path",
+                    disabled=not confirm_disconnect,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_reorganize_disconnect_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                if disconnect_path:
+                    try:
+                        connections = disconnect_graph_connection(
+                            spec["inlets"],
+                            spec["units"],
+                            spec["connections"],
+                            reorganize_connection_id,
+                        )
+                        candidate_draft = create_graph_draft(
+                            spec["units"],
+                            connections,
+                            spec["inlets"],
+                        )
+                        candidate_case = _apply_studio_graph_draft(
+                            spec,
+                            candidate_draft,
+                        )
+                        _validate_case_graph(
+                            candidate_case,
+                            candidate_case["process"],
+                        )
+                    except ValueError as edit_error:
+                        st.error(
+                            "Path disconnection failed without changing the "
+                            f"draft: {edit_error}"
+                        )
+                    else:
+                        _record_graph_revision(
+                            spec,
+                            candidate_draft,
+                            (
+                                f"Disconnected '{reorganize_connection_id}'. "
+                                "Reconnect the available endpoints before "
+                                "running NeqSim, or use undo to restore it."
                             ),
                         )
                         st.rerun()

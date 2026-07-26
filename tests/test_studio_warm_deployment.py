@@ -145,6 +145,76 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             )
         )
 
+    def test_original_equipment_can_be_replaced_without_rebuilding_paths(self):
+        app = self._run_studio()
+        path_selector = next(
+            selectbox
+            for selectbox in app.selectbox
+            if selectbox.label == "Material path to reorganize"
+        )
+        path_selector.set_value(
+            "inlet-scrubber-gas-to-compressor-stage-1"
+        )
+        app.run(timeout=120)
+
+        equipment_action = next(
+            radio
+            for radio in app.radio
+            if radio.label == "Equipment action"
+        )
+        equipment_action.set_value("Replace downstream equipment")
+        app.run(timeout=120)
+
+        name_input = next(
+            text_input
+            for text_input in app.text_input
+            if (
+                text_input.label == "Equipment name"
+                and "reorganize_equipment_name" in text_input.key
+            )
+        )
+        name_input.set_value("Replacement compressor")
+        app.run(timeout=120)
+        replace_button = next(
+            button
+            for button in app.button
+            if button.label
+            == "Replace equipment and preserve surrounding path"
+        )
+        replace_button.click()
+        app.run(timeout=120)
+
+        if app.exception:
+            details = "\n".join(str(item.value) for item in app.exception)
+            self.fail(
+                "Original equipment replacement raised exceptions:\n"
+                + details
+            )
+        draft = app.session_state["flowsheet_studio_graph_draft"]
+        unit_ids = {
+            str(unit["id"])
+            for unit in draft["units"]
+            if isinstance(unit, dict)
+        }
+        self.assertNotIn("compressor-stage-1", unit_ids)
+        self.assertIn("replacement-compressor", unit_ids)
+        connection_endpoints = [
+            (
+                connection["source"]["id"],
+                connection["target"]["id"],
+            )
+            for connection in draft["connections"]
+            if connection.get("type") == "material"
+        ]
+        self.assertIn(
+            ("inlet-scrubber", "replacement-compressor"),
+            connection_endpoints,
+        )
+        self.assertIn(
+            ("replacement-compressor", "intercooler"),
+            connection_endpoints,
+        )
+
     def test_palette_routes_multi_port_units_through_standalone_workflow(self):
         app = self._run_studio()
         selectboxes = {

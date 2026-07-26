@@ -14,6 +14,7 @@ from process_chat.flowsheet_editor import (
     insert_mixer_on_connection,
     record_graph_history,
     redo_graph_history,
+    replace_inline_unit,
     undo_graph_history,
     update_inline_unit_properties,
 )
@@ -598,6 +599,26 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             },
             {"kind": "unit", "id": mixer_id, "port": "in_1"},
         )
+        (
+            units,
+            connections,
+            replacement_compressor_id,
+        ) = replace_inline_unit(
+            units,
+            connections,
+            compressor_id,
+            "compressor",
+            "replacement export compressor",
+            {compressor_id},
+        )
+        units = update_inline_unit_properties(
+            units,
+            replacement_compressor_id,
+            {
+                "outlet_pressure_bara": 60.0,
+                "isentropic_efficiency": 0.78,
+            },
+        )
         history = record_graph_history(
             history,
             units,
@@ -622,7 +643,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 "main-feed",
                 "satellite-feed",
                 mixer_id,
-                compressor_id,
+                replacement_compressor_id,
                 cooler_id,
             ],
         )
@@ -910,6 +931,25 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 )
                 self.assertIn(
                     "Acyclic graph built and converged successfully.",
+                    builder.build_log,
+                )
+                self.assertNotIn(
+                    "export-compressor",
+                    {
+                        unit["id"]
+                        for unit in graph_spec["units"]
+                    },
+                )
+                self.assertIn(
+                    "replacement-export-compressor",
+                    {
+                        unit["id"]
+                        for unit in graph_spec["units"]
+                    },
+                )
+                self.assertIn(
+                    "Added graph unit: replacement-export-compressor "
+                    "(compressor)",
                     builder.build_log,
                 )
                 persisted = json.loads(
