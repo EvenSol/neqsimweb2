@@ -578,14 +578,18 @@ class ProcessBuilder:
                 f"0 to {len(material_outputs) - 1}."
             )
 
-        total_factor = sum(factors_by_index.values())
-        if total_factor <= 0.0:
+        factor_scale = max(factors_by_index.values())
+        if factor_scale <= 0.0:
             raise ValueError(
                 f"Splitter '{unit_id}' split factors must have a positive sum."
             )
-        normalized_factors = [
-            factors_by_index[index] / total_factor
+        scaled_factors = [
+            factors_by_index[index] / factor_scale
             for index in range(len(material_outputs))
+        ]
+        scaled_total = sum(scaled_factors)
+        normalized_factors = [
+            factor / scaled_total for factor in scaled_factors
         ]
 
         if not hasattr(unit, "setSplitFactors"):
