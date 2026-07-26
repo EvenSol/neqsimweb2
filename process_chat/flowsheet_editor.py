@@ -1874,6 +1874,117 @@ def insert_mixer_on_connection(
     )
 
 
+def replace_inline_unit(
+    units: list[Any],
+    connections: list[Any],
+    unit_id: str,
+    replacement_type: str,
+    replacement_name: str,
+    reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Replace one simple material-path unit without breaking its neighbours.
+
+    The selected unit must have exactly one material ``in`` connection and one
+    material ``out`` connection, with no energy or branch references. Removal
+    first reconnects the surrounding path on isolated copies; the replacement
+    is then inserted into that same connection. Callers therefore receive
+    either a complete replacement or the original graph remains untouched.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    copied_connections = copy.deepcopy(connections)
+    cleaned_unit_id = str(unit_id).strip()
+    unit_matches = [
+        unit
+        for unit in copied_units
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not unit_matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(unit_matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+    validate_catalog_unit(unit_matches[0])
+
+    peer_names = _normalized_name_keys(
+        unit.get("name")
+        for unit in copied_units
+        if (
+            isinstance(unit, dict)
+            and str(unit.get("id", "")).strip() != cleaned_unit_id
+        )
+    )
+    peer_names.update(_normalized_name_keys(reserved_names))
+    cleaned_replacement_name = str(replacement_name).strip()
+    if cleaned_replacement_name.casefold() in peer_names:
+        raise ValueError(
+            f"Equipment name '{cleaned_replacement_name}' is duplicated."
+        )
+
+    incoming_connection_ids = [
+        str(connection.get("id", "")).strip()
+        for connection in copied_connections
+        if (
+            isinstance(connection, dict)
+            and str(connection.get("type", "")).strip().lower() == "material"
+            and isinstance(connection.get("target"), dict)
+            and str(connection["target"].get("kind", "")).strip() == "unit"
+            and str(connection["target"].get("id", "")).strip()
+            == cleaned_unit_id
+            and str(connection["target"].get("port", "")).strip() == "in"
+        )
+    ]
+    if len(incoming_connection_ids) != 1:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' requires exactly one material "
+            "input before it can be replaced."
+        )
+    outgoing_connections = [
+        connection
+        for connection in copied_connections
+        if (
+            isinstance(connection, dict)
+            and str(connection.get("type", "")).strip().lower() == "material"
+            and isinstance(connection.get("source"), dict)
+            and str(connection["source"].get("kind", "")).strip() == "unit"
+            and str(connection["source"].get("id", "")).strip()
+            == cleaned_unit_id
+            and str(connection["source"].get("port", "")).strip() == "out"
+        )
+    ]
+    if len(outgoing_connections) != 1:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' requires exactly one material "
+            "output before it can be replaced."
+        )
+    replacement_connection_id = incoming_connection_ids[0]
+
+    reduced_units, reduced_connections = remove_inline_unit(
+        copied_units,
+        copied_connections,
+        cleaned_unit_id,
+    )
+    replaced_units, replaced_connections, replacement_id = (
+        insert_inline_unit_on_connection(
+            reduced_units,
+            reduced_connections,
+            replacement_connection_id,
+            replacement_type,
+            cleaned_replacement_name,
+            {
+                str(reserved_id).strip()
+                for reserved_id in (reserved_ids or set())
+            },
+        )
+    )
+    return replaced_units, replaced_connections, replacement_id
+
+
 def rename_inline_unit(
     units: list[Any],
     unit_id: str,

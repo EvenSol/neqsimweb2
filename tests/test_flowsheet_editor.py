@@ -34,6 +34,7 @@ from process_chat.flowsheet_editor import (
     redo_graph_history,
     remove_material_inlet,
     remove_inline_unit,
+    replace_inline_unit,
     reroute_graph_connection,
     rename_material_inlet,
     rename_inline_unit,
@@ -1256,6 +1257,154 @@ class InlineUnitLifecycleTest(unittest.TestCase):
                     )
         self.assertEqual(len(units), 2)
         self.assertEqual(len(connections), 2)
+
+
+class InlineUnitReplacementTest(unittest.TestCase):
+    """Validate atomic replacement of equipment in a simple material path."""
+
+    def setUp(self):
+        self.units = [
+            create_inline_unit_spec("compressor", "Original Compressor", set()),
+            create_inline_unit_spec(
+                "cooler",
+                "Export Cooler",
+                {"original-compressor"},
+            ),
+        ]
+        self.connections = [
+            {
+                "id": "feed-to-compressor",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "original-compressor",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "compressor-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "original-compressor",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "export-cooler",
+                    "port": "in",
+                },
+            },
+        ]
+
+    def test_replace_preserves_surrounding_path_and_input_graph(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        units, connections, replacement_id = replace_inline_unit(
+            self.units,
+            self.connections,
+            "original-compressor",
+            "valve",
+            "Inlet Valve",
+        )
+
+        self.assertEqual(replacement_id, "inlet-valve")
+        self.assertEqual(
+            [unit["id"] for unit in units],
+            ["inlet-valve", "export-cooler"],
+        )
+        self.assertEqual(
+            [connection["id"] for connection in connections],
+            ["feed-to-compressor", "inlet-valve-to-export-cooler"],
+        )
+        self.assertEqual(
+            connections[0],
+            {
+                "id": "feed-to-compressor",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "inlet-valve",
+                    "port": "in",
+                },
+            },
+        )
+        self.assertEqual(
+            connections[1]["target"],
+            {
+                "kind": "unit",
+                "id": "export-cooler",
+                "port": "in",
+            },
+        )
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
+
+    def test_replace_reserves_starter_identity_and_rejects_name_conflicts(self):
+        units, _, replacement_id = replace_inline_unit(
+            self.units,
+            self.connections,
+            "original-compressor",
+            "compressor",
+            "Original Compressor",
+            {"original-compressor"},
+        )
+        self.assertEqual(replacement_id, "original-compressor-2")
+        self.assertEqual(units[0]["type"], "compressor")
+
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            replace_inline_unit(
+                self.units,
+                self.connections,
+                "original-compressor",
+                "valve",
+                "Export Cooler",
+            )
+
+    def test_replace_rejects_terminal_and_branched_units_without_mutation(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+        invalid_connections = [
+            self.connections[0],
+            {
+                **self.connections[1],
+                "source": {
+                    "kind": "unit",
+                    "id": "export-cooler",
+                    "port": "out",
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "exactly one material output"):
+            replace_inline_unit(
+                self.units,
+                invalid_connections,
+                "original-compressor",
+                "valve",
+                "Inlet Valve",
+            )
+        with self.assertRaisesRegex(ValueError, "exactly one material output"):
+            replace_inline_unit(
+                self.units,
+                self.connections,
+                "export-cooler",
+                "valve",
+                "Export Valve",
+            )
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
 
 
 class MixerPathInsertionTest(unittest.TestCase):
