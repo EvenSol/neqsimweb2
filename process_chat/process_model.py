@@ -27,6 +27,8 @@ _COMPONENT_BALANCE_OK_PCT = 0.01
 _COMPONENT_BALANCE_WARN_PCT = 1.0
 _ENERGY_BALANCE_OK_PCT = 0.01
 _ENERGY_BALANCE_WARN_PCT = 1.0
+_UNIT_BALANCE_SCALE_FLOOR_KG_HR = 1.0e-9
+_UNIT_BALANCE_SCALE_FLOOR_KW = 1.0e-9
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
     "stream",
@@ -1466,6 +1468,223 @@ class NeqSimProcessModel:
         return transfers, excluded_units
 
     @staticmethod
+    def _distinct_material_outlet_streams(unit: Any) -> List[Any]:
+        """Return distinct native material outlets for one unit."""
+        tracker = _MaterialBoundaryIdentityTracker()
+        streams: List[Any] = []
+        for stream, _ in (
+            NeqSimProcessModel._fallback_material_outlet_streams(unit)
+        ):
+            if tracker.contains("product", stream):
+                continue
+            tracker.add("product", stream)
+            streams.append(stream)
+        return streams
+
+    @staticmethod
+    def _unit_external_energy_transfer_kW(
+        unit: Any,
+    ) -> Optional[float]:
+        """Return audited signed external energy for one unit."""
+        transfers, excluded_units = (
+            NeqSimProcessModel._system_energy_transfers([unit])
+        )
+        if excluded_units:
+            return None
+        return sum(
+            float(transfer["energy_transfer_kW"])
+            for transfer in transfers
+        )
+
+    def _extract_unit_balance_diagnostics(self) -> Dict[str, Any]:
+        """Capture explicit-port mass and energy closure for each unit."""
+        rows: List[Dict[str, Any]] = []
+        excluded_units: List[str] = []
+        control_unit_classes = {"adjuster", "calculator", "setpoint"}
+        process_name_counts: Dict[str, int] = {}
+
+        for process_index, process_system in enumerate(
+            self.get_process_systems()
+        ):
+            try:
+                process_name = str(process_system.getName()).strip()
+            except Exception:
+                process_name = ""
+            if not process_name or process_name.lower() == "null":
+                process_name = f"process {process_index + 1}"
+            process_name_counts[process_name] = (
+                process_name_counts.get(process_name, 0) + 1
+            )
+            if process_name_counts[process_name] > 1:
+                process_name = (
+                    f"{process_name} [{process_name_counts[process_name]}]"
+                )
+            try:
+                units = list(process_system.getUnitOperations())
+            except Exception:
+                try:
+                    units = list(process_system.getUnitOperationList())
+                except Exception:
+                    units = []
+
+            unit_name_counts: Dict[Tuple[str, str], int] = {}
+            for unit in units:
+                try:
+                    unit_type = str(
+                        unit.getClass().getSimpleName()
+                    ).strip()
+                except Exception:
+                    continue
+                normalized_type = unit_type.lower()
+                if (
+                    normalized_type in _MATERIAL_STREAM_UNIT_CLASSES
+                    or normalized_type in control_unit_classes
+                ):
+                    continue
+                try:
+                    unit_name = str(unit.getName()).strip()
+                except Exception:
+                    unit_name = ""
+                unit_name = unit_name or unit_type
+                unit_identity = (unit_name, unit_type)
+                unit_name_counts[unit_identity] = (
+                    unit_name_counts.get(unit_identity, 0) + 1
+                )
+                if unit_name_counts[unit_identity] > 1:
+                    unit_name = (
+                        f"{unit_name} [{unit_name_counts[unit_identity]}]"
+                    )
+                unit_label = (
+                    f"{process_name}/{unit_name} ({unit_type})"
+                )
+
+                inlet_streams = self._material_inlet_streams(unit)
+                outlet_streams = (
+                    self._distinct_material_outlet_streams(unit)
+                )
+                if not inlet_streams or not outlet_streams:
+                    excluded_units.append(
+                        f"{unit_label}: explicit material ports unavailable"
+                    )
+                    continue
+
+                try:
+                    inlet_records = [
+                        self._material_boundary_record(
+                            stream,
+                            "feed",
+                            f"{unit_name} inlet {index + 1}",
+                        )
+                        for index, stream in enumerate(inlet_streams)
+                    ]
+                    outlet_records = [
+                        self._material_boundary_record(
+                            stream,
+                            "product",
+                            f"{unit_name} outlet {index + 1}",
+                        )
+                        for index, stream in enumerate(outlet_streams)
+                    ]
+                except ValueError as exc:
+                    excluded_units.append(f"{unit_label}: {exc}")
+                    continue
+
+                inlet_mass = sum(
+                    float(record["mass_flow_kg_hr"])
+                    for record in inlet_records
+                )
+                outlet_mass = sum(
+                    float(record["mass_flow_kg_hr"])
+                    for record in outlet_records
+                )
+                mass_residual = outlet_mass - inlet_mass
+                mass_scale = max(
+                    abs(inlet_mass),
+                    abs(outlet_mass),
+                    _UNIT_BALANCE_SCALE_FLOOR_KG_HR,
+                )
+                row: Dict[str, Any] = {
+                    "process_system": process_name,
+                    "unit_name": unit_name,
+                    "unit_type": unit_type,
+                    "inlet_count": len(inlet_records),
+                    "outlet_count": len(outlet_records),
+                    "inlet_mass_flow_kg_hr": inlet_mass,
+                    "outlet_mass_flow_kg_hr": outlet_mass,
+                    "mass_residual_kg_hr": mass_residual,
+                    "mass_imbalance_pct": (
+                        abs(mass_residual) / mass_scale * 100.0
+                    ),
+                    "inlet_enthalpy_kW": None,
+                    "outlet_enthalpy_kW": None,
+                    "external_energy_transfer_kW": None,
+                    "energy_residual_kW": None,
+                    "energy_imbalance_pct": None,
+                }
+
+                inlet_enthalpies = [
+                    record["enthalpy_flow_kW"]
+                    for record in inlet_records
+                ]
+                outlet_enthalpies = [
+                    record["enthalpy_flow_kW"]
+                    for record in outlet_records
+                ]
+                external_transfer = (
+                    self._unit_external_energy_transfer_kW(unit)
+                )
+                if (
+                    external_transfer is not None
+                    and all(
+                        value is not None
+                        for value in (
+                            inlet_enthalpies + outlet_enthalpies
+                        )
+                    )
+                ):
+                    inlet_enthalpy = sum(
+                        float(value) for value in inlet_enthalpies
+                    )
+                    outlet_enthalpy = sum(
+                        float(value) for value in outlet_enthalpies
+                    )
+                    energy_residual = (
+                        outlet_enthalpy
+                        - inlet_enthalpy
+                        - external_transfer
+                    )
+                    energy_scale = max(
+                        abs(inlet_enthalpy),
+                        abs(outlet_enthalpy),
+                        abs(external_transfer),
+                        _UNIT_BALANCE_SCALE_FLOOR_KW,
+                    )
+                    row.update(
+                        {
+                            "inlet_enthalpy_kW": inlet_enthalpy,
+                            "outlet_enthalpy_kW": outlet_enthalpy,
+                            "external_energy_transfer_kW": (
+                                external_transfer
+                            ),
+                            "energy_residual_kW": energy_residual,
+                            "energy_imbalance_pct": (
+                                abs(energy_residual)
+                                / energy_scale
+                                * 100.0
+                            ),
+                        }
+                    )
+                rows.append(row)
+
+        excluded_units = list(dict.fromkeys(excluded_units))
+        return {
+            "applicable": bool(rows),
+            "coverage_complete": not excluded_units,
+            "rows": rows,
+            "excluded_units": excluded_units,
+        }
+
+    @staticmethod
     def _material_boundary_component_flows(
         stream: Any,
         total_molar_flow: Optional[float],
@@ -2690,6 +2909,104 @@ class NeqSimProcessModel:
                 )
             )
 
+        unit_balance_diagnostics = (
+            self._extract_unit_balance_diagnostics()
+        )
+        from .solver_diagnostics import aggregate_unit_balances
+
+        unit_balance_summary = aggregate_unit_balances(
+            ModelRunResult(
+                kpis={},
+                constraints=[],
+                raw={
+                    "unit_balance_diagnostics": (
+                        unit_balance_diagnostics
+                    )
+                },
+            )
+        )
+        if unit_balance_summary["applicable"]:
+            unit_count = float(unit_balance_summary["unit_count"])
+            maximum_mass_imbalance = float(
+                unit_balance_summary["max_mass_imbalance_pct"]
+            )
+            kpis["unit_balance_count"] = KPI(
+                "unit_balance_count",
+                unit_count,
+                "count",
+            )
+            kpis["unit_mass_balance_max_pct"] = KPI(
+                "unit_mass_balance_max_pct",
+                maximum_mass_imbalance,
+                "%",
+            )
+            mass_status = (
+                "OK"
+                if maximum_mass_imbalance < _COMPONENT_BALANCE_OK_PCT
+                else "WARN"
+                if maximum_mass_imbalance < _COMPONENT_BALANCE_WARN_PCT
+                else "VIOLATION"
+            )
+            constraints.append(
+                ConstraintStatus(
+                    "unit_mass_balance",
+                    mass_status,
+                    f"{int(unit_count)} explicit-port unit(s) checked; "
+                    "maximum relative mass imbalance="
+                    f"{maximum_mass_imbalance:.6g}%.",
+                )
+            )
+
+            energy_unit_count = float(
+                unit_balance_summary["energy_unit_count"]
+            )
+            maximum_energy_imbalance = unit_balance_summary[
+                "max_energy_imbalance_pct"
+            ]
+            if maximum_energy_imbalance is not None:
+                maximum_energy_imbalance = float(
+                    maximum_energy_imbalance
+                )
+                kpis["unit_energy_balance_count"] = KPI(
+                    "unit_energy_balance_count",
+                    energy_unit_count,
+                    "count",
+                )
+                kpis["unit_energy_balance_max_pct"] = KPI(
+                    "unit_energy_balance_max_pct",
+                    maximum_energy_imbalance,
+                    "%",
+                )
+                energy_status = (
+                    "OK"
+                    if maximum_energy_imbalance < _ENERGY_BALANCE_OK_PCT
+                    else "WARN"
+                    if maximum_energy_imbalance
+                    < _ENERGY_BALANCE_WARN_PCT
+                    else "VIOLATION"
+                )
+                constraints.append(
+                    ConstraintStatus(
+                        "unit_energy_balance",
+                        energy_status,
+                        f"{int(energy_unit_count)} audited unit(s) checked; "
+                        "maximum relative energy imbalance="
+                        f"{maximum_energy_imbalance:.6g}%.",
+                    )
+                )
+        if not unit_balance_summary["coverage_complete"]:
+            constraints.append(
+                ConstraintStatus(
+                    "unit_balance_coverage",
+                    "UNKNOWN",
+                    "Per-unit closure is unavailable for: "
+                    + ", ".join(
+                        unit_balance_summary["excluded_units"]
+                    )
+                    + ".",
+                )
+            )
+
         # Add convergence warning if all power/duty are zero
         if total_power_kW == 0.0 and total_duty_kW == 0.0:
             has_energy_unit = False
@@ -3229,6 +3546,7 @@ class NeqSimProcessModel:
                 "energy_transfers": energy_transfers,
                 "energy_balance_applicable": energy_balance_applicable,
                 "convergence_diagnostics": convergence_diagnostics,
+                "unit_balance_diagnostics": unit_balance_diagnostics,
             }
         )
 
