@@ -7,6 +7,8 @@ import math
 import unittest
 
 from process_chat.flowsheet_editor import (
+    add_catalog_unit,
+    connect_graph_ports,
     create_graph_history,
     extend_material_path,
     record_graph_history,
@@ -347,6 +349,140 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ],
         )
         return builder, model, history
+
+    @staticmethod
+    def _build_palette_mixer_separator_case(flow_scale: float):
+        inlet_specs = [
+            {
+                "inlet_id": "gas-rich-feed",
+                "name": "gas rich feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.80,
+                        "n-hexane": 0.20,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 20.0,
+                    "total_flow": 10_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            },
+            {
+                "inlet_id": "liquid-rich-feed",
+                "name": "liquid rich feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.20,
+                        "n-hexane": 0.80,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 20.0,
+                    "total_flow": 10_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            },
+        ]
+        editor_inlets = [
+            {
+                "id": inlet["inlet_id"],
+                "name": inlet["name"],
+                **inlet["fluid_spec"],
+            }
+            for inlet in inlet_specs
+        ]
+        reserved_ids = {
+            inlet["inlet_id"]
+            for inlet in inlet_specs
+        }
+        reserved_names = {
+            inlet["name"]
+            for inlet in inlet_specs
+        }
+        units, mixer_id = add_catalog_unit(
+            [],
+            "mixer",
+            "feed mixer",
+            reserved_ids,
+            reserved_names,
+        )
+        connections = []
+        history = create_graph_history(
+            units,
+            connections,
+            editor_inlets,
+        )
+        for inlet_id, inlet_port in (
+            ("gas-rich-feed", "in_0"),
+            ("liquid-rich-feed", "in_1"),
+        ):
+            connections, _ = connect_graph_ports(
+                editor_inlets,
+                units,
+                connections,
+                "material",
+                {
+                    "kind": "inlet",
+                    "id": inlet_id,
+                    "port": "out",
+                },
+                {
+                    "kind": "unit",
+                    "id": mixer_id,
+                    "port": inlet_port,
+                },
+            )
+        history = record_graph_history(
+            history,
+            units,
+            connections,
+            editor_inlets,
+        )
+        units, connections, separator_id, _ = extend_material_path(
+            editor_inlets,
+            units,
+            connections,
+            {
+                "kind": "unit",
+                "id": mixer_id,
+                "port": "out",
+            },
+            "separator",
+            "product separator",
+        )
+        history = record_graph_history(
+            history,
+            units,
+            connections,
+            editor_inlets,
+        )
+        graph_spec = json.loads(
+            json.dumps(
+                {
+                    "name": "Palette-built mixer separator benchmark",
+                    "units": units,
+                    "connections": connections,
+                },
+                allow_nan=False,
+            )
+        )
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            [
+                "gas-rich-feed",
+                "liquid-rich-feed",
+                mixer_id,
+                separator_id,
+            ],
+        )
+        return builder, model, history, graph_spec
 
     def test_native_two_inlet_mass_energy_and_nearby_point(self):
         for flow_scale in (1.0, 1.05):
@@ -718,6 +854,120 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
                     f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                     f"components={component_constraint.status.lower()}",
+                )
+
+    def test_palette_built_two_feed_separator_round_trip_and_closure(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model, history, graph_spec = (
+                    self._build_palette_mixer_separator_case(flow_scale)
+                )
+                result = model.run(timeout_ms=180_000)
+                units = list(model.get_process().getUnitOperations())
+                names = [str(unit.getName()) for unit in units]
+
+                self.assertEqual(
+                    names,
+                    [
+                        "gas rich feed",
+                        "liquid rich feed",
+                        "feed mixer",
+                        "product separator",
+                        "product separator [gas] product",
+                        "product separator [liquid] product",
+                    ],
+                )
+                expected_flow = 20_000.0 * flow_scale
+                boundary_rows = result.raw["material_boundaries"]
+                product_rows = [
+                    row
+                    for row in boundary_rows
+                    if row["role"] == "product"
+                ]
+                self.assertEqual(len(product_rows), 2)
+                self.assertTrue(
+                    all(row["mass_flow_kg_hr"] > 1.0 for row in product_rows)
+                )
+                self.assertEqual(
+                    result.kpis["material_feed_count"].value,
+                    2.0,
+                )
+                self.assertEqual(
+                    result.kpis["material_product_count"].value,
+                    2.0,
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_feed_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                for constraint_name in (
+                    "mass_balance",
+                    "component_balance",
+                    "energy_balance",
+                ):
+                    constraint = next(
+                        constraint
+                        for constraint in result.constraints
+                        if constraint.name == constraint_name
+                    )
+                    self.assertEqual(constraint.status, "OK")
+                self.assertIn(
+                    "Added graph mixer: feed-mixer (2 material inlets)",
+                    builder.build_log,
+                )
+                self.assertIn(
+                    "Added graph unit: product-separator (separator)",
+                    builder.build_log,
+                )
+
+                persisted = json.loads(
+                    json.dumps(graph_spec, allow_nan=False)
+                )
+                self.assertEqual(persisted, graph_spec)
+                history, connected_mixer_draft = undo_graph_history(history)
+                self.assertEqual(
+                    [unit["id"] for unit in connected_mixer_draft["units"]],
+                    ["feed-mixer"],
+                )
+                self.assertEqual(
+                    len(connected_mixer_draft["connections"]),
+                    2,
+                )
+                history, final_draft = redo_graph_history(history)
+                self.assertEqual(
+                    final_draft["units"],
+                    graph_spec["units"],
+                )
+                self.assertEqual(
+                    final_draft["connections"],
+                    graph_spec["connections"],
+                )
+                print(
+                    "native palette mixer-separator benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"feed={expected_flow:.1f} kg/hr",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                 )
 
     def test_native_signed_work_heat_and_nearby_point(self):
