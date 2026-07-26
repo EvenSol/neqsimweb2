@@ -291,6 +291,19 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "default_params": {},
         "properties": {},
     },
+    "splitter": {
+        "label": "Equal splitter",
+        "category": "Flow routing",
+        "description": (
+            "Divide one material stream equally between two branch outlets."
+        ),
+        "ports": {
+            "material_in": ["in"],
+            "material_out": ["out_0", "out_1"],
+        },
+        "default_params": {},
+        "properties": {},
+    },
 }
 
 _PROCESS_UNIT_PROPERTY_DEFINITIONS: dict[str, dict[str, Any]] = {
