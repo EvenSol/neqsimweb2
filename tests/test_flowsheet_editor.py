@@ -142,6 +142,39 @@ class UnitCatalogTest(unittest.TestCase):
             )
         self.assertEqual(len(units), 2)
 
+    def test_null_legacy_names_do_not_create_false_collisions(self):
+        units = [{"id": "legacy-unit", "name": None, "type": "pump"}]
+        updated_units, unit_id = add_catalog_unit(
+            units,
+            "pump",
+            "None",
+            reserved_names={None, ""},
+        )
+        self.assertEqual(updated_units[-1]["name"], "None")
+        self.assertEqual(unit_id, "none")
+
+        renamed_units = rename_inline_unit(
+            [
+                {
+                    "id": "pump-a",
+                    "name": "Pump A",
+                    "type": "pump",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {
+                        "outlet_pressure_bara": 100.0,
+                        "efficiency": 0.75,
+                    },
+                }
+            ],
+            "pump-a",
+            "None",
+            reserved_names={None, " "},
+        )
+        self.assertEqual(renamed_units[0]["name"], "None")
+
     def test_property_metadata_has_explicit_units_and_valid_defaults(self):
         catalog = inline_unit_catalog()
 
@@ -654,6 +687,27 @@ class MaterialInletLifecycleTest(unittest.TestCase):
                 "Condensate Pump",
                 {"condensate pump"},
             )
+
+    def test_null_legacy_feed_names_do_not_create_false_collisions(self):
+        legacy_inlet = {
+            **copy.deepcopy(self.inlets[0]),
+            "id": "legacy-feed",
+            "name": None,
+        }
+        inlets, inlet_id = clone_material_inlet(
+            [*self.inlets, legacy_inlet],
+            "feed",
+            "Satellite",
+            reserved_names={None, ""},
+        )
+        renamed = rename_material_inlet(
+            inlets,
+            inlet_id,
+            "None",
+            reserved_names={None, " "},
+        )
+
+        self.assertEqual(renamed[-1]["name"], "None")
 
     def test_remove_requires_an_unconnected_nonprotected_secondary_feed(self):
         inlets, inlet_id = clone_material_inlet(
