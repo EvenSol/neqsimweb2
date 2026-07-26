@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -76,7 +77,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
             and node.name == function_name
         )
-        namespace = {"Any": Any, "json": json}
+        namespace = {"Any": Any, "json": json, "math": math}
         exec(
             compile(
                 ast.Module(body=[function], type_ignores=[]),
@@ -213,18 +214,42 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ]
         connections = [
             {
+                "type": "material",
                 "source": {
                     "kind": "unit",
                     "id": "separator",
                     "port": "gas",
                 }
-            }
+            },
+            {
+                "type": "energy",
+                "source": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "liquid",
+                },
+            },
         ]
 
         self.assertEqual(
             terminal_names(units, connections),
             {"Inlet scrubber [liquid] product"},
         )
+
+    def test_registry_change_reconciles_cloned_feed_composition(self):
+        reconcile = self._load_studio_function(
+            "_reconcile_inlet_composition"
+        )
+
+        result = reconcile(
+            {"methane": 0.7, "ethane": 0.3},
+            {"methane": 0.5, "propane": 0.5},
+        )
+
+        self.assertEqual(list(result), ["methane", "propane"])
+        self.assertAlmostEqual(result["methane"], 0.7 / 1.2)
+        self.assertAlmostEqual(result["propane"], 0.5 / 1.2)
+        self.assertAlmostEqual(sum(result.values()), 1.0)
 
     def test_terminal_names_conflict_with_feeds_and_equipment(self):
         terminal_name_conflicts = self._load_studio_function(
@@ -293,6 +318,9 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         apply_studio_graph_draft = self._load_studio_function(
             "_apply_studio_graph_draft"
         )
+        reconcile = self._load_studio_function(
+            "_reconcile_inlet_composition"
+        )
         current_template_unit = {
             "id": "stage-1-compressor",
             "name": "Stage 1 compressor",
@@ -309,8 +337,18 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             "type": "pump",
             "params": {"outlet_pressure_bara": 25.0},
         }
-        primary_inlet = {"id": "feed-gas", "name": "Feed gas"}
-        secondary_inlet = {"id": "liquid-feed", "name": "Liquid feed"}
+        primary_inlet = {
+            "id": "feed-gas",
+            "name": "Feed gas",
+            "fluid_package_id": "base-fluid",
+            "composition": {"methane": 0.8, "propane": 0.2},
+        }
+        secondary_inlet = {
+            "id": "liquid-feed",
+            "name": "Liquid feed",
+            "fluid_package_id": "base-fluid",
+            "composition": {"methane": 0.6, "ethane": 0.4},
+        }
         case_spec = {
             "process": [{"name": "current controls"}],
             "inlets": [primary_inlet],
@@ -330,6 +368,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                     [current_template_unit],
                     [],
                 ),
+                "_reconcile_inlet_composition": reconcile,
                 "apply_graph_draft": lambda case, graph: {
                     **case,
                     **graph,
@@ -340,7 +379,19 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
         self.assertEqual(result["units"][0], current_template_unit)
         self.assertEqual(result["units"][1], standalone_unit)
+        self.assertEqual(
+            list(result["inlets"][1]["composition"]),
+            ["methane", "propane"],
+        )
+        self.assertAlmostEqual(
+            sum(result["inlets"][1]["composition"].values()),
+            1.0,
+        )
         self.assertEqual(draft["units"][0], stale_template_unit)
+        self.assertEqual(
+            draft["inlets"][1]["composition"],
+            {"methane": 0.6, "ethane": 0.4},
+        )
 
     def test_standalone_no_test_selection_returns_five(self):
         studio_test_path = Path(__file__).resolve()
