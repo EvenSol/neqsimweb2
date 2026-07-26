@@ -1777,38 +1777,76 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     stage_2_efficiency = process[5]["params"]["isentropic_efficiency"]
     intercooler_pressure_drop = process[3]["params"]["pressure_drop_bar"]
     export_pressure_drop = process[6]["params"]["pressure_drop_bar"]
+    retained_unit_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in spec.get("units", [])
+        if isinstance(unit, dict)
+    }
+    stage_1_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
+    )
+    intercooler_retained = (
+        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
+    )
+    stage_2_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
+    )
+    export_cooler_retained = (
+        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
+    )
 
     if feed_pressure <= 0.0:
         raise ValueError("Feed pressure must be greater than zero bara.")
     if fluid["total_flow"] <= 0.0:
         raise ValueError("Feed flow must be greater than zero kg/hr.")
-    if not feed_pressure < stage_1_pressure < stage_2_pressure:
+    if (
+        stage_1_retained
+        and stage_2_retained
+        and not feed_pressure < stage_1_pressure < stage_2_pressure
+    ):
         raise ValueError(
             "Pressure ordering must be feed pressure < stage 1 pressure "
             "< stage 2 pressure."
         )
-    for stage_number, efficiency in (
-        (1, stage_1_efficiency),
-        (2, stage_2_efficiency),
+    for stage_number, efficiency, retained in (
+        (1, stage_1_efficiency, stage_1_retained),
+        (2, stage_2_efficiency, stage_2_retained),
     ):
+        if not retained:
+            continue
         if not 0.50 <= efficiency <= 0.95:
             raise ValueError(
                 f"Compressor stage {stage_number} isentropic efficiency must be "
                 "between 0.50 and 0.95."
             )
-    for cooler_name, pressure_drop, inlet_pressure in (
-        ("Intercooler", intercooler_pressure_drop, stage_1_pressure),
-        ("Export cooler", export_pressure_drop, stage_2_pressure),
+    for cooler_name, pressure_drop, retained, inlet_pressure in (
+        (
+            "Intercooler",
+            intercooler_pressure_drop,
+            intercooler_retained,
+            stage_1_pressure if stage_1_retained else None,
+        ),
+        (
+            "Export cooler",
+            export_pressure_drop,
+            export_cooler_retained,
+            stage_2_pressure if stage_2_retained else None,
+        ),
     ):
+        if not retained:
+            continue
         if not 0.0 <= pressure_drop <= 50.0:
             raise ValueError(
                 f"{cooler_name} pressure drop must be between 0 and 50 bar."
             )
-        if pressure_drop >= inlet_pressure:
+        if inlet_pressure is not None and pressure_drop >= inlet_pressure:
             raise ValueError(
                 f"{cooler_name} pressure drop must be lower than its inlet pressure."
             )
-        if pressure_drop / inlet_pressure > 0.10:
+        if (
+            inlet_pressure is not None
+            and pressure_drop / inlet_pressure > 0.10
+        ):
             warnings.append(
                 f"{cooler_name} pressure drop exceeds 10% of its inlet pressure."
             )
@@ -1816,11 +1854,16 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
         warnings.append(
             f"Composition summed to {composition_total:.6f} and was normalized to 1.0."
         )
-    if stage_1_pressure / feed_pressure > 3.0:
-        warnings.append("Stage 1 pressure ratio exceeds 3.0; check compressor feasibility.")
-    stage_2_inlet_pressure = stage_1_pressure - intercooler_pressure_drop
-    if stage_2_pressure / stage_2_inlet_pressure > 3.0:
-        warnings.append("Stage 2 pressure ratio exceeds 3.0; check compressor feasibility.")
+    if stage_1_retained and stage_1_pressure / feed_pressure > 3.0:
+        warnings.append(
+            "Stage 1 pressure ratio exceeds 3.0; check compressor feasibility."
+        )
+    if stage_1_retained and intercooler_retained and stage_2_retained:
+        stage_2_inlet_pressure = stage_1_pressure - intercooler_pressure_drop
+        if stage_2_pressure / stage_2_inlet_pressure > 3.0:
+            warnings.append(
+                "Stage 2 pressure ratio exceeds 3.0; check compressor feasibility."
+            )
     if fluid["eos_model"] == "gerg2008":
         warnings.append(
             "GERG-2008 is intended for gas-phase property calculations; "
