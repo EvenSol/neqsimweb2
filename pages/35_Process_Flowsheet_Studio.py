@@ -84,6 +84,7 @@ _EDITOR_SYMBOL_NAMES = (
     "redo_graph_history",
     "remove_material_inlet",
     "remove_inline_unit",
+    "replace_inline_unit_type",
     "reroute_graph_connection",
     "rename_material_inlet",
     "rename_inline_unit",
@@ -4559,6 +4560,73 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     f"{selected_unit_id}_{graph_widget_revision}"
                 ),
             )
+            compatible_replacements = [
+                unit_type
+                for unit_type, definition in catalog.items()
+                if unit_type != selected_unit["type"]
+                and definition["ports"] == selected_unit["ports"]
+            ]
+            st.markdown("##### Replace equipment")
+            st.caption(
+                "Swap the selected operation in place. Its stable ID and all "
+                "connections are retained; operating properties reset to the "
+                "replacement defaults shown below."
+            )
+            replacement_type = None
+            replace_unit = False
+            if compatible_replacements:
+                replacement_type = st.selectbox(
+                    "Replacement equipment type",
+                    options=compatible_replacements,
+                    format_func=lambda value: catalog[value]["label"],
+                    key=(
+                        "flowsheet_replacement_type_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+                replacement_rows = inline_unit_property_rows(
+                    replacement_type,
+                    catalog[replacement_type]["default_params"],
+                )
+                if replacement_rows:
+                    st.dataframe(
+                        [
+                            {
+                                "Property": row["label"],
+                                "Value": row["value"],
+                                "Unit": row["unit"],
+                            }
+                            for row in replacement_rows
+                        ],
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                else:
+                    st.caption(
+                        "This replacement has no editable operating "
+                        "properties."
+                    )
+                confirm_replacement = st.checkbox(
+                    "Confirm equipment replacement",
+                    key=(
+                        "flowsheet_confirm_replacement_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+                replace_unit = st.button(
+                    "Replace equipment in place",
+                    disabled=not confirm_replacement,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_replace_unit_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+            else:
+                st.info(
+                    "No other catalog equipment has the same port contract. "
+                    "Disconnect this operation before changing its topology."
+                )
             lifecycle_cols = st.columns(2)
             rename_unit = lifecycle_cols[0].button(
                 "Rename equipment",
@@ -4612,6 +4680,43 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"Updated operating properties for "
                             f"'{selected_unit['name']}'. Run NeqSim to solve "
                             "the revised graph."
+                        ),
+                    )
+                    st.rerun()
+
+            if replace_unit and replacement_type is not None:
+                try:
+                    units = replace_inline_unit_type(
+                        spec["units"],
+                        selected_unit_id,
+                        replacement_type,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        spec["connections"],
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(f"Equipment replacement failed: {edit_error}")
+                else:
+                    replacement_label = catalog[replacement_type]["label"]
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Replaced '{selected_unit['name']}' with "
+                            f"{replacement_label}. Stable graph ID and "
+                            "connections were retained; default properties "
+                            "were applied. Run NeqSim to solve the revised "
+                            "graph."
                         ),
                     )
                     st.rerun()
