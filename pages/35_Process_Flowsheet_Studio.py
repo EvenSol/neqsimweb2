@@ -329,6 +329,27 @@ def _graph_object_name(record: dict[str, Any], fallback_id: str) -> str:
     return str(raw_name).strip() or clean_fallback
 
 
+def _material_output_selection_label(unit: dict[str, Any]) -> str:
+    """Describe declared material outlets for a graph-edit success notice."""
+    unit_id = str(unit.get("id", "")).strip()
+    ports = unit.get("ports")
+    material_outputs = (
+        ports.get("material_out")
+        if isinstance(ports, dict)
+        else None
+    )
+    output_labels = [
+        f"'{unit_id}:{str(port).strip()}'"
+        for port in material_outputs or []
+        if str(port).strip()
+    ]
+    if not output_labels:
+        return f"an available outlet on '{unit_id}'"
+    if len(output_labels) == 1:
+        return output_labels[0]
+    return "one of " + ", ".join(output_labels)
+
+
 def _required_identifier(value: Any, field_label: str) -> str:
     """Return a non-null, non-blank persisted object identifier."""
     if value is None:
@@ -3762,13 +3783,21 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             except ValueError as edit_error:
                 st.error(f"Material path extension failed: {edit_error}")
             else:
+                new_unit = next(
+                    unit
+                    for unit in units
+                    if str(unit.get("id", "")).strip() == new_unit_id
+                )
+                next_output_label = _material_output_selection_label(
+                    new_unit
+                )
                 _record_graph_revision(
                     spec,
                     candidate_draft,
                     (
                         f"Added {extend_type} '{extend_name.strip()}' and "
                         f"connected it with '{new_connection_id}'. Select "
-                        f"'{new_unit_id}:out' to extend the path again."
+                        f"{next_output_label} to extend the path again."
                     ),
                 )
                 st.rerun()
