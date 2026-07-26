@@ -3697,6 +3697,14 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             for unit_type, definition in catalog.items()
             if len(definition["ports"].get("material_in", [])) == 1
         ]
+        extend_type_key = (
+            f"flowsheet_extend_type_{graph_widget_revision}"
+        )
+        if (
+            extend_type_key in st.session_state
+            and st.session_state[extend_type_key] not in extendable_types
+        ):
+            st.session_state.pop(extend_type_key)
         extend_cols = st.columns(3)
         if extend_source_rows:
             extend_source_index = extend_cols[0].selectbox(
@@ -3712,7 +3720,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             "Next equipment",
             options=extendable_types,
             format_func=lambda value: catalog[value]["label"],
-            key=f"flowsheet_extend_type_{graph_widget_revision}",
+            key=extend_type_key,
         )
         extend_name = extend_cols[2].text_input(
             "Equipment name",
@@ -4003,14 +4011,27 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             use_container_width=True,
             hide_index=True,
         )
+        inline_insert_types = [
+            unit_type
+            for unit_type, definition in catalog.items()
+            if definition["ports"].get("material_in") == ["in"]
+            and definition["ports"].get("material_out") == ["out"]
+        ]
+        palette_unit_type_key = "flowsheet_palette_unit_type"
+        if (
+            palette_unit_type_key in st.session_state
+            and st.session_state[palette_unit_type_key]
+            not in inline_insert_types
+        ):
+            st.session_state.pop(palette_unit_type_key)
         unit_type = st.selectbox(
             "Equipment type",
-            options=list(catalog),
+            options=inline_insert_types,
             format_func=lambda value: (
                 f"{catalog[value]['label']} · "
                 f"{catalog[value]['category']}"
             ),
-            key="flowsheet_palette_unit_type",
+            key=palette_unit_type_key,
         )
         selected_definition = catalog[unit_type]
         unit_name = st.text_input(
