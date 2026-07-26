@@ -118,6 +118,8 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             any(
                 "Mass imbalance [%]" in dataframe.value.columns
                 and "Energy imbalance [%]" in dataframe.value.columns
+                and "Inlet enthalpy flow [kW]" in dataframe.value.columns
+                and "Outlet enthalpy flow [kW]" in dataframe.value.columns
                 for dataframe in app.dataframe
             )
         )
