@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import os
+import subprocess
 import sys
 import types
 import unittest
@@ -11,6 +13,22 @@ from pathlib import Path
 import process_chat.flowsheet_editor as flowsheet_editor
 import process_chat.solver_diagnostics as solver_diagnostics
 from streamlit.testing.v1 import AppTest
+
+
+def _standalone_exit_code(result: unittest.TestResult) -> int:
+    """Match unittest's standalone status without waiting for JVM teardown."""
+    if result.testsRun == 0:
+        return 5
+    return 0 if result.wasSuccessful() else 1
+
+
+def _flush_standalone_output(*streams) -> None:
+    """Best-effort flush logs before the standalone process hard-exits."""
+    for stream in streams:
+        try:
+            stream.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            continue
 
 
 class StudioWarmDeploymentTest(unittest.TestCase):
@@ -78,6 +96,43 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertTrue(
             callable(solver_diagnostics.aggregate_energy_balance)
         )
+
+    def test_standalone_no_test_selection_returns_five(self):
+        studio_test_path = Path(__file__).resolve()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(studio_test_path),
+                "-k",
+                "definitely_no_matching_test",
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(
+            completed.returncode,
+            5,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_standalone_flush_continues_after_broken_pipe(self):
+        flushed = []
+
+        class BrokenStream:
+            def flush(self):
+                raise BrokenPipeError
+
+        class HealthyStream:
+            def flush(self):
+                flushed.append(True)
+
+        _flush_standalone_output(BrokenStream(), HealthyStream())
+
+        self.assertEqual(flushed, [True])
 
     def test_solved_page_reports_and_exports_unit_closure(self):
         app = self._run_studio()
@@ -147,9 +202,8 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     program = unittest.main(exit=False)
-    import os
-    import sys
-
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0 if program.result.wasSuccessful() else 1)
+    exit_code = _standalone_exit_code(program.result)
+    try:
+        _flush_standalone_output(sys.stdout, sys.stderr)
+    finally:
+        os._exit(exit_code)
