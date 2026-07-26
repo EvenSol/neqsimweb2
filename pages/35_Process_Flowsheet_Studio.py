@@ -338,6 +338,27 @@ def _required_identifier(value: Any, field_label: str) -> str:
     return result
 
 
+def _graph_name_set(
+    records: list[Any],
+    *,
+    casefold: bool = False,
+) -> set[str]:
+    """Return non-null, non-blank graph names for collision checks."""
+    if not isinstance(records, list):
+        return set()
+    result: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        raw_name = record.get("name")
+        if raw_name is None:
+            continue
+        name = str(raw_name).strip()
+        if name:
+            result.add(name.casefold() if casefold else name)
+    return result
+
+
 def _secondary_inlet_map(
     inlets: list[Any],
     primary_inlet_id: str,
@@ -524,7 +545,10 @@ def _validate_fluid_package_integrity(
             raise ValueError("Inlet ids must be unique.")
         inlet_ids.add(inlet_id)
 
-        inlet_name = str(inlet.get("name", "")).strip()
+        raw_inlet_name = inlet.get("name")
+        inlet_name = (
+            "" if raw_inlet_name is None else str(raw_inlet_name).strip()
+        )
         if not inlet_name:
             raise ValueError(f"Inlet '{inlet_id}' requires a stream name.")
         if inlet_name in inlet_names:
@@ -3189,12 +3213,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         if isinstance(unit, dict)
                         and str(unit.get("id", "")).strip()
                     },
-                    {
-                        str(unit.get("name", "")).strip()
-                        for unit in spec["units"]
-                        if isinstance(unit, dict)
-                        and str(unit.get("name", "")).strip()
-                    },
+                    _graph_name_set(spec["units"]),
                 )
                 candidate_draft = create_graph_draft(
                     spec["units"],
@@ -3416,12 +3435,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["inlets"],
                             selected_inlet_id,
                             renamed_inlet,
-                            {
-                                str(unit.get("name", "")).strip()
-                                for unit in spec["units"]
-                                if isinstance(unit, dict)
-                                and str(unit.get("name", "")).strip()
-                            },
+                            _graph_name_set(spec["units"]),
                         )
                         lifecycle_notice = (
                             f"Renamed feed '{selected_inlet_name}' to "
@@ -3498,12 +3512,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     if isinstance(inlet, dict)
                     and str(inlet.get("id", "")).strip()
                 }
-                reserved_names = {
-                    str(inlet.get("name", "")).strip()
-                    for inlet in spec["inlets"]
-                    if isinstance(inlet, dict)
-                    and str(inlet.get("name", "")).strip()
-                }
+                reserved_names = _graph_name_set(spec["inlets"])
                 units, new_unit_id = add_catalog_unit(
                     spec["units"],
                     standalone_type,
@@ -3757,16 +3766,12 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     unit_name.strip()
                     or f"New {selected_definition['label']}"
                 )
-                existing_names = {
-                    str(unit.get("name", "")).strip().casefold()
-                    for unit in spec["units"]
-                    if isinstance(unit, dict)
-                }
+                existing_names = _graph_name_set(
+                    spec["units"],
+                    casefold=True,
+                )
                 existing_names.update(
-                    str(inlet.get("name", "")).strip().casefold()
-                    for inlet in spec["inlets"]
-                    if isinstance(inlet, dict)
-                    and str(inlet.get("name", "")).strip()
+                    _graph_name_set(spec["inlets"], casefold=True)
                 )
                 resolved_name = requested_name
                 name_suffix = 2
@@ -3936,12 +3941,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         spec["units"],
                         selected_unit_id,
                         renamed_unit_name,
-                        {
-                            str(inlet.get("name", "")).strip()
-                            for inlet in spec["inlets"]
-                            if isinstance(inlet, dict)
-                            and str(inlet.get("name", "")).strip()
-                        },
+                        _graph_name_set(spec["inlets"]),
                     )
                     candidate_draft = create_graph_draft(
                         units,
