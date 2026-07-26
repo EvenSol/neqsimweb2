@@ -1197,7 +1197,7 @@ def _validate_case_graph(
     indexed_units = _index_graph_objects(units, "units")
     expected_units, _ = _build_template_graph(process)
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
-    validate_starter_unit_projection(units, expected_units)
+    validate_starter_unit_projection(units, expected_units, inlets)
     for unit_id, unit in indexed_units.items():
         if unit_id in expected_unit_map:
             continue

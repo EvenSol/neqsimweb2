@@ -444,6 +444,22 @@ class StarterUnitProjectionTest(unittest.TestCase):
                 [self.expected[0], self.expected[0]],
             )
 
+    def test_rejects_inlet_collision_with_omitted_starter_identity(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "conflicts with a starter-template unit identity",
+        ):
+            validate_starter_unit_projection(
+                [],
+                self.expected,
+                [
+                    {
+                        "id": "stage-1-compressor",
+                        "name": "Imported feed",
+                    }
+                ],
+            )
+
 
 class InletConditionMetadataTest(unittest.TestCase):
     """Validate explicit-unit metadata for reusable material inlets."""

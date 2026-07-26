@@ -1024,6 +1024,7 @@ def validate_catalog_unit(unit: Any) -> None:
 def validate_starter_unit_projection(
     units: list[Any],
     expected_units: list[Any],
+    inlets: list[Any] | None = None,
 ) -> None:
     """Keep retained starter nodes canonical while allowing their removal.
 
@@ -1066,6 +1067,21 @@ def validate_starter_unit_projection(
                 "Graph units conflict with the starter-template projection at "
                 f"'{expected_unit_id}'."
             )
+
+    if inlets is not None:
+        if not isinstance(inlets, list):
+            raise ValueError("Graph inlets must be an array.")
+        for index, inlet in enumerate(inlets):
+            if not isinstance(inlet, dict):
+                raise ValueError(f"Graph inlet {index} must be an object.")
+            inlet_id = str(inlet.get("id", "")).strip()
+            if not inlet_id:
+                raise ValueError(f"Graph inlet {index} requires an id.")
+            if inlet_id in expected_ids:
+                raise ValueError(
+                    f"Graph inlet id '{inlet_id}' conflicts with a "
+                    "starter-template unit identity."
+                )
 
 
 def _connection_index(
