@@ -843,6 +843,44 @@ def create_inline_unit_spec(
     }
 
 
+def add_catalog_unit(
+    units: list[Any],
+    unit_type: str,
+    name: str,
+    reserved_ids: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """Add one unconnected catalog unit for subsequent explicit port routing."""
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    existing_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in copied_units
+        if isinstance(unit, dict)
+    }
+    existing_ids.update(
+        str(reserved_id).strip() for reserved_id in (reserved_ids or set())
+    )
+    cleaned_name = str(name).strip()
+    existing_names = {
+        str(unit.get("name", "")).strip().casefold()
+        for unit in copied_units
+        if isinstance(unit, dict)
+    }
+    if cleaned_name.casefold() in existing_names:
+        raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
+
+    unit = create_inline_unit_spec(
+        unit_type,
+        cleaned_name,
+        existing_ids,
+    )
+    validate_catalog_unit(unit)
+    copied_units.append(unit)
+    return copied_units, unit["id"]
+
+
 def validate_catalog_unit(unit: Any) -> None:
     """Validate that a unit matches the editor catalog's executable shape."""
     if not isinstance(unit, dict):
