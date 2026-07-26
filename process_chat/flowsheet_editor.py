@@ -716,11 +716,13 @@ def clone_material_inlet(
         inlet_id = f"{id_stem}-{suffix}"
         suffix += 1
 
-    cloned_inlet = {
-        **source_matches[0],
-        "id": inlet_id,
-        "name": cleaned_name,
-    }
+    cloned_inlet = copy.deepcopy(source_matches[0])
+    cloned_inlet.update(
+        {
+            "id": inlet_id,
+            "name": cleaned_name,
+        }
+    )
     inlet_condition_property_rows(cloned_inlet)
     inlet_composition_property_rows(cloned_inlet)
     copied_inlets.append(cloned_inlet)
