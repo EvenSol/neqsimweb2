@@ -283,6 +283,21 @@ class UnitCatalogTest(unittest.TestCase):
         splitter["params"] = {"split_factors": [3.0, 7.0]}
         validate_catalog_unit(splitter)
 
+        extreme_rows = inline_unit_property_rows(
+            "splitter",
+            {"split_factors": [1.0e308, 1.0e308]},
+        )
+        self.assertEqual(extreme_rows[0]["value"], 0.5)
+
+    def test_splitter_property_rows_migrate_empty_legacy_params(self):
+        rows = inline_unit_property_rows("splitter", {})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["value"], 0.5)
+
+        splitter = create_inline_unit_spec("splitter", "Product split", set())
+        splitter["params"] = {}
+        validate_catalog_unit(splitter)
+
     def test_property_metadata_rejects_invalid_parameter_shapes(self):
         invalid_cases = (
             (
@@ -308,11 +323,6 @@ class UnitCatalogTest(unittest.TestCase):
                     "roughness": 1.0e-5,
                 },
                 "property 'diameter' must be between",
-            ),
-            (
-                "splitter",
-                {},
-                "missing property 'split_factor'",
             ),
             (
                 "splitter",
@@ -1325,6 +1335,23 @@ class ProcessUnitPropertyUpdateTest(unittest.TestCase):
             splitter["params"],
             {"split_factors": [3.0, 7.0]},
         )
+
+    def test_updates_splitter_and_canonicalizes_empty_legacy_params(self):
+        splitter = create_inline_unit_spec(
+            "splitter",
+            "Product split",
+            set(),
+        )
+        splitter["params"] = {}
+
+        updated = update_process_unit_properties(
+            [splitter],
+            splitter["id"],
+            {"split_factor": 0.3},
+        )
+
+        self.assertEqual(updated[0]["params"], {"split_factor": 0.3})
+        self.assertEqual(splitter["params"], {})
 
     def test_rejects_invalid_generic_updates_without_mutation(self):
         duplicated = [*self.units, dict(self.units[1])]
