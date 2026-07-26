@@ -1670,10 +1670,10 @@ def create_graph_draft(
     copied_units = copy.deepcopy(units)
     copied_connections = copy.deepcopy(connections)
     copied_inlets = copy.deepcopy(inlets)
+    inlet_ids: set[str] = set()
     if copied_inlets is not None:
         if not isinstance(copied_inlets, list):
             raise ValueError("Graph draft inlets must be an array.")
-        inlet_ids: set[str] = set()
         for index, inlet in enumerate(copied_inlets):
             if not isinstance(inlet, dict):
                 raise ValueError(
@@ -1700,6 +1700,14 @@ def create_graph_draft(
         if unit_id in unit_ids:
             raise ValueError(f"Graph draft unit id '{unit_id}' is duplicated.")
         unit_ids.add(unit_id)
+
+    conflicting_object_ids = inlet_ids.intersection(unit_ids)
+    if conflicting_object_ids:
+        conflicting_id = sorted(conflicting_object_ids)[0]
+        raise ValueError(
+            f"Graph object id '{conflicting_id}' is duplicated between "
+            "an inlet and a unit."
+        )
 
     connection_ids: set[str] = set()
     for index, connection in enumerate(copied_connections):

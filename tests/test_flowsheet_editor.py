@@ -1338,6 +1338,15 @@ class GraphDraftLifecycleTest(unittest.TestCase):
             (
                 {
                     "schema_version": 1,
+                    "inlets": [{"id": "product-cooler"}],
+                    "units": self.units,
+                    "connections": self.connections,
+                },
+                "duplicated between an inlet and a unit",
+            ),
+            (
+                {
+                    "schema_version": 1,
                     "units": self.units,
                     "connections": [
                         {**self.connections[0], "type": "signal"}
