@@ -200,6 +200,65 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             {"feed a"},
         )
 
+    def test_terminal_names_are_reserved_for_unconnected_outputs(self):
+        terminal_names = self._load_studio_function(
+            "_terminal_material_stream_names"
+        )
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet scrubber",
+                "ports": {"material_out": ["gas", "liquid"]},
+            }
+        ]
+        connections = [
+            {
+                "source": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "gas",
+                }
+            }
+        ]
+
+        self.assertEqual(
+            terminal_names(units, connections),
+            {"Inlet scrubber [liquid] product"},
+        )
+
+    def test_solve_readiness_rejects_disconnected_feeds(self):
+        validate_solve_readiness = self._load_studio_function(
+            "_validate_graph_solve_readiness"
+        )
+        case_spec = {
+            "inlets": [
+                {"id": "feed-gas"},
+                {"id": "tie-in-feed"},
+            ],
+            "connections": [
+                {
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed-gas",
+                        "port": "out",
+                    }
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "tie-in-feed"):
+            validate_solve_readiness(case_spec)
+        case_spec["connections"].append(
+            {
+                "source": {
+                    "kind": "inlet",
+                    "id": "tie-in-feed",
+                    "port": "out",
+                }
+            }
+        )
+        validate_solve_readiness(case_spec)
+
     def test_feed_draft_refreshes_current_template_unit_properties(self):
         apply_studio_graph_draft = self._load_studio_function(
             "_apply_studio_graph_draft"
