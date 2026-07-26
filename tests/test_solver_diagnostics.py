@@ -692,6 +692,8 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
         self.assertIsNone(legacy["applicable"])
         self.assertIsNone(legacy["coverage_complete"])
         self.assertIsNone(legacy["unit_count"])
+        self.assertIsNone(legacy["max_mass_imbalance_unit"])
+        self.assertIsNone(legacy["max_energy_imbalance_unit"])
 
         empty = self._result(
             {
@@ -724,6 +726,19 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
         self.assertEqual(summary["energy_unit_count"], 1.0)
         self.assertEqual(summary["max_mass_imbalance_pct"], 0.0)
         self.assertEqual(summary["max_energy_imbalance_pct"], 0.0)
+        expected_limiting_unit = {
+            "process_system": "gas plant",
+            "unit_name": "feed mixer",
+            "unit_type": "Mixer",
+        }
+        self.assertEqual(
+            summary["max_mass_imbalance_unit"],
+            expected_limiting_unit,
+        )
+        self.assertEqual(
+            summary["max_energy_imbalance_unit"],
+            expected_limiting_unit,
+        )
         self.assertEqual(
             summary["excluded_units"],
             ["column (DistillationColumn)"],
@@ -757,6 +772,42 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
 
         self.assertEqual(summary["energy_unit_count"], 0.0)
         self.assertIsNone(summary["max_energy_imbalance_pct"])
+        self.assertIsNone(summary["max_energy_imbalance_unit"])
+
+    def test_limiting_unit_attribution_is_deterministic_for_ties(self):
+        later_row = self._row()
+        later_row["process_system"] = "second train"
+        later_row["unit_name"] = "z cooler"
+        later_row["mass_imbalance_pct"] = 0.25
+        later_row["energy_imbalance_pct"] = 0.5
+        earlier_row = self._row()
+        earlier_row["process_system"] = "first train"
+        earlier_row["unit_name"] = "a compressor"
+        earlier_row["mass_imbalance_pct"] = 0.25
+        earlier_row["energy_imbalance_pct"] = 0.5
+        result = self._result(
+            {
+                "applicable": True,
+                "coverage_complete": True,
+                "rows": [later_row, earlier_row],
+                "excluded_units": [],
+            }
+        )
+
+        summary = aggregate_unit_balances(result)
+
+        expected = {
+            "process_system": "first train",
+            "unit_name": "a compressor",
+            "unit_type": "Mixer",
+        }
+        self.assertEqual(summary["max_mass_imbalance_unit"], expected)
+        self.assertEqual(summary["max_energy_imbalance_unit"], expected)
+        summary["max_mass_imbalance_unit"]["unit_name"] = "changed"
+        self.assertEqual(
+            result.raw["unit_balance_diagnostics"]["rows"][1]["unit_name"],
+            "a compressor",
+        )
 
     def test_rejects_incomplete_or_conflicting_diagnostics(self):
         incomplete = self._row()

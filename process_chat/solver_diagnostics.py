@@ -433,6 +433,8 @@ def aggregate_unit_balances(result: Any) -> Dict[str, Any]:
             "energy_unit_count": None,
             "max_mass_imbalance_pct": None,
             "max_energy_imbalance_pct": None,
+            "max_mass_imbalance_unit": None,
+            "max_energy_imbalance_unit": None,
             "excluded_units": [],
         }
     if not isinstance(diagnostics, dict):
@@ -471,6 +473,42 @@ def aggregate_unit_balances(result: Any) -> Dict[str, Any]:
         for row in rows
         if row["energy_imbalance_pct"] is not None
     ]
+    mass_limiting_row = (
+        min(
+            rows,
+            key=lambda row: (
+                -row["mass_imbalance_pct"],
+                row["process_system"],
+                row["unit_name"],
+                row["unit_type"],
+            ),
+        )
+        if rows
+        else None
+    )
+    energy_limiting_row = (
+        min(
+            energy_rows,
+            key=lambda row: (
+                -row["energy_imbalance_pct"],
+                row["process_system"],
+                row["unit_name"],
+                row["unit_type"],
+            ),
+        )
+        if energy_rows
+        else None
+    )
+
+    def unit_identity(row: Dict[str, Any] | None) -> Dict[str, str] | None:
+        if row is None:
+            return None
+        return {
+            "process_system": row["process_system"],
+            "unit_name": row["unit_name"],
+            "unit_type": row["unit_type"],
+        }
+
     return {
         "applicable": applicable,
         "coverage_complete": coverage_complete,
@@ -486,6 +524,8 @@ def aggregate_unit_balances(result: Any) -> Dict[str, Any]:
             if energy_rows
             else None
         ),
+        "max_mass_imbalance_unit": unit_identity(mass_limiting_row),
+        "max_energy_imbalance_unit": unit_identity(energy_limiting_row),
         "excluded_units": excluded_units,
     }
 
