@@ -1698,3 +1698,569 @@ def remove_inline_unit(
         source = connection.get("source")
         target = connection.get("target")
         source_matches = (
+            isinstance(source, dict)
+            and str(source.get("kind", "")).strip() == "unit"
+            and str(source.get("id", "")).strip() == cleaned_unit_id
+        )
+        target_matches = (
+            isinstance(target, dict)
+            and str(target.get("kind", "")).strip() == "unit"
+            and str(target.get("id", "")).strip() == cleaned_unit_id
+        )
+        if not source_matches and not target_matches:
+            continue
+
+        if (
+            connection_type == "material"
+            and target_matches
+            and str(target.get("port", "")).strip() == "in"
+            and not source_matches
+        ):
+            incoming_indices.append(index)
+        elif (
+            connection_type == "material"
+            and source_matches
+            and str(source.get("port", "")).strip() == "out"
+            and not target_matches
+        ):
+            outgoing_indices.append(index)
+        else:
+            unsupported_references.append(connection_id)
+
+    if unsupported_references:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' has unsupported connections: "
+            + ", ".join(unsupported_references)
+            + "."
+        )
+    if not incoming_indices and not outgoing_indices:
+        copied_units.pop(unit_matches[0])
+        return copied_units, copied_connections
+    if len(incoming_indices) == 1 and not outgoing_indices:
+        copied_connections.pop(incoming_indices[0])
+        copied_units.pop(unit_matches[0])
+        return copied_units, copied_connections
+    if len(incoming_indices) != 1 or len(outgoing_indices) != 1:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' requires no connections, one "
+            "terminal incoming connection, or exactly one incoming and one "
+            "outgoing material connection."
+        )
+
+    incoming_index = incoming_indices[0]
+    outgoing_index = outgoing_indices[0]
+    outgoing_target = copied_connections[outgoing_index].get("target")
+    if not isinstance(outgoing_target, dict):
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' outgoing target must be an object."
+        )
+    if str(outgoing_target.get("id", "")).strip() == cleaned_unit_id:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' cannot reconnect to itself."
+        )
+
+    copied_connections[incoming_index]["target"] = copy.deepcopy(
+        outgoing_target
+    )
+    copied_connections.pop(outgoing_index)
+    copied_units.pop(unit_matches[0])
+    return copied_units, copied_connections
+
+
+def create_graph_draft(
+    units: list[Any],
+    connections: list[Any],
+    inlets: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Create an isolated, versioned draft from case graph arrays."""
+    if not isinstance(units, list):
+        raise ValueError("Graph draft units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph draft connections must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    copied_connections = copy.deepcopy(connections)
+    copied_inlets = copy.deepcopy(inlets)
+    inlet_ids: set[str] = set()
+    if copied_inlets is not None:
+        if not isinstance(copied_inlets, list):
+            raise ValueError("Graph draft inlets must be an array.")
+        for index, inlet in enumerate(copied_inlets):
+            if not isinstance(inlet, dict):
+                raise ValueError(
+                    f"Graph draft inlet {index} must be an object."
+                )
+            inlet_id = str(inlet.get("id", "")).strip()
+            if not inlet_id:
+                raise ValueError(
+                    f"Graph draft inlet {index} requires an id."
+                )
+            if inlet_id in inlet_ids:
+                raise ValueError(
+                    f"Graph draft inlet id '{inlet_id}' is duplicated."
+                )
+            inlet_ids.add(inlet_id)
+
+    unit_ids: set[str] = set()
+    for index, unit in enumerate(copied_units):
+        if not isinstance(unit, dict):
+            raise ValueError(f"Graph draft unit {index} must be an object.")
+        unit_id = str(unit.get("id", "")).strip()
+        if not unit_id:
+            raise ValueError(f"Graph draft unit {index} requires an id.")
+        if unit_id in unit_ids:
+            raise ValueError(f"Graph draft unit id '{unit_id}' is duplicated.")
+        unit_ids.add(unit_id)
+
+    conflicting_object_ids = inlet_ids.intersection(unit_ids)
+    if conflicting_object_ids:
+        conflicting_id = sorted(conflicting_object_ids)[0]
+        raise ValueError(
+            f"Graph object id '{conflicting_id}' is duplicated between an "
+            "inlet and a unit; it is both an inlet and a unit."
+        )
+
+    connection_ids: set[str] = set()
+    for index, connection in enumerate(copied_connections):
+        if not isinstance(connection, dict):
+            raise ValueError(
+                f"Graph draft connection {index} must be an object."
+            )
+        connection_id = str(connection.get("id", "")).strip()
+        if not connection_id:
+            raise ValueError(f"Graph draft connection {index} requires an id.")
+        if connection_id in connection_ids:
+            raise ValueError(
+                f"Graph draft connection id '{connection_id}' is duplicated."
+            )
+        connection_ids.add(connection_id)
+        if str(connection.get("type", "")).strip() not in (
+            "material",
+            "energy",
+        ):
+            raise ValueError(
+                f"Graph draft connection '{connection_id}' has invalid type."
+            )
+        for endpoint_name in ("source", "target"):
+            endpoint = connection.get(endpoint_name)
+            if not isinstance(endpoint, dict):
+                raise ValueError(
+                    f"Graph draft connection '{connection_id}' "
+                    f"{endpoint_name} must be an object."
+                )
+            for field_name in ("kind", "id", "port"):
+                if not str(endpoint.get(field_name, "")).strip():
+                    raise ValueError(
+                        f"Graph draft connection '{connection_id}' "
+                        f"{endpoint_name} requires {field_name}."
+                    )
+
+    draft = {
+        "schema_version": GRAPH_DRAFT_SCHEMA_VERSION,
+        "units": copied_units,
+        "connections": copied_connections,
+    }
+    if copied_inlets is not None:
+        draft["inlets"] = copied_inlets
+    return draft
+
+
+def apply_graph_draft(
+    case_spec: dict[str, Any],
+    draft: Any,
+) -> dict[str, Any]:
+    """Apply a validated draft to an isolated copy of a complete case."""
+    if not isinstance(case_spec, dict):
+        raise ValueError("Case specification must be an object.")
+    if not isinstance(draft, dict):
+        raise ValueError("Graph draft must be an object.")
+    if draft.get("schema_version") != GRAPH_DRAFT_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported graph draft schema version. Expected version 1."
+        )
+    if "inlets" in draft and draft["inlets"] is None:
+        raise ValueError("Graph draft inlets must be an array.")
+    retained_or_draft_inlets = (
+        draft.get("inlets")
+        if "inlets" in draft
+        else case_spec.get("inlets")
+    )
+    validated = create_graph_draft(
+        draft.get("units"),
+        draft.get("connections"),
+        retained_or_draft_inlets,
+    )
+    updated_case = copy.deepcopy(case_spec)
+    updated_case["units"] = validated["units"]
+    updated_case["connections"] = validated["connections"]
+    if "inlets" in validated:
+        updated_case["inlets"] = validated["inlets"]
+    return updated_case
+
+
+def _validated_graph_history(history: Any) -> dict[str, Any]:
+    """Return an isolated validated graph-history timeline."""
+    if not isinstance(history, dict):
+        raise ValueError("Graph history must be an object.")
+    if history.get("schema_version") != GRAPH_HISTORY_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported graph history schema version. Expected version 1."
+        )
+
+    entries = history.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("Graph history entries must be a non-empty array.")
+    validated_entries: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Graph history entry {index} must be an object.")
+        if entry.get("schema_version") != GRAPH_DRAFT_SCHEMA_VERSION:
+            raise ValueError(
+                f"Graph history entry {index} has an unsupported draft version."
+            )
+        validated_entries.append(
+            create_graph_draft(
+                entry.get("units"),
+                entry.get("connections"),
+                entry.get("inlets") if "inlets" in entry else None,
+            )
+        )
+
+    cursor = history.get("cursor")
+    if isinstance(cursor, bool) or not isinstance(cursor, int):
+        raise ValueError("Graph history cursor must be an integer.")
+    if cursor < 0 or cursor >= len(validated_entries):
+        raise ValueError("Graph history cursor is outside the entry range.")
+    return {
+        "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
+        "entries": validated_entries,
+        "cursor": cursor,
+    }
+
+
+def create_graph_history(
+    units: list[Any],
+    connections: list[Any],
+    inlets: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Create a history timeline containing one isolated graph revision."""
+    return {
+        "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
+        "entries": [create_graph_draft(units, connections, inlets)],
+        "cursor": 0,
+    }
+
+
+def record_graph_history(
+    history: Any,
+    units: list[Any],
+    connections: list[Any],
+    inlets: list[Any] | None = None,
+    max_entries: int = MAX_GRAPH_HISTORY_ENTRIES,
+) -> dict[str, Any]:
+    """Append one graph revision and discard any abandoned redo branch."""
+    if (
+        isinstance(max_entries, bool)
+        or not isinstance(max_entries, int)
+        or max_entries < 2
+    ):
+        raise ValueError("Graph history limit must be an integer of at least 2.")
+
+    updated = _validated_graph_history(history)
+    candidate = create_graph_draft(units, connections, inlets)
+    if updated["entries"][updated["cursor"]] == candidate:
+        return updated
+
+    entries = updated["entries"][: updated["cursor"] + 1]
+    entries.append(candidate)
+    if len(entries) > max_entries:
+        entries = entries[-max_entries:]
+    return {
+        "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
+        "entries": entries,
+        "cursor": len(entries) - 1,
+    }
+
+
+def graph_history_status(history: Any) -> dict[str, Any]:
+    """Return presentation-ready position and navigation availability."""
+    validated = _validated_graph_history(history)
+    cursor = validated["cursor"]
+    total = len(validated["entries"])
+    return {
+        "position": cursor + 1,
+        "total": total,
+        "can_undo": cursor > 0,
+        "can_redo": cursor < total - 1,
+    }
+
+
+def undo_graph_history(
+    history: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Move back one revision and return isolated history and draft copies."""
+    updated = _validated_graph_history(history)
+    if updated["cursor"] == 0:
+        raise ValueError("Graph history has no earlier revision to undo.")
+    updated["cursor"] -= 1
+    return updated, copy.deepcopy(updated["entries"][updated["cursor"]])
+
+
+def redo_graph_history(
+    history: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Move forward one revision and return isolated history and draft copies."""
+    updated = _validated_graph_history(history)
+    if updated["cursor"] >= len(updated["entries"]) - 1:
+        raise ValueError("Graph history has no later revision to redo.")
+    updated["cursor"] += 1
+    return updated, copy.deepcopy(updated["entries"][updated["cursor"]])
+
+
+def _dot_text(value: Any) -> str:
+    """Quote untrusted graph text for a Graphviz string attribute."""
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def build_graph_draft_dot(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+) -> str:
+    """Render a validated draft graph as deterministic auto-layout DOT.
+
+    Material connections are solid blue paths, energy connections are dashed
+    amber paths, and each unconnected material output is shown as an explicit
+    product boundary. Internal DOT node ids never contain user-provided text.
+    """
+    if not isinstance(inlets, list):
+        raise ValueError("Graph preview inlets must be an array.")
+    validated_draft = create_graph_draft(units, connections, inlets)
+    validated_inlets = validated_draft["inlets"]
+    validated_units = validated_draft["units"]
+    validated_connections = validated_draft["connections"]
+
+    node_ids: dict[tuple[str, str], str] = {}
+    inlet_records: list[tuple[str, dict[str, Any], str]] = []
+    for index, inlet in enumerate(validated_inlets):
+        inlet_id = str(inlet["id"]).strip()
+        key = ("inlet", inlet_id)
+        if key in node_ids:
+            raise ValueError(f"Graph preview inlet id '{inlet_id}' is duplicated.")
+        dot_id = f"inlet_{index}"
+        node_ids[key] = dot_id
+        inlet_records.append((inlet_id, inlet, dot_id))
+
+    unit_records: list[tuple[str, dict[str, Any], str]] = []
+    units_by_id: dict[str, dict[str, Any]] = {}
+    for index, unit in enumerate(validated_units):
+        unit_id = str(unit["id"]).strip()
+        if not isinstance(unit.get("ports"), dict):
+            raise ValueError(f"Graph preview unit '{unit_id}' requires ports.")
+        if ("inlet", unit_id) in node_ids:
+            raise ValueError(
+                f"Graph preview id '{unit_id}' is both an inlet and a unit."
+            )
+        key = ("unit", unit_id)
+        dot_id = f"unit_{index}"
+        node_ids[key] = dot_id
+        units_by_id[unit_id] = unit
+        unit_records.append((unit_id, unit, dot_id))
+
+    connected_outputs: set[tuple[str, str]] = set()
+    rendered_connections: list[
+        tuple[dict[str, Any], str, str, str, str]
+    ] = []
+    for connection in sorted(
+        validated_connections,
+        key=lambda item: str(item["id"]),
+    ):
+        connection_id = str(connection["id"]).strip()
+        source = connection["source"]
+        target = connection["target"]
+        source_kind = str(source["kind"]).strip()
+        source_id = str(source["id"]).strip()
+        source_port = str(source["port"]).strip()
+        target_kind = str(target["kind"]).strip()
+        target_id = str(target["id"]).strip()
+        target_port = str(target["port"]).strip()
+        source_dot_id = node_ids.get((source_kind, source_id))
+        target_dot_id = node_ids.get((target_kind, target_id))
+        if source_dot_id is None:
+            raise ValueError(
+                f"Graph preview connection '{connection_id}' has unknown source "
+                f"{source_kind} '{source_id}'."
+            )
+        if target_dot_id is None:
+            raise ValueError(
+                f"Graph preview connection '{connection_id}' has unknown target "
+                f"{target_kind} '{target_id}'."
+            )
+        connection_type = str(connection["type"])
+        if source_kind == "inlet":
+            if connection_type != "material" or source_port != "out":
+                raise ValueError(
+                    f"Graph preview inlet '{source_id}' exposes material port 'out'."
+                )
+        else:
+            output_ports = units_by_id[source_id]["ports"].get(
+                f"{connection_type}_out",
+                [],
+            )
+            if source_port not in output_ports:
+                raise ValueError(
+                    f"Graph preview connection '{connection_id}' uses undeclared "
+                    f"{connection_type}_out port '{source_port}'."
+                )
+        if target_kind != "unit":
+            raise ValueError(
+                f"Graph preview connection '{connection_id}' target must be a unit."
+            )
+        input_ports = units_by_id[target_id]["ports"].get(
+            f"{connection_type}_in",
+            [],
+        )
+        if target_port not in input_ports:
+            raise ValueError(
+                f"Graph preview connection '{connection_id}' uses undeclared "
+                f"{connection_type}_in port '{target_port}'."
+            )
+        if connection_type == "material":
+            connected_outputs.add((source_id, source_port))
+        rendered_connections.append(
+            (
+                connection,
+                source_dot_id,
+                target_dot_id,
+                source_port,
+                target_port,
+            )
+        )
+
+    lines = [
+        "digraph flowsheet {",
+        '  graph [rankdir="LR", bgcolor="transparent", pad="0.2", '
+        'nodesep="0.45", ranksep="0.75", splines="ortho"];',
+        '  node [shape="box", style="rounded,filled", fontname="Helvetica", '
+        'fontsize="10", margin="0.12,0.08", penwidth="1.4"];',
+        '  edge [fontname="Helvetica", fontsize="8", arrowsize="0.7", '
+        'penwidth="1.4"];',
+    ]
+    for inlet_id, inlet, dot_id in inlet_records:
+        inlet_name = str(inlet.get("name", inlet_id)).strip() or inlet_id
+        label = f"{inlet_name}\nINLET"
+        lines.append(
+            f"  {dot_id} [label={_dot_text(label)}, shape=\"oval\", "
+            'fillcolor="#dcfce7", color="#16a34a"];'
+        )
+
+    for unit_id, unit, dot_id in unit_records:
+        unit_name = str(unit.get("name", unit_id)).strip() or unit_id
+        unit_type = str(unit.get("type", "unit")).strip().lower() or "unit"
+        fill_color, line_color = _GRAPH_NODE_STYLES.get(
+            unit_type,
+            ("#f8fafc", "#64748b"),
+        )
+        label = f"{unit_name}\n{unit_type.upper()}"
+        lines.append(
+            f"  {dot_id} [label={_dot_text(label)}, "
+            f"fillcolor=\"{fill_color}\", color=\"{line_color}\"];"
+        )
+
+    for (
+        connection,
+        source_dot_id,
+        target_dot_id,
+        source_port,
+        target_port,
+    ) in rendered_connections:
+        connection_type = str(connection["type"])
+        if connection_type == "energy":
+            edge_style = 'color="#d97706", fontcolor="#92400e", style="dashed"'
+        else:
+            edge_style = 'color="#2563eb", fontcolor="#1e40af"'
+        edge_label = f"{source_port} \u2192 {target_port}"
+        lines.append(
+            f"  {source_dot_id} -> {target_dot_id} "
+            f"[label={_dot_text(edge_label)}, {edge_style}];"
+        )
+
+    product_index = 0
+    for unit_id, unit, dot_id in unit_records:
+        ports = unit.get("ports")
+        if not isinstance(ports, dict):
+            raise ValueError(f"Graph preview unit '{unit_id}' requires ports.")
+        output_ports = ports.get("material_out", [])
+        if not isinstance(output_ports, list):
+            raise ValueError(
+                f"Graph preview unit '{unit_id}' material_out must be an array."
+            )
+        for port in output_ports:
+            port_name = str(port).strip()
+            if not port_name:
+                raise ValueError(
+                    f"Graph preview unit '{unit_id}' has an empty output port."
+                )
+            if (unit_id, port_name) in connected_outputs:
+                continue
+            product_dot_id = f"product_{product_index}"
+            product_index += 1
+            product_label = f"{unit_id}:{port_name}\nPRODUCT"
+            lines.append(
+                f"  {product_dot_id} [label={_dot_text(product_label)}, "
+                'shape="oval", fillcolor="#f1f5f9", color="#64748b"];'
+            )
+            lines.append(
+                f"  {dot_id} -> {product_dot_id} "
+                f"[label={_dot_text(port_name)}, color=\"#2563eb\", "
+                'fontcolor="#1e40af"];'
+            )
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def material_connection_rows(
+    connections: list[Any],
+) -> list[dict[str, str]]:
+    """Return deterministic palette labels for editable material paths."""
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    rows: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            raise ValueError(f"Graph connection {index} must be an object.")
+        connection_id = str(connection.get("id", "")).strip()
+        if not connection_id:
+            raise ValueError(f"Graph connection {index} requires an id.")
+        if connection_id in seen_ids:
+            raise ValueError(f"Graph connection id '{connection_id}' is duplicated.")
+        seen_ids.add(connection_id)
+        if str(connection.get("type", "")).strip().lower() != "material":
+            continue
+
+        source = connection.get("source")
+        target = connection.get("target")
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            raise ValueError(
+                f"Connection '{connection_id}' requires source and target."
+            )
+        source_id = str(source.get("id", "")).strip()
+        source_port = str(source.get("port", "")).strip()
+        target_id = str(target.get("id", "")).strip()
+        target_port = str(target.get("port", "")).strip()
+        if not all((source_id, source_port, target_id, target_port)):
+            raise ValueError(
+                f"Connection '{connection_id}' has an incomplete material route."
+            )
+        rows.append(
+            {
+                "id": connection_id,
+                "label": (
+                    f"{source_id}:{source_port} → "
+                    f"{target_id}:{target_port}"
+                ),
+            }
+        )
+    return rows
