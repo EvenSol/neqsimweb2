@@ -60,6 +60,7 @@ class UnitCatalogTest(unittest.TestCase):
                 "pipeline",
                 "separator",
                 "mixer",
+                "splitter",
             ],
         )
         self.assertTrue(all(row["Category"] for row in rows))
@@ -108,7 +109,7 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(updated[-1]["params"]["efficiency"], 0.75)
         self.assertEqual(len(units), 1)
 
-    def test_adds_multi_inlet_mixer_and_phase_separator_nodes(self):
+    def test_adds_multi_inlet_mixer_separator_and_splitter_nodes(self):
         units, mixer_id = add_catalog_unit(
             [],
             "mixer",
@@ -120,6 +121,11 @@ class UnitCatalogTest(unittest.TestCase):
             units,
             "separator",
             "Product separator",
+        )
+        units, splitter_id = add_catalog_unit(
+            units,
+            "splitter",
+            "Export split",
         )
 
         self.assertEqual(mixer_id, "feed-mixer")
@@ -138,10 +144,20 @@ class UnitCatalogTest(unittest.TestCase):
                 "material_out": ["gas", "liquid"],
             },
         )
+        self.assertEqual(splitter_id, "export-split")
+        self.assertEqual(
+            units[2]["ports"],
+            {
+                "material_in": ["in"],
+                "material_out": ["out_0", "out_1"],
+            },
+        )
         self.assertEqual(units[0]["params"], {})
         self.assertEqual(units[1]["params"], {})
+        self.assertEqual(units[2]["params"], {})
         validate_catalog_unit(units[0])
         validate_catalog_unit(units[1])
+        validate_catalog_unit(units[2])
 
     def test_standalone_unit_rejects_duplicate_names_without_mutation(self):
         units = [
