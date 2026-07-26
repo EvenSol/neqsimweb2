@@ -2314,7 +2314,6 @@ def remove_inline_unit(
         raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
     if len(unit_matches) > 1:
         raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
-    validate_catalog_unit(copied_units[unit_matches[0]])
 
     incoming_indices: list[int] = []
     outgoing_indices: list[int] = []
@@ -2365,6 +2364,7 @@ def remove_inline_unit(
     if not incoming_indices and not outgoing_indices:
         copied_units.pop(unit_matches[0])
         return copied_units, copied_connections
+    validate_catalog_unit(copied_units[unit_matches[0]])
     if len(incoming_indices) == 1 and not outgoing_indices:
         copied_connections.pop(incoming_indices[0])
         copied_units.pop(unit_matches[0])
