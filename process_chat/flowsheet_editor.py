@@ -1494,40 +1494,58 @@ def _validate_acyclic_material_connections(
         on_stack: set[tuple[str, str]] = set()
         cyclic_nodes: set[tuple[str, str]] = set()
 
-        def visit(node: tuple[str, str]) -> None:
-            nonlocal next_index
-            indices[node] = next_index
-            lowlinks[node] = next_index
+        for start in sorted(adjacency):
+            if start in indices:
+                continue
+            indices[start] = next_index
+            lowlinks[start] = next_index
             next_index += 1
-            stack.append(node)
-            on_stack.add(node)
-            for downstream in sorted(adjacency[node]):
+            stack.append(start)
+            on_stack.add(start)
+            parents: dict[tuple[str, str], tuple[str, str]] = {}
+            traversal = [(start, iter(sorted(adjacency[start])))]
+            while traversal:
+                node, downstream_nodes = traversal[-1]
+                try:
+                    downstream = next(downstream_nodes)
+                except StopIteration:
+                    traversal.pop()
+                    parent = parents.get(node)
+                    if parent is not None:
+                        lowlinks[parent] = min(
+                            lowlinks[parent],
+                            lowlinks[node],
+                        )
+                    if lowlinks[node] != indices[node]:
+                        continue
+                    component: list[tuple[str, str]] = []
+                    while stack:
+                        member = stack.pop()
+                        on_stack.remove(member)
+                        component.append(member)
+                        if member == node:
+                            break
+                    if len(component) > 1 or node in adjacency[node]:
+                        cyclic_nodes.update(component)
+                    continue
                 if downstream not in indices:
-                    visit(downstream)
-                    lowlinks[node] = min(
-                        lowlinks[node],
-                        lowlinks[downstream],
+                    parents[downstream] = node
+                    indices[downstream] = next_index
+                    lowlinks[downstream] = next_index
+                    next_index += 1
+                    stack.append(downstream)
+                    on_stack.add(downstream)
+                    traversal.append(
+                        (
+                            downstream,
+                            iter(sorted(adjacency[downstream])),
+                        )
                     )
                 elif downstream in on_stack:
                     lowlinks[node] = min(
                         lowlinks[node],
                         indices[downstream],
                     )
-            if lowlinks[node] != indices[node]:
-                return
-            component: list[tuple[str, str]] = []
-            while stack:
-                member = stack.pop()
-                on_stack.remove(member)
-                component.append(member)
-                if member == node:
-                    break
-            if len(component) > 1 or node in adjacency[node]:
-                cyclic_nodes.update(component)
-
-        for node in sorted(adjacency):
-            if node not in indices:
-                visit(node)
         cyclic_units = sorted(
             object_id
             for kind, object_id in cyclic_nodes

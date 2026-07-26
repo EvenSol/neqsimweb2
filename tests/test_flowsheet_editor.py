@@ -7,6 +7,7 @@ import json
 import unittest
 
 from process_chat.flowsheet_editor import (
+    _validate_acyclic_material_connections,
     add_catalog_unit,
     apply_graph_draft,
     build_graph_draft_dot,
@@ -2571,6 +2572,29 @@ class GraphPortConnectionTest(unittest.TestCase):
                 {"kind": "unit", "id": "splitter", "port": "in"},
             )
         self.assertNotIn("downstream-pump", str(raised.exception))
+
+    def test_large_cycle_is_rejected_without_recursive_traversal(self):
+        unit_count = 1_100
+        connections = [
+            {
+                "id": f"node-{index}-to-node-{(index + 1) % unit_count}",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": f"node-{index}",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": f"node-{(index + 1) % unit_count}",
+                    "port": "in",
+                },
+            }
+            for index in range(unit_count)
+        ]
+
+        with self.assertRaisesRegex(ValueError, "would create a cycle"):
+            _validate_acyclic_material_connections(connections)
 
     def test_connection_rows_cover_material_and_energy_paths(self):
         rows = graph_connection_rows(

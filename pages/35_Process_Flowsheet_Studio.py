@@ -3491,11 +3491,58 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     ),
                 )
                 resolved_mixer_name = mixer_name.strip() or "Feed mixer"
+                secondary_source_candidates = [
+                    row
+                    for row in all_material_sources
+                    if not row["connected"]
+                ]
+                selected_secondary_source = None
+                if secondary_source_candidates:
+                    secondary_source_index = st.selectbox(
+                        "Second mixer inlet",
+                        options=[
+                            None,
+                            *range(len(secondary_source_candidates)),
+                        ],
+                        format_func=lambda index: (
+                            "Leave in_1 unconnected for now"
+                            if index is None
+                            else secondary_source_candidates[index]["label"]
+                        ),
+                        key=(
+                            "flowsheet_reorganize_mixer_second_source_"
+                            f"{graph_widget_revision}"
+                        ),
+                        help=(
+                            "Choose another feed or material outlet to make "
+                            "the inserted mixer immediately solve-ready."
+                        ),
+                    )
+                    if secondary_source_index is not None:
+                        selected_secondary_source = (
+                            secondary_source_candidates[
+                                secondary_source_index
+                            ]
+                        )
+                else:
+                    st.caption(
+                        "No free material source is currently available for "
+                        "mixer in_1."
+                    )
+                secondary_preview = (
+                    f"{selected_secondary_source['label']} → "
+                    f"{resolved_mixer_name}:in_1"
+                    if selected_secondary_source is not None
+                    else (
+                        f"{resolved_mixer_name}:in_1 remains free and must be "
+                        "connected before solving"
+                    )
+                )
                 st.markdown(
                     f"**Preview:** {current_source_label} → "
                     f"{resolved_mixer_name}:in_0 → "
                     f"{resolved_mixer_name}:out → "
-                    f"{current_target_label}; mixer `in_1` remains free."
+                    f"{current_target_label}; {secondary_preview}."
                 )
                 insert_mixer = st.button(
                     "Insert mixer and preserve downstream path",
@@ -3519,6 +3566,23 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             reorganize_connection_id,
                             resolved_mixer_name,
                         )
+                        secondary_connection_id = None
+                        if selected_secondary_source is not None:
+                            (
+                                connections,
+                                secondary_connection_id,
+                            ) = connect_graph_ports(
+                                spec["inlets"],
+                                units,
+                                connections,
+                                "material",
+                                selected_secondary_source["endpoint"],
+                                {
+                                    "kind": "unit",
+                                    "id": mixer_id,
+                                    "port": "in_1",
+                                },
+                            )
                         candidate_draft = create_graph_draft(
                             units,
                             connections,
@@ -3538,6 +3602,17 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"draft: {edit_error}"
                         )
                     else:
+                        if secondary_connection_id is None:
+                            solve_notice = (
+                                f"Left {mixer_id}:in_1 available. Connect it "
+                                "before running NeqSim."
+                            )
+                        else:
+                            solve_notice = (
+                                "Connected the second source with "
+                                f"'{secondary_connection_id}'. The reorganized "
+                                "graph is ready to run in NeqSim."
+                            )
                         _record_graph_revision(
                             spec,
                             candidate_draft,
@@ -3545,9 +3620,8 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                 f"Inserted mixer '{mixer_id}' in "
                                 f"'{reorganize_connection_id}', preserved the "
                                 "downstream process with "
-                                f"'{downstream_connection_id}', and left "
-                                f"{mixer_id}:in_1 available. Run NeqSim to "
-                                "solve the reorganized graph."
+                                f"'{downstream_connection_id}'. "
+                                f"{solve_notice}"
                             ),
                         )
                         st.rerun()
