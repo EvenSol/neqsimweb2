@@ -1995,12 +1995,12 @@ def replace_inline_unit(
     if not isinstance(connections, list):
         raise ValueError("Graph connections must be an array.")
 
-    copied_units = copy.deepcopy(units)
-    copied_connections = copy.deepcopy(connections)
+    inspected_units = units
+    inspected_connections = connections
     cleaned_unit_id = str(unit_id).strip()
     unit_matches = [
         unit
-        for unit in copied_units
+        for unit in inspected_units
         if isinstance(unit, dict)
         and str(unit.get("id", "")).strip() == cleaned_unit_id
     ]
@@ -2028,7 +2028,7 @@ def replace_inline_unit(
 
     peer_names = _normalized_name_keys(
         unit.get("name")
-        for unit in copied_units
+        for unit in inspected_units
         if (
             isinstance(unit, dict)
             and str(unit.get("id", "")).strip() != cleaned_unit_id
@@ -2043,7 +2043,7 @@ def replace_inline_unit(
 
     incoming_connection_ids = [
         str(connection.get("id", "")).strip()
-        for connection in copied_connections
+        for connection in inspected_connections
         if (
             isinstance(connection, dict)
             and str(connection.get("type", "")).strip().lower() == "material"
@@ -2061,7 +2061,7 @@ def replace_inline_unit(
         )
     outgoing_connections = [
         connection
-        for connection in copied_connections
+        for connection in inspected_connections
         if (
             isinstance(connection, dict)
             and str(connection.get("type", "")).strip().lower() == "material"
@@ -2080,8 +2080,8 @@ def replace_inline_unit(
     replacement_connection_id = incoming_connection_ids[0]
 
     reduced_units, reduced_connections = remove_inline_unit(
-        copied_units,
-        copied_connections,
+        inspected_units,
+        inspected_connections,
         cleaned_unit_id,
     )
     replaced_units, replaced_connections, replacement_id = (
