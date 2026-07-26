@@ -3693,12 +3693,16 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             available_only=True,
         )
         extend_cols = st.columns(3)
-        extend_source_index = extend_cols[0].selectbox(
-            "Source outlet",
-            options=list(range(len(extend_source_rows))),
-            format_func=lambda index: extend_source_rows[index]["label"],
-            key=f"flowsheet_extend_source_{graph_widget_revision}",
-        )
+        if extend_source_rows:
+            extend_source_index = extend_cols[0].selectbox(
+                "Source outlet",
+                options=list(range(len(extend_source_rows))),
+                format_func=lambda index: extend_source_rows[index]["label"],
+                key=f"flowsheet_extend_source_{graph_widget_revision}",
+            )
+        else:
+            extend_cols[0].info("No unconnected material outlets.")
+            extend_source_index = None
         extend_type = extend_cols[1].selectbox(
             "Next equipment",
             options=list(catalog),
