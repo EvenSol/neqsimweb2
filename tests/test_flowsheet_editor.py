@@ -631,6 +631,13 @@ class MaterialInletLifecycleTest(unittest.TestCase):
         self.assertEqual(inlets[1]["name"], "Tie-in Feed")
         with self.assertRaisesRegex(ValueError, "duplicated"):
             rename_material_inlet(inlets, inlet_id, "feed")
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            rename_material_inlet(
+                inlets,
+                inlet_id,
+                "Condensate Pump",
+                {"condensate pump"},
+            )
 
     def test_remove_requires_an_unconnected_nonprotected_secondary_feed(self):
         inlets, inlet_id = clone_material_inlet(

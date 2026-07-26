@@ -3348,6 +3348,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["inlets"],
                             selected_inlet_id,
                             renamed_inlet,
+                            {
+                                str(unit["name"]).strip()
+                                for unit in spec["units"]
+                                if isinstance(unit, dict)
+                            },
                         )
                         lifecycle_notice = (
                             f"Renamed feed '{selected_inlet['name']}' to "
