@@ -1389,6 +1389,16 @@ class MixerPathInsertionTest(unittest.TestCase):
                 "only be inserted in a material path",
             ),
             (
+                [
+                    {
+                        key: value
+                        for key, value in self.connections[0].items()
+                        if key != "type"
+                    }
+                ],
+                "only be inserted in a material path",
+            ),
+            (
                 self.connections,
                 "duplicated",
             ),
@@ -2466,6 +2476,101 @@ class GraphPortConnectionTest(unittest.TestCase):
                         target,
                     )
         self.assertEqual(self.connections, original_connections)
+
+    def test_cycle_diagnostic_excludes_downstream_units(self):
+        units = [
+            {
+                "id": "splitter",
+                "name": "Cycle splitter",
+                "type": "splitter",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out_0", "out_1"],
+                },
+            },
+            create_inline_unit_spec("mixer", "Cycle mixer", {"splitter"}),
+            create_inline_unit_spec(
+                "heater",
+                "Cycle heater",
+                {"splitter", "cycle-mixer"},
+            ),
+            create_inline_unit_spec(
+                "pump",
+                "Downstream pump",
+                {"splitter", "cycle-mixer", "cycle-heater"},
+            ),
+        ]
+        connections = [
+            {
+                "id": "feed-to-splitter",
+                "type": "material",
+                "source": {"kind": "inlet", "id": "feed", "port": "out"},
+                "target": {"kind": "unit", "id": "splitter", "port": "in"},
+            },
+            {
+                "id": "splitter-to-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "splitter",
+                    "port": "out_0",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "cycle-mixer",
+                    "port": "in_0",
+                },
+            },
+            {
+                "id": "mixer-to-heater",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "cycle-mixer",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "cycle-heater",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "splitter-to-pump",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "splitter",
+                    "port": "out_1",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "downstream-pump",
+                    "port": "in",
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            (
+                "cycle involving: cycle-heater, cycle-mixer, splitter"
+                r"\."
+            ),
+        ) as raised:
+            reroute_graph_connection(
+                [{"id": "feed", "name": "Feed"}],
+                units,
+                connections,
+                "feed-to-splitter",
+                {
+                    "kind": "unit",
+                    "id": "cycle-heater",
+                    "port": "out",
+                },
+                {"kind": "unit", "id": "splitter", "port": "in"},
+            )
+        self.assertNotIn("downstream-pump", str(raised.exception))
 
     def test_connection_rows_cover_material_and_energy_paths(self):
         rows = graph_connection_rows(
