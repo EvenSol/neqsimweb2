@@ -2047,7 +2047,18 @@ def _unit_balance_coverage_label(summary: dict[str, Any]) -> str:
         return "Not recorded"
     if summary["applicable"] is False:
         return "Not applicable"
-    return "Complete" if summary["coverage_complete"] else "Partial"
+    material_label = (
+        "Material complete"
+        if summary["coverage_complete"]
+        else "Material partial"
+    )
+    if summary["energy_unit_count"] == 0:
+        energy_label = "energy not audited"
+    elif summary["energy_coverage_complete"]:
+        energy_label = "energy complete"
+    else:
+        energy_label = "energy partial"
+    return f"{material_label}; {energy_label}"
 
 
 def _kpi_value(result: Any, name: str) -> float | None:
@@ -4439,12 +4450,22 @@ if results_are_current and has_stored_result:
             if unit_balance_summary["coverage_complete"]:
                 st.success(
                     "Every supported explicit-port unit was included "
-                    "in the closure audit."
+                    "in the material-balance audit."
                 )
             else:
                 st.warning(
-                    "Per-unit closure coverage is incomplete; excluded "
-                    "equipment is listed below."
+                    "Per-unit material-balance coverage is incomplete; "
+                    "excluded equipment is listed below."
+                )
+            if unit_balance_summary["energy_unit_count"] == 0:
+                st.warning("No per-unit energy balance was audited.")
+            elif not unit_balance_summary["energy_coverage_complete"]:
+                st.warning(
+                    "Per-unit energy balance was audited for "
+                    f"{int(unit_balance_summary['energy_unit_count'])} "
+                    "of "
+                    f"{int(unit_balance_summary['unit_count'])} "
+                    "included units."
                 )
             closure_cols = st.columns(2)
             closure_cols[0].metric(
