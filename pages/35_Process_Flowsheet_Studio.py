@@ -359,6 +359,84 @@ def _graph_name_set(
     return result
 
 
+def _terminal_material_stream_names(
+    units: list[Any],
+    connections: list[Any],
+) -> set[str]:
+    """Return names the native builder will assign to product boundaries."""
+    connected_outputs: set[tuple[str, str]] = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        source = connection.get("source")
+        if not isinstance(source, dict):
+            continue
+        if str(source.get("kind", "")).strip().lower() != "unit":
+            continue
+        connected_outputs.add(
+            (
+                str(source.get("id", "")).strip(),
+                str(source.get("port", "")).strip().lower(),
+            )
+        )
+
+    result: set[str] = set()
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        unit_id = str(unit.get("id", "")).strip()
+        raw_name = unit.get("name")
+        unit_name = "" if raw_name is None else str(raw_name).strip()
+        ports = unit.get("ports")
+        if not unit_id or not unit_name or not isinstance(ports, dict):
+            continue
+        material_outputs = ports.get("material_out")
+        if not isinstance(material_outputs, list):
+            continue
+        for raw_port in material_outputs:
+            output_port = str(raw_port).strip().lower()
+            if (
+                output_port
+                and (unit_id, output_port) not in connected_outputs
+            ):
+                result.add(f"{unit_name} [{output_port}] product")
+    return result
+
+
+def _validate_graph_solve_readiness(case_spec: dict[str, Any]) -> None:
+    """Reject graph drafts whose independent feeds are not yet consumed."""
+    inlets = case_spec.get("inlets")
+    connections = case_spec.get("connections")
+    if not isinstance(inlets, list) or not isinstance(connections, list):
+        raise ValueError("The graph requires inlet and connection arrays.")
+
+    connected_inlets: set[str] = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        source = connection.get("source")
+        if not isinstance(source, dict):
+            continue
+        if (
+            str(source.get("kind", "")).strip().lower() == "inlet"
+            and str(source.get("port", "")).strip().lower() == "out"
+        ):
+            connected_inlets.add(str(source.get("id", "")).strip())
+
+    disconnected = [
+        str(inlet.get("id", "")).strip()
+        for inlet in inlets
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip()
+        and str(inlet.get("id", "")).strip() not in connected_inlets
+    ]
+    if disconnected:
+        raise ValueError(
+            "Connect every independent feed before solving; disconnected "
+            f"inlet(s): {', '.join(disconnected)}."
+        )
+
+
 def _secondary_inlet_map(
     inlets: list[Any],
     primary_inlet_id: str,
@@ -1053,6 +1131,24 @@ def _validate_case_graph(
         raise ValueError("Schema v3 requires a connections array.")
 
     _validate_graph_integrity(inlets, units, connections)
+    terminal_name_keys = {
+        name.casefold()
+        for name in _terminal_material_stream_names(units, connections)
+    }
+    conflicting_inlet_names = sorted(
+        str(inlet.get("name", "")).strip()
+        for inlet in inlets
+        if isinstance(inlet, dict)
+        and inlet.get("name") is not None
+        and str(inlet.get("name", "")).strip().casefold()
+        in terminal_name_keys
+    )
+    if conflicting_inlet_names:
+        raise ValueError(
+            "Inlet names conflict with generated terminal product streams: "
+            + ", ".join(conflicting_inlet_names)
+            + "."
+        )
     indexed_units = _index_graph_objects(units, "units")
     expected_units, _ = _build_template_graph(process)
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
@@ -3213,7 +3309,12 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         if isinstance(unit, dict)
                         and str(unit.get("id", "")).strip()
                     },
-                    _graph_name_set(spec["units"]),
+                    _graph_name_set(spec["units"]).union(
+                        _terminal_material_stream_names(
+                            spec["units"],
+                            spec["connections"],
+                        )
+                    ),
                 )
                 candidate_draft = create_graph_draft(
                     spec["units"],
@@ -3435,7 +3536,12 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["inlets"],
                             selected_inlet_id,
                             renamed_inlet,
-                            _graph_name_set(spec["units"]),
+                            _graph_name_set(spec["units"]).union(
+                                _terminal_material_stream_names(
+                                    spec["units"],
+                                    spec["connections"],
+                                )
+                            ),
                         )
                         lifecycle_notice = (
                             f"Renamed feed '{selected_inlet_name}' to "
@@ -4373,6 +4479,7 @@ if run_case:
             raise ValueError(draft_error or "The current case inputs are invalid.")
         case_spec = draft_case_spec
         case_warnings = draft_warnings
+        _validate_graph_solve_readiness(case_spec)
 
         solver_status_placeholder.write("**Solver:** Solving")
         execution_started = perf_counter()
