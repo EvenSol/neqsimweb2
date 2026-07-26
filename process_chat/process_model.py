@@ -39,6 +39,13 @@ _MATERIAL_CONNECTIVITY_UNSAFE_UNIT_CLASSES = {
     "electrolyzer",
     "tank",
 }
+_MATERIAL_PREFER_EXPLICIT_INLET_COLLECTION_CLASSES = {
+    "gasscrubber",
+    "gasscrubbersimple",
+    "separator",
+    "threephaseseparator",
+    "twophaseseparator",
+}
 _MATERIAL_PRIVATE_INLET_FIELDS = {
     "co2electrolyzer": ("inletStream",),
     "electrolyzer": ("waterInlet",),
@@ -1148,6 +1155,10 @@ class NeqSimProcessModel:
     def _material_inlet_streams(unit: Any) -> List[Any]:
         """Return every discoverable material inlet on a native unit."""
         inlets: List[Any] = []
+        try:
+            unit_class = str(unit.getClass().getSimpleName()).lower()
+        except Exception:
+            unit_class = ""
 
         if hasattr(unit, "getInletStreams"):
             try:
@@ -1158,6 +1169,20 @@ class NeqSimProcessModel:
                 )
             except Exception:
                 pass
+
+        if (
+            inlets
+            and unit_class
+            in _MATERIAL_PREFER_EXPLICIT_INLET_COLLECTION_CLASSES
+        ):
+            unique_inlets = []
+            inlet_identities = _MaterialBoundaryIdentityTracker()
+            for stream in inlets:
+                if inlet_identities.contains("feed", stream):
+                    continue
+                inlet_identities.add("feed", stream)
+                unique_inlets.append(stream)
+            return unique_inlets
 
         for method_name in (
             "getInStream",
@@ -1198,10 +1223,6 @@ class NeqSimProcessModel:
             if stream is not None:
                 inlets.append(stream)
 
-        try:
-            unit_class = str(unit.getClass().getSimpleName()).lower()
-        except Exception:
-            unit_class = ""
         for field_name in _MATERIAL_PRIVATE_INLET_FIELDS.get(
             unit_class,
             (),
