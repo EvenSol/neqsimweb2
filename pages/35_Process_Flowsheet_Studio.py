@@ -368,6 +368,8 @@ def _terminal_material_stream_names(
     for connection in connections:
         if not isinstance(connection, dict):
             continue
+        if str(connection.get("type", "")).strip().lower() != "material":
+            continue
         source = connection.get("source")
         if not isinstance(source, dict):
             continue
@@ -3063,6 +3065,58 @@ def _graph_history_for_spec(spec: dict[str, Any]) -> dict[str, Any]:
     return history
 
 
+def _reconcile_inlet_composition(
+    composition: dict[str, Any],
+    registry_composition: dict[str, Any],
+) -> dict[str, float]:
+    """Rebase an inlet composition onto a changed shared component registry."""
+    if not isinstance(composition, dict):
+        raise ValueError("Inlet composition must be an object.")
+    if not isinstance(registry_composition, dict) or not registry_composition:
+        raise ValueError("Shared registry composition must be non-empty.")
+
+    values: dict[str, float] = {}
+    fallback_values: dict[str, float] = {}
+    for component_name, raw_fallback in registry_composition.items():
+        if isinstance(raw_fallback, bool):
+            raise ValueError("Shared registry mole fractions must be numeric.")
+        try:
+            fallback = float(raw_fallback)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Shared registry mole fractions must be numeric."
+            ) from error
+        if not math.isfinite(fallback) or fallback < 0.0:
+            raise ValueError(
+                "Shared registry mole fractions must be finite and non-negative."
+            )
+        fallback_values[component_name] = fallback
+
+        raw_value = composition.get(component_name, fallback)
+        if isinstance(raw_value, bool):
+            raise ValueError("Inlet mole fractions must be numeric.")
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Inlet mole fractions must be numeric.") from error
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                "Inlet mole fractions must be finite and non-negative."
+            )
+        values[component_name] = value
+
+    total = sum(values.values())
+    if total <= 0.0:
+        values = fallback_values
+        total = sum(values.values())
+    if total <= 0.0:
+        raise ValueError("Reconciled inlet mole fractions must have a positive sum.")
+    return {
+        component_name: value / total
+        for component_name, value in values.items()
+    }
+
+
 def _apply_studio_graph_draft(
     case_spec: dict[str, Any],
     draft: dict[str, Any],
@@ -3119,6 +3173,29 @@ def _apply_studio_graph_draft(
     refreshed_draft["inlets"][primary_draft_indices[0]] = json.loads(
         json.dumps(primary_case_inlets[0], allow_nan=False)
     )
+    primary_inlet = primary_case_inlets[0]
+    primary_package_id = str(
+        primary_inlet.get("fluid_package_id", "")
+    ).strip()
+    primary_composition = primary_inlet.get("composition")
+    if primary_package_id and isinstance(primary_composition, dict):
+        for index, inlet in enumerate(refreshed_draft["inlets"]):
+            if index == primary_draft_indices[0] or not isinstance(inlet, dict):
+                continue
+            if (
+                str(inlet.get("fluid_package_id", "")).strip()
+                != primary_package_id
+            ):
+                continue
+            composition = inlet.get("composition")
+            if (
+                isinstance(composition, dict)
+                and set(composition) != set(primary_composition)
+            ):
+                inlet["composition"] = _reconcile_inlet_composition(
+                    composition,
+                    primary_composition,
+                )
     return apply_graph_draft(case_spec, refreshed_draft)
 
 
