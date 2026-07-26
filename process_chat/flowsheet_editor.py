@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import heapq
 import json
 import math
 import re
@@ -1471,25 +1472,66 @@ def _validate_acyclic_material_connections(
             adjacency[source_node].add(target_node)
             indegree[target_node] += 1
 
-    available = sorted(
+    available = [
         node for node, dependency_count in indegree.items()
         if dependency_count == 0
-    )
+    ]
+    heapq.heapify(available)
     visited = 0
     while available:
-        node = available.pop(0)
+        node = heapq.heappop(available)
         visited += 1
         for downstream in sorted(adjacency[node]):
             indegree[downstream] -= 1
             if indegree[downstream] == 0:
-                available.append(downstream)
-                available.sort()
+                heapq.heappush(available, downstream)
 
     if visited != len(indegree):
+        next_index = 0
+        indices: dict[tuple[str, str], int] = {}
+        lowlinks: dict[tuple[str, str], int] = {}
+        stack: list[tuple[str, str]] = []
+        on_stack: set[tuple[str, str]] = set()
+        cyclic_nodes: set[tuple[str, str]] = set()
+
+        def visit(node: tuple[str, str]) -> None:
+            nonlocal next_index
+            indices[node] = next_index
+            lowlinks[node] = next_index
+            next_index += 1
+            stack.append(node)
+            on_stack.add(node)
+            for downstream in sorted(adjacency[node]):
+                if downstream not in indices:
+                    visit(downstream)
+                    lowlinks[node] = min(
+                        lowlinks[node],
+                        lowlinks[downstream],
+                    )
+                elif downstream in on_stack:
+                    lowlinks[node] = min(
+                        lowlinks[node],
+                        indices[downstream],
+                    )
+            if lowlinks[node] != indices[node]:
+                return
+            component: list[tuple[str, str]] = []
+            while stack:
+                member = stack.pop()
+                on_stack.remove(member)
+                component.append(member)
+                if member == node:
+                    break
+            if len(component) > 1 or node in adjacency[node]:
+                cyclic_nodes.update(component)
+
+        for node in sorted(adjacency):
+            if node not in indices:
+                visit(node)
         cyclic_units = sorted(
             object_id
-            for (kind, object_id), dependency_count in indegree.items()
-            if kind == "unit" and dependency_count > 0
+            for kind, object_id in cyclic_nodes
+            if kind == "unit"
         )
         cycle_label = ", ".join(cyclic_units) or "unknown units"
         raise ValueError(
@@ -1723,7 +1765,7 @@ def insert_mixer_on_connection(
         cleaned_connection_id,
     )
     selected_connection = copied_connections[selected_index]
-    if str(selected_connection["type"]).strip().lower() != "material":
+    if str(selected_connection.get("type", "")).strip().lower() != "material":
         raise ValueError("A mixer can only be inserted in a material path.")
     inventory = _graph_port_inventory(inlets, units, copied_connections)
     copied_connections = inventory["connections"]
