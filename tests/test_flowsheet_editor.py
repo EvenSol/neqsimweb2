@@ -65,6 +65,15 @@ class UnitCatalogTest(unittest.TestCase):
         )
         self.assertTrue(all(row["Category"] for row in rows))
         self.assertTrue(all(row["Description"] for row in rows))
+        splitter_row = rows[-1]
+        self.assertEqual(
+            splitter_row["Equipment"],
+            "Splitter (equal default)",
+        )
+        self.assertIn(
+            "default to an equal allocation",
+            splitter_row["Description"],
+        )
 
         first_copy = inline_unit_catalog()
         first_copy["cooler"]["ports"]["material_out"].append("changed")
