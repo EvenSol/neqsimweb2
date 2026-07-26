@@ -1927,6 +1927,61 @@ def rename_inline_unit(
     return copied_units
 
 
+def replace_inline_unit_type(
+    units: list[Any],
+    unit_id: str,
+    replacement_type: str,
+) -> list[dict[str, Any]]:
+    """Replace one catalog unit while preserving its graph identity and routes.
+
+    Replacement is intentionally limited to equipment with an identical port
+    contract. The stable id, display name, and non-execution metadata are
+    retained; type-specific parameters reset to the replacement defaults.
+    Inputs are never mutated.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+
+    copied_units = copy.deepcopy(units)
+    cleaned_unit_id = str(unit_id).strip()
+    matches = [
+        index
+        for index, unit in enumerate(copied_units)
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+
+    selected_unit = copied_units[matches[0]]
+    validate_catalog_unit(selected_unit)
+    current_type = str(selected_unit.get("type", "")).strip().lower()
+    cleaned_replacement_type = str(replacement_type).strip().lower()
+    replacement = _INLINE_UNIT_CATALOG.get(cleaned_replacement_type)
+    if replacement is None:
+        raise ValueError(
+            f"Unsupported inline unit type '{cleaned_replacement_type}'."
+        )
+    if cleaned_replacement_type == current_type:
+        raise ValueError(
+            f"Inline unit '{cleaned_unit_id}' is already type "
+            f"'{current_type}'."
+        )
+    if replacement["ports"] != selected_unit["ports"]:
+        raise ValueError(
+            f"Cannot replace '{current_type}' with "
+            f"'{cleaned_replacement_type}': material and energy ports differ."
+        )
+
+    selected_unit["type"] = cleaned_replacement_type
+    selected_unit["ports"] = copy.deepcopy(replacement["ports"])
+    selected_unit["params"] = copy.deepcopy(replacement["default_params"])
+    validate_catalog_unit(selected_unit)
+    return copied_units
+
+
 def update_process_unit_properties(
     units: list[Any],
     unit_id: str,
