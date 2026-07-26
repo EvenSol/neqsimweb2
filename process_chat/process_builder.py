@@ -506,7 +506,9 @@ class ProcessBuilder:
         if not isinstance(params, dict):
             raise ValueError(f"Splitter '{unit_id}' params must be an object.")
         raw_factors = params.get("split_factors")
-        if not isinstance(raw_factors, list):
+        if raw_factors is None:
+            raw_factors = [1.0] * len(material_outputs)
+        elif not isinstance(raw_factors, list):
             raise ValueError(
                 f"Splitter '{unit_id}' requires a split_factors array."
             )
