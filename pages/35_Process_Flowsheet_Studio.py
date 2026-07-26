@@ -40,12 +40,14 @@ from theme import apply_theme, theme_toggle  # noqa: E402
 _SOLVER_DIAGNOSTIC_SYMBOL_NAMES = (
     "aggregate_convergence",
     "aggregate_energy_balance",
+    "aggregate_unit_balances",
     "aggregate_validation_status",
     "component_balance_rows",
     "convergence_rows",
     "energy_transfer_rows",
     "material_boundary_rows",
     "solved_feed_flow_kg_hr",
+    "unit_balance_rows",
 )
 globals().update(
     import_local_symbols(
@@ -1985,6 +1987,58 @@ def _convergence_state_label(summary: dict[str, Any]) -> str:
     if summary["applicable"] is False:
         return "Feed-forward"
     return "Converged" if summary["converged"] else "Not converged"
+
+
+def _unit_balance_dataframe(result: Any) -> pd.DataFrame:
+    """Build an explicit-unit material and energy closure table."""
+    columns = [
+        "Process system",
+        "Unit",
+        "Type",
+        "Inlets",
+        "Outlets",
+        "Inlet mass flow [kg/hr]",
+        "Outlet mass flow [kg/hr]",
+        "Mass residual [kg/hr]",
+        "Mass imbalance [%]",
+        "Inlet enthalpy [kW]",
+        "Outlet enthalpy [kW]",
+        "External energy transfer [kW]",
+        "Energy residual [kW]",
+        "Energy imbalance [%]",
+    ]
+    records = [
+        {
+            "Process system": row["process_system"],
+            "Unit": row["unit_name"],
+            "Type": row["unit_type"],
+            "Inlets": row["inlet_count"],
+            "Outlets": row["outlet_count"],
+            "Inlet mass flow [kg/hr]": row["inlet_mass_flow_kg_hr"],
+            "Outlet mass flow [kg/hr]": row["outlet_mass_flow_kg_hr"],
+            "Mass residual [kg/hr]": row["mass_residual_kg_hr"],
+            "Mass imbalance [%]": row["mass_imbalance_pct"],
+            "Inlet enthalpy [kW]": row["inlet_enthalpy_kW"],
+            "Outlet enthalpy [kW]": row["outlet_enthalpy_kW"],
+            "External energy transfer [kW]": row[
+                "external_energy_transfer_kW"
+            ],
+            "Energy residual [kW]": row["energy_residual_kW"],
+            "Energy imbalance [%]": row["energy_imbalance_pct"],
+        }
+        for row in unit_balance_rows(result)
+    ]
+    return pd.DataFrame(records, columns=columns)
+
+
+def _unit_identity_label(identity: dict[str, str] | None) -> str:
+    """Format one process-system-scoped unit identity for reporting."""
+    if identity is None:
+        return "n/a"
+    return (
+        f"{identity['process_system']} / {identity['unit_name']} "
+        f"({identity['unit_type']})"
+    )
 
 
 def _kpi_value(result: Any, name: str) -> float | None:
@@ -4195,6 +4249,8 @@ if results_are_current and has_stored_result:
     energy_transfer_table = _energy_transfer_dataframe(result)
     convergence_table = _convergence_dataframe(result)
     convergence_summary = aggregate_convergence(result)
+    unit_balance_table = _unit_balance_dataframe(result)
+    unit_balance_summary = aggregate_unit_balances(result)
     with validation_tab:
         status_counts = constraint_table["status"].value_counts()
         profile_counts = pressure_profile_table["Status"].value_counts()
@@ -4271,6 +4327,80 @@ if results_are_current and has_stored_result:
                 st.caption("Native solver guidance")
                 for suggestion in suggestions:
                     st.caption(f"• {suggestion}")
+        st.markdown("#### Per-unit material and energy closure")
+        if unit_balance_summary["applicable"] is None:
+            st.info(
+                "This legacy result did not record explicit-port "
+                "per-unit closure diagnostics."
+            )
+        elif unit_balance_summary["applicable"] is False:
+            st.info(
+                "No supported unit operation exposed both inlet and "
+                "outlet material ports for a closure audit."
+            )
+        else:
+            if unit_balance_summary["coverage_complete"]:
+                st.success(
+                    "Every supported explicit-port unit was included "
+                    "in the closure audit."
+                )
+            else:
+                st.warning(
+                    "Per-unit closure coverage is incomplete; excluded "
+                    "equipment is listed below."
+                )
+            closure_cols = st.columns(2)
+            closure_cols[0].metric(
+                "Maximum unit mass imbalance",
+                _format_metric(
+                    unit_balance_summary["max_mass_imbalance_pct"],
+                    "%",
+                    6,
+                ),
+                help=_unit_identity_label(
+                    unit_balance_summary["max_mass_imbalance_unit"]
+                ),
+            )
+            closure_cols[1].metric(
+                "Maximum unit energy imbalance",
+                _format_metric(
+                    unit_balance_summary["max_energy_imbalance_pct"],
+                    "%",
+                    6,
+                ),
+                help=_unit_identity_label(
+                    unit_balance_summary["max_energy_imbalance_unit"]
+                ),
+            )
+            st.dataframe(
+                unit_balance_table.style.format(
+                    {
+                        "Inlet mass flow [kg/hr]": "{:,.6f}",
+                        "Outlet mass flow [kg/hr]": "{:,.6f}",
+                        "Mass residual [kg/hr]": "{:+.6e}",
+                        "Mass imbalance [%]": "{:.6g}",
+                        "Inlet enthalpy [kW]": "{:+,.6f}",
+                        "Outlet enthalpy [kW]": "{:+,.6f}",
+                        "External energy transfer [kW]": "{:+,.6f}",
+                        "Energy residual [kW]": "{:+.6e}",
+                        "Energy imbalance [%]": "{:.6g}",
+                    },
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                "Each residual is outlet minus inlet minus signed "
+                "external energy transfer. Positive external transfer "
+                "adds energy to the material system."
+            )
+            if unit_balance_summary["excluded_units"]:
+                st.caption(
+                    "Unaudited equipment: "
+                    + ", ".join(unit_balance_summary["excluded_units"])
+                    + "."
+                )
         st.markdown("#### Solved material boundaries")
         if material_boundary_table.empty:
             st.info(

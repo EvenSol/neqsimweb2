@@ -52,14 +52,20 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
     def test_page_recovers_stale_solver_diagnostics_module(self):
         del solver_diagnostics.aggregate_energy_balance
+        del solver_diagnostics.aggregate_unit_balances
         del solver_diagnostics.energy_transfer_rows
+        del solver_diagnostics.unit_balance_rows
 
         self._run_studio()
 
         self.assertTrue(
             callable(solver_diagnostics.aggregate_energy_balance)
         )
+        self.assertTrue(
+            callable(solver_diagnostics.aggregate_unit_balances)
+        )
         self.assertTrue(callable(solver_diagnostics.energy_transfer_rows))
+        self.assertTrue(callable(solver_diagnostics.unit_balance_rows))
 
     def test_page_recovers_multiple_stale_local_modules(self):
         del flowsheet_editor.connect_graph_ports
