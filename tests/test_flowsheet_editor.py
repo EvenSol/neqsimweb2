@@ -1446,6 +1446,30 @@ class InlineUnitLifecycleTest(unittest.TestCase):
         self.assertEqual(terminal_connections, self.connections)
         self.assertEqual(len(units), len(self.units) + 1)
 
+    def test_remove_unconnected_parameterless_starter_separator(self):
+        starter_separator = {
+            "id": "inlet-scrubber",
+            "name": "Inlet scrubber",
+            "type": "separator",
+            "ports": {
+                "material_in": ["in"],
+                "material_out": ["gas", "liquid"],
+                "energy_in": [],
+                "energy_out": [],
+            },
+        }
+        original = copy.deepcopy(starter_separator)
+
+        units, connections = remove_inline_unit(
+            [starter_separator],
+            [],
+            "inlet-scrubber",
+        )
+
+        self.assertEqual(units, [])
+        self.assertEqual(connections, [])
+        self.assertEqual(starter_separator, original)
+
     def test_remove_rejects_branches_and_nonmaterial_references(self):
         units, connections, inserted_id = self._insert_valve()
         branch = {
