@@ -659,6 +659,20 @@ def _slugify(value: str) -> str:
     return slug or "unit"
 
 
+def _normalized_name_keys(values: Any) -> set[str]:
+    """Return case-insensitive non-null, non-blank names."""
+    if values is None:
+        return set()
+    result: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        cleaned = str(value).strip()
+        if cleaned:
+            result.add(cleaned.casefold())
+    return result
+
+
 def clone_material_inlet(
     inlets: list[Any],
     source_inlet_id: str,
@@ -689,15 +703,12 @@ def clone_material_inlet(
     if len(cleaned_name) > 80:
         raise ValueError("Material inlet name cannot exceed 80 characters.")
 
-    inlet_names = {
-        str(inlet.get("name", "")).strip().casefold()
+    inlet_names = _normalized_name_keys(
+        inlet.get("name")
         for inlet in copied_inlets
         if isinstance(inlet, dict)
-    }
-    inlet_names.update(
-        str(reserved_name).strip().casefold()
-        for reserved_name in (reserved_names or set())
     )
+    inlet_names.update(_normalized_name_keys(reserved_names))
     if cleaned_name.casefold() in inlet_names:
         raise ValueError(f"Material inlet name '{cleaned_name}' is duplicated.")
 
@@ -757,15 +768,12 @@ def rename_material_inlet(
         raise ValueError("Material inlet name cannot be empty.")
     if len(cleaned_name) > 80:
         raise ValueError("Material inlet name cannot exceed 80 characters.")
-    peer_names = {
-        str(inlet.get("name", "")).strip().casefold()
+    peer_names = _normalized_name_keys(
+        inlet.get("name")
         for index, inlet in enumerate(copied_inlets)
         if index != matches[0] and isinstance(inlet, dict)
-    }
-    peer_names.update(
-        str(reserved_name).strip().casefold()
-        for reserved_name in (reserved_names or set())
     )
+    peer_names.update(_normalized_name_keys(reserved_names))
     if cleaned_name.casefold() in peer_names:
         raise ValueError(f"Material inlet name '{cleaned_name}' is duplicated.")
 
@@ -880,17 +888,12 @@ def add_catalog_unit(
         str(reserved_id).strip() for reserved_id in (reserved_ids or set())
     )
     cleaned_name = str(name).strip()
-    existing_names = {
-        str(unit.get("name", "")).strip().casefold()
+    existing_names = _normalized_name_keys(
+        unit.get("name")
         for unit in copied_units
         if isinstance(unit, dict)
-        and str(unit.get("name", "")).strip()
-    }
-    existing_names.update(
-        str(reserved_name).strip().casefold()
-        for reserved_name in (reserved_names or set())
-        if str(reserved_name).strip()
     )
+    existing_names.update(_normalized_name_keys(reserved_names))
     if cleaned_name.casefold() in existing_names:
         raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
 
@@ -1459,7 +1462,10 @@ def rename_inline_unit(
         if not isinstance(unit, dict):
             continue
         existing_id = str(unit.get("id", "")).strip()
-        existing_name = str(unit.get("name", "")).strip()
+        raw_existing_name = unit.get("name")
+        existing_name = (
+            "" if raw_existing_name is None else str(raw_existing_name).strip()
+        )
         if (
             existing_id != cleaned_unit_id
             and existing_name.casefold() == cleaned_name.casefold()
@@ -1467,10 +1473,7 @@ def rename_inline_unit(
             raise ValueError(
                 f"Equipment name '{cleaned_name}' is already in use."
             )
-    if cleaned_name.casefold() in {
-        str(reserved_name).strip().casefold()
-        for reserved_name in (reserved_names or set())
-    }:
+    if cleaned_name.casefold() in _normalized_name_keys(reserved_names):
         raise ValueError(f"Equipment name '{cleaned_name}' is already in use.")
 
     selected_unit = copied_units[matches[0]]
