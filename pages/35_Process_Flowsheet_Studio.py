@@ -328,6 +328,16 @@ def _graph_object_name(record: dict[str, Any], fallback_id: str) -> str:
     return str(raw_name).strip() or clean_fallback
 
 
+def _required_identifier(value: Any, field_label: str) -> str:
+    """Return a non-null, non-blank persisted object identifier."""
+    if value is None:
+        raise ValueError(f"{field_label} cannot be empty.")
+    result = str(value).strip()
+    if not result:
+        raise ValueError(f"{field_label} cannot be empty.")
+    return result
+
+
 def _secondary_inlet_map(
     inlets: list[Any],
     primary_inlet_id: str,
@@ -383,9 +393,10 @@ def _validate_fluid_package_integrity(
     for package_index, package in enumerate(fluid_packages):
         if not isinstance(package, dict):
             raise ValueError(f"fluid_packages[{package_index}] must be an object.")
-        package_id = str(package.get("id", "")).strip()
-        if not package_id:
-            raise ValueError(f"fluid_packages[{package_index}].id cannot be empty.")
+        package_id = _required_identifier(
+            package.get("id"),
+            f"fluid_packages[{package_index}].id",
+        )
         if package_id in packages_by_id:
             raise ValueError("Fluid-package ids must be unique.")
         packages_by_id[package_id] = package
@@ -505,9 +516,10 @@ def _validate_fluid_package_integrity(
     for inlet_index, inlet in enumerate(inlets):
         if not isinstance(inlet, dict):
             raise ValueError(f"inlets[{inlet_index}] must be an object.")
-        inlet_id = str(inlet.get("id", "")).strip()
-        if not inlet_id:
-            raise ValueError(f"inlets[{inlet_index}].id cannot be empty.")
+        inlet_id = _required_identifier(
+            inlet.get("id"),
+            f"inlets[{inlet_index}].id",
+        )
         if inlet_id in inlet_ids:
             raise ValueError("Inlet ids must be unique.")
         inlet_ids.add(inlet_id)
@@ -685,9 +697,10 @@ def _index_graph_objects(
     for index, item in enumerate(objects):
         if not isinstance(item, dict):
             raise ValueError(f"{label}[{index}] must be an object.")
-        item_id = str(item.get("id", "")).strip()
-        if not item_id:
-            raise ValueError(f"{label}[{index}].id cannot be empty.")
+        item_id = _required_identifier(
+            item.get("id"),
+            f"{label}[{index}].id",
+        )
         if item_id in indexed:
             raise ValueError(f"{label} ids must be unique.")
         indexed[item_id] = item
@@ -2924,6 +2937,28 @@ def _apply_studio_graph_draft(
         return apply_graph_draft(case_spec, draft)
 
     refreshed_draft = json.loads(json.dumps(draft, allow_nan=False))
+    case_process = case_spec.get("process")
+    draft_units = refreshed_draft.get("units")
+    if isinstance(case_process, list) and isinstance(draft_units, list):
+        current_template_units, _ = _build_template_graph(case_process)
+        current_template_by_id = {
+            str(unit["id"]).strip(): unit
+            for unit in current_template_units
+        }
+        refreshed_draft["units"] = [
+            json.loads(
+                json.dumps(
+                    current_template_by_id.get(
+                        str(unit.get("id", "")).strip(),
+                        unit,
+                    ),
+                    allow_nan=False,
+                )
+            )
+            if isinstance(unit, dict)
+            else unit
+            for unit in draft_units
+        ]
     case_inlets = case_spec.get("inlets")
     draft_inlets = refreshed_draft.get("inlets")
     if not isinstance(case_inlets, list) or not isinstance(draft_inlets, list):
