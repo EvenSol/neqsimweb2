@@ -16,6 +16,19 @@ _BOUNDARY_NUMERIC_FIELDS = (
 _COMPONENT_BALANCE_ABSOLUTE_TOL_MOL_SEC = 1.0e-9
 _ENERGY_BALANCE_SCALE_FLOOR_KW = 1.0e-9
 _ENERGY_TRANSFER_KINDS = {"shaft_work", "heat"}
+_CONVERGENCE_UNIT_TYPES = {"recycle", "adjuster"}
+_CONVERGENCE_OPTIONAL_NUMERIC_FIELDS = (
+    "flow_error",
+    "temperature_error",
+    "pressure_error",
+    "composition_error",
+    "error",
+    "flow_tolerance",
+    "temperature_tolerance",
+    "pressure_tolerance",
+    "composition_tolerance",
+    "tolerance",
+)
 _VALIDATION_STATUSES = {"OK", "WARN", "VIOLATION", "UNKNOWN"}
 
 
@@ -33,6 +46,221 @@ def aggregate_validation_status(statuses: Any) -> str:
         if status in normalized:
             return status
     return "OK"
+
+
+def convergence_rows(result: Any) -> List[Dict[str, Any]]:
+    """Return validated per-unit recycle and adjuster convergence rows."""
+    raw = getattr(result, "raw", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Solver result raw diagnostics must be an object.")
+    diagnostics = raw.get("convergence_diagnostics")
+    if diagnostics is None:
+        return []
+    if not isinstance(diagnostics, dict):
+        raise ValueError("Convergence diagnostics must be an object.")
+    source_rows = diagnostics.get("rows", [])
+    if not isinstance(source_rows, list):
+        raise ValueError("Convergence diagnostic rows must be an array.")
+
+    rows: List[Dict[str, Any]] = []
+    identities = set()
+    for index, source_row in enumerate(source_rows):
+        if not isinstance(source_row, dict):
+            raise ValueError(
+                f"Convergence diagnostic row {index} must be an object."
+            )
+        process_system = str(
+            source_row.get("process_system", "")
+        ).strip()
+        unit_name = str(source_row.get("unit_name", "")).strip()
+        unit_type = str(source_row.get("unit_type", "")).strip().lower()
+        converged = source_row.get("converged")
+        if not process_system or not unit_name:
+            raise ValueError(
+                f"Convergence diagnostic row {index} requires process "
+                "system and unit name."
+            )
+        if unit_type not in _CONVERGENCE_UNIT_TYPES:
+            raise ValueError(
+                f"Convergence diagnostic row {index} has an invalid "
+                "unit type."
+            )
+        if not isinstance(converged, bool):
+            raise ValueError(
+                f"Convergence diagnostic row {index} requires a boolean "
+                "converged state."
+            )
+        identity = (process_system, unit_name, unit_type)
+        if identity in identities:
+            raise ValueError(
+                f"Convergence diagnostic row {index} duplicates a unit."
+            )
+        identities.add(identity)
+
+        iterations = source_row.get("iterations")
+        if iterations is not None:
+            if isinstance(iterations, bool):
+                raise ValueError(
+                    f"Convergence diagnostic row {index} iterations "
+                    "must be an integer."
+                )
+            try:
+                iterations_value = int(iterations)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Convergence diagnostic row {index} iterations "
+                    "must be an integer."
+                ) from exc
+            if iterations_value < 0 or float(iterations_value) != float(
+                iterations
+            ):
+                raise ValueError(
+                    f"Convergence diagnostic row {index} iterations "
+                    "must be a non-negative integer."
+                )
+            iterations = iterations_value
+
+        max_iterations = source_row.get("max_iterations")
+        if max_iterations is not None:
+            if isinstance(max_iterations, bool):
+                raise ValueError(
+                    f"Convergence diagnostic row {index} maximum "
+                    "iterations must be an integer."
+                )
+            try:
+                max_iterations_value = int(max_iterations)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Convergence diagnostic row {index} maximum "
+                    "iterations must be an integer."
+                ) from exc
+            if (
+                max_iterations_value < 1
+                or float(max_iterations_value) != float(max_iterations)
+            ):
+                raise ValueError(
+                    f"Convergence diagnostic row {index} maximum "
+                    "iterations must be a positive integer."
+                )
+            max_iterations = max_iterations_value
+
+        row: Dict[str, Any] = {
+            "process_system": process_system,
+            "unit_name": unit_name,
+            "unit_type": unit_type,
+            "converged": converged,
+            "iterations": iterations,
+            "max_iterations": max_iterations,
+            "dominant_error": (
+                str(source_row.get("dominant_error", "")).strip()
+                or None
+            ),
+            "acceleration_method": (
+                str(source_row.get("acceleration_method", "")).strip()
+                or None
+            ),
+        }
+        for field_name in _CONVERGENCE_OPTIONAL_NUMERIC_FIELDS:
+            value = source_row.get(field_name)
+            if value is None:
+                row[field_name] = None
+                continue
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Convergence diagnostic row {index} field "
+                    f"'{field_name}' must be numeric."
+                ) from exc
+            if not math.isfinite(numeric_value) or numeric_value < 0.0:
+                raise ValueError(
+                    f"Convergence diagnostic row {index} field "
+                    f"'{field_name}' must be finite and non-negative."
+                )
+            row[field_name] = numeric_value
+        rows.append(row)
+    return rows
+
+
+def aggregate_convergence(result: Any) -> Dict[str, Any]:
+    """Aggregate strict convergence state with legacy-result compatibility."""
+    raw = getattr(result, "raw", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Solver result raw diagnostics must be an object.")
+    diagnostics = raw.get("convergence_diagnostics")
+    if diagnostics is None:
+        return {
+            "applicable": None,
+            "converged": None,
+            "unit_count": None,
+            "unconverged_count": None,
+            "max_iterations": None,
+            "suggestions": [],
+        }
+    if not isinstance(diagnostics, dict):
+        raise ValueError("Convergence diagnostics must be an object.")
+    applicable = diagnostics.get("applicable")
+    converged = diagnostics.get("converged")
+    if not isinstance(applicable, bool):
+        raise ValueError(
+            "Convergence applicability must be a boolean."
+        )
+    if converged is not None and not isinstance(converged, bool):
+        raise ValueError(
+            "Aggregate convergence state must be boolean or null."
+        )
+    source_suggestions = diagnostics.get("suggestions", [])
+    if not isinstance(source_suggestions, list):
+        raise ValueError("Convergence suggestions must be an array.")
+    suggestions = []
+    for index, suggestion in enumerate(source_suggestions):
+        if not isinstance(suggestion, str) or not suggestion.strip():
+            raise ValueError(
+                f"Convergence suggestion {index} must be non-empty text."
+            )
+        suggestions.append(suggestion.strip())
+
+    rows = convergence_rows(result)
+    if not applicable:
+        if rows or converged is not None:
+            raise ValueError(
+                "Feed-forward convergence diagnostics cannot contain "
+                "iterative-unit state."
+            )
+        return {
+            "applicable": False,
+            "converged": None,
+            "unit_count": 0.0,
+            "unconverged_count": 0.0,
+            "max_iterations": None,
+            "suggestions": suggestions,
+        }
+    if not rows:
+        raise ValueError(
+            "Applicable convergence diagnostics require unit rows."
+        )
+    computed_converged = all(row["converged"] for row in rows)
+    if converged is None or converged is not computed_converged:
+        raise ValueError(
+            "Aggregate convergence state conflicts with its unit rows."
+        )
+    iteration_values = [
+        int(row["iterations"])
+        for row in rows
+        if row["iterations"] is not None
+    ]
+    return {
+        "applicable": True,
+        "converged": computed_converged,
+        "unit_count": float(len(rows)),
+        "unconverged_count": float(
+            sum(not row["converged"] for row in rows)
+        ),
+        "max_iterations": (
+            float(max(iteration_values)) if iteration_values else None
+        ),
+        "suggestions": suggestions,
+    }
 
 
 def material_boundary_rows(result: Any) -> List[Dict[str, Any]]:

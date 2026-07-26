@@ -2342,6 +2342,193 @@ class NeqSimProcessModel:
             except Exception:
                 pass
 
+    @staticmethod
+    def _optional_nonnegative_number(unit: Any, getter: str) -> Optional[float]:
+        """Read one finite non-negative native diagnostic value."""
+        if not hasattr(unit, getter):
+            return None
+        try:
+            value = abs(float(getattr(unit, getter)()))
+        except Exception:
+            return None
+        return value if math.isfinite(value) else None
+
+    def _extract_convergence_diagnostics(self) -> Dict[str, Any]:
+        """Capture native recycle and adjuster convergence diagnostics."""
+        rows: List[Dict[str, Any]] = []
+        suggestions: List[str] = []
+
+        for process_index, process_system in enumerate(
+            self.get_process_systems()
+        ):
+            try:
+                process_name = str(process_system.getName()).strip()
+            except Exception:
+                process_name = ""
+            if not process_name or process_name.lower() == "null":
+                process_name = f"process {process_index + 1}"
+
+            try:
+                units = list(process_system.getUnitOperations())
+            except Exception:
+                units = []
+
+            for unit in units:
+                try:
+                    java_class = str(
+                        unit.getClass().getSimpleName()
+                    ).strip()
+                except Exception:
+                    continue
+                if java_class not in {"Recycle", "Adjuster"}:
+                    continue
+                try:
+                    unit_name = str(unit.getName()).strip()
+                except Exception:
+                    unit_name = ""
+                if not unit_name:
+                    unit_name = java_class
+
+                try:
+                    converged = bool(unit.solved())
+                except Exception:
+                    converged = False
+
+                iterations = self._optional_nonnegative_number(
+                    unit,
+                    "getIterations",
+                )
+                max_iterations = self._optional_nonnegative_number(
+                    unit,
+                    "getMaxIterations",
+                )
+                row: Dict[str, Any] = {
+                    "process_system": process_name,
+                    "unit_name": unit_name,
+                    "unit_type": java_class.lower(),
+                    "converged": converged,
+                    "iterations": (
+                        int(iterations)
+                        if iterations is not None
+                        else None
+                    ),
+                    "max_iterations": (
+                        int(max_iterations)
+                        if max_iterations is not None
+                        and max_iterations >= 1.0
+                        else None
+                    ),
+                    "dominant_error": None,
+                    "acceleration_method": None,
+                    "flow_error": None,
+                    "temperature_error": None,
+                    "pressure_error": None,
+                    "composition_error": None,
+                    "error": None,
+                    "flow_tolerance": None,
+                    "temperature_tolerance": None,
+                    "pressure_tolerance": None,
+                    "composition_tolerance": None,
+                    "tolerance": None,
+                }
+                if java_class == "Recycle":
+                    getter_fields = {
+                        "flow_error": "getErrorFlow",
+                        "temperature_error": "getErrorTemperature",
+                        "pressure_error": "getErrorPressure",
+                        "composition_error": "getErrorComposition",
+                        "flow_tolerance": "getFlowTolerance",
+                        "temperature_tolerance": (
+                            "getTemperatureTolerance"
+                        ),
+                        "pressure_tolerance": "getPressureTolerance",
+                        "composition_tolerance": (
+                            "getCompositionTolerance"
+                        ),
+                    }
+                    for field_name, getter in getter_fields.items():
+                        row[field_name] = (
+                            self._optional_nonnegative_number(
+                                unit,
+                                getter,
+                            )
+                        )
+                    error_ratios = []
+                    for error_name in (
+                        "flow",
+                        "temperature",
+                        "pressure",
+                        "composition",
+                    ):
+                        error_value = row[f"{error_name}_error"]
+                        tolerance = row[f"{error_name}_tolerance"]
+                        if error_value is None:
+                            continue
+                        scale = (
+                            tolerance
+                            if tolerance is not None and tolerance > 0.0
+                            else 1.0
+                        )
+                        error_ratios.append(
+                            (error_value / scale, error_name)
+                        )
+                    if error_ratios:
+                        row["dominant_error"] = max(error_ratios)[1]
+                    if hasattr(unit, "getAccelerationMethod"):
+                        try:
+                            row["acceleration_method"] = str(
+                                unit.getAccelerationMethod()
+                            ).strip() or None
+                        except Exception:
+                            pass
+                else:
+                    row["error"] = self._optional_nonnegative_number(
+                        unit,
+                        "getError",
+                    )
+                    row["tolerance"] = (
+                        self._optional_nonnegative_number(
+                            unit,
+                            "getTolerance",
+                        )
+                    )
+                    row["dominant_error"] = "target"
+                rows.append(row)
+
+            try:
+                from neqsim import jneqsim
+
+                analyzer = (
+                    jneqsim.process.equipment.util.ConvergenceDiagnostics(
+                        process_system
+                    )
+                )
+                native_report = analyzer.analyze()
+                for suggestion in native_report.getSuggestions():
+                    text = str(suggestion).strip()
+                    if text and not text.startswith(
+                        "No recycle or adjuster units found"
+                    ):
+                        suggestions.append(text)
+            except Exception:
+                pass
+
+        unique_suggestions = list(dict.fromkeys(suggestions))
+        if rows and not all(row["converged"] for row in rows):
+            if not unique_suggestions:
+                unique_suggestions.append(
+                    "Review tear-stream estimates, tolerances, and "
+                    "acceleration settings for unconverged units."
+                )
+        return {
+            "applicable": bool(rows),
+            "converged": (
+                all(row["converged"] for row in rows) if rows else None
+            ),
+            "rows": rows,
+            "suggestions": unique_suggestions,
+        }
+
     def _extract_results(self) -> ModelRunResult:
         """Extract KPIs, constraints, and JSON report from solved process."""
         kpis: Dict[str, KPI] = {}
@@ -2441,6 +2628,68 @@ class NeqSimProcessModel:
         # Extract mechanical design data (wall thickness, weights, dimensions, cost)
         self._extract_mechanical_design(kpis)
 
+        convergence_diagnostics = self._extract_convergence_diagnostics()
+        convergence_rows = convergence_diagnostics["rows"]
+        if convergence_diagnostics["applicable"]:
+            unconverged_rows = [
+                row for row in convergence_rows if not row["converged"]
+            ]
+            iteration_values = [
+                int(row["iterations"])
+                for row in convergence_rows
+                if row["iterations"] is not None
+            ]
+            kpis["convergence_unit_count"] = KPI(
+                "convergence_unit_count",
+                float(len(convergence_rows)),
+                "count",
+            )
+            kpis["convergence_unconverged_count"] = KPI(
+                "convergence_unconverged_count",
+                float(len(unconverged_rows)),
+                "count",
+            )
+            if iteration_values:
+                kpis["convergence_max_iterations"] = KPI(
+                    "convergence_max_iterations",
+                    float(max(iteration_values)),
+                    "iterations",
+                )
+            if unconverged_rows:
+                detail = ", ".join(
+                    f"{row['unit_name']} ({row['dominant_error'] or 'state'})"
+                    for row in unconverged_rows
+                )
+                constraints.append(
+                    ConstraintStatus(
+                        "convergence",
+                        "VIOLATION",
+                        "Native iterative-unit convergence failed: "
+                        f"{detail}.",
+                    )
+                )
+            else:
+                max_iterations = (
+                    max(iteration_values) if iteration_values else 0
+                )
+                constraints.append(
+                    ConstraintStatus(
+                        "convergence",
+                        "OK",
+                        f"{len(convergence_rows)} native iterative unit(s) "
+                        f"converged; maximum iterations={max_iterations}.",
+                    )
+                )
+        else:
+            constraints.append(
+                ConstraintStatus(
+                    "convergence",
+                    "OK",
+                    "Feed-forward process has no recycle or adjuster "
+                    "convergence loops.",
+                )
+            )
+
         # Add convergence warning if all power/duty are zero
         if total_power_kW == 0.0 and total_duty_kW == 0.0:
             has_energy_unit = False
@@ -2482,7 +2731,9 @@ class NeqSimProcessModel:
                     msg += f" Energy units: {', '.join(energy_unit_names[:5])}."
                 if recycle_info:
                     msg += f" Recycle state: {'; '.join(recycle_info)}."
-                constraints.append(ConstraintStatus("convergence", "WARN", msg))
+                constraints.append(
+                    ConstraintStatus("execution_quality", "WARN", msg)
+                )
 
         # Extract calculated fluid properties from streams (viscosity, Z, JT, TVP, RVP, etc.)
         self._extract_stream_fluid_properties(kpis)
@@ -2977,6 +3228,7 @@ class NeqSimProcessModel:
                 "component_balance_applicable": component_balance_applicable,
                 "energy_transfers": energy_transfers,
                 "energy_balance_applicable": energy_balance_applicable,
+                "convergence_diagnostics": convergence_diagnostics,
             }
         )
 

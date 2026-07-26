@@ -38,9 +38,11 @@ from theme import apply_theme, theme_toggle  # noqa: E402
 
 
 _SOLVER_DIAGNOSTIC_SYMBOL_NAMES = (
+    "aggregate_convergence",
     "aggregate_energy_balance",
     "aggregate_validation_status",
     "component_balance_rows",
+    "convergence_rows",
     "energy_transfer_rows",
     "material_boundary_rows",
     "solved_feed_flow_kg_hr",
@@ -1926,6 +1928,65 @@ def _energy_transfer_dataframe(result: Any) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
+def _convergence_dataframe(result: Any) -> pd.DataFrame:
+    """Build an explicit-unit native solver convergence table."""
+    columns = [
+        "Process system",
+        "Unit",
+        "Type",
+        "State",
+        "Iterations",
+        "Maximum iterations",
+        "Dominant residual",
+        "Acceleration",
+        "Flow error",
+        "Flow tolerance",
+        "Temperature error",
+        "Temperature tolerance",
+        "Pressure error",
+        "Pressure tolerance",
+        "Composition error",
+        "Composition tolerance",
+        "Target error",
+        "Target tolerance",
+    ]
+    records = [
+        {
+            "Process system": row["process_system"],
+            "Unit": row["unit_name"],
+            "Type": row["unit_type"].title(),
+            "State": (
+                "Converged" if row["converged"] else "Not converged"
+            ),
+            "Iterations": row["iterations"],
+            "Maximum iterations": row["max_iterations"],
+            "Dominant residual": row["dominant_error"],
+            "Acceleration": row["acceleration_method"],
+            "Flow error": row["flow_error"],
+            "Flow tolerance": row["flow_tolerance"],
+            "Temperature error": row["temperature_error"],
+            "Temperature tolerance": row["temperature_tolerance"],
+            "Pressure error": row["pressure_error"],
+            "Pressure tolerance": row["pressure_tolerance"],
+            "Composition error": row["composition_error"],
+            "Composition tolerance": row["composition_tolerance"],
+            "Target error": row["error"],
+            "Target tolerance": row["tolerance"],
+        }
+        for row in convergence_rows(result)
+    ]
+    return pd.DataFrame(records, columns=columns)
+
+
+def _convergence_state_label(summary: dict[str, Any]) -> str:
+    """Return a concise convergence label for reports and comparisons."""
+    if summary["applicable"] is None:
+        return "Not recorded"
+    if summary["applicable"] is False:
+        return "Feed-forward"
+    return "Converged" if summary["converged"] else "Not converged"
+
+
 def _kpi_value(result: Any, name: str) -> float | None:
     kpi = result.kpis.get(name)
     return float(kpi.value) if kpi is not None else None
@@ -1963,6 +2024,7 @@ def _solver_run_record(
         for item in result.constraints
     ]
     validation_summary = aggregate_validation_status(validation_statuses)
+    convergence_summary = aggregate_convergence(result)
     try:
         unit_count = len(model.list_units())
     except Exception:
@@ -1989,6 +2051,16 @@ def _solver_run_record(
         "Validation incomplete checks": sum(
             status == "UNKNOWN" for status in validation_statuses
         ),
+        "Iterative convergence": _convergence_state_label(
+            convergence_summary
+        ),
+        "Iterative solver units": convergence_summary["unit_count"],
+        "Unconverged solver units": convergence_summary[
+            "unconverged_count"
+        ],
+        "Maximum convergence iterations": convergence_summary[
+            "max_iterations"
+        ],
     }
 
 
@@ -2026,6 +2098,7 @@ def _engineering_workbook_bytes(
     total_power_kw = _kpi_value(result, "total_power_kW")
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
+    convergence_summary = aggregate_convergence(result)
     feed_flow_kg_hr = solved_feed_flow_kg_hr(
         result,
         float(fluid["total_flow"]),
@@ -2119,6 +2192,30 @@ def _engineering_workbook_bytes(
                 "Build, solve, and serialization wall time",
                 run_record.get("Execution wall time [s]"),
                 "s",
+            ),
+            (
+                "Solver",
+                "Iterative convergence",
+                _convergence_state_label(convergence_summary),
+                "",
+            ),
+            (
+                "Solver",
+                "Iterative solver units",
+                convergence_summary["unit_count"],
+                "count",
+            ),
+            (
+                "Solver",
+                "Unconverged solver units",
+                convergence_summary["unconverged_count"],
+                "count",
+            ),
+            (
+                "Solver",
+                "Maximum convergence iterations",
+                convergence_summary["max_iterations"],
+                "iterations",
             ),
             (
                 "Software",
@@ -2259,6 +2356,7 @@ def _engineering_workbook_bytes(
     component_balance_table = _component_balance_dataframe(result)
     energy_balance_table = _energy_balance_dataframe(result)
     energy_transfer_table = _energy_transfer_dataframe(result)
+    convergence_table = _convergence_dataframe(result)
     sheet_frames = {
         "Case Summary": case_summary,
         "KPIs": kpi_table,
@@ -2273,6 +2371,7 @@ def _engineering_workbook_bytes(
         "Component Balance": component_balance_table,
         "Energy Balance": energy_balance_table,
         "Energy Transfers": energy_transfer_table,
+        "Convergence": convergence_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,
@@ -2355,6 +2454,7 @@ def _case_history_record(
         for constraint in result.constraints
     ]
     validation_status = aggregate_validation_status(constraint_statuses)
+    convergence_summary = aggregate_convergence(result)
 
     process = spec["process"]
     return {
@@ -2390,6 +2490,12 @@ def _case_history_record(
         "Specific energy [kWh/t]": specific_energy_kwh_t,
         "Mass imbalance [%]": mass_balance_pct,
         "Max component imbalance [%]": component_balance_pct,
+        "Iterative convergence": _convergence_state_label(
+            convergence_summary
+        ),
+        "Max convergence iterations": convergence_summary[
+            "max_iterations"
+        ],
         "Validation": validation_status,
     }
 
@@ -4087,6 +4193,8 @@ if results_are_current and has_stored_result:
     component_balance_table = _component_balance_dataframe(result)
     energy_balance_table = _energy_balance_dataframe(result)
     energy_transfer_table = _energy_transfer_dataframe(result)
+    convergence_table = _convergence_dataframe(result)
+    convergence_summary = aggregate_convergence(result)
     with validation_tab:
         status_counts = constraint_table["status"].value_counts()
         profile_counts = pressure_profile_table["Status"].value_counts()
@@ -4118,6 +4226,51 @@ if results_are_current and has_stored_result:
             use_container_width=True,
             hide_index=True,
         )
+        st.markdown("#### Iterative convergence")
+        if convergence_summary["applicable"] is None:
+            st.info(
+                "This legacy result did not record native recycle or "
+                "adjuster convergence diagnostics."
+            )
+        elif convergence_summary["applicable"] is False:
+            st.success(
+                "Feed-forward solve: no recycle or adjuster convergence "
+                "loops are present."
+            )
+        else:
+            if convergence_summary["converged"]:
+                st.success(
+                    "Every native recycle and adjuster reports convergence."
+                )
+            else:
+                st.error(
+                    "One or more native recycle or adjuster units did not "
+                    "converge."
+                )
+            st.dataframe(
+                convergence_table.style.format(
+                    {
+                        "Flow error": "{:.6g}",
+                        "Flow tolerance": "{:.6g}",
+                        "Temperature error": "{:.6g}",
+                        "Temperature tolerance": "{:.6g}",
+                        "Pressure error": "{:.6g}",
+                        "Pressure tolerance": "{:.6g}",
+                        "Composition error": "{:.6g}",
+                        "Composition tolerance": "{:.6g}",
+                        "Target error": "{:.6g}",
+                        "Target tolerance": "{:.6g}",
+                    },
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            suggestions = convergence_summary["suggestions"]
+            if suggestions:
+                st.caption("Native solver guidance")
+                for suggestion in suggestions:
+                    st.caption(f"• {suggestion}")
         st.markdown("#### Solved material boundaries")
         if material_boundary_table.empty:
             st.info(
@@ -4241,9 +4394,10 @@ if results_are_current and has_stored_result:
                 "Run the case again to create it."
             )
         st.caption(
-            "Validation level: NeqSim convergence evidence, pressure ordering, "
-            "composition normalization, material, component and audited "
-            "energy closure, and engineering bounds."
+            "Validation level: per-unit NeqSim recycle and adjuster "
+            "convergence, pressure ordering, composition normalization, "
+            "material, component and audited energy closure, and "
+            "engineering bounds."
         )
 
     st.subheader("3. Reproducible deliverables")
