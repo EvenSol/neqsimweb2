@@ -322,7 +322,10 @@ def _finite_float(value: Any, field_name: str) -> float:
 def _graph_object_name(record: dict[str, Any], fallback_id: str) -> str:
     """Return a safe UI label for a graph object with legacy metadata."""
     clean_fallback = str(fallback_id).strip()
-    return str(record.get("name", clean_fallback)).strip() or clean_fallback
+    raw_name = record.get("name")
+    if raw_name is None:
+        return clean_fallback
+    return str(raw_name).strip() or clean_fallback
 
 
 def _bounded_float(
