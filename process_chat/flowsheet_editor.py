@@ -1705,8 +1705,8 @@ def create_graph_draft(
     if conflicting_object_ids:
         conflicting_id = sorted(conflicting_object_ids)[0]
         raise ValueError(
-            f"Graph object id '{conflicting_id}' is duplicated between "
-            "an inlet and a unit."
+            f"Graph object id '{conflicting_id}' is duplicated between an "
+            "inlet and a unit; it is both an inlet and a unit."
         )
 
     connection_ids: set[str] = set()
