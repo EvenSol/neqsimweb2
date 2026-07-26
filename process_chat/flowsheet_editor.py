@@ -1618,7 +1618,7 @@ def remove_inline_unit(
 
     if unsupported_references:
         raise ValueError(
-            f"Inline unit '{cleaned_unit_id}' has unsupported connections: "
+            f"Graph unit '{cleaned_unit_id}' has unsupported connections: "
             + ", ".join(unsupported_references)
             + "."
         )
@@ -1631,7 +1631,7 @@ def remove_inline_unit(
         return copied_units, copied_connections
     if len(incoming_indices) != 1 or len(outgoing_indices) != 1:
         raise ValueError(
-            f"Inline unit '{cleaned_unit_id}' requires no connections, one "
+            f"Graph unit '{cleaned_unit_id}' requires no connections, one "
             "terminal incoming connection, or exactly one incoming and one "
             "outgoing material connection."
         )
@@ -1641,11 +1641,11 @@ def remove_inline_unit(
     outgoing_target = copied_connections[outgoing_index].get("target")
     if not isinstance(outgoing_target, dict):
         raise ValueError(
-            f"Inline unit '{cleaned_unit_id}' outgoing target must be an object."
+            f"Graph unit '{cleaned_unit_id}' outgoing target must be an object."
         )
     if str(outgoing_target.get("id", "")).strip() == cleaned_unit_id:
         raise ValueError(
-            f"Inline unit '{cleaned_unit_id}' cannot reconnect to itself."
+            f"Graph unit '{cleaned_unit_id}' cannot reconnect to itself."
         )
 
     copied_connections[incoming_index]["target"] = copy.deepcopy(
