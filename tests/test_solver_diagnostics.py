@@ -691,6 +691,7 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
         legacy = aggregate_unit_balances(SimpleNamespace(raw={}))
         self.assertIsNone(legacy["applicable"])
         self.assertIsNone(legacy["coverage_complete"])
+        self.assertIsNone(legacy["energy_coverage_complete"])
         self.assertIsNone(legacy["unit_count"])
         self.assertIsNone(legacy["max_mass_imbalance_unit"])
         self.assertIsNone(legacy["max_energy_imbalance_unit"])
@@ -706,6 +707,7 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
         summary = aggregate_unit_balances(empty)
         self.assertFalse(summary["applicable"])
         self.assertTrue(summary["coverage_complete"])
+        self.assertTrue(summary["energy_coverage_complete"])
         self.assertEqual(summary["unit_count"], 0.0)
 
     def test_rows_are_isolated_and_aggregate_partial_coverage(self):
@@ -724,6 +726,7 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
         self.assertEqual(rows[0]["inlet_count"], 2)
         self.assertEqual(summary["unit_count"], 1.0)
         self.assertEqual(summary["energy_unit_count"], 1.0)
+        self.assertTrue(summary["energy_coverage_complete"])
         self.assertEqual(summary["max_mass_imbalance_pct"], 0.0)
         self.assertEqual(summary["max_energy_imbalance_pct"], 0.0)
         expected_limiting_unit = {
@@ -771,6 +774,7 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
         summary = aggregate_unit_balances(result)
 
         self.assertEqual(summary["energy_unit_count"], 0.0)
+        self.assertFalse(summary["energy_coverage_complete"])
         self.assertIsNone(summary["max_energy_imbalance_pct"])
         self.assertIsNone(summary["max_energy_imbalance_unit"])
 

@@ -429,6 +429,7 @@ def aggregate_unit_balances(result: Any) -> Dict[str, Any]:
         return {
             "applicable": None,
             "coverage_complete": None,
+            "energy_coverage_complete": None,
             "unit_count": None,
             "energy_unit_count": None,
             "max_mass_imbalance_pct": None,
@@ -512,6 +513,7 @@ def aggregate_unit_balances(result: Any) -> Dict[str, Any]:
     return {
         "applicable": applicable,
         "coverage_complete": coverage_complete,
+        "energy_coverage_complete": len(energy_rows) == len(rows),
         "unit_count": float(len(rows)),
         "energy_unit_count": float(len(energy_rows)),
         "max_mass_imbalance_pct": (
