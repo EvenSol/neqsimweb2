@@ -1021,6 +1021,53 @@ def validate_catalog_unit(unit: Any) -> None:
     inline_unit_property_rows(unit_type, unit["params"])
 
 
+def validate_starter_unit_projection(
+    units: list[Any],
+    expected_units: list[Any],
+) -> None:
+    """Keep retained starter nodes canonical while allowing their removal.
+
+    The backward-compatible ``process`` array still projects the starter
+    template. A graph draft may omit any of those nodes when the user
+    reorganizes the process, but it may not silently redefine a retained
+    starter identity. Replacement equipment must therefore use a new graph id.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(expected_units, list):
+        raise ValueError("Expected starter units must be an array.")
+
+    indexed_units: dict[str, dict[str, Any]] = {}
+    for index, unit in enumerate(units):
+        if not isinstance(unit, dict):
+            raise ValueError(f"Graph unit {index} must be an object.")
+        unit_id = str(unit.get("id", "")).strip()
+        if not unit_id:
+            raise ValueError(f"Graph unit {index} requires an id.")
+        if unit_id in indexed_units:
+            raise ValueError(f"Graph unit id '{unit_id}' is duplicated.")
+        indexed_units[unit_id] = unit
+
+    expected_ids: set[str] = set()
+    for index, expected_unit in enumerate(expected_units):
+        if not isinstance(expected_unit, dict):
+            raise ValueError(f"Starter unit {index} must be an object.")
+        expected_unit_id = str(expected_unit.get("id", "")).strip()
+        if not expected_unit_id:
+            raise ValueError(f"Starter unit {index} requires an id.")
+        if expected_unit_id in expected_ids:
+            raise ValueError(
+                f"Starter unit id '{expected_unit_id}' is duplicated."
+            )
+        expected_ids.add(expected_unit_id)
+        retained_unit = indexed_units.get(expected_unit_id)
+        if retained_unit is not None and retained_unit != expected_unit:
+            raise ValueError(
+                "Graph units conflict with the starter-template projection at "
+                f"'{expected_unit_id}'."
+            )
+
+
 def _connection_index(
     connections: list[Any],
     connection_id: str,

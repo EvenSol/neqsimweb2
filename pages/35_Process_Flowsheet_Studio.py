@@ -92,6 +92,7 @@ _EDITOR_SYMBOL_NAMES = (
     "update_inlet_conditions",
     "update_inline_unit_properties",
     "validate_catalog_unit",
+    "validate_starter_unit_projection",
 )
 globals().update(
     import_local_symbols(
@@ -1195,12 +1196,7 @@ def _validate_case_graph(
     indexed_units = _index_graph_objects(units, "units")
     expected_units, _ = _build_template_graph(process)
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
-    for expected_unit_id, expected_unit in expected_unit_map.items():
-        if indexed_units.get(expected_unit_id) != expected_unit:
-            raise ValueError(
-                "Graph units conflict with the starter-template projection at "
-                f"'{expected_unit_id}'."
-            )
+    validate_starter_unit_projection(units, expected_units)
     for unit_id, unit in indexed_units.items():
         if unit_id in expected_unit_map:
             continue

@@ -44,6 +44,7 @@ from process_chat.flowsheet_editor import (
     update_inline_unit_properties,
     update_process_unit_properties,
     validate_catalog_unit,
+    validate_starter_unit_projection,
 )
 
 
@@ -386,6 +387,62 @@ class UnitCatalogTest(unittest.TestCase):
         malformed["ports"]["material_out"] = ["wrong"]
         with self.assertRaisesRegex(ValueError, "ports do not match"):
             validate_catalog_unit(malformed)
+
+
+class StarterUnitProjectionTest(unittest.TestCase):
+    """Keep retained starter identities canonical without making them mandatory."""
+
+    def setUp(self):
+        self.expected = [
+            create_inline_unit_spec("compressor", "Stage 1 Compressor", set()),
+            create_inline_unit_spec(
+                "cooler",
+                "Intercooler",
+                {"stage-1-compressor"},
+            ),
+        ]
+
+    def test_allows_omitted_starter_units_and_unrelated_replacements(self):
+        replacement = create_inline_unit_spec(
+            "valve",
+            "Replacement Valve",
+            {"stage-1-compressor", "intercooler"},
+        )
+
+        validate_starter_unit_projection(
+            [self.expected[1], replacement],
+            self.expected,
+        )
+        validate_starter_unit_projection([replacement], self.expected)
+        validate_starter_unit_projection([], self.expected)
+
+    def test_rejects_redefinition_of_retained_starter_identity(self):
+        conflicting = {
+            **self.expected[0],
+            "type": "valve",
+            "params": {"outlet_pressure_bara": 40.0},
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "starter-template projection",
+        ):
+            validate_starter_unit_projection(
+                [conflicting, self.expected[1]],
+                self.expected,
+            )
+
+    def test_rejects_duplicate_graph_and_starter_ids(self):
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            validate_starter_unit_projection(
+                [self.expected[0], self.expected[0]],
+                self.expected,
+            )
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            validate_starter_unit_projection(
+                self.expected,
+                [self.expected[0], self.expected[0]],
+            )
 
 
 class InletConditionMetadataTest(unittest.TestCase):
