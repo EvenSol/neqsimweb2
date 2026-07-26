@@ -127,6 +127,21 @@ class UnitCatalogTest(unittest.TestCase):
             )
         self.assertEqual(len(units), 1)
 
+    def test_standalone_unit_ignores_blank_stored_names_before_validation(self):
+        units = [
+            {"id": "legacy-unit", "type": "pump"},
+            {"id": "blank-unit", "name": "   ", "type": "pump"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            add_catalog_unit(
+                units,
+                "pump",
+                "   ",
+                reserved_names={"", "   "},
+            )
+        self.assertEqual(len(units), 2)
+
     def test_property_metadata_has_explicit_units_and_valid_defaults(self):
         catalog = inline_unit_catalog()
 
