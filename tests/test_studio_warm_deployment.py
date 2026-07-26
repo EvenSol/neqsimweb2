@@ -226,6 +226,36 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             {"Inlet scrubber [liquid] product"},
         )
 
+    def test_terminal_names_conflict_with_feeds_and_equipment(self):
+        terminal_name_conflicts = self._load_studio_function(
+            "_terminal_name_conflicts"
+        )
+
+        self.assertEqual(
+            terminal_name_conflicts(
+                [
+                    {
+                        "id": "feed",
+                        "name": "Inlet scrubber [liquid] product",
+                    },
+                    {
+                        "id": "pump",
+                        "name": "Cooler [out] product",
+                    },
+                    {"id": "blank", "name": " "},
+                    {"id": "null", "name": None},
+                ],
+                {
+                    "INLET SCRUBBER [LIQUID] PRODUCT",
+                    "Cooler [out] product",
+                },
+            ),
+            [
+                "Cooler [out] product",
+                "Inlet scrubber [liquid] product",
+            ],
+        )
+
     def test_solve_readiness_rejects_disconnected_feeds(self):
         validate_solve_readiness = self._load_studio_function(
             "_validate_graph_solve_readiness"
