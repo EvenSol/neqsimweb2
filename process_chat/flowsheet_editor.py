@@ -1311,6 +1311,7 @@ def insert_inline_unit_on_connection(
     connection_id: str,
     unit_type: str,
     unit_name: str,
+    reserved_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     """Transactionally insert one catalog unit into a material connection.
 
@@ -1369,6 +1370,9 @@ def insert_inline_unit_on_connection(
             connection.get("target"),
         )
         if isinstance(endpoint, dict)
+    )
+    existing_object_ids.update(
+        str(reserved_id).strip() for reserved_id in (reserved_ids or set())
     )
     new_unit = create_inline_unit_spec(
         unit_type,

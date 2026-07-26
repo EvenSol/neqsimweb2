@@ -793,6 +793,19 @@ class InlineInsertionTest(unittest.TestCase):
         )
         self.assertEqual(len(new_units), 3)
 
+    def test_insert_reserves_unconnected_inlet_ids(self):
+        new_units, _, new_unit_id = insert_inline_unit_on_connection(
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "cooler",
+            "Satellite Feed",
+            {"satellite-feed"},
+        )
+
+        self.assertEqual(new_unit_id, "satellite-feed-2")
+        self.assertEqual(new_units[0]["id"], "satellite-feed-2")
+
     def test_invalid_path_requests_fail_without_partial_edits(self):
         invalid_cases = (
             ("missing", self.connections, "Unknown graph connection"),
