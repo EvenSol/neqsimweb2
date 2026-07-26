@@ -3702,9 +3702,14 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         unit
                         for unit in spec["units"]
                         if (
-                            not isinstance(downstream_unit, dict)
-                            or str(unit.get("id", "")).strip()
-                            != str(downstream_unit.get("id", "")).strip()
+                            isinstance(unit, dict)
+                            and (
+                                not isinstance(downstream_unit, dict)
+                                or str(unit.get("id", "")).strip()
+                                != str(
+                                    downstream_unit.get("id", "")
+                                ).strip()
+                            )
                         )
                     ]
                 else:
@@ -3820,9 +3825,12 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                     reorganize_unit_type,
                                     resolved_name,
                                     {
-                                        str(inlet.get("id", "")).strip()
-                                        for inlet in spec["inlets"]
-                                        if isinstance(inlet, dict)
+                                        *protected_unit_ids,
+                                        *(
+                                            str(inlet.get("id", "")).strip()
+                                            for inlet in spec["inlets"]
+                                            if isinstance(inlet, dict)
+                                        ),
                                     },
                                 )
                             )
@@ -4425,6 +4433,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         extend_source_rows[extend_source_index]["endpoint"],
                         extend_type,
                         extend_name,
+                        protected_unit_ids,
                     )
                 )
                 candidate_draft = create_graph_draft(
@@ -4495,10 +4504,13 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         if add_standalone:
             try:
                 reserved_ids = {
-                    str(inlet.get("id", "")).strip()
-                    for inlet in spec["inlets"]
-                    if isinstance(inlet, dict)
-                    and str(inlet.get("id", "")).strip()
+                    *protected_unit_ids,
+                    *(
+                        str(inlet.get("id", "")).strip()
+                        for inlet in spec["inlets"]
+                        if isinstance(inlet, dict)
+                        and str(inlet.get("id", "")).strip()
+                    ),
                 }
                 reserved_names = _graph_name_set(spec["inlets"])
                 units, new_unit_id = add_catalog_unit(
@@ -4787,10 +4799,13 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         unit_type,
                         resolved_name,
                         {
-                            str(inlet.get("id", "")).strip()
-                            for inlet in spec["inlets"]
-                            if isinstance(inlet, dict)
-                            and str(inlet.get("id", "")).strip()
+                            *protected_unit_ids,
+                            *(
+                                str(inlet.get("id", "")).strip()
+                                for inlet in spec["inlets"]
+                                if isinstance(inlet, dict)
+                                and str(inlet.get("id", "")).strip()
+                            ),
                         },
                     )
                 )
