@@ -184,6 +184,22 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cannot be empty"):
                     required_identifier(invalid_id, "inlet id")
 
+    def test_graph_name_set_ignores_null_and_blank_names(self):
+        graph_name_set = self._load_studio_function("_graph_name_set")
+        records = [
+            {"id": "named", "name": " Feed A "},
+            {"id": "null", "name": None},
+            {"id": "blank", "name": "  "},
+            {"id": "missing"},
+            None,
+        ]
+
+        self.assertEqual(graph_name_set(records), {"Feed A"})
+        self.assertEqual(
+            graph_name_set(records, casefold=True),
+            {"feed a"},
+        )
+
     def test_feed_draft_refreshes_current_template_unit_properties(self):
         apply_studio_graph_draft = self._load_studio_function(
             "_apply_studio_graph_draft"
