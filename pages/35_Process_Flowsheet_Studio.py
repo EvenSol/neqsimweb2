@@ -403,6 +403,30 @@ def _terminal_material_stream_names(
     return result
 
 
+def _terminal_name_conflicts(
+    records: list[Any],
+    terminal_names: set[str],
+) -> list[str]:
+    """Return graph object names reserved by synthesized product streams."""
+    terminal_name_keys = {
+        str(name).strip().casefold()
+        for name in terminal_names
+        if str(name).strip()
+    }
+    conflicts: dict[str, str] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        raw_name = record.get("name")
+        if raw_name is None:
+            continue
+        name = str(raw_name).strip()
+        name_key = name.casefold()
+        if name and name_key in terminal_name_keys:
+            conflicts.setdefault(name_key, name)
+    return [conflicts[name_key] for name_key in sorted(conflicts)]
+
+
 def _validate_graph_solve_readiness(case_spec: dict[str, Any]) -> None:
     """Reject graph drafts whose independent feeds are not yet consumed."""
     inlets = case_spec.get("inlets")
@@ -1131,22 +1155,15 @@ def _validate_case_graph(
         raise ValueError("Schema v3 requires a connections array.")
 
     _validate_graph_integrity(inlets, units, connections)
-    terminal_name_keys = {
-        name.casefold()
-        for name in _terminal_material_stream_names(units, connections)
-    }
-    conflicting_inlet_names = sorted(
-        str(inlet.get("name", "")).strip()
-        for inlet in inlets
-        if isinstance(inlet, dict)
-        and inlet.get("name") is not None
-        and str(inlet.get("name", "")).strip().casefold()
-        in terminal_name_keys
+    conflicting_graph_names = _terminal_name_conflicts(
+        [*inlets, *units],
+        _terminal_material_stream_names(units, connections),
     )
-    if conflicting_inlet_names:
+    if conflicting_graph_names:
         raise ValueError(
-            "Inlet names conflict with generated terminal product streams: "
-            + ", ".join(conflicting_inlet_names)
+            "Inlet or unit names conflict with generated terminal product "
+            "streams: "
+            + ", ".join(conflicting_graph_names)
             + "."
         )
     indexed_units = _index_graph_objects(units, "units")
