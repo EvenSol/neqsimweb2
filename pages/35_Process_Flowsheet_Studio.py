@@ -3351,9 +3351,10 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             selected_inlet_id,
                             renamed_inlet,
                             {
-                                str(unit["name"]).strip()
+                                str(unit.get("name", "")).strip()
                                 for unit in spec["units"]
                                 if isinstance(unit, dict)
+                                and str(unit.get("name", "")).strip()
                             },
                         )
                         lifecycle_notice = (
