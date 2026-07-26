@@ -29,6 +29,19 @@ _CONVERGENCE_OPTIONAL_NUMERIC_FIELDS = (
     "composition_tolerance",
     "tolerance",
 )
+_UNIT_BALANCE_MASS_FIELDS = (
+    "inlet_mass_flow_kg_hr",
+    "outlet_mass_flow_kg_hr",
+    "mass_residual_kg_hr",
+    "mass_imbalance_pct",
+)
+_UNIT_BALANCE_ENERGY_FIELDS = (
+    "inlet_enthalpy_kW",
+    "outlet_enthalpy_kW",
+    "external_energy_transfer_kW",
+    "energy_residual_kW",
+    "energy_imbalance_pct",
+)
 _VALIDATION_STATUSES = {"OK", "WARN", "VIOLATION", "UNKNOWN"}
 
 
@@ -260,6 +273,209 @@ def aggregate_convergence(result: Any) -> Dict[str, Any]:
             float(max(iteration_values)) if iteration_values else None
         ),
         "suggestions": suggestions,
+    }
+
+
+def unit_balance_rows(result: Any) -> List[Dict[str, Any]]:
+    """Return validated per-unit material and energy closure rows."""
+    raw = getattr(result, "raw", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Solver result raw diagnostics must be an object.")
+    diagnostics = raw.get("unit_balance_diagnostics")
+    if diagnostics is None:
+        return []
+    if not isinstance(diagnostics, dict):
+        raise ValueError("Unit balance diagnostics must be an object.")
+    source_rows = diagnostics.get("rows", [])
+    if not isinstance(source_rows, list):
+        raise ValueError("Unit balance diagnostic rows must be an array.")
+
+    rows: List[Dict[str, Any]] = []
+    identities = set()
+    for index, source_row in enumerate(source_rows):
+        if not isinstance(source_row, dict):
+            raise ValueError(
+                f"Unit balance row {index} must be an object."
+            )
+        process_system = str(
+            source_row.get("process_system", "")
+        ).strip()
+        unit_name = str(source_row.get("unit_name", "")).strip()
+        unit_type = str(source_row.get("unit_type", "")).strip()
+        if not process_system or not unit_name or not unit_type:
+            raise ValueError(
+                f"Unit balance row {index} requires process system, "
+                "unit name, and unit type."
+            )
+        identity = (process_system, unit_name, unit_type)
+        if identity in identities:
+            raise ValueError(
+                f"Unit balance row {index} duplicates a unit."
+            )
+        identities.add(identity)
+
+        row: Dict[str, Any] = {
+            "process_system": process_system,
+            "unit_name": unit_name,
+            "unit_type": unit_type,
+        }
+        for field_name in ("inlet_count", "outlet_count"):
+            value = source_row.get(field_name)
+            if isinstance(value, bool):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be a positive integer."
+                )
+            try:
+                integer_value = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be a positive integer."
+                ) from exc
+            if integer_value < 1 or float(integer_value) != float(value):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be a positive integer."
+                )
+            row[field_name] = integer_value
+
+        for field_name in _UNIT_BALANCE_MASS_FIELDS:
+            try:
+                numeric_value = float(source_row.get(field_name))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be numeric."
+                ) from exc
+            if not math.isfinite(numeric_value):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be finite."
+                )
+            if (
+                field_name != "mass_residual_kg_hr"
+                and numeric_value < 0.0
+            ):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be non-negative."
+                )
+            row[field_name] = numeric_value
+
+        energy_values = [
+            source_row.get(field_name)
+            for field_name in _UNIT_BALANCE_ENERGY_FIELDS
+        ]
+        energy_available = any(
+            value is not None for value in energy_values
+        )
+        if energy_available and any(
+            value is None for value in energy_values
+        ):
+            raise ValueError(
+                f"Unit balance row {index} has incomplete energy closure."
+            )
+        for field_name, value in zip(
+            _UNIT_BALANCE_ENERGY_FIELDS,
+            energy_values,
+        ):
+            if value is None:
+                row[field_name] = None
+                continue
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be numeric."
+                ) from exc
+            if not math.isfinite(numeric_value):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be finite."
+                )
+            if (
+                field_name == "energy_imbalance_pct"
+                and numeric_value < 0.0
+            ):
+                raise ValueError(
+                    f"Unit balance row {index} energy imbalance must "
+                    "be non-negative."
+                )
+            row[field_name] = numeric_value
+        rows.append(row)
+    return rows
+
+
+def aggregate_unit_balances(result: Any) -> Dict[str, Any]:
+    """Aggregate strict per-unit closure with legacy compatibility."""
+    raw = getattr(result, "raw", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Solver result raw diagnostics must be an object.")
+    diagnostics = raw.get("unit_balance_diagnostics")
+    if diagnostics is None:
+        return {
+            "applicable": None,
+            "coverage_complete": None,
+            "unit_count": None,
+            "energy_unit_count": None,
+            "max_mass_imbalance_pct": None,
+            "max_energy_imbalance_pct": None,
+            "excluded_units": [],
+        }
+    if not isinstance(diagnostics, dict):
+        raise ValueError("Unit balance diagnostics must be an object.")
+
+    applicable = diagnostics.get("applicable")
+    coverage_complete = diagnostics.get("coverage_complete")
+    if not isinstance(applicable, bool):
+        raise ValueError("Unit balance applicability must be a boolean.")
+    if not isinstance(coverage_complete, bool):
+        raise ValueError(
+            "Unit balance coverage state must be a boolean."
+        )
+    source_excluded = diagnostics.get("excluded_units", [])
+    if not isinstance(source_excluded, list):
+        raise ValueError("Excluded unit balances must be an array.")
+    excluded_units = []
+    for index, source_unit in enumerate(source_excluded):
+        if not isinstance(source_unit, str) or not source_unit.strip():
+            raise ValueError(
+                f"Excluded unit balance {index} must be non-empty text."
+            )
+        excluded_units.append(source_unit.strip())
+    if coverage_complete is not (not excluded_units):
+        raise ValueError(
+            "Unit balance coverage state conflicts with excluded units."
+        )
+
+    rows = unit_balance_rows(result)
+    if applicable is not bool(rows):
+        raise ValueError(
+            "Unit balance applicability conflicts with its rows."
+        )
+    energy_rows = [
+        row
+        for row in rows
+        if row["energy_imbalance_pct"] is not None
+    ]
+    return {
+        "applicable": applicable,
+        "coverage_complete": coverage_complete,
+        "unit_count": float(len(rows)),
+        "energy_unit_count": float(len(energy_rows)),
+        "max_mass_imbalance_pct": (
+            max(row["mass_imbalance_pct"] for row in rows)
+            if rows
+            else None
+        ),
+        "max_energy_imbalance_pct": (
+            max(row["energy_imbalance_pct"] for row in energy_rows)
+            if energy_rows
+            else None
+        ),
+        "excluded_units": excluded_units,
     }
 
 
