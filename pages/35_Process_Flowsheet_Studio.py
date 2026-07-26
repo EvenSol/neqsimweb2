@@ -3713,6 +3713,12 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         connection_id,
                         unit_type,
                         resolved_name,
+                        {
+                            str(inlet.get("id", "")).strip()
+                            for inlet in spec["inlets"]
+                            if isinstance(inlet, dict)
+                            and str(inlet.get("id", "")).strip()
+                        },
                     )
                 )
                 candidate_draft = create_graph_draft(
