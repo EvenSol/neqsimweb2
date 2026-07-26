@@ -4488,9 +4488,11 @@ if results_are_current and has_stored_result:
                 hide_index=True,
             )
             st.caption(
-                "Each residual is outlet minus inlet minus signed "
-                "external energy transfer. Positive external transfer "
-                "adds energy to the material system."
+                "Mass residual is outlet mass flow minus inlet mass flow. "
+                "Energy residual is outlet enthalpy flow minus inlet "
+                "enthalpy flow minus signed external energy transfer. "
+                "Positive external transfer adds energy to the material "
+                "system."
             )
             if unit_balance_summary["excluded_units"]:
                 st.caption(

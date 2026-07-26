@@ -125,6 +125,22 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             "Download engineering workbook",
             [button.label for button in app.get("download_button")],
         )
+        captions = [caption.value for caption in app.caption]
+        self.assertTrue(
+            any(
+                "Mass residual is outlet mass flow minus inlet mass flow."
+                in caption
+                for caption in captions
+            )
+        )
+        self.assertTrue(
+            any(
+                "Energy residual is outlet enthalpy flow minus inlet "
+                "enthalpy flow minus signed external energy transfer."
+                in caption
+                for caption in captions
+            )
+        )
 
 
 if __name__ == "__main__":
