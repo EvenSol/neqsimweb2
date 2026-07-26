@@ -2091,10 +2091,12 @@ def replace_inline_unit(
             replacement_connection_id,
             replacement_type,
             cleaned_replacement_name,
-            {
-                str(reserved_id).strip()
-                for reserved_id in (reserved_ids or set())
-            },
+            {cleaned_unit_id}.union(
+                {
+                    str(reserved_id).strip()
+                    for reserved_id in (reserved_ids or set())
+                }
+            ),
         )
     )
     return replaced_units, replaced_connections, replacement_id
