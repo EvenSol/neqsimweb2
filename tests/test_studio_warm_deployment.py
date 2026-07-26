@@ -146,6 +146,10 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             graph_object_name({"id": "feed-a", "name": " "}, "feed-a"),
             "feed-a",
         )
+        self.assertEqual(
+            graph_object_name({"id": "feed-a", "name": None}, "feed-a"),
+            "feed-a",
+        )
 
     def test_standalone_no_test_selection_returns_five(self):
         studio_test_path = Path(__file__).resolve()
