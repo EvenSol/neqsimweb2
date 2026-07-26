@@ -615,6 +615,7 @@ class MaterialInletLifecycleTest(unittest.TestCase):
         self.assertEqual(updated[1]["fluid_package_id"], "base-fluid")
         self.assertEqual(updated[1]["composition"], self.inlets[0]["composition"])
         updated[1]["composition"]["methane"] = 0.8
+        self.assertEqual(updated[0]["composition"]["methane"], 0.9)
         self.assertEqual(self.inlets[0]["composition"]["methane"], 0.9)
         self.assertEqual(len(self.inlets), 1)
 
