@@ -1767,10 +1767,15 @@ def apply_graph_draft(
         raise ValueError(
             "Unsupported graph draft schema version. Expected version 1."
         )
+    retained_or_draft_inlets = (
+        draft.get("inlets")
+        if "inlets" in draft
+        else case_spec.get("inlets")
+    )
     validated = create_graph_draft(
         draft.get("units"),
         draft.get("connections"),
-        draft.get("inlets") if "inlets" in draft else None,
+        retained_or_draft_inlets,
     )
     updated_case = copy.deepcopy(case_spec)
     updated_case["units"] = validated["units"]
