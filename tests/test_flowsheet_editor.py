@@ -58,6 +58,8 @@ class UnitCatalogTest(unittest.TestCase):
                 "pump",
                 "expander",
                 "pipeline",
+                "separator",
+                "mixer",
             ],
         )
         self.assertTrue(all(row["Category"] for row in rows))
@@ -105,6 +107,41 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(updated[-1]["ports"]["material_out"], ["out"])
         self.assertEqual(updated[-1]["params"]["efficiency"], 0.75)
         self.assertEqual(len(units), 1)
+
+    def test_adds_multi_inlet_mixer_and_phase_separator_nodes(self):
+        units, mixer_id = add_catalog_unit(
+            [],
+            "mixer",
+            "Feed mixer",
+            {"feed-a", "feed-b"},
+            {"Feed A", "Feed B"},
+        )
+        units, separator_id = add_catalog_unit(
+            units,
+            "separator",
+            "Product separator",
+        )
+
+        self.assertEqual(mixer_id, "feed-mixer")
+        self.assertEqual(
+            units[0]["ports"],
+            {
+                "material_in": ["in_0", "in_1"],
+                "material_out": ["out"],
+            },
+        )
+        self.assertEqual(separator_id, "product-separator")
+        self.assertEqual(
+            units[1]["ports"],
+            {
+                "material_in": ["in"],
+                "material_out": ["gas", "liquid"],
+            },
+        )
+        self.assertEqual(units[0]["params"], {})
+        self.assertEqual(units[1]["params"], {})
+        validate_catalog_unit(units[0])
+        validate_catalog_unit(units[1])
 
     def test_standalone_unit_rejects_duplicate_names_without_mutation(self):
         units = [
@@ -251,7 +288,7 @@ class UnitCatalogTest(unittest.TestCase):
         invalid_cases = (
             ("separator", {"pressure_drop_bar": 1.0}, "unsupported property"),
             ("separator", [], "params must be an object"),
-            ("mixer", {}, "Unsupported process unit type"),
+            ("mixer", {"pressure_drop_bar": 1.0}, "unsupported property"),
         )
         for unit_type, params, message in invalid_cases:
             with self.subTest(unit_type=unit_type):
