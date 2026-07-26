@@ -202,6 +202,31 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             "feed-a",
         )
 
+    def test_material_output_notice_uses_declared_phase_ports(self):
+        output_label = self._load_studio_function(
+            "_material_output_selection_label"
+        )
+
+        self.assertEqual(
+            output_label(
+                {
+                    "id": "condensate-pump",
+                    "ports": {"material_out": ["out"]},
+                }
+            ),
+            "'condensate-pump:out'",
+        )
+        self.assertEqual(
+            output_label(
+                {
+                    "id": "product-separator",
+                    "ports": {"material_out": ["gas", "liquid"]},
+                }
+            ),
+            "one of 'product-separator:gas', "
+            "'product-separator:liquid'",
+        )
+
     def test_secondary_inlet_map_ignores_missing_and_blank_ids(self):
         secondary_inlet_map = self._load_studio_function(
             "_secondary_inlet_map"
