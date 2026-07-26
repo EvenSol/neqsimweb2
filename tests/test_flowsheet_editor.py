@@ -68,10 +68,10 @@ class UnitCatalogTest(unittest.TestCase):
         splitter_row = rows[-1]
         self.assertEqual(
             splitter_row["Equipment"],
-            "Splitter (equal default)",
+            "Splitter",
         )
         self.assertIn(
-            "default to an equal allocation",
+            "editable out_0 flow fraction",
             splitter_row["Description"],
         )
 
@@ -163,7 +163,7 @@ class UnitCatalogTest(unittest.TestCase):
         )
         self.assertEqual(units[0]["params"], {})
         self.assertEqual(units[1]["params"], {})
-        self.assertEqual(units[2]["params"], {})
+        self.assertEqual(units[2]["params"], {"split_factor": 0.5})
         validate_catalog_unit(units[0])
         validate_catalog_unit(units[1])
         validate_catalog_unit(units[2])
@@ -263,6 +263,25 @@ class UnitCatalogTest(unittest.TestCase):
         pressure_row = inline_unit_property_rows("compressor")[0]
         self.assertEqual(pressure_row["unit"], "bara (absolute)")
         self.assertEqual(pressure_row["format"], "%.2f")
+        splitter_row = inline_unit_property_rows("splitter")[0]
+        self.assertEqual(splitter_row["key"], "split_factor")
+        self.assertEqual(splitter_row["label"], "Outlet out_0 flow fraction")
+        self.assertEqual(splitter_row["unit"], "-")
+        self.assertEqual(splitter_row["value"], 0.5)
+        self.assertEqual(splitter_row["minimum"], 0.0)
+        self.assertEqual(splitter_row["maximum"], 1.0)
+
+    def test_splitter_property_rows_migrate_normalized_array_alias(self):
+        rows = inline_unit_property_rows(
+            "splitter",
+            {"split_factors": [3.0, 7.0]},
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["value"], 0.3)
+
+        splitter = create_inline_unit_spec("splitter", "Product split", set())
+        splitter["params"] = {"split_factors": [3.0, 7.0]}
+        validate_catalog_unit(splitter)
 
     def test_property_metadata_rejects_invalid_parameter_shapes(self):
         invalid_cases = (
@@ -290,6 +309,24 @@ class UnitCatalogTest(unittest.TestCase):
                 },
                 "property 'diameter' must be between",
             ),
+            (
+                "splitter",
+                {},
+                "missing property 'split_factor'",
+            ),
+            (
+                "splitter",
+                {
+                    "split_factor": 0.5,
+                    "split_factors": [0.5, 0.5],
+                },
+                "conflicting split_factor and split_factors",
+            ),
+            (
+                "splitter",
+                {"split_factors": [0.2, 0.3, 0.5]},
+                "must contain exactly two values",
+            ),
         )
         for unit_type, params, message in invalid_cases:
             with self.subTest(unit_type=unit_type, message=message):
@@ -314,6 +351,7 @@ class UnitCatalogTest(unittest.TestCase):
             ("separator", {"pressure_drop_bar": 1.0}, "unsupported property"),
             ("separator", [], "params must be an object"),
             ("mixer", {"pressure_drop_bar": 1.0}, "unsupported property"),
+            ("splitter", {"split_factor": 1.1}, "must be between"),
         )
         for unit_type, params, message in invalid_cases:
             with self.subTest(unit_type=unit_type):
@@ -1267,6 +1305,26 @@ class ProcessUnitPropertyUpdateTest(unittest.TestCase):
 
         self.assertNotIn("params", updated[0])
         self.assertEqual(updated, self.units)
+
+    def test_updates_splitter_and_canonicalizes_legacy_array(self):
+        splitter = create_inline_unit_spec(
+            "splitter",
+            "Product split",
+            set(),
+        )
+        splitter["params"] = {"split_factors": [3.0, 7.0]}
+
+        updated = update_process_unit_properties(
+            [splitter],
+            splitter["id"],
+            {"split_factor": 0.4},
+        )
+
+        self.assertEqual(updated[0]["params"], {"split_factor": 0.4})
+        self.assertEqual(
+            splitter["params"],
+            {"split_factors": [3.0, 7.0]},
+        )
 
     def test_rejects_invalid_generic_updates_without_mutation(self):
         duplicated = [*self.units, dict(self.units[1])]
