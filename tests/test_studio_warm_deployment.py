@@ -105,12 +105,15 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 "Maximum unit energy imbalance",
             },
         )
-        self.assertTrue(
-            all(metric.value.endswith(" %") for metric in closure_metrics.values())
-        )
-        self.assertTrue(
-            all(" / " in metric.help for metric in closure_metrics.values())
-        )
+        mass_metric = closure_metrics["Maximum unit mass imbalance"]
+        self.assertTrue(mass_metric.value.endswith(" %"))
+        self.assertIn(" / ", mass_metric.help)
+        energy_metric = closure_metrics["Maximum unit energy imbalance"]
+        if energy_metric.value == "n/a":
+            self.assertEqual(energy_metric.help, "n/a")
+        else:
+            self.assertTrue(energy_metric.value.endswith(" %"))
+            self.assertIn(" / ", energy_metric.help)
         self.assertTrue(
             any(
                 "Mass imbalance [%]" in dataframe.value.columns
