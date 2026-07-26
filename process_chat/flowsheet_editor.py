@@ -387,6 +387,11 @@ def process_unit_property_rows(
     else:
         raise ValueError("Process unit params must be an object.")
 
+    if cleaned_type == "splitter" and not selected_params:
+        # Schema-v3 palette splitters were persisted with empty params before
+        # their equal allocation became an editor-backed property.
+        selected_params = copy.deepcopy(definition["default_params"])
+
     if cleaned_type == "splitter" and "split_factors" in selected_params:
         if "split_factor" in selected_params:
             raise ValueError(
@@ -416,12 +421,15 @@ def process_unit_property_rows(
                     "non-negative."
                 )
             factors.append(factor)
-        factor_total = sum(factors)
-        if factor_total <= 0.0:
+        factor_scale = max(factors)
+        if factor_scale <= 0.0:
             raise ValueError(
                 "Process splitter split_factors must have a positive sum."
             )
-        selected_params["split_factor"] = factors[0] / factor_total
+        scaled_factors = [factor / factor_scale for factor in factors]
+        selected_params["split_factor"] = (
+            scaled_factors[0] / sum(scaled_factors)
+        )
 
     property_keys = set(definition["properties"])
     parameter_keys = set(selected_params)
