@@ -67,6 +67,7 @@ _EDITOR_SYMBOL_NAMES = (
     "create_graph_draft",
     "create_graph_history",
     "disconnect_graph_connection",
+    "extend_material_path",
     "graph_connection_rows",
     "graph_history_status",
     "graph_port_rows",
@@ -3675,6 +3676,85 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         + " Run NeqSim to solve the revised graph.",
                     )
                     st.rerun()
+
+        st.divider()
+        st.markdown("#### Extend a material path")
+        st.caption(
+            "Choose any unconnected feed or equipment outlet, then add and "
+            "connect the next native unit in one step. Separator gas and "
+            "liquid outlets appear independently."
+        )
+        extend_source_rows = graph_port_rows(
+            spec["inlets"],
+            spec["units"],
+            spec["connections"],
+            "material",
+            "source",
+            available_only=True,
+        )
+        extend_cols = st.columns(3)
+        extend_source_index = extend_cols[0].selectbox(
+            "Source outlet",
+            options=list(range(len(extend_source_rows))),
+            format_func=lambda index: extend_source_rows[index]["label"],
+            key=f"flowsheet_extend_source_{graph_widget_revision}",
+        )
+        extend_type = extend_cols[1].selectbox(
+            "Next equipment",
+            options=list(catalog),
+            format_func=lambda value: catalog[value]["label"],
+            key=f"flowsheet_extend_type_{graph_widget_revision}",
+        )
+        extend_name = extend_cols[2].text_input(
+            "Equipment name",
+            value=f"New {catalog[extend_type]['label']}",
+            max_chars=80,
+            key=f"flowsheet_extend_name_{graph_widget_revision}",
+        )
+        extend_path = st.button(
+            "Add and connect equipment",
+            disabled=extend_source_index is None,
+            use_container_width=True,
+            key=f"flowsheet_extend_path_{graph_widget_revision}",
+        )
+        if extend_path:
+            try:
+                units, connections, new_unit_id, new_connection_id = (
+                    extend_material_path(
+                        spec["inlets"],
+                        spec["units"],
+                        spec["connections"],
+                        extend_source_rows[extend_source_index]["endpoint"],
+                        extend_type,
+                        extend_name,
+                    )
+                )
+                candidate_draft = create_graph_draft(
+                    units,
+                    connections,
+                    spec["inlets"],
+                )
+                candidate_case = _apply_studio_graph_draft(
+                    spec,
+                    candidate_draft,
+                )
+                _validate_case_graph(
+                    candidate_case,
+                    candidate_case["process"],
+                )
+            except ValueError as edit_error:
+                st.error(f"Material path extension failed: {edit_error}")
+            else:
+                _record_graph_revision(
+                    spec,
+                    candidate_draft,
+                    (
+                        f"Added {extend_type} '{extend_name.strip()}' and "
+                        f"connected it with '{new_connection_id}'. Select "
+                        f"'{new_unit_id}:out' to extend the path again."
+                    ),
+                )
+                st.rerun()
 
         st.divider()
         st.markdown("#### Add standalone equipment")
