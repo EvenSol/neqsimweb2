@@ -3691,6 +3691,12 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     for unit in spec["units"]
                     if isinstance(unit, dict)
                 }
+                existing_names.update(
+                    str(inlet.get("name", "")).strip().casefold()
+                    for inlet in spec["inlets"]
+                    if isinstance(inlet, dict)
+                    and str(inlet.get("name", "")).strip()
+                )
                 resolved_name = requested_name
                 name_suffix = 2
                 while resolved_name.casefold() in existing_names:
