@@ -16,6 +16,7 @@ from process_chat.flowsheet_editor import (
     create_graph_history,
     create_inline_unit_spec,
     disconnect_graph_connection,
+    extend_material_path,
     graph_connection_rows,
     graph_history_status,
     graph_port_rows,
@@ -1944,6 +1945,97 @@ class GraphPortConnectionTest(unittest.TestCase):
             ("separator", "liquid"),
             {(row["id"], row["port"]) for row in available_sources},
         )
+
+    def test_extends_separator_liquid_path_through_pump_and_heater(self):
+        inlets = [{"id": "feed", "name": "Well fluid"}]
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet separator",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["gas", "liquid"],
+                },
+            }
+        ]
+        connections = [
+            {
+                "id": "feed-to-separator",
+                "type": "material",
+                "source": {"kind": "inlet", "id": "feed", "port": "out"},
+                "target": {"kind": "unit", "id": "separator", "port": "in"},
+            }
+        ]
+
+        units, connections, pump_id, pump_connection_id = (
+            extend_material_path(
+                inlets,
+                units,
+                connections,
+                {"kind": "unit", "id": "separator", "port": "liquid"},
+                "pump",
+                "Condensate pump",
+            )
+        )
+        units, connections, heater_id, heater_connection_id = (
+            extend_material_path(
+                inlets,
+                units,
+                connections,
+                {"kind": "unit", "id": pump_id, "port": "out"},
+                "heater",
+                "Condensate heater",
+            )
+        )
+
+        self.assertEqual(pump_id, "condensate-pump")
+        self.assertEqual(heater_id, "condensate-heater")
+        self.assertEqual(
+            pump_connection_id,
+            "material-separator-liquid-to-condensate-pump-in",
+        )
+        self.assertEqual(
+            heater_connection_id,
+            "material-condensate-pump-out-to-condensate-heater-in",
+        )
+        self.assertEqual(
+            [unit["id"] for unit in units],
+            ["separator", "condensate-pump", "condensate-heater"],
+        )
+        self.assertEqual(len(connections), 3)
+        self.assertEqual(
+            graph_port_rows(
+                inlets,
+                units,
+                connections,
+                "material",
+                "source",
+                available_only=True,
+            )[-1]["endpoint"],
+            {
+                "kind": "unit",
+                "id": "condensate-heater",
+                "port": "out",
+            },
+        )
+
+    def test_path_extension_failure_does_not_mutate_graph(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "already has a connection"):
+            extend_material_path(
+                self.inlets,
+                self.units,
+                self.connections,
+                {"kind": "inlet", "id": "feed-a", "port": "out"},
+                "pump",
+                "Extra pump",
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
 
     def test_rejects_occupied_undeclared_and_self_connections(self):
         invalid_cases = (
