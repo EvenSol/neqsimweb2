@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import json
 import os
 import subprocess
 import sys
@@ -75,7 +76,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
             and node.name == function_name
         )
-        namespace = {"Any": Any}
+        namespace = {"Any": Any, "json": json}
         exec(
             compile(
                 ast.Module(body=[function], type_ignores=[]),
@@ -171,6 +172,70 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         )
 
         self.assertEqual(result, {"liquid-feed": secondary})
+
+    def test_required_identifier_rejects_null_and_blank_ids(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+
+        self.assertEqual(required_identifier(" feed-a ", "inlet id"), "feed-a")
+        for invalid_id in (None, "", "   "):
+            with self.subTest(invalid_id=invalid_id):
+                with self.assertRaisesRegex(ValueError, "cannot be empty"):
+                    required_identifier(invalid_id, "inlet id")
+
+    def test_feed_draft_refreshes_current_template_unit_properties(self):
+        apply_studio_graph_draft = self._load_studio_function(
+            "_apply_studio_graph_draft"
+        )
+        current_template_unit = {
+            "id": "stage-1-compressor",
+            "name": "Stage 1 compressor",
+            "type": "compressor",
+            "params": {"outlet_pressure_bara": 91.0},
+        }
+        stale_template_unit = {
+            **current_template_unit,
+            "params": {"outlet_pressure_bara": 80.0},
+        }
+        standalone_unit = {
+            "id": "liquid-pump",
+            "name": "Liquid pump",
+            "type": "pump",
+            "params": {"outlet_pressure_bara": 25.0},
+        }
+        primary_inlet = {"id": "feed-gas", "name": "Feed gas"}
+        secondary_inlet = {"id": "liquid-feed", "name": "Liquid feed"}
+        case_spec = {
+            "process": [{"name": "current controls"}],
+            "inlets": [primary_inlet],
+            "units": [current_template_unit],
+            "connections": [],
+        }
+        draft = {
+            "inlets": [primary_inlet, secondary_inlet],
+            "units": [stale_template_unit, standalone_unit],
+            "connections": [],
+        }
+
+        apply_studio_graph_draft.__globals__.update(
+            {
+                "PRIMARY_INLET_ID": "feed-gas",
+                "_build_template_graph": lambda process: (
+                    [current_template_unit],
+                    [],
+                ),
+                "apply_graph_draft": lambda case, graph: {
+                    **case,
+                    **graph,
+                },
+            }
+        )
+        result = apply_studio_graph_draft(case_spec, draft)
+
+        self.assertEqual(result["units"][0], current_template_unit)
+        self.assertEqual(result["units"][1], standalone_unit)
+        self.assertEqual(draft["units"][0], stale_template_unit)
 
     def test_standalone_no_test_selection_returns_five(self):
         studio_test_path = Path(__file__).resolve()
