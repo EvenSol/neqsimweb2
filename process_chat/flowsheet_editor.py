@@ -884,10 +884,12 @@ def add_catalog_unit(
         str(unit.get("name", "")).strip().casefold()
         for unit in copied_units
         if isinstance(unit, dict)
+        and str(unit.get("name", "")).strip()
     }
     existing_names.update(
         str(reserved_name).strip().casefold()
         for reserved_name in (reserved_names or set())
+        if str(reserved_name).strip()
     )
     if cleaned_name.casefold() in existing_names:
         raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
