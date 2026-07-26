@@ -341,8 +341,14 @@ def unit_balance_rows(result: Any) -> List[Dict[str, Any]]:
             row[field_name] = integer_value
 
         for field_name in _UNIT_BALANCE_MASS_FIELDS:
+            value = source_row.get(field_name)
+            if isinstance(value, bool):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be numeric."
+                )
             try:
-                numeric_value = float(source_row.get(field_name))
+                numeric_value = float(value)
             except (TypeError, ValueError) as exc:
                 raise ValueError(
                     f"Unit balance row {index} field '{field_name}' "
@@ -383,6 +389,11 @@ def unit_balance_rows(result: Any) -> List[Dict[str, Any]]:
             if value is None:
                 row[field_name] = None
                 continue
+            if isinstance(value, bool):
+                raise ValueError(
+                    f"Unit balance row {index} field '{field_name}' "
+                    "must be numeric."
+                )
             try:
                 numeric_value = float(value)
             except (TypeError, ValueError) as exc:
