@@ -497,6 +497,117 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         )
         validate_solve_readiness(case_spec)
 
+    def test_omitted_starter_controls_do_not_block_graph_validation(self):
+        validate_case = self._load_studio_function("_validate_case")
+        fluid = {
+            "pressure_bara": 100.0,
+            "total_flow": 1000.0,
+            "eos_model": "srk",
+        }
+        process = [
+            {},
+            {},
+            {
+                "params": {
+                    "outlet_pressure_bara": 80.0,
+                    "isentropic_efficiency": 0.10,
+                }
+            },
+            {"params": {"pressure_drop_bar": 5.0}},
+            {},
+            {
+                "params": {
+                    "outlet_pressure_bara": 70.0,
+                    "isentropic_efficiency": 0.10,
+                }
+            },
+            {"params": {"pressure_drop_bar": 5.0}},
+        ]
+        template_ids = {
+            "compressor stage 1": "compressor-stage-1",
+            "intercooler": "intercooler",
+            "compressor stage 2": "compressor-stage-2",
+            "export cooler": "export-cooler",
+        }
+        spec = {
+            "fluid": fluid,
+            "process": process,
+            "units": [
+                {"id": "intercooler"},
+                {"id": "export-cooler"},
+            ],
+        }
+        validate_case.__globals__.update(
+            {
+                "_build_execution_plan": lambda candidate: [],
+                "_build_inlet_fluid_specs": lambda candidate: [
+                    {
+                        "inlet_id": "feed-gas",
+                        "fluid_spec": candidate["fluid"],
+                    }
+                ],
+                "PRIMARY_INLET_ID": "feed-gas",
+                "TEMPLATE_UNIT_IDS": template_ids,
+            }
+        )
+
+        self.assertEqual(validate_case(spec, 1.0), [])
+        spec["units"].append({"id": "compressor-stage-1"})
+        with self.assertRaisesRegex(ValueError, "efficiency"):
+            validate_case(spec, 1.0)
+
+    def test_disconnected_starter_inventory_requires_no_graph_references(self):
+        unconnected_unit_map = self._load_studio_function(
+            "_unconnected_unit_map"
+        )
+        units = [
+            {"id": "inlet-scrubber", "name": "Inlet scrubber"},
+            {"id": "compressor-stage-1", "name": "Compressor stage 1"},
+            {"id": "intercooler", "name": "Intercooler"},
+        ]
+        connections = [
+            {
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "compressor-stage-1",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "product",
+                    "port": "in",
+                },
+            },
+            {
+                "type": "energy",
+                "source": {
+                    "kind": "unit",
+                    "id": "utility",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "intercooler",
+                    "port": "energy",
+                },
+            },
+            None,
+        ]
+
+        self.assertEqual(
+            unconnected_unit_map(
+                units,
+                connections,
+                {
+                    "inlet-scrubber",
+                    "compressor-stage-1",
+                    "intercooler",
+                },
+            ),
+            {"inlet-scrubber": units[0]},
+        )
+
     def test_feed_draft_refreshes_current_template_unit_properties(self):
         apply_studio_graph_draft = self._load_studio_function(
             "_apply_studio_graph_draft"
