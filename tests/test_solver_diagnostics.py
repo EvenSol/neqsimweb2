@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from tests import test_process_graph_conservation as graph_conservation
 
+from process_chat.process_builder import ProcessBuilder
 from process_chat.process_model import (
     NeqSimProcessModel,
     _MaterialBoundaryIdentityTracker,
@@ -598,6 +599,69 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
     """Validate the strict per-unit material and energy closure contract."""
 
     @staticmethod
+    def _build_separator_case(
+        separator_type,
+        inlet_count,
+        flow_scale,
+    ):
+        from neqsim import jneqsim
+
+        inlet_specs = [
+            {
+                "inlet_id": "feed-a",
+                "name": "feed a",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 45.0,
+                    "total_flow": 60_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            },
+            {
+                "inlet_id": "feed-b",
+                "name": "feed b",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 45.0,
+                    "total_flow": 40_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            },
+        ][:inlet_count]
+        streams = ProcessBuilder().create_inlet_streams(inlet_specs)
+        process = jneqsim.process.processmodel.ProcessSystem()
+        process.setName(f"{separator_type} closure")
+        for stream in streams.values():
+            process.add(stream)
+
+        separator_class = getattr(
+            jneqsim.process.equipment.separator,
+            separator_type,
+        )
+        separator = separator_class(
+            "inlet separator",
+            streams["feed-a"],
+        )
+        if inlet_count == 2:
+            separator.addStream(streams["feed-b"])
+        process.add(separator)
+        return NeqSimProcessModel(process)
+
+    @staticmethod
     def _result(diagnostics):
         return SimpleNamespace(
             raw={"unit_balance_diagnostics": diagnostics},
@@ -812,6 +876,50 @@ class UnitBalanceDiagnosticsTest(unittest.TestCase):
                         "unit_energy_balance": "OK",
                     },
                 )
+
+    def test_native_separator_closure_uses_only_external_feeds(self):
+        for separator_type, outlet_count in (
+            ("Separator", 2),
+            ("ThreePhaseSeparator", 3),
+        ):
+            for inlet_count in (1, 2):
+                for flow_scale in (1.0, 1.05):
+                    with self.subTest(
+                        separator_type=separator_type,
+                        inlet_count=inlet_count,
+                        flow_scale=flow_scale,
+                    ):
+                        model = self._build_separator_case(
+                            separator_type,
+                            inlet_count,
+                            flow_scale,
+                        )
+                        result = model.run(timeout_ms=180_000)
+                        rows = unit_balance_rows(result)
+                        summary = aggregate_unit_balances(result)
+
+                        self.assertEqual(len(rows), 1)
+                        self.assertEqual(
+                            rows[0]["unit_name"],
+                            "inlet separator",
+                        )
+                        self.assertEqual(
+                            rows[0]["inlet_count"],
+                            inlet_count,
+                        )
+                        self.assertEqual(
+                            rows[0]["outlet_count"],
+                            outlet_count,
+                        )
+                        self.assertTrue(summary["coverage_complete"])
+                        self.assertLess(
+                            summary["max_mass_imbalance_pct"],
+                            1.0e-6,
+                        )
+                        self.assertLess(
+                            summary["max_energy_imbalance_pct"],
+                            1.0e-6,
+                        )
 
 
 def _result(rows=None, **kpi_values):
