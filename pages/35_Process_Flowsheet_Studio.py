@@ -3572,6 +3572,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["connections"],
                             reorganize_connection_id,
                             resolved_mixer_name,
+                            protected_unit_ids,
                         )
                         secondary_connection_id = None
                         if selected_secondary_source is not None:
@@ -3859,8 +3860,14 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                     _graph_name_set(spec["inlets"]),
                                 )
                             )
+                            replaced_label = _graph_object_name(
+                                downstream_unit,
+                                str(
+                                    downstream_unit.get("id", "")
+                                ).strip(),
+                            )
                             action_notice = (
-                                f"Replaced '{downstream_unit['name']}' with "
+                                f"Replaced '{replaced_label}' with "
                                 f"'{resolved_name}' ({changed_unit_id}) while "
                                 "preserving its surrounding material path."
                             )

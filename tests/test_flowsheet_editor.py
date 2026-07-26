@@ -1442,6 +1442,22 @@ class InlineUnitReplacementTest(unittest.TestCase):
                 "Export Cooler",
             )
 
+    def test_replace_rejects_non_inline_catalog_port_shapes(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "ports 'in' and 'out'"):
+            replace_inline_unit(
+                self.units,
+                self.connections,
+                "original-compressor",
+                "mixer",
+                "Replacement Mixer",
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
+
     def test_replace_rejects_terminal_and_branched_units_without_mutation(self):
         original_units = copy.deepcopy(self.units)
         original_connections = copy.deepcopy(self.connections)
@@ -1601,6 +1617,19 @@ class MixerPathInsertionTest(unittest.TestCase):
         self.assertEqual(restored["connections"], self.connections)
         history, redone = redo_graph_history(history)
         self.assertEqual(redone, persisted)
+
+    def test_insert_mixer_reserves_removed_starter_ids(self):
+        units, _, mixer_id, _ = insert_mixer_on_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "Compressor Stage 1",
+            {"compressor-stage-1"},
+        )
+
+        self.assertEqual(mixer_id, "compressor-stage-1-2")
+        self.assertEqual(units[0]["id"], "compressor-stage-1-2")
 
     def test_invalid_insertions_leave_graph_unchanged(self):
         invalid_cases = (

@@ -1958,6 +1958,22 @@ def replace_inline_unit(
         raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
     validate_catalog_unit(unit_matches[0])
 
+    cleaned_replacement_type = str(replacement_type).strip().lower()
+    replacement_definition = _INLINE_UNIT_CATALOG.get(cleaned_replacement_type)
+    if replacement_definition is None:
+        raise ValueError(
+            f"Unsupported inline unit type '{cleaned_replacement_type}'."
+        )
+    replacement_ports = replacement_definition["ports"]
+    if (
+        replacement_ports.get("material_in") != ["in"]
+        or replacement_ports.get("material_out") != ["out"]
+    ):
+        raise ValueError(
+            f"Replacement equipment '{cleaned_replacement_type}' must expose "
+            "exactly the material ports 'in' and 'out'."
+        )
+
     peer_names = _normalized_name_keys(
         unit.get("name")
         for unit in copied_units
