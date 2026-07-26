@@ -1439,6 +1439,116 @@ def disconnect_graph_connection(
     return copied_connections
 
 
+def _validate_acyclic_material_connections(
+    connections: list[Any],
+) -> None:
+    """Reject material cycles before a draft reaches the acyclic executor."""
+    adjacency: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    indegree: dict[tuple[str, str], int] = {}
+    for connection in connections:
+        if (
+            not isinstance(connection, dict)
+            or str(connection.get("type", "")).strip().lower() != "material"
+        ):
+            continue
+        source = connection.get("source")
+        target = connection.get("target")
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            continue
+        source_node = (
+            str(source.get("kind", "")).strip(),
+            str(source.get("id", "")).strip(),
+        )
+        target_node = (
+            str(target.get("kind", "")).strip(),
+            str(target.get("id", "")).strip(),
+        )
+        adjacency.setdefault(source_node, set())
+        adjacency.setdefault(target_node, set())
+        indegree.setdefault(source_node, 0)
+        indegree.setdefault(target_node, 0)
+        if target_node not in adjacency[source_node]:
+            adjacency[source_node].add(target_node)
+            indegree[target_node] += 1
+
+    available = sorted(
+        node for node, dependency_count in indegree.items()
+        if dependency_count == 0
+    )
+    visited = 0
+    while available:
+        node = available.pop(0)
+        visited += 1
+        for downstream in sorted(adjacency[node]):
+            indegree[downstream] -= 1
+            if indegree[downstream] == 0:
+                available.append(downstream)
+                available.sort()
+
+    if visited != len(indegree):
+        cyclic_units = sorted(
+            object_id
+            for (kind, object_id), dependency_count in indegree.items()
+            if kind == "unit" and dependency_count > 0
+        )
+        cycle_label = ", ".join(cyclic_units) or "unknown units"
+        raise ValueError(
+            "Material reroute would create a cycle involving: "
+            f"{cycle_label}."
+        )
+
+
+def reroute_graph_connection(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    connection_id: str,
+    source: Any,
+    target: Any,
+) -> list[dict[str, Any]]:
+    """Atomically replace both endpoints while preserving connection identity.
+
+    The selected edge is removed from the occupancy inventory before the new
+    route is validated, so either original endpoint may be retained. Invalid
+    ports, occupied endpoints, self-links, and material cycles fail without
+    mutating the caller's graph.
+    """
+    inventory = _graph_port_inventory(inlets, units, connections)
+    copied_connections = inventory["connections"]
+    cleaned_connection_id = str(connection_id).strip()
+    selected_index = _connection_index(
+        copied_connections,
+        cleaned_connection_id,
+    )
+    connection_type = str(
+        copied_connections[selected_index]["type"]
+    ).strip().lower()
+    remaining_connections = [
+        connection
+        for index, connection in enumerate(copied_connections)
+        if index != selected_index
+    ]
+    connected, generated_id = connect_graph_ports(
+        inlets,
+        units,
+        remaining_connections,
+        connection_type,
+        source,
+        target,
+    )
+    replacement = next(
+        connection
+        for connection in connected
+        if str(connection.get("id", "")).strip() == generated_id
+    )
+    connected.remove(replacement)
+    replacement["id"] = cleaned_connection_id
+    connected.insert(selected_index, replacement)
+    _graph_port_inventory(inlets, units, connected)
+    _validate_acyclic_material_connections(connected)
+    return connected
+
+
 def graph_connection_rows(
     inlets: list[Any],
     units: list[Any],

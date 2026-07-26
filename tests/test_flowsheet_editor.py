@@ -32,6 +32,7 @@ from process_chat.flowsheet_editor import (
     redo_graph_history,
     remove_material_inlet,
     remove_inline_unit,
+    reroute_graph_connection,
     rename_material_inlet,
     rename_inline_unit,
     undo_graph_history,
@@ -2247,6 +2248,68 @@ class GraphPortConnectionTest(unittest.TestCase):
                 self.connections,
                 "missing",
             )
+
+    def test_reroutes_connection_atomically_and_preserves_identity(self):
+        original_connections = copy.deepcopy(self.connections)
+        updated = reroute_graph_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "feed-a-mixer",
+            {"kind": "inlet", "id": "feed-b", "port": "out"},
+            {"kind": "unit", "id": "mixer", "port": "in_1"},
+        )
+
+        self.assertEqual(updated[0]["id"], "feed-a-mixer")
+        self.assertEqual(
+            updated[0]["source"],
+            {"kind": "inlet", "id": "feed-b", "port": "out"},
+        )
+        self.assertEqual(
+            updated[0]["target"],
+            {"kind": "unit", "id": "mixer", "port": "in_1"},
+        )
+        self.assertEqual(updated[1:], self.connections[1:])
+        self.assertEqual(self.connections, original_connections)
+        available_sources = graph_port_rows(
+            self.inlets,
+            self.units,
+            updated,
+            "material",
+            "source",
+            available_only=True,
+        )
+        self.assertIn(
+            ("feed-a", "out"),
+            {(row["id"], row["port"]) for row in available_sources},
+        )
+
+    def test_reroute_rejects_occupied_ports_and_material_cycles(self):
+        original_connections = copy.deepcopy(self.connections)
+        invalid_routes = (
+            (
+                {"kind": "inlet", "id": "feed-a", "port": "out"},
+                {"kind": "unit", "id": "heater", "port": "in"},
+                "input port heater:in already has",
+            ),
+            (
+                {"kind": "unit", "id": "heater", "port": "out"},
+                {"kind": "unit", "id": "mixer", "port": "in_0"},
+                "would create a cycle",
+            ),
+        )
+        for source, target, message in invalid_routes:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    reroute_graph_connection(
+                        self.inlets,
+                        self.units,
+                        self.connections,
+                        "feed-a-mixer",
+                        source,
+                        target,
+                    )
+        self.assertEqual(self.connections, original_connections)
 
     def test_connection_rows_cover_material_and_energy_paths(self):
         rows = graph_connection_rows(
