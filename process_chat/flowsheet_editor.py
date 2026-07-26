@@ -659,6 +659,154 @@ def _slugify(value: str) -> str:
     return slug or "unit"
 
 
+def clone_material_inlet(
+    inlets: list[Any],
+    source_inlet_id: str,
+    name: str,
+) -> tuple[list[dict[str, Any]], str]:
+    """Clone one compatible feed into a new independently editable inlet."""
+    if not isinstance(inlets, list) or not inlets:
+        raise ValueError("Graph inlets must be a non-empty array.")
+
+    copied_inlets = copy.deepcopy(inlets)
+    cleaned_source_id = str(source_inlet_id).strip()
+    source_matches = [
+        inlet
+        for inlet in copied_inlets
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == cleaned_source_id
+    ]
+    if not source_matches:
+        raise ValueError(f"Unknown material inlet '{cleaned_source_id}'.")
+    if len(source_matches) > 1:
+        raise ValueError(f"Material inlet id '{cleaned_source_id}' is duplicated.")
+
+    cleaned_name = str(name).strip()
+    if not cleaned_name:
+        raise ValueError("Material inlet name cannot be empty.")
+    if len(cleaned_name) > 80:
+        raise ValueError("Material inlet name cannot exceed 80 characters.")
+
+    inlet_names = {
+        str(inlet.get("name", "")).strip().casefold()
+        for inlet in copied_inlets
+        if isinstance(inlet, dict)
+    }
+    if cleaned_name.casefold() in inlet_names:
+        raise ValueError(f"Material inlet name '{cleaned_name}' is duplicated.")
+
+    existing_ids = {
+        str(inlet.get("id", "")).strip()
+        for inlet in copied_inlets
+        if isinstance(inlet, dict)
+    }
+    id_stem = _slugify(cleaned_name)
+    inlet_id = id_stem
+    suffix = 2
+    while inlet_id in existing_ids:
+        inlet_id = f"{id_stem}-{suffix}"
+        suffix += 1
+
+    cloned_inlet = {
+        **source_matches[0],
+        "id": inlet_id,
+        "name": cleaned_name,
+    }
+    inlet_condition_property_rows(cloned_inlet)
+    inlet_composition_property_rows(cloned_inlet)
+    copied_inlets.append(cloned_inlet)
+    return copied_inlets, inlet_id
+
+
+def rename_material_inlet(
+    inlets: list[Any],
+    inlet_id: str,
+    name: str,
+) -> list[dict[str, Any]]:
+    """Rename one inlet without changing its stable graph identity."""
+    if not isinstance(inlets, list):
+        raise ValueError("Graph inlets must be an array.")
+
+    copied_inlets = copy.deepcopy(inlets)
+    cleaned_inlet_id = str(inlet_id).strip()
+    matches = [
+        index
+        for index, inlet in enumerate(copied_inlets)
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == cleaned_inlet_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown material inlet '{cleaned_inlet_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Material inlet id '{cleaned_inlet_id}' is duplicated.")
+
+    cleaned_name = str(name).strip()
+    if not cleaned_name:
+        raise ValueError("Material inlet name cannot be empty.")
+    if len(cleaned_name) > 80:
+        raise ValueError("Material inlet name cannot exceed 80 characters.")
+    peer_names = {
+        str(inlet.get("name", "")).strip().casefold()
+        for index, inlet in enumerate(copied_inlets)
+        if index != matches[0] and isinstance(inlet, dict)
+    }
+    if cleaned_name.casefold() in peer_names:
+        raise ValueError(f"Material inlet name '{cleaned_name}' is duplicated.")
+
+    copied_inlets[matches[0]]["name"] = cleaned_name
+    return copied_inlets
+
+
+def remove_material_inlet(
+    inlets: list[Any],
+    connections: list[Any],
+    inlet_id: str,
+    protected_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Remove one unconnected inlet while preserving a valid feed boundary."""
+    if not isinstance(inlets, list):
+        raise ValueError("Graph inlets must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    cleaned_inlet_id = str(inlet_id).strip()
+    protected = {
+        str(protected_id).strip() for protected_id in (protected_ids or set())
+    }
+    if cleaned_inlet_id in protected:
+        raise ValueError(f"Material inlet '{cleaned_inlet_id}' is protected.")
+
+    copied_inlets = copy.deepcopy(inlets)
+    matches = [
+        index
+        for index, inlet in enumerate(copied_inlets)
+        if isinstance(inlet, dict)
+        and str(inlet.get("id", "")).strip() == cleaned_inlet_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown material inlet '{cleaned_inlet_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Material inlet id '{cleaned_inlet_id}' is duplicated.")
+    if len(copied_inlets) == 1:
+        raise ValueError("A flowsheet requires at least one material inlet.")
+
+    for connection in connections:
+        if not isinstance(connection, dict):
+            raise ValueError("Graph connections must contain objects.")
+        for endpoint in (connection.get("source"), connection.get("target")):
+            if (
+                isinstance(endpoint, dict)
+                and str(endpoint.get("kind", "")).strip().lower() == "inlet"
+                and str(endpoint.get("id", "")).strip() == cleaned_inlet_id
+            ):
+                raise ValueError(
+                    f"Material inlet '{cleaned_inlet_id}' is still connected."
+                )
+
+    copied_inlets.pop(matches[0])
+    return copied_inlets
+
+
 def create_inline_unit_spec(
     unit_type: str,
     name: str,

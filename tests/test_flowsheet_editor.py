@@ -9,6 +9,7 @@ import unittest
 from process_chat.flowsheet_editor import (
     apply_graph_draft,
     build_graph_draft_dot,
+    clone_material_inlet,
     connect_graph_ports,
     create_graph_draft,
     create_graph_history,
@@ -27,7 +28,9 @@ from process_chat.flowsheet_editor import (
     process_unit_property_rows,
     record_graph_history,
     redo_graph_history,
+    remove_material_inlet,
     remove_inline_unit,
+    rename_material_inlet,
     rename_inline_unit,
     undo_graph_history,
     update_inlet_composition,
@@ -528,6 +531,96 @@ class InletCompositionUpdateTest(unittest.TestCase):
             self.inlets[0]["composition"],
             {"methane": 0.90, "ethane": 0.10},
         )
+
+
+class MaterialInletLifecycleTest(unittest.TestCase):
+    """Validate safe creation, naming, and removal of independent feeds."""
+
+    def setUp(self):
+        self.inlets = [
+            {
+                "id": "feed",
+                "name": "Feed",
+                "fluid_package_id": "base-fluid",
+                "temperature_C": 25.0,
+                "pressure_bara": 50.0,
+                "total_flow": 100_000.0,
+                "flow_unit": "kg/hr",
+                "composition_basis": "mole_fraction",
+                "composition": {"methane": 0.9, "ethane": 0.1},
+            }
+        ]
+
+    def test_clone_creates_collision_free_compatible_independent_feed(self):
+        with_first, first_id = clone_material_inlet(
+            self.inlets,
+            "feed",
+            "Tie-in Feed",
+        )
+        updated, second_id = clone_material_inlet(
+            with_first,
+            "feed",
+            "Tie in Feed",
+        )
+
+        self.assertEqual(first_id, "tie-in-feed")
+        self.assertEqual(second_id, "tie-in-feed-2")
+        self.assertEqual(updated[1]["fluid_package_id"], "base-fluid")
+        self.assertEqual(updated[1]["composition"], self.inlets[0]["composition"])
+        updated[1]["composition"]["methane"] = 0.8
+        self.assertEqual(self.inlets[0]["composition"]["methane"], 0.9)
+        self.assertEqual(len(self.inlets), 1)
+
+    def test_rename_preserves_stable_identity_and_rejects_duplicate_name(self):
+        inlets, inlet_id = clone_material_inlet(
+            self.inlets,
+            "feed",
+            "Tie-in Feed",
+        )
+        renamed = rename_material_inlet(inlets, inlet_id, "Satellite Feed")
+
+        self.assertEqual(renamed[1]["id"], inlet_id)
+        self.assertEqual(renamed[1]["name"], "Satellite Feed")
+        self.assertEqual(inlets[1]["name"], "Tie-in Feed")
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            rename_material_inlet(inlets, inlet_id, "feed")
+
+    def test_remove_requires_an_unconnected_nonprotected_secondary_feed(self):
+        inlets, inlet_id = clone_material_inlet(
+            self.inlets,
+            "feed",
+            "Tie-in Feed",
+        )
+        connection = {
+            "id": "tie-in-to-mixer",
+            "type": "material",
+            "source": {"kind": "inlet", "id": inlet_id, "port": "out"},
+            "target": {"kind": "unit", "id": "mixer", "port": "in_1"},
+        }
+
+        with self.assertRaisesRegex(ValueError, "still connected"):
+            remove_material_inlet(inlets, [connection], inlet_id)
+        with self.assertRaisesRegex(ValueError, "protected"):
+            remove_material_inlet(inlets, [], "feed", {"feed"})
+
+        remaining = remove_material_inlet(inlets, [], inlet_id)
+        self.assertEqual(remaining, self.inlets)
+        self.assertEqual(len(inlets), 2)
+
+    def test_invalid_clone_and_last_inlet_removal_fail_without_mutation(self):
+        invalid_clones = (
+            ("missing", "Feed B", "Unknown material inlet"),
+            ("feed", " ", "name cannot be empty"),
+            ("feed", "feed", "duplicated"),
+        )
+        for source_id, name, message in invalid_clones:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    clone_material_inlet(self.inlets, source_id, name)
+
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            remove_material_inlet(self.inlets, [], "feed")
+        self.assertEqual(len(self.inlets), 1)
 
 
 class InlineInsertionTest(unittest.TestCase):
