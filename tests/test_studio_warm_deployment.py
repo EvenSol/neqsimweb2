@@ -131,6 +131,55 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertIn("Add equipment node", button_labels)
         self.assertIn("Connect selected ports", button_labels)
 
+    def test_palette_routes_multi_port_units_through_standalone_workflow(self):
+        app = self._run_studio()
+        selectboxes = {
+            selectbox.label: selectbox
+            for selectbox in app.selectbox
+        }
+
+        standalone_options = set(
+            selectboxes["Standalone equipment type"].options
+        )
+        inline_options = set(selectboxes["Equipment type"].options)
+        extend_options = set(selectboxes["Next equipment"].options)
+        self.assertIn("Mixer · Flow routing", standalone_options)
+        self.assertIn("Separator · Separation", standalone_options)
+        self.assertNotIn("Mixer · Flow routing", inline_options)
+        self.assertNotIn("Separator · Separation", inline_options)
+        self.assertNotIn("Mixer", extend_options)
+        self.assertIn("Separator", extend_options)
+
+    def test_page_clears_stale_multi_inlet_extend_selection(self):
+        app = self._run_studio()
+        extend_selectbox = next(
+            selectbox
+            for selectbox in app.selectbox
+            if selectbox.label == "Next equipment"
+        )
+        studio_path = (
+            self.project_root / "pages" / "35_Process_Flowsheet_Studio.py"
+        )
+        warm_app = AppTest.from_file(str(studio_path))
+        warm_app.session_state[extend_selectbox.key] = "mixer"
+
+        warm_app.run(timeout=120)
+
+        if warm_app.exception:
+            details = "\n".join(
+                str(item.value) for item in warm_app.exception
+            )
+            self.fail(
+                "Studio retained an invalid warm-session selection:\n"
+                + details
+            )
+        extend_selectbox = next(
+            selectbox
+            for selectbox in warm_app.selectbox
+            if selectbox.label == "Next equipment"
+        )
+        self.assertNotEqual(extend_selectbox.value, "mixer")
+
     def test_graph_object_name_falls_back_for_legacy_records(self):
         graph_object_name = self._load_studio_function(
             "_graph_object_name"
