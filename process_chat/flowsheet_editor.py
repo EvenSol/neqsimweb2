@@ -265,6 +265,32 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             ),
         },
     },
+    "separator": {
+        "label": "Separator",
+        "category": "Separation",
+        "description": (
+            "Separate one feed into explicit gas and liquid outlet ports."
+        ),
+        "ports": {
+            "material_in": ["in"],
+            "material_out": ["gas", "liquid"],
+        },
+        "default_params": {},
+        "properties": {},
+    },
+    "mixer": {
+        "label": "Mixer",
+        "category": "Flow routing",
+        "description": (
+            "Combine two independently defined material inlet streams."
+        ),
+        "ports": {
+            "material_in": ["in_0", "in_1"],
+            "material_out": ["out"],
+        },
+        "default_params": {},
+        "properties": {},
+    },
 }
 
 _PROCESS_UNIT_PROPERTY_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -274,11 +300,6 @@ _PROCESS_UNIT_PROPERTY_DEFINITIONS: dict[str, dict[str, Any]] = {
     }
     for unit_type, definition in _INLINE_UNIT_CATALOG.items()
 }
-_PROCESS_UNIT_PROPERTY_DEFINITIONS["separator"] = {
-    "default_params": {},
-    "properties": {},
-}
-
 _INLET_CONDITION_PROPERTIES = {
     "temperature_C": _number_property(
         "Temperature",
