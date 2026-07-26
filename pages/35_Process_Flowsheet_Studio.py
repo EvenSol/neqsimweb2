@@ -77,12 +77,14 @@ _EDITOR_SYMBOL_NAMES = (
     "inline_unit_catalog_rows",
     "inline_unit_property_rows",
     "insert_inline_unit_on_connection",
+    "insert_mixer_on_connection",
     "material_connection_rows",
     "process_unit_property_rows",
     "record_graph_history",
     "redo_graph_history",
     "remove_material_inlet",
     "remove_inline_unit",
+    "reroute_graph_connection",
     "rename_material_inlet",
     "rename_inline_unit",
     "undo_graph_history",
@@ -3379,6 +3381,270 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 st.error(f"Graph history navigation failed: {history_error}")
             else:
                 st.rerun()
+
+        st.divider()
+        st.markdown("#### Reorganize an existing process")
+        st.caption(
+            "Select an existing material path and change it in one undoable "
+            "transaction. You do not need to disconnect the process first."
+        )
+        if connection_rows:
+            reorganize_connection_id = st.selectbox(
+                "Material path to reorganize",
+                options=list(connection_labels),
+                format_func=connection_labels.__getitem__,
+                key=(
+                    "flowsheet_reorganize_connection_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            reorganize_connection = next(
+                connection
+                for connection in spec["connections"]
+                if (
+                    isinstance(connection, dict)
+                    and str(connection.get("id", "")).strip()
+                    == reorganize_connection_id
+                )
+            )
+            current_source = reorganize_connection["source"]
+            current_target = reorganize_connection["target"]
+
+            all_material_sources = graph_port_rows(
+                spec["inlets"],
+                spec["units"],
+                spec["connections"],
+                "material",
+                "source",
+            )
+            all_material_targets = graph_port_rows(
+                spec["inlets"],
+                spec["units"],
+                spec["connections"],
+                "material",
+                "target",
+            )
+
+            def candidate_port_rows(
+                rows: list[dict[str, Any]],
+                current_endpoint: dict[str, Any],
+            ) -> list[dict[str, Any]]:
+                current_key = tuple(
+                    str(current_endpoint.get(field, "")).strip()
+                    for field in ("kind", "id", "port")
+                )
+                candidates = [
+                    row
+                    for row in rows
+                    if (
+                        not row["connected"]
+                        or tuple(
+                            str(row["endpoint"].get(field, "")).strip()
+                            for field in ("kind", "id", "port")
+                        )
+                        == current_key
+                    )
+                ]
+                return sorted(
+                    candidates,
+                    key=lambda row: (
+                        tuple(
+                            str(row["endpoint"].get(field, "")).strip()
+                            for field in ("kind", "id", "port")
+                        )
+                        != current_key,
+                        row["label"].casefold(),
+                    ),
+                )
+
+            source_candidates = candidate_port_rows(
+                all_material_sources,
+                current_source,
+            )
+            target_candidates = candidate_port_rows(
+                all_material_targets,
+                current_target,
+            )
+            current_source_label = source_candidates[0]["label"]
+            current_target_label = target_candidates[0]["label"]
+            st.info(
+                f"Current route: {current_source_label} → "
+                f"{current_target_label}"
+            )
+
+            insert_mixer_tab, reconnect_tab = st.tabs(
+                ["Insert mixer here", "Reconnect this path"]
+            )
+            with insert_mixer_tab:
+                st.caption(
+                    "The current source will enter mixer port in_0. The mixer "
+                    "outlet will reconnect to the current downstream target, "
+                    "while in_1 remains available for another feed."
+                )
+                mixer_name = st.text_input(
+                    "Mixer name",
+                    value="Feed mixer",
+                    max_chars=80,
+                    key=(
+                        "flowsheet_reorganize_mixer_name_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                resolved_mixer_name = mixer_name.strip() or "Feed mixer"
+                st.markdown(
+                    f"**Preview:** {current_source_label} → "
+                    f"{resolved_mixer_name}:in_0 → "
+                    f"{resolved_mixer_name}:out → "
+                    f"{current_target_label}; mixer `in_1` remains free."
+                )
+                insert_mixer = st.button(
+                    "Insert mixer and preserve downstream path",
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_reorganize_insert_mixer_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                if insert_mixer:
+                    try:
+                        (
+                            units,
+                            connections,
+                            mixer_id,
+                            downstream_connection_id,
+                        ) = insert_mixer_on_connection(
+                            spec["inlets"],
+                            spec["units"],
+                            spec["connections"],
+                            reorganize_connection_id,
+                            resolved_mixer_name,
+                        )
+                        candidate_draft = create_graph_draft(
+                            units,
+                            connections,
+                            spec["inlets"],
+                        )
+                        candidate_case = _apply_studio_graph_draft(
+                            spec,
+                            candidate_draft,
+                        )
+                        _validate_case_graph(
+                            candidate_case,
+                            candidate_case["process"],
+                        )
+                    except ValueError as edit_error:
+                        st.error(
+                            "Mixer insertion failed without changing the "
+                            f"draft: {edit_error}"
+                        )
+                    else:
+                        _record_graph_revision(
+                            spec,
+                            candidate_draft,
+                            (
+                                f"Inserted mixer '{mixer_id}' in "
+                                f"'{reorganize_connection_id}', preserved the "
+                                "downstream process with "
+                                f"'{downstream_connection_id}', and left "
+                                f"{mixer_id}:in_1 available. Run NeqSim to "
+                                "solve the reorganized graph."
+                            ),
+                        )
+                        st.rerun()
+
+            with reconnect_tab:
+                st.caption(
+                    "Replace the selected path's source and target together. "
+                    "The old endpoints are released only after the new route "
+                    "passes port, occupancy, and cycle validation."
+                )
+                reconnect_cols = st.columns(2)
+                replacement_source_index = reconnect_cols[0].selectbox(
+                    "New source",
+                    options=list(range(len(source_candidates))),
+                    format_func=lambda index: source_candidates[index]["label"],
+                    key=(
+                        "flowsheet_reorganize_source_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                replacement_target_index = reconnect_cols[1].selectbox(
+                    "New target",
+                    options=list(range(len(target_candidates))),
+                    format_func=lambda index: target_candidates[index]["label"],
+                    key=(
+                        "flowsheet_reorganize_target_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                replacement_source = source_candidates[
+                    replacement_source_index
+                ]
+                replacement_target = target_candidates[
+                    replacement_target_index
+                ]
+                route_changed = (
+                    replacement_source["endpoint"] != current_source
+                    or replacement_target["endpoint"] != current_target
+                )
+                st.markdown(
+                    f"**Preview:** {replacement_source['label']} → "
+                    f"{replacement_target['label']}"
+                )
+                reconnect_path = st.button(
+                    "Replace selected path",
+                    disabled=not route_changed,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_reorganize_replace_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                if reconnect_path:
+                    try:
+                        connections = reroute_graph_connection(
+                            spec["inlets"],
+                            spec["units"],
+                            spec["connections"],
+                            reorganize_connection_id,
+                            replacement_source["endpoint"],
+                            replacement_target["endpoint"],
+                        )
+                        candidate_draft = create_graph_draft(
+                            spec["units"],
+                            connections,
+                            spec["inlets"],
+                        )
+                        candidate_case = _apply_studio_graph_draft(
+                            spec,
+                            candidate_draft,
+                        )
+                        _validate_case_graph(
+                            candidate_case,
+                            candidate_case["process"],
+                        )
+                    except ValueError as edit_error:
+                        st.error(
+                            "Path replacement failed without changing the "
+                            f"draft: {edit_error}"
+                        )
+                    else:
+                        _record_graph_revision(
+                            spec,
+                            candidate_draft,
+                            (
+                                f"Reconnected '{reorganize_connection_id}' as "
+                                f"{replacement_source['label']} → "
+                                f"{replacement_target['label']}. Run NeqSim "
+                                "to solve the reorganized graph."
+                            ),
+                        )
+                        st.rerun()
+        else:
+            st.info(
+                "Add or connect a material path before reorganizing the "
+                "process."
+            )
 
         st.divider()
         st.markdown("#### Add an independent feed stream")
