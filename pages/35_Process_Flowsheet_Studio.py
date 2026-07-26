@@ -319,6 +319,12 @@ def _finite_float(value: Any, field_name: str) -> float:
     return result
 
 
+def _graph_object_name(record: dict[str, Any], fallback_id: str) -> str:
+    """Return a safe UI label for a graph object with legacy metadata."""
+    clean_fallback = str(fallback_id).strip()
+    return str(record.get("name", clean_fallback)).strip() or clean_fallback
+
+
 def _bounded_float(
     value: Any,
     field_name: str,
@@ -3095,7 +3101,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             "Copy fluid basis and conditions from",
             options=list(inlet_map),
             format_func=lambda value: (
-                f"{inlet_map[value]['name']} · {value}"
+                f"{_graph_object_name(inlet_map[value], value)} · {value}"
             ),
             key=f"flowsheet_new_feed_source_{graph_widget_revision}",
         )
@@ -3178,7 +3184,8 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 "Material inlet",
                 options=list(secondary_inlet_map),
                 format_func=lambda value: (
-                    f"{secondary_inlet_map[value]['name']} · {value}"
+                    f"{_graph_object_name(secondary_inlet_map[value], value)}"
+                    f" · {value}"
                 ),
                 key=(
                     "flowsheet_secondary_inlet_"
@@ -3186,6 +3193,10 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 ),
             )
             selected_inlet = secondary_inlet_map[selected_inlet_id]
+            selected_inlet_name = _graph_object_name(
+                selected_inlet,
+                selected_inlet_id,
+            )
             st.markdown("##### Operating conditions")
             try:
                 condition_rows = inlet_condition_property_rows(
@@ -3302,7 +3313,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         candidate_draft,
                         (
                             f"Updated conditions and composition for "
-                            f"'{selected_inlet['name']}'. Run NeqSim to solve "
+                            f"'{selected_inlet_name}'. Run NeqSim to solve "
                             "the revised graph."
                         ),
                     )
@@ -3312,7 +3323,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             lifecycle_cols = st.columns(2)
             renamed_inlet = lifecycle_cols[0].text_input(
                 "Rename selected feed",
-                value=str(selected_inlet["name"]),
+                value=selected_inlet_name,
                 max_chars=80,
                 key=(
                     "flowsheet_rename_inlet_"
@@ -3358,7 +3369,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             },
                         )
                         lifecycle_notice = (
-                            f"Renamed feed '{selected_inlet['name']}' to "
+                            f"Renamed feed '{selected_inlet_name}' to "
                             f"'{renamed_inlet.strip()}'."
                         )
                     else:
@@ -3370,7 +3381,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         )
                         lifecycle_notice = (
                             f"Removed unconnected feed "
-                            f"'{selected_inlet['name']}'."
+                            f"'{selected_inlet_name}'."
                         )
                     candidate_draft = create_graph_draft(
                         spec["units"],
