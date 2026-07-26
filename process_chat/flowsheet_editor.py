@@ -1261,6 +1261,75 @@ def connect_graph_ports(
     return copied_connections, connection_id
 
 
+def extend_material_path(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    source: Any,
+    unit_type: str,
+    unit_name: str,
+    reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str]:
+    """Add one catalog unit and connect an available material source to it.
+
+    The operation is transactional: validation completes against isolated
+    copies before the new unit and connection are returned. Inlet identities
+    and names are always reserved so an equipment node cannot shadow a feed.
+    """
+    inlet_ids = {
+        str(inlet.get("id", "")).strip()
+        for inlet in inlets
+        if isinstance(inlet, dict) and str(inlet.get("id", "")).strip()
+    }
+    inlet_names = {
+        str(inlet.get("name", "")).strip()
+        for inlet in inlets
+        if isinstance(inlet, dict) and str(inlet.get("name", "")).strip()
+    }
+    combined_ids = inlet_ids.union(
+        str(reserved_id).strip()
+        for reserved_id in (reserved_ids or set())
+        if str(reserved_id).strip()
+    )
+    combined_names = inlet_names.union(
+        str(reserved_name).strip()
+        for reserved_name in (reserved_names or set())
+        if str(reserved_name).strip()
+    )
+    copied_units, unit_id = add_catalog_unit(
+        units,
+        unit_type,
+        unit_name,
+        combined_ids,
+        combined_names,
+    )
+    new_unit = next(
+        unit
+        for unit in copied_units
+        if str(unit.get("id", "")).strip() == unit_id
+    )
+    inlet_ports = new_unit["ports"].get("material_in", [])
+    if len(inlet_ports) != 1:
+        raise ValueError(
+            f"Equipment '{unit_id}' must expose exactly one material inlet "
+            "for path extension."
+        )
+    copied_connections, connection_id = connect_graph_ports(
+        inlets,
+        copied_units,
+        connections,
+        "material",
+        source,
+        {
+            "kind": "unit",
+            "id": unit_id,
+            "port": str(inlet_ports[0]).strip(),
+        },
+    )
+    return copied_units, copied_connections, unit_id, connection_id
+
+
 def disconnect_graph_connection(
     inlets: list[Any],
     units: list[Any],
