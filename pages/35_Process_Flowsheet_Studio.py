@@ -3117,14 +3117,16 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     source_inlet_id,
                     new_feed_name,
                     {
-                        str(unit["id"]).strip()
+                        str(unit.get("id", "")).strip()
                         for unit in spec["units"]
                         if isinstance(unit, dict)
+                        and str(unit.get("id", "")).strip()
                     },
                     {
-                        str(unit["name"]).strip()
+                        str(unit.get("name", "")).strip()
                         for unit in spec["units"]
                         if isinstance(unit, dict)
+                        and str(unit.get("name", "")).strip()
                     },
                 )
                 candidate_draft = create_graph_draft(
@@ -3424,14 +3426,16 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         if add_standalone:
             try:
                 reserved_ids = {
-                    str(inlet["id"]).strip()
+                    str(inlet.get("id", "")).strip()
                     for inlet in spec["inlets"]
                     if isinstance(inlet, dict)
+                    and str(inlet.get("id", "")).strip()
                 }
                 reserved_names = {
-                    str(inlet["name"]).strip()
+                    str(inlet.get("name", "")).strip()
                     for inlet in spec["inlets"]
                     if isinstance(inlet, dict)
+                    and str(inlet.get("name", "")).strip()
                 }
                 units, new_unit_id = add_catalog_unit(
                     spec["units"],
@@ -3860,9 +3864,10 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         selected_unit_id,
                         renamed_unit_name,
                         {
-                            str(inlet["name"]).strip()
+                            str(inlet.get("name", "")).strip()
                             for inlet in spec["inlets"]
                             if isinstance(inlet, dict)
+                            and str(inlet.get("name", "")).strip()
                         },
                     )
                     candidate_draft = create_graph_draft(
