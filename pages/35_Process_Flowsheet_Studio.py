@@ -3740,16 +3740,41 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         )
                         equipment_action_ready = False
                     else:
-                        downstream_name = _graph_object_name(
-                            downstream_unit,
-                            str(downstream_unit.get("id", "")).strip(),
-                        )
-                        st.markdown(
-                            f"**Preview:** replace {downstream_name} with "
-                            f"{resolved_name}; retain its upstream and "
-                            "downstream material paths."
-                        )
-                        equipment_action_ready = True
+                        try:
+                            replace_inline_unit(
+                                spec["units"],
+                                spec["connections"],
+                                str(downstream_unit["id"]).strip(),
+                                reorganize_unit_type,
+                                resolved_name,
+                                {
+                                    *protected_unit_ids,
+                                    *(
+                                        str(inlet.get("id", "")).strip()
+                                        for inlet in spec["inlets"]
+                                        if isinstance(inlet, dict)
+                                    ),
+                                },
+                                _graph_name_set(spec["inlets"]),
+                            )
+                        except ValueError as replacement_blocker:
+                            st.warning(
+                                "This downstream unit cannot be replaced as "
+                                "one continuous path: "
+                                f"{replacement_blocker}"
+                            )
+                            equipment_action_ready = False
+                        else:
+                            downstream_name = _graph_object_name(
+                                downstream_unit,
+                                str(downstream_unit.get("id", "")).strip(),
+                            )
+                            st.markdown(
+                                f"**Preview:** replace {downstream_name} with "
+                                f"{resolved_name}; retain its upstream and "
+                                "downstream material paths."
+                            )
+                            equipment_action_ready = True
                     equipment_button_label = (
                         "Replace equipment and preserve surrounding path"
                     )

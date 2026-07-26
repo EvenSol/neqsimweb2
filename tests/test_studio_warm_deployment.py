@@ -215,6 +215,31 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             connection_endpoints,
         )
 
+    def test_replacement_disables_branching_downstream_equipment_up_front(self):
+        app = self._run_studio()
+        equipment_action = next(
+            radio
+            for radio in app.radio
+            if radio.label == "Equipment action"
+        )
+        equipment_action.set_value("Replace downstream equipment")
+        app.run(timeout=120)
+
+        replace_button = next(
+            button
+            for button in app.button
+            if button.label
+            == "Replace equipment and preserve surrounding path"
+        )
+        self.assertTrue(replace_button.disabled)
+        self.assertTrue(
+            any(
+                "cannot be replaced as one continuous path"
+                in str(warning.value)
+                for warning in app.warning
+            )
+        )
+
     def test_palette_routes_multi_port_units_through_standalone_workflow(self):
         app = self._run_studio()
         selectboxes = {
