@@ -505,10 +505,24 @@ class ProcessBuilder:
         params = unit_spec.get("params", {})
         if not isinstance(params, dict):
             raise ValueError(f"Splitter '{unit_id}' params must be an object.")
-        raw_factors = params.get("split_factors")
-        if raw_factors is None:
+        if "split_factors" in params:
+            raw_factors = params["split_factors"]
+        elif "split_factor" in params:
+            if len(material_outputs) != 2:
+                raise ValueError(
+                    f"Splitter '{unit_id}' legacy split_factor requires "
+                    "exactly two material output ports."
+                )
+            try:
+                legacy_factor = float(params["split_factor"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Splitter '{unit_id}' split_factor must be numeric."
+                ) from exc
+            raw_factors = [legacy_factor, 1.0 - legacy_factor]
+        else:
             raw_factors = [1.0] * len(material_outputs)
-        elif not isinstance(raw_factors, list):
+        if not isinstance(raw_factors, list):
             raise ValueError(
                 f"Splitter '{unit_id}' requires a split_factors array."
             )
