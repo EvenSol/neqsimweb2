@@ -26,6 +26,7 @@ from process_chat.flowsheet_editor import (
     inline_unit_catalog_rows,
     inline_unit_property_rows,
     insert_inline_unit_on_connection,
+    insert_mixer_on_connection,
     material_connection_rows,
     process_unit_property_rows,
     record_graph_history,
@@ -1254,6 +1255,161 @@ class InlineUnitLifecycleTest(unittest.TestCase):
                     )
         self.assertEqual(len(units), 2)
         self.assertEqual(len(connections), 2)
+
+
+class MixerPathInsertionTest(unittest.TestCase):
+    """Validate one-step mixer insertion into an existing process path."""
+
+    def setUp(self):
+        self.inlets = [
+            {"id": "feed", "name": "Main feed"},
+            {"id": "satellite", "name": "Satellite feed"},
+        ]
+        self.units = [
+            create_inline_unit_spec(
+                "compressor",
+                "Feed compressor",
+                set(),
+            )
+        ]
+        self.connections = [
+            {
+                "id": "feed-to-compressor",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "feed-compressor",
+                    "port": "in",
+                },
+            }
+        ]
+
+    def test_inserts_mixer_and_preserves_downstream_path(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+        units, connections, mixer_id, downstream_id = (
+            insert_mixer_on_connection(
+                self.inlets,
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "Feed mixer",
+            )
+        )
+
+        self.assertEqual(mixer_id, "feed-mixer")
+        self.assertEqual(downstream_id, "feed-mixer-out-to-feed-compressor")
+        self.assertEqual(
+            [unit["id"] for unit in units],
+            ["feed-mixer", "feed-compressor"],
+        )
+        self.assertEqual(connections[0]["id"], "feed-to-compressor")
+        self.assertEqual(
+            connections[0]["source"],
+            self.connections[0]["source"],
+        )
+        self.assertEqual(
+            connections[0]["target"],
+            {"kind": "unit", "id": "feed-mixer", "port": "in_0"},
+        )
+        self.assertEqual(
+            connections[1]["source"],
+            {"kind": "unit", "id": "feed-mixer", "port": "out"},
+        )
+        self.assertEqual(
+            connections[1]["target"],
+            self.connections[0]["target"],
+        )
+        available_targets = graph_port_rows(
+            self.inlets,
+            units,
+            connections,
+            "material",
+            "target",
+            available_only=True,
+        )
+        self.assertIn(
+            ("feed-mixer", "in_1"),
+            {(row["id"], row["port"]) for row in available_targets},
+        )
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
+
+    def test_second_feed_round_trips_and_supports_undo_redo(self):
+        history = create_graph_history(
+            self.units,
+            self.connections,
+            self.inlets,
+        )
+        units, connections, mixer_id, _ = insert_mixer_on_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "Feed mixer",
+        )
+        connections, _ = connect_graph_ports(
+            self.inlets,
+            units,
+            connections,
+            "material",
+            {"kind": "inlet", "id": "satellite", "port": "out"},
+            {"kind": "unit", "id": mixer_id, "port": "in_1"},
+        )
+        history = record_graph_history(
+            history,
+            units,
+            connections,
+            self.inlets,
+        )
+        persisted = json.loads(
+            json.dumps(
+                create_graph_draft(units, connections, self.inlets),
+                allow_nan=False,
+            )
+        )
+
+        self.assertEqual(persisted["units"], units)
+        self.assertEqual(persisted["connections"], connections)
+        history, restored = undo_graph_history(history)
+        self.assertEqual(restored["units"], self.units)
+        self.assertEqual(restored["connections"], self.connections)
+        history, redone = redo_graph_history(history)
+        self.assertEqual(redone, persisted)
+
+    def test_invalid_insertions_leave_graph_unchanged(self):
+        invalid_cases = (
+            (
+                [{**self.connections[0], "type": "energy"}],
+                "only be inserted in a material path",
+            ),
+            (
+                self.connections,
+                "duplicated",
+            ),
+        )
+        for connections, message in invalid_cases:
+            with self.subTest(message=message):
+                name = (
+                    "Feed compressor"
+                    if message == "duplicated"
+                    else "Feed mixer"
+                )
+                with self.assertRaisesRegex(ValueError, message):
+                    insert_mixer_on_connection(
+                        self.inlets,
+                        self.units,
+                        connections,
+                        "feed-to-compressor",
+                        name,
+                    )
+        self.assertEqual(len(self.units), 1)
+        self.assertEqual(len(self.connections), 1)
 
 
 class ProcessUnitPropertyUpdateTest(unittest.TestCase):
