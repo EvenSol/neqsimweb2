@@ -2041,6 +2041,15 @@ def _unit_identity_label(identity: dict[str, str] | None) -> str:
     )
 
 
+def _unit_balance_coverage_label(summary: dict[str, Any]) -> str:
+    """Return a concise per-unit closure coverage label."""
+    if summary["applicable"] is None:
+        return "Not recorded"
+    if summary["applicable"] is False:
+        return "Not applicable"
+    return "Complete" if summary["coverage_complete"] else "Partial"
+
+
 def _kpi_value(result: Any, name: str) -> float | None:
     kpi = result.kpis.get(name)
     return float(kpi.value) if kpi is not None else None
@@ -2079,6 +2088,7 @@ def _solver_run_record(
     ]
     validation_summary = aggregate_validation_status(validation_statuses)
     convergence_summary = aggregate_convergence(result)
+    unit_balance_summary = aggregate_unit_balances(result)
     try:
         unit_count = len(model.list_units())
     except Exception:
@@ -2115,6 +2125,28 @@ def _solver_run_record(
         "Maximum convergence iterations": convergence_summary[
             "max_iterations"
         ],
+        "Per-unit closure coverage": _unit_balance_coverage_label(
+            unit_balance_summary
+        ),
+        "Per-unit mass audits": unit_balance_summary["unit_count"],
+        "Maximum unit mass imbalance [%]": unit_balance_summary[
+            "max_mass_imbalance_pct"
+        ],
+        "Limiting mass-balance unit": _unit_identity_label(
+            unit_balance_summary["max_mass_imbalance_unit"]
+        ),
+        "Per-unit energy audits": unit_balance_summary[
+            "energy_unit_count"
+        ],
+        "Maximum unit energy imbalance [%]": unit_balance_summary[
+            "max_energy_imbalance_pct"
+        ],
+        "Limiting energy-balance unit": _unit_identity_label(
+            unit_balance_summary["max_energy_imbalance_unit"]
+        ),
+        "Units excluded from closure": ", ".join(
+            unit_balance_summary["excluded_units"]
+        ),
     }
 
 
@@ -2153,6 +2185,7 @@ def _engineering_workbook_bytes(
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
     convergence_summary = aggregate_convergence(result)
+    unit_balance_summary = aggregate_unit_balances(result)
     feed_flow_kg_hr = solved_feed_flow_kg_hr(
         result,
         float(fluid["total_flow"]),
@@ -2272,6 +2305,58 @@ def _engineering_workbook_bytes(
                 "iterations",
             ),
             (
+                "Solver",
+                "Per-unit closure coverage",
+                _unit_balance_coverage_label(unit_balance_summary),
+                "",
+            ),
+            (
+                "Solver",
+                "Per-unit mass audits",
+                unit_balance_summary["unit_count"],
+                "count",
+            ),
+            (
+                "Solver",
+                "Maximum unit mass imbalance",
+                unit_balance_summary["max_mass_imbalance_pct"],
+                "%",
+            ),
+            (
+                "Solver",
+                "Limiting mass-balance unit",
+                _unit_identity_label(
+                    unit_balance_summary["max_mass_imbalance_unit"]
+                ),
+                "",
+            ),
+            (
+                "Solver",
+                "Per-unit energy audits",
+                unit_balance_summary["energy_unit_count"],
+                "count",
+            ),
+            (
+                "Solver",
+                "Maximum unit energy imbalance",
+                unit_balance_summary["max_energy_imbalance_pct"],
+                "%",
+            ),
+            (
+                "Solver",
+                "Limiting energy-balance unit",
+                _unit_identity_label(
+                    unit_balance_summary["max_energy_imbalance_unit"]
+                ),
+                "",
+            ),
+            (
+                "Solver",
+                "Units excluded from per-unit closure",
+                ", ".join(unit_balance_summary["excluded_units"]),
+                "",
+            ),
+            (
                 "Software",
                 "NeqSim Python package version",
                 run_record.get("NeqSim package version", "Not reported"),
@@ -2292,6 +2377,16 @@ def _engineering_workbook_bytes(
             ("Total cooling duty magnitude", total_duty_kw, "kW"),
             ("Solved aggregate feed flow", feed_flow_kg_hr, "kg/hr"),
             ("Specific compression energy", specific_energy, "kWh/t feed"),
+            (
+                "Maximum unit mass imbalance",
+                unit_balance_summary["max_mass_imbalance_pct"],
+                "%",
+            ),
+            (
+                "Maximum unit energy imbalance",
+                unit_balance_summary["max_energy_imbalance_pct"],
+                "%",
+            ),
             ("Total mass imbalance", mass_balance_pct, "%"),
         ],
         columns=["KPI", "Value", "Unit"],
@@ -2411,6 +2506,7 @@ def _engineering_workbook_bytes(
     energy_balance_table = _energy_balance_dataframe(result)
     energy_transfer_table = _energy_transfer_dataframe(result)
     convergence_table = _convergence_dataframe(result)
+    unit_balance_table = _unit_balance_dataframe(result)
     sheet_frames = {
         "Case Summary": case_summary,
         "KPIs": kpi_table,
@@ -2426,6 +2522,7 @@ def _engineering_workbook_bytes(
         "Energy Balance": energy_balance_table,
         "Energy Transfers": energy_transfer_table,
         "Convergence": convergence_table,
+        "Unit Balances": unit_balance_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
         "Validation": constraint_table,

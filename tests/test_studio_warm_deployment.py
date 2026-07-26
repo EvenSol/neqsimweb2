@@ -42,6 +42,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         if app.exception:
             details = "\n".join(str(item.value) for item in app.exception)
             self.fail(f"Studio raised exceptions after warm reload:\n{details}")
+        return app
 
     def test_page_recovers_stale_editor_module(self):
         del flowsheet_editor.connect_graph_ports
@@ -76,6 +77,50 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
         self.assertTrue(
             callable(solver_diagnostics.aggregate_energy_balance)
+        )
+
+    def test_solved_page_reports_and_exports_unit_closure(self):
+        app = self._run_studio()
+        run_button = next(
+            button
+            for button in app.button
+            if button.label == "▶ Run NeqSim flowsheet"
+        )
+
+        run_button.click()
+        app.run(timeout=240)
+
+        if app.exception:
+            details = "\n".join(str(item.value) for item in app.exception)
+            self.fail(f"Studio solve raised exceptions:\n{details}")
+        closure_metrics = {
+            metric.label: metric
+            for metric in app.metric
+            if metric.label.startswith("Maximum unit ")
+        }
+        self.assertEqual(
+            set(closure_metrics),
+            {
+                "Maximum unit mass imbalance",
+                "Maximum unit energy imbalance",
+            },
+        )
+        self.assertTrue(
+            all(metric.value.endswith(" %") for metric in closure_metrics.values())
+        )
+        self.assertTrue(
+            all(" / " in metric.help for metric in closure_metrics.values())
+        )
+        self.assertTrue(
+            any(
+                "Mass imbalance [%]" in dataframe.value.columns
+                and "Energy imbalance [%]" in dataframe.value.columns
+                for dataframe in app.dataframe
+            )
+        )
+        self.assertIn(
+            "Download engineering workbook",
+            [button.label for button in app.get("download_button")],
         )
 
 
