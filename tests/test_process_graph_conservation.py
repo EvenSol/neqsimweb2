@@ -212,7 +212,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             f"{replay_result.kpis['energy_balance_pct'].value:.3e}%",
         )
 
-    def test_graph_python_export_allows_inapplicable_energy_balance(self):
+    def test_graph_python_export_allows_inapplicable_balance_audits(self):
         builder = ProcessBuilder()
         builder._process_name = "Unaudited transport"
         builder._spec = {
@@ -241,18 +241,20 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 self.status = status
 
         class _Result:
-            raw = {"energy_balance_applicable": False}
+            raw = {
+                "material_balance_applicable": False,
+                "component_balance_applicable": False,
+                "energy_balance_applicable": False,
+            }
             kpis = {
                 "material_feed_count": _Value(1.0),
                 "material_feed_flow_kg_hr": _Value(12_000.0),
                 "material_product_count": _Value(1.0),
                 "material_product_flow_kg_hr": _Value(12_000.0),
-                "mass_balance_pct": _Value(0.0),
-                "component_balance_max_pct": _Value(0.0),
             }
             constraints = [
-                _Constraint("mass_balance", "OK"),
-                _Constraint("component_balance", "OK"),
+                _Constraint("mass_balance", "UNKNOWN"),
+                _Constraint("component_balance", "UNKNOWN"),
                 _Constraint("energy_balance", "UNKNOWN"),
             ]
 
@@ -291,6 +293,14 @@ class MultiInletMixerConservationTest(unittest.TestCase):
 
         save_model.assert_called_once()
         self.assertIs(namespace["result"], result)
+        self.assertIn(
+            "Mass imbalance: not applicable",
+            output.getvalue(),
+        )
+        self.assertIn(
+            "Maximum component imbalance: not applicable",
+            output.getvalue(),
+        )
         self.assertIn(
             "Energy imbalance: not applicable",
             output.getvalue(),
