@@ -552,6 +552,11 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         )
 
         self.assertEqual(validate_case(spec, 1.0), [])
+        spec["process"] = [{}]
+        spec["units"] = []
+        self.assertEqual(validate_case(spec, 1.0), [])
+
+        spec["process"] = process
         spec["units"].append({"id": "compressor-stage-1"})
         with self.assertRaisesRegex(ValueError, "efficiency"):
             validate_case(spec, 1.0)
