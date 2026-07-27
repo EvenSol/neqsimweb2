@@ -863,18 +863,35 @@ class ProcessBuilder:
                         f"{unit_type.capitalize()} '{node_id}' requires "
                         "declared material inlet ports."
                     )
+                normalized_declared_inputs = [
+                    str(port).strip()
+                    for port in declared_inputs
+                ]
+                if (
+                    any(not port for port in normalized_declared_inputs)
+                    or len(set(normalized_declared_inputs))
+                    != len(normalized_declared_inputs)
+                ):
+                    raise ValueError(
+                        f"{unit_type.capitalize()} '{node_id}' requires "
+                        "unique non-empty declared material inlet ports."
+                    )
                 connected_inputs = [
                     str(connection["target"].get("port", "")).strip()
                     for connection in incoming
                 ]
                 missing_inputs = sorted(
-                    set(declared_inputs).difference(connected_inputs)
+                    set(normalized_declared_inputs).difference(
+                        connected_inputs
+                    )
                 )
                 unexpected_inputs = sorted(
-                    set(connected_inputs).difference(declared_inputs)
+                    set(connected_inputs).difference(
+                        normalized_declared_inputs
+                    )
                 )
                 if (
-                    len(connected_inputs) != len(declared_inputs)
+                    len(connected_inputs) != len(normalized_declared_inputs)
                     or missing_inputs
                     or unexpected_inputs
                 ):
@@ -889,7 +906,8 @@ class ProcessBuilder:
                         )
                     if not details:
                         details.append(
-                            f"declared {len(declared_inputs)}, connected "
+                            "declared "
+                            f"{len(normalized_declared_inputs)}, connected "
                             f"{len(connected_inputs)}"
                         )
                     raise ValueError(
