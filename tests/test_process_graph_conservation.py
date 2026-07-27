@@ -90,7 +90,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             script,
         )
         self.assertIn(
-            "Run from this repository checkout with neqsim installed.",
+            "# Run from this repository checkout with neqsim installed.",
             script,
         )
         self.assertNotIn("EvenSol/neqsimweb2", script)
@@ -112,6 +112,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "two-feed_satellite_mixer.neqsim",
             script,
         )
+
+        builder._process_name = 'Mixer """\nraise RuntimeError("header")'
+        adversarial_script = builder.to_python_script()
+        compile(adversarial_script, "process_flowsheet_model.py", "exec")
+        self.assertTrue(
+            adversarial_script.startswith(
+                '# NeqSim Process: "Mixer \\"\\"\\"'
+                '\\nraise RuntimeError(\\"header\\")"\n'
+            )
+        )
+        self.assertNotIn("\nraise RuntimeError", adversarial_script)
 
     def test_graph_python_export_replays_native_two_inlet_case(self):
         builder, source_model = self._build_case(1.05)
