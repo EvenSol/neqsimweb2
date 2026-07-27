@@ -22,6 +22,7 @@ from process_chat.flowsheet_editor import (
     redo_graph_history,
     replace_inline_unit,
     replace_inline_unit_type,
+    resize_mixer_inlet_ports,
     undo_graph_history,
     update_inline_unit_properties,
 )
@@ -949,6 +950,86 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ],
         )
         return builder, model, history, graph_spec
+
+    @staticmethod
+    def _build_palette_three_feed_mixer_case(flow_scale: float):
+        inlet_specs = []
+        compositions = (
+            {"methane": 0.90, "ethane": 0.10},
+            {"methane": 0.70, "ethane": 0.30},
+            {"methane": 0.50, "ethane": 0.50},
+        )
+        base_flows = (10_000.0, 15_000.0, 5_000.0)
+        for index, (composition, base_flow) in enumerate(
+            zip(compositions, base_flows)
+        ):
+            inlet_specs.append(
+                {
+                    "inlet_id": f"feed-{index}",
+                    "name": f"feed {index}",
+                    "fluid_spec": {
+                        "eos_model": "srk",
+                        "mixing_rule": 2,
+                        "components": composition,
+                        "composition_basis": "mole_fraction",
+                        "temperature_C": 20.0 + 5.0 * index,
+                        "pressure_bara": 30.0,
+                        "total_flow": base_flow * flow_scale,
+                        "flow_unit": "kg/hr",
+                    },
+                }
+            )
+        editor_inlets = [
+            {
+                "id": inlet["inlet_id"],
+                "name": inlet["name"],
+                **inlet["fluid_spec"],
+            }
+            for inlet in inlet_specs
+        ]
+        units, mixer_id = add_catalog_unit(
+            [],
+            "mixer",
+            "three feed mixer",
+            {inlet["inlet_id"] for inlet in inlet_specs},
+            {inlet["name"] for inlet in inlet_specs},
+        )
+        units = resize_mixer_inlet_ports(
+            units,
+            [],
+            mixer_id,
+            3,
+        )
+        connections = []
+        for index, inlet in enumerate(editor_inlets):
+            connections, _ = connect_graph_ports(
+                editor_inlets,
+                units,
+                connections,
+                "material",
+                {
+                    "kind": "inlet",
+                    "id": inlet["id"],
+                    "port": "out",
+                },
+                {
+                    "kind": "unit",
+                    "id": mixer_id,
+                    "port": f"in_{index}",
+                },
+            )
+        graph_spec = {
+            "name": "Palette-built three-feed mixer benchmark",
+            "units": units,
+            "connections": connections,
+        }
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed-0", "feed-1", "feed-2", mixer_id],
+        )
+        return builder, model
 
     @staticmethod
     def _build_reorganized_original_process(flow_scale: float):
@@ -2044,6 +2125,60 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 )
                 print(
                     "native palette mixer-separator benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"feed={expected_flow:.1f} kg/hr",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+
+    def test_palette_built_three_feed_mixer_conserves_at_nearby_points(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model = self._build_palette_three_feed_mixer_case(
+                    flow_scale
+                )
+                result = model.run(timeout_ms=180_000)
+                expected_flow = 30_000.0 * flow_scale
+
+                self.assertEqual(
+                    result.kpis["material_feed_count"].value,
+                    3.0,
+                )
+                self.assertEqual(
+                    result.kpis["material_product_count"].value,
+                    1.0,
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_feed_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertIn(
+                    "Added graph mixer: three-feed-mixer "
+                    "(3 material inlets)",
+                    builder.build_log,
+                )
+                print(
+                    "native three-feed mixer benchmark:",
                     f"scale={flow_scale:.2f}",
                     f"feed={expected_flow:.1f} kg/hr",
                     f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
