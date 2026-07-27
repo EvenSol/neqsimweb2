@@ -227,6 +227,60 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             )
         )
 
+    def test_multi_inlet_controls_normalize_imported_unit_type(self):
+        studio_source = (
+            self.project_root
+            / "pages"
+            / "35_Process_Flowsheet_Studio.py"
+        ).read_text(encoding="utf-8")
+        studio_tree = ast.parse(studio_source)
+        normalized_type_assignments = [
+            node
+            for node in ast.walk(studio_tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "selected_unit_type"
+                for target in node.targets
+            )
+        ]
+
+        self.assertEqual(len(normalized_type_assignments), 1)
+        self.assertEqual(
+            ast.unparse(normalized_type_assignments[0].value),
+            "str(selected_unit['type']).strip().lower()",
+        )
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Compare)
+                and isinstance(node.left, ast.Name)
+                and node.left.id == "selected_unit_type"
+                and any(isinstance(operator, ast.In) for operator in node.ops)
+                and {
+                    element.value
+                    for comparator in node.comparators
+                    if isinstance(comparator, ast.Set)
+                    for element in comparator.elts
+                    if isinstance(element, ast.Constant)
+                }
+                == {"mixer", "separator"}
+                for node in ast.walk(studio_tree)
+            )
+        )
+
+        self.assertTrue(
+            any(
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "supports_multi_inlet_resize"
+                for node in ast.walk(studio_tree)
+            )
+        )
+        self.assertIn(
+            "This imported mixer keeps legacy named inlet ports.",
+            studio_source,
+        )
+
     def test_original_equipment_can_be_replaced_without_rebuilding_paths(self):
         app = self._run_studio()
         path_selector = next(
@@ -450,6 +504,78 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cannot be empty"):
                     required_identifier(invalid_id, "inlet id")
 
+    def test_graph_integrity_normalizes_declared_legacy_ports(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+        index_graph_objects = self._load_studio_function(
+            "_index_graph_objects"
+        )
+        index_graph_objects.__globals__["_required_identifier"] = (
+            required_identifier
+        )
+        validate_graph_integrity = self._load_studio_function(
+            "_validate_graph_integrity"
+        )
+        validate_graph_integrity.__globals__["_index_graph_objects"] = (
+            index_graph_objects
+        )
+        inlets = [
+            {"id": "feed-a", "name": "Feed A"},
+            {"id": "feed-b", "name": "Feed B"},
+        ]
+        units = [
+            {
+                "id": "legacy-mixer",
+                "name": "Legacy mixer",
+                "ports": {
+                    "material_in": ["feed_a ", "feed_b"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            }
+        ]
+        connections = [
+            {
+                "id": "feed-a-to-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "legacy-mixer",
+                    "port": "feed_a ",
+                },
+            },
+            {
+                "id": "feed-b-to-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-b",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "legacy-mixer",
+                    "port": "feed_b",
+                },
+            },
+        ]
+
+        validate_graph_integrity(inlets, units, connections)
+
+        units[0]["ports"]["material_out"] = ["feed_a"]
+        with self.assertRaisesRegex(
+            ValueError,
+            "cannot be both input and output",
+        ):
+            validate_graph_integrity(inlets, units, connections)
+
     def test_graph_name_set_ignores_null_and_blank_names(self):
         graph_name_set = self._load_studio_function("_graph_name_set")
         records = [
@@ -634,6 +760,63 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             "restorable starter product streams",
         ):
             validate_case_graph(case_data, [])
+
+    def test_import_rejects_oversized_nonstarter_mixer(self):
+        validate_case_graph = self._load_studio_function(
+            "_validate_case_graph"
+        )
+        oversized_mixer = flowsheet_editor.create_inline_unit_spec(
+            "mixer",
+            "Oversized mixer",
+            set(),
+        )
+        oversized_mixer["ports"]["material_in"] = [
+            f"in_{index}"
+            for index in range(
+                flowsheet_editor.MAX_MULTI_INLET_PORTS + 1
+            )
+        ]
+        validate_case_graph.__globals__.update(
+            {
+                "CASE_SCHEMA_VERSION": 3,
+                "MAX_MULTI_INLET_PORTS": (
+                    flowsheet_editor.MAX_MULTI_INLET_PORTS
+                ),
+                "_validate_graph_integrity": lambda *args: None,
+                "_terminal_name_conflicts": lambda *args: [],
+                "_terminal_material_stream_names": lambda *args: set(),
+                "_index_graph_objects": lambda units, label: {
+                    unit["id"]: unit
+                    for unit in units
+                },
+                "_build_template_graph": lambda process: ([], []),
+                "validate_starter_unit_projection": lambda *args: None,
+                "validate_catalog_unit": (
+                    flowsheet_editor.validate_catalog_unit
+                ),
+                "_build_execution_plan": lambda case_data: [],
+            }
+        )
+        case_data = {
+            "schema_version": 3,
+            "inlets": [{"id": "feed", "name": "Feed"}],
+            "units": [oversized_mixer],
+            "connections": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            validate_case_graph(case_data, [])
+        legacy_mixer = {
+            "id": "legacy-mixer",
+            "name": "Legacy mixer",
+            "type": "mixer",
+            "ports": {
+                "material_in": ["feed_a", "feed_b"],
+                "material_out": ["out"],
+            },
+        }
+        case_data["units"] = [legacy_mixer]
+        validate_case_graph(case_data, [])
 
     def test_solve_readiness_rejects_disconnected_feeds(self):
         validate_solve_readiness = self._load_studio_function(

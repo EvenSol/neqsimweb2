@@ -59,6 +59,7 @@ globals().update(
 
 
 _EDITOR_SYMBOL_NAMES = (
+    "MAX_MULTI_INLET_PORTS",
     "add_catalog_unit",
     "apply_graph_draft",
     "build_graph_draft_dot",
@@ -84,6 +85,7 @@ _EDITOR_SYMBOL_NAMES = (
     "redo_graph_history",
     "remove_material_inlet",
     "remove_inline_unit",
+    "resize_multi_inlet_unit_ports",
     "replace_inline_unit",
     "replace_inline_unit_type",
     "reroute_graph_connection",
@@ -932,10 +934,12 @@ def _validate_graph_integrity(
             f"Graph id '{duplicate_id}' is used by both an inlet and a unit."
         )
 
+    normalized_unit_ports: dict[str, dict[str, list[str]]] = {}
     for unit_id, unit in indexed_units.items():
         ports = unit.get("ports")
         if not isinstance(ports, dict):
             raise ValueError(f"Unit '{unit_id}' requires a ports object.")
+        normalized_unit_ports[unit_id] = {}
         for connection_type in ("material", "energy"):
             input_key = f"{connection_type}_in"
             output_key = f"{connection_type}_out"
@@ -952,7 +956,10 @@ def _validate_graph_integrity(
                     raise ValueError(f"Unit '{unit_id}' {key} has an empty port.")
                 if len(cleaned_ports) != len(set(cleaned_ports)):
                     raise ValueError(f"Unit '{unit_id}' {key} ports must be unique.")
-            ambiguous_ports = set(input_ports).intersection(output_ports)
+                normalized_unit_ports[unit_id][key] = cleaned_ports
+            ambiguous_ports = set(
+                normalized_unit_ports[unit_id][input_key]
+            ).intersection(normalized_unit_ports[unit_id][output_key])
             if ambiguous_ports:
                 port = sorted(ambiguous_ports)[0]
                 raise ValueError(
@@ -1008,7 +1015,7 @@ def _validate_graph_integrity(
                     )
                 direction = "out" if endpoint_name == "source" else "in"
                 port_key = f"{connection_type}_{direction}"
-                declared_ports = indexed_units[endpoint_id]["ports"].get(port_key, [])
+                declared_ports = normalized_unit_ports[endpoint_id][port_key]
                 if endpoint_port not in declared_ports:
                     raise ValueError(
                         f"Connection '{connection_id}' uses undeclared {port_key} "
@@ -1292,6 +1299,11 @@ def _validate_case_graph(
                 raise ValueError(
                     f"Graph mixer '{unit_id}' requires at least two unique "
                     "material input ports."
+                )
+            if len(material_inputs) > MAX_MULTI_INLET_PORTS:
+                raise ValueError(
+                    f"Graph mixer '{unit_id}' cannot exceed "
+                    f"{MAX_MULTI_INLET_PORTS} material input ports."
                 )
             if material_outputs != ["out"]:
                 raise ValueError(
@@ -5305,6 +5317,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 key="flowsheet_added_unit",
             )
             selected_unit = added_unit_map[selected_unit_id]
+            selected_unit_type = (
+                str(selected_unit["type"]).strip().lower()
+            )
             renamed_unit_name = st.text_input(
                 "Equipment display name",
                 value=str(selected_unit["name"]),
@@ -5320,7 +5335,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 "engineering units."
             )
             property_rows = inline_unit_property_rows(
-                selected_unit["type"],
+                selected_unit_type,
                 selected_unit["params"],
             )
             property_updates: dict[str, float] = {}
@@ -5351,10 +5366,72 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     f"{selected_unit_id}_{graph_widget_revision}"
                 ),
             )
+            resize_multi_inlet_unit = False
+            requested_material_inlet_count = None
+            selected_material_inlets = selected_unit.get("ports", {}).get(
+                "material_in",
+                [],
+            )
+            canonical_mixer_inlets = [
+                f"in_{index}"
+                for index in range(len(selected_material_inlets))
+            ]
+            supports_multi_inlet_resize = (
+                selected_unit_type in {"mixer", "separator"}
+                and (
+                    selected_unit_type != "mixer"
+                    or selected_material_inlets == canonical_mixer_inlets
+                )
+            )
+            if (
+                selected_unit_type == "mixer"
+                and not supports_multi_inlet_resize
+            ):
+                st.info(
+                    "This imported mixer keeps legacy named inlet ports. "
+                    "Replace or reconnect it with canonical in_0, in_1, ... "
+                    "ports before changing its inlet count."
+                )
+            if supports_multi_inlet_resize:
+                topology_label = selected_unit_type.capitalize()
+                st.markdown(f"##### {topology_label} topology")
+                current_material_inlet_count = len(
+                    selected_material_inlets
+                )
+                st.caption(
+                    "Add explicit material inlet ports for additional feeds. "
+                    "Trailing ports can be removed only while disconnected."
+                )
+                requested_material_inlet_count = st.number_input(
+                    "Material inlet ports [-]",
+                    min_value=(
+                        2 if selected_unit_type == "mixer" else 1
+                    ),
+                    max_value=MAX_MULTI_INLET_PORTS,
+                    value=current_material_inlet_count,
+                    step=1,
+                    format="%d",
+                    key=(
+                        "flowsheet_material_inlet_count_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+                resize_multi_inlet_unit = st.button(
+                    f"Apply {selected_unit_type} inlet count",
+                    disabled=(
+                        requested_material_inlet_count
+                        == current_material_inlet_count
+                    ),
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_resize_material_inlets_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
             compatible_replacements = [
                 unit_type
                 for unit_type, definition in catalog.items()
-                if unit_type != selected_unit["type"]
+                if unit_type != selected_unit_type
                 and definition["ports"] == selected_unit["ports"]
             ]
             st.markdown("##### Replace equipment")
@@ -5440,6 +5517,47 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 use_container_width=True,
                 key=f"flowsheet_remove_unit_{selected_unit_id}",
             )
+
+            if (
+                resize_multi_inlet_unit
+                and requested_material_inlet_count is not None
+            ):
+                try:
+                    units = resize_multi_inlet_unit_ports(
+                        spec["units"],
+                        spec["connections"],
+                        selected_unit_id,
+                        requested_material_inlet_count,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        spec["connections"],
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"{topology_label} topology update failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Resized '{selected_unit['name']}' to "
+                            f"{int(requested_material_inlet_count)} material "
+                            "inlet ports. Connect every required feed and run "
+                            "NeqSim to solve the revised graph."
+                        ),
+                    )
+                    st.rerun()
 
             if save_properties:
                 try:

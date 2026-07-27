@@ -13,6 +13,7 @@ from typing import Any
 GRAPH_DRAFT_SCHEMA_VERSION = 1
 GRAPH_HISTORY_SCHEMA_VERSION = 1
 MAX_GRAPH_HISTORY_ENTRIES = 50
+MAX_MULTI_INLET_PORTS = 64
 
 
 def _number_property(
@@ -998,6 +999,95 @@ def add_catalog_unit(
     return copied_units, unit["id"]
 
 
+def _validated_mixer_inlet_ports(
+    unit_id: str,
+    ports: Any,
+) -> list[str]:
+    """Return a mixer's contiguous, explicitly indexed material inlet ports."""
+    if not isinstance(ports, dict):
+        raise ValueError(f"Inline mixer '{unit_id}' requires ports.")
+    material_inputs = ports.get("material_in")
+    if not isinstance(material_inputs, list) or len(material_inputs) < 2:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' requires at least two material inlet ports."
+        )
+    if len(material_inputs) > MAX_MULTI_INLET_PORTS:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' cannot exceed "
+            f"{MAX_MULTI_INLET_PORTS} material inlet ports."
+        )
+    expected_inputs = [
+        f"in_{index}" for index in range(len(material_inputs))
+    ]
+    if material_inputs != expected_inputs:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' material inlet ports must be contiguous "
+            "from 'in_0'."
+        )
+    if ports.get("material_out") != ["out"]:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' requires the material outlet port 'out'."
+        )
+    unexpected_port_groups = sorted(
+        key
+        for key, value in ports.items()
+        if key not in {"material_in", "material_out"} and value
+    )
+    if unexpected_port_groups:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' has unsupported port group "
+            f"'{unexpected_port_groups[0]}'."
+        )
+    return list(material_inputs)
+
+
+def _validated_separator_inlet_ports(
+    unit_id: str,
+    ports: Any,
+) -> list[str]:
+    """Return a separator's backward-compatible explicit material inlets."""
+    if not isinstance(ports, dict):
+        raise ValueError(f"Inline separator '{unit_id}' requires ports.")
+    material_inputs = ports.get("material_in")
+    if not isinstance(material_inputs, list) or not material_inputs:
+        raise ValueError(
+            f"Inline separator '{unit_id}' requires a material inlet port."
+        )
+    if len(material_inputs) > MAX_MULTI_INLET_PORTS:
+        raise ValueError(
+            f"Inline separator '{unit_id}' cannot exceed "
+            f"{MAX_MULTI_INLET_PORTS} material inlet ports."
+        )
+    expected_inputs = [
+        "in",
+        *[
+            f"in_{index}"
+            for index in range(1, len(material_inputs))
+        ],
+    ]
+    if material_inputs != expected_inputs:
+        raise ValueError(
+            f"Inline separator '{unit_id}' material inlet ports must start "
+            "with 'in' and continue contiguously from 'in_1'."
+        )
+    if ports.get("material_out") != ["gas", "liquid"]:
+        raise ValueError(
+            f"Inline separator '{unit_id}' requires material outlet ports "
+            "'gas' and 'liquid'."
+        )
+    unexpected_port_groups = sorted(
+        key
+        for key, value in ports.items()
+        if key not in {"material_in", "material_out"} and value
+    )
+    if unexpected_port_groups:
+        raise ValueError(
+            f"Inline separator '{unit_id}' has unsupported port group "
+            f"'{unexpected_port_groups[0]}'."
+        )
+    return list(material_inputs)
+
+
 def validate_catalog_unit(unit: Any) -> None:
     """Validate that a unit matches the editor catalog's executable shape."""
     if not isinstance(unit, dict):
@@ -1012,13 +1102,157 @@ def validate_catalog_unit(unit: Any) -> None:
     definition = _INLINE_UNIT_CATALOG.get(unit_type)
     if definition is None:
         raise ValueError(f"Unsupported inline unit type '{unit_type}'.")
-    if unit.get("ports") != definition["ports"]:
+    if unit_type == "mixer":
+        _validated_mixer_inlet_ports(unit_id, unit.get("ports"))
+    elif unit_type == "separator":
+        _validated_separator_inlet_ports(unit_id, unit.get("ports"))
+    elif unit.get("ports") != definition["ports"]:
         raise ValueError(
             f"Inline unit '{unit_id}' ports do not match the '{unit_type}' catalog."
         )
     if not isinstance(unit.get("params"), dict):
         raise ValueError(f"Inline unit '{unit_id}' params must be an object.")
     inline_unit_property_rows(unit_type, unit["params"])
+
+
+def resize_multi_inlet_unit_ports(
+    units: list[Any],
+    connections: list[Any],
+    unit_id: str,
+    inlet_count: Any,
+) -> list[dict[str, Any]]:
+    """Resize a mixer or separator inlet-port array without dropping routes.
+
+    Expansion appends deterministic explicit ports. Reduction removes only
+    trailing ports and is rejected when a removed port still has a material
+    connection, preserving graph identity and every existing route. Separator
+    port ``in`` remains stable for backward compatibility.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+    if isinstance(inlet_count, bool):
+        raise ValueError("Material inlet count must be an integer.")
+    try:
+        normalized_count = int(inlet_count)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Material inlet count must be an integer.") from error
+    try:
+        numeric_count = float(inlet_count)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Material inlet count must be an integer.") from error
+    if not math.isfinite(numeric_count) or numeric_count != normalized_count:
+        raise ValueError("Material inlet count must be an integer.")
+    if normalized_count > MAX_MULTI_INLET_PORTS:
+        raise ValueError(
+            "Material inlet count cannot exceed "
+            f"{MAX_MULTI_INLET_PORTS}."
+        )
+
+    cleaned_unit_id = str(unit_id).strip()
+    copied_units = copy.deepcopy(units)
+    matches = [
+        unit
+        for unit in copied_units
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+    unit = matches[0]
+    unit_type = str(unit.get("type", "")).strip().lower()
+    if unit_type == "mixer":
+        minimum_count = 2
+        current_ports = _validated_mixer_inlet_ports(
+            cleaned_unit_id,
+            unit.get("ports"),
+        )
+        requested_ports = [
+            f"in_{index}" for index in range(normalized_count)
+        ]
+    elif unit_type == "separator":
+        minimum_count = 1
+        current_ports = _validated_separator_inlet_ports(
+            cleaned_unit_id,
+            unit.get("ports"),
+        )
+        requested_ports = [
+            "in",
+            *[
+                f"in_{index}"
+                for index in range(1, normalized_count)
+            ],
+        ]
+    else:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' does not support multiple "
+            "material inlet ports."
+        )
+    if normalized_count < minimum_count:
+        raise ValueError(
+            f"{unit_type.capitalize()} inlet count must be at least "
+            f"{minimum_count}."
+        )
+
+    retained_ports = set(requested_ports)
+    removed_ports = set(current_ports) - retained_ports
+    for index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            raise ValueError(f"Graph connection {index} must be an object.")
+        if str(connection.get("type", "")).strip().lower() != "material":
+            continue
+        target = connection.get("target")
+        if not isinstance(target, dict):
+            raise ValueError(
+                f"Graph connection {index} requires a target object."
+            )
+        if (
+            str(target.get("kind", "")).strip().lower() == "unit"
+            and str(target.get("id", "")).strip() == cleaned_unit_id
+            and str(target.get("port", "")).strip() in removed_ports
+        ):
+            connection_id = str(connection.get("id", "")).strip() or str(index)
+            raise ValueError(
+                f"Disconnect {unit_type} connection '{connection_id}' before "
+                f"removing port '{str(target.get('port', '')).strip()}'."
+            )
+
+    unit["ports"]["material_in"] = requested_ports
+    validate_catalog_unit(unit)
+    return copied_units
+
+
+def resize_mixer_inlet_ports(
+    units: list[Any],
+    connections: list[Any],
+    mixer_id: str,
+    inlet_count: Any,
+) -> list[dict[str, Any]]:
+    """Backward-compatible wrapper for resizing mixer material inlets."""
+    return resize_multi_inlet_unit_ports(
+        units,
+        connections,
+        mixer_id,
+        inlet_count,
+    )
+
+
+def resize_separator_inlet_ports(
+    units: list[Any],
+    connections: list[Any],
+    separator_id: str,
+    inlet_count: Any,
+) -> list[dict[str, Any]]:
+    """Resize one separator's explicit material inlet ports."""
+    return resize_multi_inlet_unit_ports(
+        units,
+        connections,
+        separator_id,
+        inlet_count,
+    )
 
 
 def validate_starter_unit_projection(

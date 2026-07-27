@@ -851,15 +851,85 @@ class ProcessBuilder:
                     str(connection["id"]).strip(),
                 ),
             )
+            if unit_type in {"mixer", "separator"}:
+                ports = unit_spec.get("ports")
+                declared_inputs = (
+                    ports.get("material_in")
+                    if isinstance(ports, dict)
+                    else None
+                )
+                if not isinstance(declared_inputs, list) or not declared_inputs:
+                    raise ValueError(
+                        f"{unit_type.capitalize()} '{node_id}' requires "
+                        "declared material inlet ports."
+                    )
+                normalized_declared_inputs = [
+                    str(port).strip()
+                    for port in declared_inputs
+                ]
+                if (
+                    any(not port for port in normalized_declared_inputs)
+                    or len(set(normalized_declared_inputs))
+                    != len(normalized_declared_inputs)
+                ):
+                    raise ValueError(
+                        f"{unit_type.capitalize()} '{node_id}' requires "
+                        "unique non-empty declared material inlet ports."
+                    )
+                connected_inputs = [
+                    str(connection["target"].get("port", "")).strip()
+                    for connection in incoming
+                ]
+                missing_inputs = sorted(
+                    set(normalized_declared_inputs).difference(
+                        connected_inputs
+                    )
+                )
+                unexpected_inputs = sorted(
+                    set(connected_inputs).difference(
+                        normalized_declared_inputs
+                    )
+                )
+                if (
+                    len(connected_inputs) != len(normalized_declared_inputs)
+                    or missing_inputs
+                    or unexpected_inputs
+                ):
+                    details = []
+                    if missing_inputs:
+                        details.append(
+                            "missing: " + ", ".join(missing_inputs)
+                        )
+                    if unexpected_inputs:
+                        details.append(
+                            "unexpected: " + ", ".join(unexpected_inputs)
+                        )
+                    if not details:
+                        details.append(
+                            "declared "
+                            f"{len(normalized_declared_inputs)}, connected "
+                            f"{len(connected_inputs)}"
+                        )
+                    raise ValueError(
+                        f"{unit_type.capitalize()} '{node_id}' material inlet "
+                        "connections must match declared ports ("
+                        + "; ".join(details)
+                        + ")."
+                    )
             if not incoming:
                 raise ValueError(
                     f"Unit '{node_id}' requires at least one material inlet."
                 )
 
-            if unit_type == "mixer":
-                if len(incoming) < 2:
+            if unit_type == "mixer" or (
+                unit_type == "separator" and len(incoming) > 1
+            ):
+                minimum_inlets = 2 if unit_type == "mixer" else 1
+                if len(incoming) < minimum_inlets:
                     raise ValueError(
-                        f"Mixer '{node_id}' requires at least two material inlets."
+                        f"{unit_type.capitalize()} '{node_id}' requires at "
+                        f"least {minimum_inlets} material inlet"
+                        f"{'s' if minimum_inlets != 1 else ''}."
                     )
                 source_streams = [
                     self.resolve_material_output(
@@ -884,11 +954,11 @@ class ProcessBuilder:
                     except Exception as exc:
                         connection_id = str(connection["id"]).strip()
                         raise ValueError(
-                            f"Mixer '{node_id}' could not add material connection "
-                            f"'{connection_id}'."
+                            f"{unit_type.capitalize()} '{node_id}' could not "
+                            f"add material connection '{connection_id}'."
                         ) from exc
                 self._build_log.append(
-                    f"Added graph mixer: {node_id} "
+                    f"Added graph {unit_type}: {node_id} "
                     f"({len(source_streams)} material inlets)"
                 )
             else:

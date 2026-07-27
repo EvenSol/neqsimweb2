@@ -7,6 +7,7 @@ import json
 import unittest
 
 from process_chat.flowsheet_editor import (
+    MAX_MULTI_INLET_PORTS,
     _validate_acyclic_material_connections,
     add_catalog_unit,
     apply_graph_draft,
@@ -34,6 +35,8 @@ from process_chat.flowsheet_editor import (
     redo_graph_history,
     remove_material_inlet,
     remove_inline_unit,
+    resize_mixer_inlet_ports,
+    resize_separator_inlet_ports,
     replace_inline_unit,
     replace_inline_unit_type,
     reroute_graph_connection,
@@ -1188,6 +1191,215 @@ class InlineInsertionTest(unittest.TestCase):
                     )
         self.assertEqual([unit["id"] for unit in self.units], ["compressor-1"])
         self.assertEqual(len(self.connections), 1)
+
+
+class MixerInletPortLifecycleTest(unittest.TestCase):
+    """Validate scalable mixer ports without losing connected feed routes."""
+
+    def setUp(self):
+        self.units, self.mixer_id = add_catalog_unit(
+            [],
+            "mixer",
+            "Feed mixer",
+        )
+        self.inlets = [
+            {"id": f"feed-{index}", "name": f"Feed {index}"}
+            for index in range(4)
+        ]
+        self.connections = []
+        for index in range(2):
+            self.connections, _ = connect_graph_ports(
+                self.inlets,
+                self.units,
+                self.connections,
+                "material",
+                {
+                    "kind": "inlet",
+                    "id": f"feed-{index}",
+                    "port": "out",
+                },
+                {
+                    "kind": "unit",
+                    "id": self.mixer_id,
+                    "port": f"in_{index}",
+                },
+            )
+
+    def test_expands_contiguous_ports_and_preserves_input_graph(self):
+        original_units = copy.deepcopy(self.units)
+        expanded = resize_mixer_inlet_ports(
+            self.units,
+            self.connections,
+            self.mixer_id,
+            4,
+        )
+
+        self.assertEqual(
+            expanded[0]["ports"]["material_in"],
+            ["in_0", "in_1", "in_2", "in_3"],
+        )
+        self.assertEqual(self.units, original_units)
+        validate_catalog_unit(expanded[0])
+        available_targets = graph_port_rows(
+            self.inlets,
+            expanded,
+            self.connections,
+            "material",
+            "target",
+            available_only=True,
+        )
+        self.assertEqual(
+            [row["port"] for row in available_targets],
+            ["in_2", "in_3"],
+        )
+
+    def test_removes_only_unconnected_trailing_ports(self):
+        expanded = resize_mixer_inlet_ports(
+            self.units,
+            self.connections,
+            self.mixer_id,
+            4,
+        )
+        reduced = resize_mixer_inlet_ports(
+            expanded,
+            self.connections,
+            self.mixer_id,
+            3,
+        )
+
+        self.assertEqual(
+            reduced[0]["ports"]["material_in"],
+            ["in_0", "in_1", "in_2"],
+        )
+        self.assertEqual(
+            expanded[0]["ports"]["material_in"],
+            ["in_0", "in_1", "in_2", "in_3"],
+        )
+
+    def test_rejects_connected_removals_and_invalid_port_shapes(self):
+        expanded = resize_mixer_inlet_ports(
+            self.units,
+            self.connections,
+            self.mixer_id,
+            4,
+        )
+        connected, connection_id = connect_graph_ports(
+            self.inlets,
+            expanded,
+            self.connections,
+            "material",
+            {"kind": "inlet", "id": "feed-3", "port": "out"},
+            {"kind": "unit", "id": self.mixer_id, "port": "in_3"},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            f"Disconnect mixer connection '{connection_id}'",
+        ):
+            resize_mixer_inlet_ports(
+                expanded,
+                connected,
+                self.mixer_id,
+                3,
+            )
+
+        for inlet_count, message in (
+            (1, "at least 2"),
+            (2.5, "Material inlet count must be an integer"),
+            (True, "Material inlet count must be an integer"),
+            (MAX_MULTI_INLET_PORTS + 1, "cannot exceed"),
+        ):
+            with self.subTest(inlet_count=inlet_count):
+                with self.assertRaisesRegex(ValueError, message):
+                    resize_mixer_inlet_ports(
+                        self.units,
+                        self.connections,
+                        self.mixer_id,
+                        inlet_count,
+                    )
+
+        malformed = copy.deepcopy(expanded[0])
+        malformed["ports"]["material_in"] = ["in_0", "in_2"]
+        with self.assertRaisesRegex(ValueError, "must be contiguous"):
+            validate_catalog_unit(malformed)
+        oversized = copy.deepcopy(expanded[0])
+        oversized["ports"]["material_in"] = [
+            f"in_{index}"
+            for index in range(MAX_MULTI_INLET_PORTS + 1)
+        ]
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            validate_catalog_unit(oversized)
+
+    def test_separator_expands_and_protects_connected_extra_feeds(self):
+        separator_units, separator_id = add_catalog_unit(
+            [],
+            "separator",
+            "Feed separator",
+        )
+        separator_connections, _ = connect_graph_ports(
+            self.inlets,
+            separator_units,
+            [],
+            "material",
+            {"kind": "inlet", "id": "feed-0", "port": "out"},
+            {"kind": "unit", "id": separator_id, "port": "in"},
+        )
+        expanded = resize_separator_inlet_ports(
+            separator_units,
+            separator_connections,
+            separator_id,
+            3,
+        )
+        self.assertEqual(
+            expanded[0]["ports"]["material_in"],
+            ["in", "in_1", "in_2"],
+        )
+        connected, connection_id = connect_graph_ports(
+            self.inlets,
+            expanded,
+            separator_connections,
+            "material",
+            {"kind": "inlet", "id": "feed-1", "port": "out"},
+            {"kind": "unit", "id": separator_id, "port": "in_1"},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            f"Disconnect separator connection '{connection_id}'",
+        ):
+            resize_separator_inlet_ports(
+                expanded,
+                connected,
+                separator_id,
+                1,
+            )
+
+        reduced = resize_separator_inlet_ports(
+            expanded,
+            separator_connections,
+            separator_id,
+            1,
+        )
+        self.assertEqual(reduced[0]["ports"]["material_in"], ["in"])
+        malformed = copy.deepcopy(expanded[0])
+        malformed["ports"]["material_in"] = ["in", "in_2"]
+        with self.assertRaisesRegex(ValueError, "continue contiguously"):
+            validate_catalog_unit(malformed)
+        oversized = copy.deepcopy(expanded[0])
+        oversized["ports"]["material_in"] = [
+            "in",
+            *[
+                f"in_{index}"
+                for index in range(1, MAX_MULTI_INLET_PORTS + 1)
+            ],
+        ]
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            validate_catalog_unit(oversized)
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            resize_separator_inlet_ports(
+                separator_units,
+                separator_connections,
+                separator_id,
+                MAX_MULTI_INLET_PORTS + 1,
+            )
 
 
 class InlineUnitLifecycleTest(unittest.TestCase):
