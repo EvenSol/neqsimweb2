@@ -456,6 +456,26 @@ def _terminal_name_conflicts(
     return [conflicts[name_key] for name_key in sorted(conflicts)]
 
 
+def _reserved_feed_names(
+    units: list[Any],
+    connections: list[Any],
+    starter_units: list[Any],
+    starter_connections: list[Any],
+) -> set[str]:
+    """Reserve active and restorable equipment and product-stream names."""
+    return (
+        _graph_name_set(starter_units)
+        .union(_graph_name_set(units))
+        .union(_terminal_material_stream_names(units, connections))
+        .union(
+            _terminal_material_stream_names(
+                starter_units,
+                starter_connections,
+            )
+        )
+    )
+
+
 def _validate_graph_solve_readiness(case_spec: dict[str, Any]) -> None:
     """Reject graph drafts whose independent feeds are not yet consumed."""
     inlets = case_spec.get("inlets")
@@ -3554,11 +3574,20 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         ).encode("utf-8")
     ).hexdigest()[:12]
     protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
-    starter_template_units = _build_template_graph(spec["process"])[0]
+    (
+        starter_template_units,
+        starter_template_connections,
+    ) = _build_template_graph(spec["process"])
     protected_unit_names = _graph_name_set(starter_template_units)
     protected_unit_name_keys = _graph_name_set(
         starter_template_units,
         casefold=True,
+    )
+    reserved_feed_names = _reserved_feed_names(
+        spec["units"],
+        spec["connections"],
+        starter_template_units,
+        starter_template_connections,
     )
     added_units = [
         unit
@@ -4400,14 +4429,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             and str(unit.get("id", "")).strip()
                         ),
                     },
-                    protected_unit_names.union(
-                        _graph_name_set(spec["units"])
-                    ).union(
-                        _terminal_material_stream_names(
-                            spec["units"],
-                            spec["connections"],
-                        )
-                    ),
+                    reserved_feed_names,
                 )
                 candidate_draft = create_graph_draft(
                     spec["units"],
@@ -4629,14 +4651,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["inlets"],
                             selected_inlet_id,
                             renamed_inlet,
-                            protected_unit_names.union(
-                                _graph_name_set(spec["units"])
-                            ).union(
-                                _terminal_material_stream_names(
-                                    spec["units"],
-                                    spec["connections"],
-                                )
-                            ),
+                            reserved_feed_names,
                         )
                         lifecycle_notice = (
                             f"Renamed feed '{selected_inlet_name}' to "
