@@ -1011,6 +1011,11 @@ def _validated_mixer_inlet_ports(
         raise ValueError(
             f"Inline mixer '{unit_id}' requires at least two material inlet ports."
         )
+    if len(material_inputs) > MAX_MULTI_INLET_PORTS:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' cannot exceed "
+            f"{MAX_MULTI_INLET_PORTS} material inlet ports."
+        )
     expected_inputs = [
         f"in_{index}" for index in range(len(material_inputs))
     ]
@@ -1047,6 +1052,11 @@ def _validated_separator_inlet_ports(
     if not isinstance(material_inputs, list) or not material_inputs:
         raise ValueError(
             f"Inline separator '{unit_id}' requires a material inlet port."
+        )
+    if len(material_inputs) > MAX_MULTI_INLET_PORTS:
+        raise ValueError(
+            f"Inline separator '{unit_id}' cannot exceed "
+            f"{MAX_MULTI_INLET_PORTS} material inlet ports."
         )
     expected_inputs = [
         "in",
