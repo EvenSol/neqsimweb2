@@ -133,6 +133,77 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertIn("Add equipment node", button_labels)
         self.assertIn("Connect selected ports", button_labels)
 
+    def test_studio_compiles_shared_process_builder_graph_spec(self):
+        build_process_spec = self._load_studio_function(
+            "_build_graph_process_spec"
+        )
+        build_process_spec.__globals__.update(
+            {
+                "_build_execution_plan": lambda candidate: [
+                    {"Object ID": "feed"},
+                    {"Object ID": "compressor"},
+                ],
+                "_build_inlet_fluid_specs": lambda candidate: [
+                    {
+                        "inlet_id": "feed",
+                        "name": "Feed",
+                        "fluid_spec": {"eos_model": "srk"},
+                    }
+                ],
+            }
+        )
+        case_spec = {
+            "name": "Shared graph handoff",
+            "units": [
+                {
+                    "id": "compressor",
+                    "name": "Compressor",
+                    "type": "compressor",
+                }
+            ],
+            "connections": [
+                {
+                    "id": "feed-to-compressor",
+                    "type": "material",
+                }
+            ],
+        }
+
+        process_spec = build_process_spec(case_spec)
+
+        self.assertEqual(process_spec["name"], "Shared graph handoff")
+        self.assertEqual(
+            process_spec["graph"],
+            {
+                "name": "Shared graph handoff",
+                "units": case_spec["units"],
+                "connections": case_spec["connections"],
+            },
+        )
+        self.assertEqual(
+            process_spec["execution_order"],
+            ["feed", "compressor"],
+        )
+        self.assertEqual(process_spec["inlet_specs"][0]["inlet_id"], "feed")
+        self.assertIsNot(
+            process_spec["graph"]["units"],
+            case_spec["units"],
+        )
+
+        studio_source = (
+            self.project_root
+            / "pages"
+            / "35_Process_Flowsheet_Studio.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "model = builder.build_from_spec(",
+            studio_source,
+        )
+        self.assertNotIn(
+            "model = builder.build_acyclic_graph(",
+            studio_source,
+        )
+
     def test_mixer_insertion_exposes_second_source_and_solve_readiness(self):
         app = self._run_studio()
 
