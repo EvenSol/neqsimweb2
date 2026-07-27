@@ -934,10 +934,12 @@ def _validate_graph_integrity(
             f"Graph id '{duplicate_id}' is used by both an inlet and a unit."
         )
 
+    normalized_unit_ports: dict[str, dict[str, list[str]]] = {}
     for unit_id, unit in indexed_units.items():
         ports = unit.get("ports")
         if not isinstance(ports, dict):
             raise ValueError(f"Unit '{unit_id}' requires a ports object.")
+        normalized_unit_ports[unit_id] = {}
         for connection_type in ("material", "energy"):
             input_key = f"{connection_type}_in"
             output_key = f"{connection_type}_out"
@@ -954,7 +956,10 @@ def _validate_graph_integrity(
                     raise ValueError(f"Unit '{unit_id}' {key} has an empty port.")
                 if len(cleaned_ports) != len(set(cleaned_ports)):
                     raise ValueError(f"Unit '{unit_id}' {key} ports must be unique.")
-            ambiguous_ports = set(input_ports).intersection(output_ports)
+                normalized_unit_ports[unit_id][key] = cleaned_ports
+            ambiguous_ports = set(
+                normalized_unit_ports[unit_id][input_key]
+            ).intersection(normalized_unit_ports[unit_id][output_key])
             if ambiguous_ports:
                 port = sorted(ambiguous_ports)[0]
                 raise ValueError(
@@ -1010,7 +1015,7 @@ def _validate_graph_integrity(
                     )
                 direction = "out" if endpoint_name == "source" else "in"
                 port_key = f"{connection_type}_{direction}"
-                declared_ports = indexed_units[endpoint_id]["ports"].get(port_key, [])
+                declared_ports = normalized_unit_ports[endpoint_id][port_key]
                 if endpoint_port not in declared_ports:
                     raise ValueError(
                         f"Connection '{connection_id}' uses undeclared {port_key} "
