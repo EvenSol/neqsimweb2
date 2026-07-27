@@ -5312,6 +5312,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 key="flowsheet_added_unit",
             )
             selected_unit = added_unit_map[selected_unit_id]
+            selected_unit_type = (
+                str(selected_unit["type"]).strip().lower()
+            )
             renamed_unit_name = st.text_input(
                 "Equipment display name",
                 value=str(selected_unit["name"]),
@@ -5327,7 +5330,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 "engineering units."
             )
             property_rows = inline_unit_property_rows(
-                selected_unit["type"],
+                selected_unit_type,
                 selected_unit["params"],
             )
             property_updates: dict[str, float] = {}
@@ -5360,8 +5363,8 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             )
             resize_multi_inlet_unit = False
             requested_material_inlet_count = None
-            if selected_unit["type"] in {"mixer", "separator"}:
-                topology_label = selected_unit["type"].capitalize()
+            if selected_unit_type in {"mixer", "separator"}:
+                topology_label = selected_unit_type.capitalize()
                 st.markdown(f"##### {topology_label} topology")
                 current_material_inlet_count = len(
                     selected_unit["ports"]["material_in"]
@@ -5373,7 +5376,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 requested_material_inlet_count = st.number_input(
                     "Material inlet ports [-]",
                     min_value=(
-                        2 if selected_unit["type"] == "mixer" else 1
+                        2 if selected_unit_type == "mixer" else 1
                     ),
                     max_value=MAX_MULTI_INLET_PORTS,
                     value=current_material_inlet_count,
@@ -5385,7 +5388,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     ),
                 )
                 resize_multi_inlet_unit = st.button(
-                    f"Apply {selected_unit['type']} inlet count",
+                    f"Apply {selected_unit_type} inlet count",
                     disabled=(
                         requested_material_inlet_count
                         == current_material_inlet_count
@@ -5399,7 +5402,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             compatible_replacements = [
                 unit_type
                 for unit_type, definition in catalog.items()
-                if unit_type != selected_unit["type"]
+                if unit_type != selected_unit_type
                 and definition["ports"] == selected_unit["ports"]
             ]
             st.markdown("##### Replace equipment")
