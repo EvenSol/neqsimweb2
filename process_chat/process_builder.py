@@ -1215,7 +1215,7 @@ class ProcessBuilder:
             '"""',
             f"NeqSim Process: {self._process_name}",
             "Auto-generated from the generic Process Flowsheet Studio graph.",
-            "Run from an EvenSol/neqsimweb2 checkout with neqsim installed.",
+            "Run from this repository checkout with neqsim installed.",
             '"""',
             "import json",
             "",
