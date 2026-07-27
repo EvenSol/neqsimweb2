@@ -2699,6 +2699,28 @@ def _workbook_cell(value: Any) -> Any:
         return str(value)
 
 
+def _active_template_process_steps(
+    spec: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Return legacy starter steps only while their graph units remain active."""
+    process_steps = {
+        str(step.get("name", "")).strip().casefold(): step
+        for step in spec.get("process", [])
+        if isinstance(step, dict)
+        and str(step.get("name", "")).strip()
+    }
+    retained_unit_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in spec.get("units", [])
+        if isinstance(unit, dict)
+    }
+    return {
+        step_name: process_steps[step_name]
+        for step_name, unit_id in TEMPLATE_UNIT_IDS.items()
+        if unit_id in retained_unit_ids and step_name in process_steps
+    }
+
+
 def _engineering_workbook_bytes(
     spec: dict[str, Any],
     result: Any,
@@ -2710,7 +2732,7 @@ def _engineering_workbook_bytes(
 ) -> bytes:
     """Build a review-ready Excel workbook from one solved NeqSim case."""
     fluid = spec["fluid"]
-    process_steps = {step["name"]: step for step in spec["process"]}
+    process_steps = _active_template_process_steps(spec)
     total_power_kw = _kpi_value(result, "total_power_kW")
     total_duty_kw = _kpi_value(result, "total_duty_kW")
     mass_balance_pct = _kpi_value(result, "mass_balance_pct")
@@ -2736,61 +2758,93 @@ def _engineering_workbook_bytes(
             ("Feed", "Temperature", fluid["temperature_C"], "°C"),
             ("Feed", "Pressure", fluid["pressure_bara"], "bara absolute"),
             ("Feed", "Mass flow", fluid["total_flow"], fluid["flow_unit"]),
-            (
-                "Compressor stage 1",
-                "Discharge pressure",
-                process_steps["compressor stage 1"]["params"][
-                    "outlet_pressure_bara"
-                ],
-                "bara absolute",
+            *(
+                [
+                    (
+                        "Compressor stage 1",
+                        "Discharge pressure",
+                        process_steps["compressor stage 1"]["params"][
+                            "outlet_pressure_bara"
+                        ],
+                        "bara absolute",
+                    ),
+                    (
+                        "Compressor stage 1",
+                        "Isentropic efficiency",
+                        process_steps["compressor stage 1"]["params"][
+                            "isentropic_efficiency"
+                        ],
+                        "fraction",
+                    ),
+                ]
+                if "compressor stage 1" in process_steps
+                else []
             ),
-            (
-                "Compressor stage 2",
-                "Discharge pressure",
-                process_steps["compressor stage 2"]["params"][
-                    "outlet_pressure_bara"
-                ],
-                "bara absolute",
+            *(
+                [
+                    (
+                        "Compressor stage 2",
+                        "Discharge pressure",
+                        process_steps["compressor stage 2"]["params"][
+                            "outlet_pressure_bara"
+                        ],
+                        "bara absolute",
+                    ),
+                    (
+                        "Compressor stage 2",
+                        "Isentropic efficiency",
+                        process_steps["compressor stage 2"]["params"][
+                            "isentropic_efficiency"
+                        ],
+                        "fraction",
+                    ),
+                ]
+                if "compressor stage 2" in process_steps
+                else []
             ),
-            (
-                "Compressor stage 1",
-                "Isentropic efficiency",
-                process_steps["compressor stage 1"]["params"][
-                    "isentropic_efficiency"
-                ],
-                "fraction",
+            *(
+                [
+                    (
+                        "Intercooler",
+                        "Outlet temperature",
+                        process_steps["intercooler"]["params"][
+                            "outlet_temperature_C"
+                        ],
+                        "°C",
+                    ),
+                    (
+                        "Intercooler",
+                        "Pressure drop",
+                        process_steps["intercooler"]["params"][
+                            "pressure_drop_bar"
+                        ],
+                        "bar",
+                    ),
+                ]
+                if "intercooler" in process_steps
+                else []
             ),
-            (
-                "Compressor stage 2",
-                "Isentropic efficiency",
-                process_steps["compressor stage 2"]["params"][
-                    "isentropic_efficiency"
-                ],
-                "fraction",
-            ),
-            (
-                "Intercooler",
-                "Outlet temperature",
-                process_steps["intercooler"]["params"]["outlet_temperature_C"],
-                "°C",
-            ),
-            (
-                "Intercooler",
-                "Pressure drop",
-                process_steps["intercooler"]["params"]["pressure_drop_bar"],
-                "bar",
-            ),
-            (
-                "Export cooler",
-                "Outlet temperature",
-                process_steps["export cooler"]["params"]["outlet_temperature_C"],
-                "°C",
-            ),
-            (
-                "Export cooler",
-                "Pressure drop",
-                process_steps["export cooler"]["params"]["pressure_drop_bar"],
-                "bar",
+            *(
+                [
+                    (
+                        "Export cooler",
+                        "Outlet temperature",
+                        process_steps["export cooler"]["params"][
+                            "outlet_temperature_C"
+                        ],
+                        "°C",
+                    ),
+                    (
+                        "Export cooler",
+                        "Pressure drop",
+                        process_steps["export cooler"]["params"][
+                            "pressure_drop_bar"
+                        ],
+                        "bar",
+                    ),
+                ]
+                if "export cooler" in process_steps
+                else []
             ),
             (
                 "Solver",
@@ -3137,7 +3191,14 @@ def _case_history_record(
     validation_status = aggregate_validation_status(constraint_statuses)
     convergence_summary = aggregate_convergence(result)
 
-    process = spec["process"]
+    process_steps = _active_template_process_steps(spec)
+
+    def active_parameter(step_name: str, parameter_name: str) -> float | None:
+        step = process_steps.get(step_name)
+        if step is None:
+            return None
+        return float(step["params"][parameter_name])
+
     return {
         "_signature": signature,
         "_spec": json.loads(json.dumps(spec, allow_nan=False)),
@@ -3148,23 +3209,29 @@ def _case_history_record(
         "Feed temperature [°C]": float(spec["fluid"]["temperature_C"]),
         "Feed pressure [bara]": float(spec["fluid"]["pressure_bara"]),
         "Feed flow [kg/hr]": feed_flow_kg_hr,
-        "Stage 1 pressure [bara]": float(
-            process[2]["params"]["outlet_pressure_bara"]
+        "Stage 1 pressure [bara]": active_parameter(
+            "compressor stage 1",
+            "outlet_pressure_bara",
         ),
-        "Stage 2 pressure [bara]": float(
-            process[5]["params"]["outlet_pressure_bara"]
+        "Stage 2 pressure [bara]": active_parameter(
+            "compressor stage 2",
+            "outlet_pressure_bara",
         ),
-        "Stage 1 efficiency [-]": float(
-            process[2]["params"]["isentropic_efficiency"]
+        "Stage 1 efficiency [-]": active_parameter(
+            "compressor stage 1",
+            "isentropic_efficiency",
         ),
-        "Stage 2 efficiency [-]": float(
-            process[5]["params"]["isentropic_efficiency"]
+        "Stage 2 efficiency [-]": active_parameter(
+            "compressor stage 2",
+            "isentropic_efficiency",
         ),
-        "Intercooler pressure drop [bar]": float(
-            process[3]["params"]["pressure_drop_bar"]
+        "Intercooler pressure drop [bar]": active_parameter(
+            "intercooler",
+            "pressure_drop_bar",
         ),
-        "Export cooler pressure drop [bar]": float(
-            process[6]["params"]["pressure_drop_bar"]
+        "Export cooler pressure drop [bar]": active_parameter(
+            "export cooler",
+            "pressure_drop_bar",
         ),
         "Compressor power [kW]": total_power_kw,
         "Cooling duty magnitude [kW]": total_duty_kw,
