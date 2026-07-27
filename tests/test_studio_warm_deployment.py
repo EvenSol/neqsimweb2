@@ -635,6 +635,49 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ):
             validate_case_graph(case_data, [])
 
+    def test_import_rejects_oversized_nonstarter_mixer(self):
+        validate_case_graph = self._load_studio_function(
+            "_validate_case_graph"
+        )
+        oversized_mixer = flowsheet_editor.create_inline_unit_spec(
+            "mixer",
+            "Oversized mixer",
+            set(),
+        )
+        oversized_mixer["ports"]["material_in"] = [
+            f"in_{index}"
+            for index in range(
+                flowsheet_editor.MAX_MULTI_INLET_PORTS + 1
+            )
+        ]
+        validate_case_graph.__globals__.update(
+            {
+                "CASE_SCHEMA_VERSION": 3,
+                "_validate_graph_integrity": lambda *args: None,
+                "_terminal_name_conflicts": lambda *args: [],
+                "_terminal_material_stream_names": lambda *args: set(),
+                "_index_graph_objects": lambda units, label: {
+                    unit["id"]: unit
+                    for unit in units
+                },
+                "_build_template_graph": lambda process: ([], []),
+                "validate_starter_unit_projection": lambda *args: None,
+                "validate_catalog_unit": (
+                    flowsheet_editor.validate_catalog_unit
+                ),
+                "_build_execution_plan": lambda case_data: [],
+            }
+        )
+        case_data = {
+            "schema_version": 3,
+            "inlets": [{"id": "feed", "name": "Feed"}],
+            "units": [oversized_mixer],
+            "connections": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            validate_case_graph(case_data, [])
+
     def test_solve_readiness_rejects_disconnected_feeds(self):
         validate_solve_readiness = self._load_studio_function(
             "_validate_graph_solve_readiness"
