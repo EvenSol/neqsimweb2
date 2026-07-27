@@ -1211,12 +1211,11 @@ class ProcessBuilder:
             ) from exc
 
         safe = _safe_filename(self._process_name)
+        display_name = json.dumps(str(self._process_name), ensure_ascii=True)
         lines = [
-            '"""',
-            f"NeqSim Process: {self._process_name}",
-            "Auto-generated from the generic Process Flowsheet Studio graph.",
-            "Run from this repository checkout with neqsim installed.",
-            '"""',
+            f"# NeqSim Process: {display_name}",
+            "# Auto-generated from the generic Process Flowsheet Studio graph.",
+            "# Run from this repository checkout with neqsim installed.",
             "import json",
             "",
             "import neqsim",
