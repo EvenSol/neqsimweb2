@@ -1194,6 +1194,7 @@ class ProcessBuilder:
             )
 
         case_payload = {
+            "name": str(self._spec.get("name", self._process_name)),
             "graph": graph_spec,
             "inlet_specs": inlet_specs,
             "execution_order": execution_order,
