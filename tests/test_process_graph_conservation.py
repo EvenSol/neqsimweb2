@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+from contextlib import redirect_stdout
+import io
 import json
 import math
+import os
+import tempfile
 import unittest
 
 from process_chat.flowsheet_editor import (
@@ -25,6 +30,170 @@ from process_chat.solver_diagnostics import aggregate_energy_balance
 
 class MultiInletMixerConservationTest(unittest.TestCase):
     """Validate material and energy closure for independent graph inlets."""
+
+    def test_graph_python_export_embeds_exact_schema_and_compiles(self):
+        builder = ProcessBuilder()
+        builder._process_name = 'Two-feed "satellite" mixer'
+        builder._spec = {
+            "graph": {
+                "name": 'Two-feed "satellite" mixer',
+                "units": [
+                    {
+                        "id": "feed-mixer",
+                        "name": "Feed mixer",
+                        "type": "mixer",
+                        "params": {},
+                        "ports": {
+                            "material_in": ["in_0", "in_1"],
+                            "material_out": ["out"],
+                        },
+                    }
+                ],
+                "connections": [],
+            },
+            "inlet_specs": [
+                {
+                    "inlet_id": "feed-a",
+                    "name": "Northern feed",
+                    "fluid_spec": {
+                        "eos_model": "srk",
+                        "components": {"methane": 1.0},
+                    },
+                },
+                {
+                    "inlet_id": "feed-b",
+                    "name": "Sør feed",
+                    "fluid_spec": {
+                        "eos_model": "srk",
+                        "components": {"methane": 1.0},
+                    },
+                },
+            ],
+            "execution_order": ["feed-a", "feed-b", "feed-mixer"],
+        }
+
+        script = builder.to_python_script()
+
+        compile(script, "process_flowsheet_model.py", "exec")
+        payload_line = next(
+            line for line in script.splitlines()
+            if line.startswith("case_data = json.loads(")
+        )
+        serialized_literal = payload_line.removeprefix(
+            "case_data = json.loads("
+        ).removesuffix(")")
+        exported_case = json.loads(ast.literal_eval(serialized_literal))
+        self.assertEqual(exported_case, builder._spec)
+        self.assertIn(
+            "from process_chat.process_builder import ProcessBuilder",
+            script,
+        )
+        self.assertIn("builder.build_acyclic_graph(", script)
+        self.assertIn("model.run(timeout_ms=180_000)", script)
+        self.assertIn(
+            '"material_product_flow_kg_hr",',
+            script,
+        )
+        self.assertIn(
+            '"Graph replay validation did not pass: "',
+            script,
+        )
+        self.assertIn(
+            'print(f"Energy imbalance: {energy_residual:.6e} %")',
+            script,
+        )
+        self.assertIn(
+            "two-feed_satellite_mixer.neqsim",
+            script,
+        )
+
+    def test_graph_python_export_replays_native_two_inlet_case(self):
+        builder, source_model = self._build_case(1.05)
+        source_result = source_model.run(timeout_ms=180_000)
+        script = builder.to_python_script()
+        namespace: dict[str, object] = {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_directory = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    exec(
+                        compile(
+                            script,
+                            "process_flowsheet_model.py",
+                            "exec",
+                        ),
+                        namespace,
+                    )
+                saved_path = os.path.join(
+                    temp_dir,
+                    "native_two-inlet_mixer_benchmark.neqsim",
+                )
+                self.assertTrue(os.path.isfile(saved_path))
+                self.assertGreater(os.path.getsize(saved_path), 0)
+            finally:
+                os.chdir(previous_directory)
+
+        replay_result = namespace["result"]
+        self.assertEqual(
+            replay_result.kpis["material_feed_count"].value,
+            2.0,
+        )
+        self.assertEqual(
+            replay_result.kpis["material_product_count"].value,
+            1.0,
+        )
+        for kpi_name in (
+            "material_feed_flow_kg_hr",
+            "material_product_flow_kg_hr",
+            "mass_balance_pct",
+            "component_balance_max_pct",
+            "energy_balance_pct",
+        ):
+            self.assertAlmostEqual(
+                replay_result.kpis[kpi_name].value,
+                source_result.kpis[kpi_name].value,
+                delta=max(
+                    abs(source_result.kpis[kpi_name].value) * 1.0e-9,
+                    1.0e-10,
+                ),
+            )
+        validation = {
+            constraint.name: constraint.status
+            for constraint in replay_result.constraints
+        }
+        self.assertEqual(validation["mass_balance"], "OK")
+        self.assertEqual(validation["component_balance"], "OK")
+        self.assertEqual(validation["energy_balance"], "OK")
+        self.assertLess(
+            replay_result.kpis["mass_balance_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(
+            replay_result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(
+            replay_result.kpis["energy_balance_pct"].value,
+            1.0e-6,
+        )
+        replay_output = output.getvalue()
+        self.assertIn("Feed boundaries: 2", replay_output)
+        self.assertIn("Feed flow: 105000.000000 kg/hr", replay_output)
+        self.assertIn("Product boundaries: 1", replay_output)
+        self.assertIn("Process simulation complete!", replay_output)
+        print(
+            "native exported graph replay benchmark:",
+            "feed=105000.0 kg/hr",
+            "mass="
+            f"{replay_result.kpis['mass_balance_pct'].value:.3e}%",
+            "components="
+            f"{replay_result.kpis['component_balance_max_pct'].value:.3e}%",
+            "energy="
+            f"{replay_result.kpis['energy_balance_pct'].value:.3e}%",
+        )
 
     @staticmethod
     def _component_molar_flows(stream):
