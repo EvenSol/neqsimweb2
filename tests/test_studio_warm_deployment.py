@@ -837,6 +837,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         template_ids = {
             "compressor stage 1": "compressor-stage-1",
             "intercooler": "intercooler",
+            "interstage scrubber": "interstage-scrubber",
             "compressor stage 2": "compressor-stage-2",
             "export cooler": "export-cooler",
         }
@@ -953,6 +954,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         template_ids = {
             "compressor stage 1": "compressor-stage-1",
             "intercooler": "intercooler",
+            "interstage scrubber": "interstage-scrubber",
             "compressor stage 2": "compressor-stage-2",
             "export cooler": "export-cooler",
         }
@@ -1048,6 +1050,18 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                         "material_out": ["out"],
                         "energy_in": [],
                         "energy_out": ["heat"],
+                    },
+                    "properties": {},
+                },
+                {
+                    "id": "interstage-scrubber",
+                    "name": "Interstage scrubber",
+                    "type": "separator",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["gas", "liquid"],
+                        "energy_in": [],
+                        "energy_out": [],
                     },
                     "properties": {},
                 },
