@@ -1321,6 +1321,13 @@ class MixerInletPortLifecycleTest(unittest.TestCase):
         malformed["ports"]["material_in"] = ["in_0", "in_2"]
         with self.assertRaisesRegex(ValueError, "must be contiguous"):
             validate_catalog_unit(malformed)
+        oversized = copy.deepcopy(expanded[0])
+        oversized["ports"]["material_in"] = [
+            f"in_{index}"
+            for index in range(MAX_MULTI_INLET_PORTS + 1)
+        ]
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            validate_catalog_unit(oversized)
 
     def test_separator_expands_and_protects_connected_extra_feeds(self):
         separator_units, separator_id = add_catalog_unit(
@@ -1376,6 +1383,16 @@ class MixerInletPortLifecycleTest(unittest.TestCase):
         malformed["ports"]["material_in"] = ["in", "in_2"]
         with self.assertRaisesRegex(ValueError, "continue contiguously"):
             validate_catalog_unit(malformed)
+        oversized = copy.deepcopy(expanded[0])
+        oversized["ports"]["material_in"] = [
+            "in",
+            *[
+                f"in_{index}"
+                for index in range(1, MAX_MULTI_INLET_PORTS + 1)
+            ],
+        ]
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            validate_catalog_unit(oversized)
         with self.assertRaisesRegex(ValueError, "cannot exceed"):
             resize_separator_inlet_ports(
                 separator_units,
