@@ -2053,24 +2053,64 @@ def _pressure_profile_dataframe(
 ) -> pd.DataFrame:
     """Compare solved outlet pressures with the current case specifications."""
     process_steps = {step["name"]: step for step in spec["process"]}
-    stage_1_pressure = float(
-        process_steps["compressor stage 1"]["params"]["outlet_pressure_bara"]
+    retained_unit_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in spec.get("units", [])
+        if isinstance(unit, dict)
+    }
+    stage_1_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
     )
-    stage_2_pressure = float(
-        process_steps["compressor stage 2"]["params"]["outlet_pressure_bara"]
+    intercooler_retained = (
+        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
     )
-    intercooler_drop = float(
-        process_steps["intercooler"]["params"]["pressure_drop_bar"]
+    stage_2_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
     )
-    export_drop = float(
-        process_steps["export cooler"]["params"]["pressure_drop_bar"]
+    export_cooler_retained = (
+        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
     )
-    expected_pressures = (
-        ("Compressor stage 1", "compressor stage 1", stage_1_pressure),
-        ("Intercooler", "intercooler", stage_1_pressure - intercooler_drop),
-        ("Compressor stage 2", "compressor stage 2", stage_2_pressure),
-        ("Export cooler", "export cooler", stage_2_pressure - export_drop),
-    )
+    expected_pressures: list[tuple[str, str, float]] = []
+    if stage_1_retained:
+        stage_1_pressure = float(
+            process_steps["compressor stage 1"]["params"][
+                "outlet_pressure_bara"
+            ]
+        )
+        expected_pressures.append(
+            ("Compressor stage 1", "compressor stage 1", stage_1_pressure)
+        )
+        if intercooler_retained:
+            intercooler_drop = float(
+                process_steps["intercooler"]["params"]["pressure_drop_bar"]
+            )
+            expected_pressures.append(
+                (
+                    "Intercooler",
+                    "intercooler",
+                    stage_1_pressure - intercooler_drop,
+                )
+            )
+    if stage_2_retained:
+        stage_2_pressure = float(
+            process_steps["compressor stage 2"]["params"][
+                "outlet_pressure_bara"
+            ]
+        )
+        expected_pressures.append(
+            ("Compressor stage 2", "compressor stage 2", stage_2_pressure)
+        )
+        if export_cooler_retained:
+            export_drop = float(
+                process_steps["export cooler"]["params"]["pressure_drop_bar"]
+            )
+            expected_pressures.append(
+                (
+                    "Export cooler",
+                    "export cooler",
+                    stage_2_pressure - export_drop,
+                )
+            )
 
     records: list[dict[str, Any]] = []
     for display_name, object_name, expected in expected_pressures:
@@ -2117,7 +2157,18 @@ def _pressure_profile_dataframe(
                 "Detail": detail,
             }
         )
-    return pd.DataFrame(records)
+    return pd.DataFrame(
+        records,
+        columns=[
+            "Operation",
+            "Expected outlet [bara]",
+            "Calculated outlet [bara]",
+            "Deviation [bar]",
+            "Pass tolerance [bar]",
+            "Status",
+            "Detail",
+        ],
+    )
 
 
 def _constraint_dataframe(result: Any) -> pd.DataFrame:
