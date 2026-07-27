@@ -2270,6 +2270,90 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                 )
 
+    def test_multi_inlet_units_require_every_declared_port(self):
+        inlet_specs = [
+            {
+                "inlet_id": f"feed-{index}",
+                "name": f"feed {index}",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {"methane": 1.0},
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 20.0,
+                    "total_flow": 10_000.0,
+                    "flow_unit": "kg/hr",
+                },
+            }
+            for index in range(2)
+        ]
+        editor_inlets = [
+            {
+                "id": inlet["inlet_id"],
+                "name": inlet["name"],
+                **inlet["fluid_spec"],
+            }
+            for inlet in inlet_specs
+        ]
+        for unit_type, declared_count, connected_count in (
+            ("mixer", 3, 2),
+            ("separator", 2, 1),
+        ):
+            with self.subTest(unit_type=unit_type):
+                units, unit_id = add_catalog_unit(
+                    [],
+                    unit_type,
+                    f"incomplete {unit_type}",
+                )
+                resize = (
+                    resize_mixer_inlet_ports
+                    if unit_type == "mixer"
+                    else resize_separator_inlet_ports
+                )
+                units = resize(
+                    units,
+                    [],
+                    unit_id,
+                    declared_count,
+                )
+                connections = []
+                for index in range(connected_count):
+                    target_port = (
+                        f"in_{index}"
+                        if unit_type == "mixer"
+                        else ("in" if index == 0 else f"in_{index}")
+                    )
+                    connections, _ = connect_graph_ports(
+                        editor_inlets,
+                        units,
+                        connections,
+                        "material",
+                        {
+                            "kind": "inlet",
+                            "id": f"feed-{index}",
+                            "port": "out",
+                        },
+                        {
+                            "kind": "unit",
+                            "id": unit_id,
+                            "port": target_port,
+                        },
+                    )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "connections must match declared ports",
+                ):
+                    ProcessBuilder().build_acyclic_graph(
+                        {
+                            "name": f"Incomplete {unit_type}",
+                            "units": units,
+                            "connections": connections,
+                        },
+                        inlet_specs,
+                        ["feed-0", "feed-1", unit_id],
+                    )
+
     def test_palette_built_three_feed_separator_conserves_nearby_points(self):
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
