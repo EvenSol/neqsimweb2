@@ -1876,23 +1876,10 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     process = spec["process"]
 
     feed_pressure = fluid["pressure_bara"]
-    retained_unit_ids = {
-        str(unit.get("id", "")).strip()
-        for unit in spec.get("units", [])
-        if isinstance(unit, dict)
-    }
-    stage_1_retained = (
-        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
-    )
-    intercooler_retained = (
-        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
-    )
-    stage_2_retained = (
-        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
-    )
-    export_cooler_retained = (
-        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
-    )
+    stage_1_retained = "compressor stage 1" in process_steps
+    intercooler_retained = "intercooler" in process_steps
+    stage_2_retained = "compressor stage 2" in process_steps
+    export_cooler_retained = "export cooler" in process_steps
     connections = spec.get("connections", [])
     stage_1_follows_feed = (
         _has_material_connection(
@@ -2739,7 +2726,11 @@ def _active_template_process_steps(
     return {
         step_name: named_steps[step_name]
         for step_name, unit_id in TEMPLATE_UNIT_IDS.items()
-        if unit_id in retained_unit_ids and step_name in named_steps
+        if (
+            unit_id in retained_unit_ids
+            and step_name in named_steps
+            and isinstance(named_steps[step_name].get("params"), dict)
+        )
     }
 
 
