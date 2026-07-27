@@ -2188,12 +2188,7 @@ def _pressure_profile_dataframe(
     equipment_table: pd.DataFrame,
 ) -> pd.DataFrame:
     """Compare solved outlet pressures with the current case specifications."""
-    process_steps = {
-        str(step.get("name", "")).strip().casefold(): step
-        for step in spec.get("process", [])
-        if isinstance(step, dict)
-        and str(step.get("name", "")).strip()
-    }
+    process_steps = _active_template_process_steps(spec)
     retained_unit_ids = {
         str(unit.get("id", "")).strip()
         for unit in spec.get("units", [])
@@ -2703,21 +2698,42 @@ def _active_template_process_steps(
     spec: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
     """Return legacy starter steps only while their graph units remain active."""
-    process_steps = {
+    process = spec.get("process", [])
+    if not isinstance(process, list):
+        process = []
+    named_steps = {
         str(step.get("name", "")).strip().casefold(): step
-        for step in spec.get("process", [])
+        for step in process
         if isinstance(step, dict)
         and str(step.get("name", "")).strip()
     }
+    legacy_positions = {
+        "inlet scrubber": 1,
+        "compressor stage 1": 2,
+        "intercooler": 3,
+        "interstage scrubber": 4,
+        "compressor stage 2": 5,
+        "export cooler": 6,
+    }
+    for step_name, position in legacy_positions.items():
+        if step_name in named_steps or position >= len(process):
+            continue
+        candidate = process[position]
+        if (
+            isinstance(candidate, dict)
+            and not str(candidate.get("name", "")).strip()
+        ):
+            named_steps[step_name] = candidate
+
     retained_unit_ids = {
         str(unit.get("id", "")).strip()
         for unit in spec.get("units", [])
         if isinstance(unit, dict)
     }
     return {
-        step_name: process_steps[step_name]
+        step_name: named_steps[step_name]
         for step_name, unit_id in TEMPLATE_UNIT_IDS.items()
-        if unit_id in retained_unit_ids and step_name in process_steps
+        if unit_id in retained_unit_ids and step_name in named_steps
     }
 
 
