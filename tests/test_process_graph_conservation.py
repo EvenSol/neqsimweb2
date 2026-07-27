@@ -2354,6 +2354,72 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                         ["feed-0", "feed-1", unit_id],
                     )
 
+    def test_legacy_mixer_port_matching_normalizes_declared_names(self):
+        inlet_specs = [
+            {
+                "inlet_id": f"feed-{index}",
+                "name": f"feed {index}",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {"methane": 1.0},
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 20.0,
+                    "total_flow": 10_000.0,
+                    "flow_unit": "kg/hr",
+                },
+            }
+            for index in range(2)
+        ]
+        graph_spec = {
+            "name": "Legacy padded mixer ports",
+            "units": [
+                {
+                    "id": "legacy-mixer",
+                    "name": "legacy mixer",
+                    "type": "mixer",
+                    "ports": {
+                        "material_in": ["feed_a ", "feed_b"],
+                        "material_out": ["out"],
+                    },
+                    "params": {},
+                }
+            ],
+            "connections": [
+                {
+                    "id": f"feed-{index}-to-legacy-mixer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": f"feed-{index}",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "legacy-mixer",
+                        "port": target_port,
+                    },
+                }
+                for index, target_port in enumerate(
+                    ("feed_a ", "feed_b")
+                )
+            ],
+        }
+
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed-0", "feed-1", "legacy-mixer"],
+        )
+
+        self.assertIsNotNone(model)
+        self.assertIn(
+            "Added graph mixer: legacy-mixer (2 material inlets)",
+            builder.build_log,
+        )
+
     def test_palette_built_three_feed_separator_conserves_nearby_points(self):
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
