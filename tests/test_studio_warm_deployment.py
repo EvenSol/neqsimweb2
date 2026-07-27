@@ -499,6 +499,9 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
     def test_omitted_starter_controls_do_not_block_graph_validation(self):
         validate_case = self._load_studio_function("_validate_case")
+        has_material_connection = self._load_studio_function(
+            "_has_material_connection"
+        )
         fluid = {
             "pressure_bara": 100.0,
             "total_flow": 1000.0,
@@ -524,8 +527,10 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             {"params": {"pressure_drop_bar": 5.0}},
         ]
         template_ids = {
+            "inlet scrubber": "inlet-scrubber",
             "compressor stage 1": "compressor-stage-1",
             "intercooler": "intercooler",
+            "interstage scrubber": "interstage-scrubber",
             "compressor stage 2": "compressor-stage-2",
             "export cooler": "export-cooler",
         }
@@ -548,6 +553,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 ],
                 "PRIMARY_INLET_ID": "feed-gas",
                 "TEMPLATE_UNIT_IDS": template_ids,
+                "_has_material_connection": has_material_connection,
             }
         )
 
@@ -561,9 +567,89 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "efficiency"):
             validate_case(spec, 1.0)
 
+    def test_reordered_starter_compressors_skip_template_pressure_order(self):
+        validate_case = self._load_studio_function("_validate_case")
+        has_material_connection = self._load_studio_function(
+            "_has_material_connection"
+        )
+        fluid = {
+            "pressure_bara": 50.0,
+            "total_flow": 1000.0,
+            "eos_model": "srk",
+        }
+        process = [
+            {},
+            {},
+            {
+                "params": {
+                    "outlet_pressure_bara": 160.0,
+                    "isentropic_efficiency": 0.80,
+                }
+            },
+            {"params": {"pressure_drop_bar": 1.0}},
+            {},
+            {
+                "params": {
+                    "outlet_pressure_bara": 80.0,
+                    "isentropic_efficiency": 0.80,
+                }
+            },
+            {"params": {"pressure_drop_bar": 1.0}},
+        ]
+        template_ids = {
+            "inlet scrubber": "inlet-scrubber",
+            "compressor stage 1": "compressor-stage-1",
+            "intercooler": "intercooler",
+            "interstage scrubber": "interstage-scrubber",
+            "compressor stage 2": "compressor-stage-2",
+            "export cooler": "export-cooler",
+        }
+        spec = {
+            "fluid": fluid,
+            "process": process,
+            "units": [
+                {"id": "compressor-stage-1"},
+                {"id": "compressor-stage-2"},
+            ],
+            "connections": [
+                {
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "compressor-stage-2",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "compressor-stage-1",
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        validate_case.__globals__.update(
+            {
+                "_build_execution_plan": lambda candidate: [],
+                "_build_inlet_fluid_specs": lambda candidate: [
+                    {
+                        "inlet_id": "feed-gas",
+                        "fluid_spec": candidate["fluid"],
+                    }
+                ],
+                "PRIMARY_INLET_ID": "feed-gas",
+                "TEMPLATE_UNIT_IDS": template_ids,
+                "_has_material_connection": has_material_connection,
+            }
+        )
+
+        self.assertEqual(validate_case(spec, 1.0), [])
+
     def test_pressure_profile_only_reports_retained_starter_operations(self):
         pressure_profile_dataframe = self._load_studio_function(
             "_pressure_profile_dataframe"
+        )
+        has_material_connection = self._load_studio_function(
+            "_has_material_connection"
         )
         pandas = __import__("pandas")
         template_ids = {
@@ -576,6 +662,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             {
                 "pd": pandas,
                 "TEMPLATE_UNIT_IDS": template_ids,
+                "_has_material_connection": has_material_connection,
             }
         )
         spec = {
@@ -598,6 +685,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 },
             ],
             "units": [],
+            "connections": [],
         }
         equipment_table = pandas.DataFrame(
             [
@@ -619,6 +707,32 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             ["Compressor stage 1"],
         )
         self.assertEqual(retained_profile["Status"].tolist(), ["OK"])
+
+        spec["units"] = [
+            {"id": "compressor-stage-1"},
+            {"id": "compressor-stage-2"},
+            {"id": "intercooler"},
+        ]
+        spec["connections"] = [
+            {
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "compressor-stage-2",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "intercooler",
+                    "port": "in",
+                },
+            }
+        ]
+        reordered_profile = pressure_profile_dataframe(spec, equipment_table)
+        self.assertEqual(
+            reordered_profile["Operation"].tolist(),
+            ["Compressor stage 1", "Compressor stage 2"],
+        )
 
     def test_disconnected_starter_inventory_requires_no_graph_references(self):
         unconnected_unit_map = self._load_studio_function(
