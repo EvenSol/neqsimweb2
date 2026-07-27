@@ -875,6 +875,18 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 "definitely_no_matching_test",
             ],
             cwd=self.project_root,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    filter(
+                        None,
+                        (
+                            str(self.project_root),
+                            os.environ.get("PYTHONPATH"),
+                        ),
+                    )
+                ),
+            },
             capture_output=True,
             text=True,
             timeout=30,
