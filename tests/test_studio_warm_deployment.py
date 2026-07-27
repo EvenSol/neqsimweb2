@@ -195,13 +195,22 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             / "pages"
             / "35_Process_Flowsheet_Studio.py"
         ).read_text(encoding="utf-8")
+        studio_tree = ast.parse(studio_source)
+        builder_calls = {
+            node.func.attr
+            for node in ast.walk(studio_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "builder"
+        }
         self.assertIn(
-            "model = builder.build_from_spec(",
-            studio_source,
+            "build_from_spec",
+            builder_calls,
         )
         self.assertNotIn(
-            "model = builder.build_acyclic_graph(",
-            studio_source,
+            "build_acyclic_graph",
+            builder_calls,
         )
 
     def test_mixer_insertion_exposes_second_source_and_solve_readiness(self):
