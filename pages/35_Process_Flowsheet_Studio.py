@@ -2229,7 +2229,10 @@ def _pressure_profile_dataframe(
         )
         if intercooler_retained and intercooler_follows_stage_1:
             intercooler_drop = float(
-                process_steps["intercooler"]["params"]["pressure_drop_bar"]
+                process_steps["intercooler"]["params"].get(
+                    "pressure_drop_bar",
+                    0.0,
+                )
             )
             expected_pressures.append(
                 (
@@ -2249,7 +2252,10 @@ def _pressure_profile_dataframe(
         )
         if export_cooler_retained and export_cooler_follows_stage_2:
             export_drop = float(
-                process_steps["export cooler"]["params"]["pressure_drop_bar"]
+                process_steps["export cooler"]["params"].get(
+                    "pressure_drop_bar",
+                    0.0,
+                )
             )
             expected_pressures.append(
                 (
@@ -2831,9 +2837,10 @@ def _engineering_workbook_bytes(
                     (
                         "Intercooler",
                         "Pressure drop",
-                        process_steps["intercooler"]["params"][
-                            "pressure_drop_bar"
-                        ],
+                        process_steps["intercooler"]["params"].get(
+                            "pressure_drop_bar",
+                            0.0,
+                        ),
                         "bar",
                     ),
                 ]
@@ -2853,9 +2860,10 @@ def _engineering_workbook_bytes(
                     (
                         "Export cooler",
                         "Pressure drop",
-                        process_steps["export cooler"]["params"][
-                            "pressure_drop_bar"
-                        ],
+                        process_steps["export cooler"]["params"].get(
+                            "pressure_drop_bar",
+                            0.0,
+                        ),
                         "bar",
                     ),
                 ]
@@ -3209,11 +3217,19 @@ def _case_history_record(
 
     process_steps = _active_template_process_steps(spec)
 
-    def active_parameter(step_name: str, parameter_name: str) -> float | None:
+    def active_parameter(
+        step_name: str,
+        parameter_name: str,
+        default: float | None = None,
+    ) -> float | None:
         step = process_steps.get(step_name)
         if step is None:
             return None
-        return float(step["params"][parameter_name])
+        params = step.get("params", {})
+        if not isinstance(params, dict):
+            return default
+        value = params.get(parameter_name, default)
+        return None if value is None else float(value)
 
     return {
         "_signature": signature,
@@ -3244,10 +3260,12 @@ def _case_history_record(
         "Intercooler pressure drop [bar]": active_parameter(
             "intercooler",
             "pressure_drop_bar",
+            0.0,
         ),
         "Export cooler pressure drop [bar]": active_parameter(
             "export cooler",
             "pressure_drop_bar",
+            0.0,
         ),
         "Compressor power [kW]": total_power_kw,
         "Cooling duty magnitude [kW]": total_duty_kw,
