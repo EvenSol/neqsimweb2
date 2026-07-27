@@ -1973,6 +1973,11 @@ def reroute_graph_connection(
     connection_type = str(
         copied_connections[selected_index]["type"]
     ).strip().lower()
+    selected_stream_name = (
+        material_connection_name(copied_connections[selected_index])
+        if connection_type == "material"
+        else None
+    )
     remaining_connections = [
         connection
         for index, connection in enumerate(copied_connections)
@@ -1993,6 +1998,8 @@ def reroute_graph_connection(
     )
     connected.remove(replacement)
     replacement["id"] = cleaned_connection_id
+    if selected_stream_name is not None:
+        replacement["name"] = selected_stream_name
     connected.insert(selected_index, replacement)
     _graph_port_inventory(inlets, units, connected)
     _validate_acyclic_material_connections(connected)

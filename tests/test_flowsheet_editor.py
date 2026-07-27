@@ -3167,6 +3167,7 @@ class GraphPortConnectionTest(unittest.TestCase):
         )
 
         self.assertEqual(updated[0]["id"], "feed-a-mixer")
+        self.assertEqual(updated[0]["name"], "feed-a-mixer")
         self.assertEqual(
             updated[0]["source"],
             {"kind": "inlet", "id": "feed-b", "port": "out"},
@@ -3189,6 +3190,22 @@ class GraphPortConnectionTest(unittest.TestCase):
             ("feed-a", "out"),
             {(row["id"], row["port"]) for row in available_sources},
         )
+
+        explicitly_named = copy.deepcopy(self.connections)
+        explicitly_named[0]["name"] = "Well A to inlet mixer"
+        renamed_route = reroute_graph_connection(
+            self.inlets,
+            self.units,
+            explicitly_named,
+            "feed-a-mixer",
+            {"kind": "inlet", "id": "feed-b", "port": "out"},
+            {"kind": "unit", "id": "mixer", "port": "in_1"},
+        )
+        self.assertEqual(
+            renamed_route[0]["name"],
+            "Well A to inlet mixer",
+        )
+        self.assertEqual(explicitly_named[0]["name"], "Well A to inlet mixer")
 
     def test_reroute_rejects_occupied_ports_and_material_cycles(self):
         original_connections = copy.deepcopy(self.connections)
