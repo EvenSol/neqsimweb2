@@ -13,6 +13,7 @@ from typing import Any
 GRAPH_DRAFT_SCHEMA_VERSION = 1
 GRAPH_HISTORY_SCHEMA_VERSION = 1
 MAX_GRAPH_HISTORY_ENTRIES = 50
+MAX_MULTI_INLET_PORTS = 64
 
 
 def _number_property(
@@ -1133,6 +1134,11 @@ def resize_multi_inlet_unit_ports(
         raise ValueError("Material inlet count must be an integer.") from error
     if not math.isfinite(numeric_count) or numeric_count != normalized_count:
         raise ValueError("Material inlet count must be an integer.")
+    if normalized_count > MAX_MULTI_INLET_PORTS:
+        raise ValueError(
+            "Material inlet count cannot exceed "
+            f"{MAX_MULTI_INLET_PORTS}."
+        )
 
     cleaned_unit_id = str(unit_id).strip()
     copied_units = copy.deepcopy(units)
