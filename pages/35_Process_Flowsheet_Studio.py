@@ -1251,7 +1251,21 @@ def _validate_case_graph(
             + "."
         )
     indexed_units = _index_graph_objects(units, "units")
-    expected_units, _ = _build_template_graph(process)
+    expected_units, expected_connections = _build_template_graph(process)
+    restorable_product_conflicts = _terminal_name_conflicts(
+        inlets,
+        _terminal_material_stream_names(
+            expected_units,
+            expected_connections,
+        ),
+    )
+    if restorable_product_conflicts:
+        raise ValueError(
+            "Graph inlet names conflict with restorable starter product "
+            "streams: "
+            + ", ".join(restorable_product_conflicts)
+            + "."
+        )
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
     validate_starter_unit_projection(units, expected_units, inlets)
     for unit_id, unit in indexed_units.items():
