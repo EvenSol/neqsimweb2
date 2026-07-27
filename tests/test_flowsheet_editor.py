@@ -7,6 +7,7 @@ import json
 import unittest
 
 from process_chat.flowsheet_editor import (
+    MAX_MULTI_INLET_PORTS,
     _validate_acyclic_material_connections,
     add_catalog_unit,
     apply_graph_draft,
@@ -1305,6 +1306,7 @@ class MixerInletPortLifecycleTest(unittest.TestCase):
             (1, "at least 2"),
             (2.5, "Material inlet count must be an integer"),
             (True, "Material inlet count must be an integer"),
+            (MAX_MULTI_INLET_PORTS + 1, "cannot exceed"),
         ):
             with self.subTest(inlet_count=inlet_count):
                 with self.assertRaisesRegex(ValueError, message):
@@ -1374,6 +1376,13 @@ class MixerInletPortLifecycleTest(unittest.TestCase):
         malformed["ports"]["material_in"] = ["in", "in_2"]
         with self.assertRaisesRegex(ValueError, "continue contiguously"):
             validate_catalog_unit(malformed)
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            resize_separator_inlet_ports(
+                separator_units,
+                separator_connections,
+                separator_id,
+                MAX_MULTI_INLET_PORTS + 1,
+            )
 
 
 class InlineUnitLifecycleTest(unittest.TestCase):
