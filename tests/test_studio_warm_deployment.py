@@ -971,7 +971,6 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 "name": "intercooler",
                 "params": {
                     "outlet_temperature_C": 35.0,
-                    "pressure_drop_bar": 1.0,
                 },
             },
             {},
@@ -1039,13 +1038,25 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                         "energy_out": ["power"],
                     },
                     "properties": {},
-                }
+                },
+                {
+                    "id": "intercooler",
+                    "name": "Intercooler",
+                    "type": "cooler",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                        "energy_in": [],
+                        "energy_out": ["heat"],
+                    },
+                    "properties": {},
+                },
             ],
             "connections": [],
         }
         self.assertEqual(
             list(active_steps(spec)),
-            ["compressor stage 1"],
+            ["compressor stage 1", "intercooler"],
         )
 
         empty_table = pandas.DataFrame()
@@ -1108,7 +1119,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             )
         self.assertIn("Compressor stage 1", workbook_xml)
         self.assertNotIn("Compressor stage 2", workbook_xml)
-        self.assertNotIn("Intercooler", workbook_xml)
+        self.assertIn("Intercooler", workbook_xml)
         self.assertNotIn("Export cooler", workbook_xml)
 
         history_record.__globals__.update(
@@ -1129,7 +1140,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertEqual(history["Stage 1 efficiency [-]"], 0.76)
         self.assertIsNone(history["Stage 2 pressure [bara]"])
         self.assertIsNone(history["Stage 2 efficiency [-]"])
-        self.assertIsNone(history["Intercooler pressure drop [bar]"])
+        self.assertEqual(history["Intercooler pressure drop [bar]"], 0.0)
         self.assertIsNone(history["Export cooler pressure drop [bar]"])
 
     def test_disconnected_starter_inventory_requires_no_graph_references(self):
