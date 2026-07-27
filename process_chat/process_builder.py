@@ -856,10 +856,15 @@ class ProcessBuilder:
                     f"Unit '{node_id}' requires at least one material inlet."
                 )
 
-            if unit_type == "mixer":
-                if len(incoming) < 2:
+            if unit_type == "mixer" or (
+                unit_type == "separator" and len(incoming) > 1
+            ):
+                minimum_inlets = 2 if unit_type == "mixer" else 1
+                if len(incoming) < minimum_inlets:
                     raise ValueError(
-                        f"Mixer '{node_id}' requires at least two material inlets."
+                        f"{unit_type.capitalize()} '{node_id}' requires at "
+                        f"least {minimum_inlets} material inlet"
+                        f"{'s' if minimum_inlets != 1 else ''}."
                     )
                 source_streams = [
                     self.resolve_material_output(
@@ -884,11 +889,11 @@ class ProcessBuilder:
                     except Exception as exc:
                         connection_id = str(connection["id"]).strip()
                         raise ValueError(
-                            f"Mixer '{node_id}' could not add material connection "
-                            f"'{connection_id}'."
+                            f"{unit_type.capitalize()} '{node_id}' could not "
+                            f"add material connection '{connection_id}'."
                         ) from exc
                 self._build_log.append(
-                    f"Added graph mixer: {node_id} "
+                    f"Added graph {unit_type}: {node_id} "
                     f"({len(source_streams)} material inlets)"
                 )
             else:
