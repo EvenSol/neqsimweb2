@@ -965,7 +965,12 @@ class ProcessBuilder:
             raise ValueError("Process specification must be an object.")
         if "graph" in spec:
             graph_spec = spec.get("graph")
-            wrapper_name = str(spec.get("name", "")).strip()
+            raw_wrapper_name = spec.get("name")
+            wrapper_name = (
+                str(raw_wrapper_name).strip()
+                if raw_wrapper_name is not None
+                else ""
+            )
             if isinstance(graph_spec, dict) and wrapper_name:
                 graph_spec = {**graph_spec, "name": wrapper_name}
             return self.build_acyclic_graph(
