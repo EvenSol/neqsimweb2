@@ -681,6 +681,94 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
         self.assertEqual(validate_case(spec, 1.0), [])
 
+    def test_retained_stage_one_validates_feed_pressure_without_stage_two(self):
+        validate_case = self._load_studio_function("_validate_case")
+        has_material_connection = self._load_studio_function(
+            "_has_material_connection"
+        )
+        fluid = {
+            "pressure_bara": 100.0,
+            "total_flow": 1000.0,
+            "eos_model": "srk",
+        }
+        process = [
+            {},
+            {},
+            {
+                "params": {
+                    "outlet_pressure_bara": 80.0,
+                    "isentropic_efficiency": 0.80,
+                }
+            },
+        ]
+        template_ids = {
+            "inlet scrubber": "inlet-scrubber",
+            "compressor stage 1": "compressor-stage-1",
+            "intercooler": "intercooler",
+            "interstage scrubber": "interstage-scrubber",
+            "compressor stage 2": "compressor-stage-2",
+            "export cooler": "export-cooler",
+        }
+        spec = {
+            "fluid": fluid,
+            "process": process,
+            "units": [
+                {"id": "inlet-scrubber"},
+                {"id": "compressor-stage-1"},
+            ],
+            "connections": [
+                {
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed-gas",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "inlet-scrubber",
+                        "port": "in",
+                    },
+                },
+                {
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "inlet-scrubber",
+                        "port": "gas",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "compressor-stage-1",
+                        "port": "in",
+                    },
+                },
+            ],
+        }
+        validate_case.__globals__.update(
+            {
+                "_build_execution_plan": lambda candidate: [],
+                "_build_inlet_fluid_specs": lambda candidate: [
+                    {
+                        "inlet_id": "feed-gas",
+                        "fluid_spec": candidate["fluid"],
+                    }
+                ],
+                "PRIMARY_INLET_ID": "feed-gas",
+                "TEMPLATE_UNIT_IDS": template_ids,
+                "_has_material_connection": has_material_connection,
+            }
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "feed pressure < stage 1 pressure",
+        ):
+            validate_case(spec, 1.0)
+
+        spec["fluid"]["pressure_bara"] = 50.0
+        self.assertEqual(validate_case(spec, 1.0), [])
+
     def test_pressure_profile_only_reports_retained_starter_operations(self):
         pressure_profile_dataframe = self._load_studio_function(
             "_pressure_profile_dataframe"
