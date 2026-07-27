@@ -501,6 +501,58 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 reserved_names=reserved_names,
             )
 
+    def test_import_rejects_restorable_starter_product_feed_name(self):
+        validate_case_graph = self._load_studio_function(
+            "_validate_case_graph"
+        )
+        terminal_name_conflicts = self._load_studio_function(
+            "_terminal_name_conflicts"
+        )
+        terminal_material_stream_names = self._load_studio_function(
+            "_terminal_material_stream_names"
+        )
+        starter_units = [
+            {
+                "id": "export-cooler",
+                "name": "Export cooler",
+                "ports": {"material_out": ["out"]},
+            }
+        ]
+        validate_case_graph.__globals__.update(
+            {
+                "CASE_SCHEMA_VERSION": 3,
+                "_validate_graph_integrity": lambda *args: None,
+                "_terminal_name_conflicts": terminal_name_conflicts,
+                "_terminal_material_stream_names": (
+                    terminal_material_stream_names
+                ),
+                "_index_graph_objects": lambda *args: {},
+                "_build_template_graph": lambda process: (
+                    starter_units,
+                    [],
+                ),
+                "validate_starter_unit_projection": lambda *args: None,
+                "_build_execution_plan": lambda case_data: [],
+            }
+        )
+        case_data = {
+            "schema_version": 3,
+            "inlets": [
+                {
+                    "id": "secondary-feed",
+                    "name": "Export cooler [out] product",
+                }
+            ],
+            "units": [],
+            "connections": [],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "restorable starter product streams",
+        ):
+            validate_case_graph(case_data, [])
+
     def test_solve_readiness_rejects_disconnected_feeds(self):
         validate_solve_readiness = self._load_studio_function(
             "_validate_graph_solve_readiness"
