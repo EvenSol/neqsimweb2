@@ -1278,33 +1278,7 @@ def _validate_case_graph(
     for unit_id, unit in indexed_units.items():
         if unit_id in expected_unit_map:
             continue
-        if str(unit.get("type", "")).strip().lower() == "mixer":
-            if not str(unit.get("name", "")).strip():
-                raise ValueError(f"Graph mixer '{unit_id}' requires a name.")
-            ports = unit.get("ports")
-            if not isinstance(ports, dict):
-                raise ValueError(f"Graph mixer '{unit_id}' requires ports.")
-            material_inputs = ports.get("material_in")
-            material_outputs = ports.get("material_out")
-            if (
-                not isinstance(material_inputs, list)
-                or len(material_inputs) < 2
-                or len(set(material_inputs)) != len(material_inputs)
-            ):
-                raise ValueError(
-                    f"Graph mixer '{unit_id}' requires at least two unique "
-                    "material input ports."
-                )
-            if material_outputs != ["out"]:
-                raise ValueError(
-                    f"Graph mixer '{unit_id}' requires material output port 'out'."
-                )
-            if unit.get("params", {}) != {}:
-                raise ValueError(
-                    f"Graph mixer '{unit_id}' does not accept operating params."
-                )
-        else:
-            validate_catalog_unit(unit)
+        validate_catalog_unit(unit)
     _build_execution_plan(case_data)
 
 def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
