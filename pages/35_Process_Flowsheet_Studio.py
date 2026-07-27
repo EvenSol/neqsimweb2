@@ -1876,10 +1876,23 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     process = spec["process"]
 
     feed_pressure = fluid["pressure_bara"]
-    stage_1_retained = "compressor stage 1" in process_steps
-    intercooler_retained = "intercooler" in process_steps
-    stage_2_retained = "compressor stage 2" in process_steps
-    export_cooler_retained = "export cooler" in process_steps
+    retained_unit_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in spec.get("units", [])
+        if isinstance(unit, dict)
+    }
+    stage_1_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
+    )
+    intercooler_retained = (
+        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
+    )
+    stage_2_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
+    )
+    export_cooler_retained = (
+        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
+    )
     connections = spec.get("connections", [])
     stage_1_follows_feed = (
         _has_material_connection(
@@ -2176,23 +2189,10 @@ def _pressure_profile_dataframe(
 ) -> pd.DataFrame:
     """Compare solved outlet pressures with the current case specifications."""
     process_steps = _active_template_process_steps(spec)
-    retained_unit_ids = {
-        str(unit.get("id", "")).strip()
-        for unit in spec.get("units", [])
-        if isinstance(unit, dict)
-    }
-    stage_1_retained = (
-        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
-    )
-    intercooler_retained = (
-        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
-    )
-    stage_2_retained = (
-        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
-    )
-    export_cooler_retained = (
-        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
-    )
+    stage_1_retained = "compressor stage 1" in process_steps
+    intercooler_retained = "intercooler" in process_steps
+    stage_2_retained = "compressor stage 2" in process_steps
+    export_cooler_retained = "export cooler" in process_steps
     connections = spec.get("connections", [])
     intercooler_follows_stage_1 = _has_material_connection(
         connections,
