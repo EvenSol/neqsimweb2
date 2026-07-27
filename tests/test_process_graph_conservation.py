@@ -89,6 +89,11 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "from process_chat.process_builder import ProcessBuilder",
             script,
         )
+        self.assertIn(
+            "Run from this repository checkout with neqsim installed.",
+            script,
+        )
+        self.assertNotIn("EvenSol/neqsimweb2", script)
         self.assertIn("builder.build_acyclic_graph(", script)
         self.assertIn("model.run(timeout_ms=180_000)", script)
         self.assertIn(
