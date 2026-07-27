@@ -952,17 +952,29 @@ class ProcessBuilder:
     def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
         """Build a complete process from a specification dict.
 
-        The spec must contain:
+        Generic graph specs contain ``graph``, ``inlet_specs``, and
+        ``execution_order`` and are delegated to :meth:`build_acyclic_graph`.
+        Legacy linear specs remain supported and must contain:
+
           - ``fluid`` — fluid definition (components, EOS, conditions)
           - ``process`` — ordered list of unit steps
 
         Returns the wrapped :class:`NeqSimProcessModel`.
         """
-        from neqsim import jneqsim
+        if not isinstance(spec, dict):
+            raise ValueError("Process specification must be an object.")
+        if "graph" in spec:
+            return self.build_acyclic_graph(
+                spec.get("graph"),
+                spec.get("inlet_specs"),
+                spec.get("execution_order"),
+            )
 
         self._spec = spec
         self._process_name = spec.get("name", "New Process")
         self._build_log.clear()
+
+        from neqsim import jneqsim
 
         fluid_spec = spec.get("fluid", {})
         process_steps = spec.get("process", [])
