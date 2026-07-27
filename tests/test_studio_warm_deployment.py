@@ -561,6 +561,65 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "efficiency"):
             validate_case(spec, 1.0)
 
+    def test_pressure_profile_only_reports_retained_starter_operations(self):
+        pressure_profile_dataframe = self._load_studio_function(
+            "_pressure_profile_dataframe"
+        )
+        pandas = __import__("pandas")
+        template_ids = {
+            "compressor stage 1": "compressor-stage-1",
+            "intercooler": "intercooler",
+            "compressor stage 2": "compressor-stage-2",
+            "export cooler": "export-cooler",
+        }
+        pressure_profile_dataframe.__globals__.update(
+            {
+                "pd": pandas,
+                "TEMPLATE_UNIT_IDS": template_ids,
+            }
+        )
+        spec = {
+            "process": [
+                {
+                    "name": "compressor stage 1",
+                    "params": {"outlet_pressure_bara": 80.0},
+                },
+                {
+                    "name": "intercooler",
+                    "params": {"pressure_drop_bar": 1.0},
+                },
+                {
+                    "name": "compressor stage 2",
+                    "params": {"outlet_pressure_bara": 160.0},
+                },
+                {
+                    "name": "export cooler",
+                    "params": {"pressure_drop_bar": 1.0},
+                },
+            ],
+            "units": [],
+        }
+        equipment_table = pandas.DataFrame(
+            [
+                {
+                    "Equipment": "compressor stage 1",
+                    "outletPressure_bara": 80.0,
+                }
+            ]
+        )
+
+        omitted_profile = pressure_profile_dataframe(spec, equipment_table)
+        self.assertTrue(omitted_profile.empty)
+        self.assertIn("Status", omitted_profile.columns)
+
+        spec["units"] = [{"id": "compressor-stage-1"}]
+        retained_profile = pressure_profile_dataframe(spec, equipment_table)
+        self.assertEqual(
+            retained_profile["Operation"].tolist(),
+            ["Compressor stage 1"],
+        )
+        self.assertEqual(retained_profile["Status"].tolist(), ["OK"])
+
     def test_disconnected_starter_inventory_requires_no_graph_references(self):
         unconnected_unit_map = self._load_studio_function(
             "_unconnected_unit_map"
