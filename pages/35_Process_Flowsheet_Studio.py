@@ -5363,11 +5363,35 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             )
             resize_multi_inlet_unit = False
             requested_material_inlet_count = None
-            if selected_unit_type in {"mixer", "separator"}:
+            selected_material_inlets = selected_unit.get("ports", {}).get(
+                "material_in",
+                [],
+            )
+            canonical_mixer_inlets = [
+                f"in_{index}"
+                for index in range(len(selected_material_inlets))
+            ]
+            supports_multi_inlet_resize = (
+                selected_unit_type in {"mixer", "separator"}
+                and (
+                    selected_unit_type != "mixer"
+                    or selected_material_inlets == canonical_mixer_inlets
+                )
+            )
+            if (
+                selected_unit_type == "mixer"
+                and not supports_multi_inlet_resize
+            ):
+                st.info(
+                    "This imported mixer keeps legacy named inlet ports. "
+                    "Replace or reconnect it with canonical in_0, in_1, ... "
+                    "ports before changing its inlet count."
+                )
+            if supports_multi_inlet_resize:
                 topology_label = selected_unit_type.capitalize()
                 st.markdown(f"##### {topology_label} topology")
                 current_material_inlet_count = len(
-                    selected_unit["ports"]["material_in"]
+                    selected_material_inlets
                 )
                 st.caption(
                     "Add explicit material inlet ports for additional feeds. "
