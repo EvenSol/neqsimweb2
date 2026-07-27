@@ -1956,9 +1956,17 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
         raise ValueError("Feed flow must be greater than zero kg/hr.")
     if (
         stage_1_retained
+        and stage_1_follows_feed
+        and not feed_pressure < stage_1_pressure
+    ):
+        raise ValueError(
+            "Pressure ordering must be feed pressure < stage 1 pressure."
+        )
+    if (
+        stage_1_retained
         and stage_2_retained
         and template_compressor_order_active
-        and not feed_pressure < stage_1_pressure < stage_2_pressure
+        and not stage_1_pressure < stage_2_pressure
     ):
         raise ValueError(
             "Pressure ordering must be feed pressure < stage 1 pressure "
