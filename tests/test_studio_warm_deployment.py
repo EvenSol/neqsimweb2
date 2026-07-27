@@ -504,6 +504,78 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cannot be empty"):
                     required_identifier(invalid_id, "inlet id")
 
+    def test_graph_integrity_normalizes_declared_legacy_ports(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+        index_graph_objects = self._load_studio_function(
+            "_index_graph_objects"
+        )
+        index_graph_objects.__globals__["_required_identifier"] = (
+            required_identifier
+        )
+        validate_graph_integrity = self._load_studio_function(
+            "_validate_graph_integrity"
+        )
+        validate_graph_integrity.__globals__["_index_graph_objects"] = (
+            index_graph_objects
+        )
+        inlets = [
+            {"id": "feed-a", "name": "Feed A"},
+            {"id": "feed-b", "name": "Feed B"},
+        ]
+        units = [
+            {
+                "id": "legacy-mixer",
+                "name": "Legacy mixer",
+                "ports": {
+                    "material_in": ["feed_a ", "feed_b"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            }
+        ]
+        connections = [
+            {
+                "id": "feed-a-to-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "legacy-mixer",
+                    "port": "feed_a ",
+                },
+            },
+            {
+                "id": "feed-b-to-mixer",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-b",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "legacy-mixer",
+                    "port": "feed_b",
+                },
+            },
+        ]
+
+        validate_graph_integrity(inlets, units, connections)
+
+        units[0]["ports"]["material_out"] = ["feed_a"]
+        with self.assertRaisesRegex(
+            ValueError,
+            "cannot be both input and output",
+        ):
+            validate_graph_integrity(inlets, units, connections)
+
     def test_graph_name_set_ignores_null_and_blank_names(self):
         graph_name_set = self._load_studio_function("_graph_name_set")
         records = [
