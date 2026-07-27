@@ -10,6 +10,7 @@ import math
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from process_chat.flowsheet_editor import (
     add_catalog_unit,
@@ -193,6 +194,94 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             f"{replay_result.kpis['component_balance_max_pct'].value:.3e}%",
             "energy="
             f"{replay_result.kpis['energy_balance_pct'].value:.3e}%",
+        )
+
+    def test_graph_python_export_allows_inapplicable_energy_balance(self):
+        builder = ProcessBuilder()
+        builder._process_name = "Unaudited transport"
+        builder._spec = {
+            "graph": {
+                "name": "Unaudited transport",
+                "units": [],
+                "connections": [],
+            },
+            "inlet_specs": [
+                {
+                    "inlet_id": "feed",
+                    "name": "feed",
+                    "fluid_spec": {},
+                }
+            ],
+            "execution_order": ["feed"],
+        }
+
+        class _Value:
+            def __init__(self, value):
+                self.value = value
+
+        class _Constraint:
+            def __init__(self, name, status):
+                self.name = name
+                self.status = status
+
+        class _Result:
+            raw = {"energy_balance_applicable": False}
+            kpis = {
+                "material_feed_count": _Value(1.0),
+                "material_feed_flow_kg_hr": _Value(12_000.0),
+                "material_product_count": _Value(1.0),
+                "material_product_flow_kg_hr": _Value(12_000.0),
+                "mass_balance_pct": _Value(0.0),
+                "component_balance_max_pct": _Value(0.0),
+            }
+            constraints = [
+                _Constraint("mass_balance", "OK"),
+                _Constraint("component_balance", "OK"),
+                _Constraint("energy_balance", "UNKNOWN"),
+            ]
+
+        result = _Result()
+
+        class _Model:
+            @staticmethod
+            def run(timeout_ms):
+                if timeout_ms != 180_000:
+                    raise AssertionError("Unexpected replay timeout.")
+                return result
+
+            @staticmethod
+            def get_process():
+                return object()
+
+        output = io.StringIO()
+        with (
+            patch.object(
+                ProcessBuilder,
+                "build_acyclic_graph",
+                return_value=_Model(),
+            ),
+            patch("neqsim.save_neqsim") as save_model,
+            redirect_stdout(output),
+        ):
+            namespace: dict[str, object] = {}
+            exec(
+                compile(
+                    builder.to_python_script(),
+                    "process_flowsheet_model.py",
+                    "exec",
+                ),
+                namespace,
+            )
+
+        save_model.assert_called_once()
+        self.assertIs(namespace["result"], result)
+        self.assertIn(
+            "Energy imbalance: not applicable",
+            output.getvalue(),
+        )
+        self.assertIn(
+            "Process simulation complete!",
+            output.getvalue(),
         )
 
     @staticmethod
