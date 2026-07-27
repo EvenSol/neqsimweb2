@@ -998,6 +998,43 @@ def add_catalog_unit(
     return copied_units, unit["id"]
 
 
+def _validated_mixer_inlet_ports(
+    unit_id: str,
+    ports: Any,
+) -> list[str]:
+    """Return a mixer's contiguous, explicitly indexed material inlet ports."""
+    if not isinstance(ports, dict):
+        raise ValueError(f"Inline mixer '{unit_id}' requires ports.")
+    material_inputs = ports.get("material_in")
+    if not isinstance(material_inputs, list) or len(material_inputs) < 2:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' requires at least two material inlet ports."
+        )
+    expected_inputs = [
+        f"in_{index}" for index in range(len(material_inputs))
+    ]
+    if material_inputs != expected_inputs:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' material inlet ports must be contiguous "
+            "from 'in_0'."
+        )
+    if ports.get("material_out") != ["out"]:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' requires the material outlet port 'out'."
+        )
+    unexpected_port_groups = sorted(
+        key
+        for key, value in ports.items()
+        if key not in {"material_in", "material_out"} and value
+    )
+    if unexpected_port_groups:
+        raise ValueError(
+            f"Inline mixer '{unit_id}' has unsupported port group "
+            f"'{unexpected_port_groups[0]}'."
+        )
+    return list(material_inputs)
+
+
 def validate_catalog_unit(unit: Any) -> None:
     """Validate that a unit matches the editor catalog's executable shape."""
     if not isinstance(unit, dict):
@@ -1012,13 +1049,98 @@ def validate_catalog_unit(unit: Any) -> None:
     definition = _INLINE_UNIT_CATALOG.get(unit_type)
     if definition is None:
         raise ValueError(f"Unsupported inline unit type '{unit_type}'.")
-    if unit.get("ports") != definition["ports"]:
+    if unit_type == "mixer":
+        _validated_mixer_inlet_ports(unit_id, unit.get("ports"))
+    elif unit.get("ports") != definition["ports"]:
         raise ValueError(
             f"Inline unit '{unit_id}' ports do not match the '{unit_type}' catalog."
         )
     if not isinstance(unit.get("params"), dict):
         raise ValueError(f"Inline unit '{unit_id}' params must be an object.")
     inline_unit_property_rows(unit_type, unit["params"])
+
+
+def resize_mixer_inlet_ports(
+    units: list[Any],
+    connections: list[Any],
+    mixer_id: str,
+    inlet_count: Any,
+) -> list[dict[str, Any]]:
+    """Resize one mixer's explicit inlet-port array without dropping routes.
+
+    Expansion appends deterministic ``in_N`` ports. Reduction removes only
+    trailing ports and is rejected when any removed port still has a material
+    connection, preserving graph identity and every existing route.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+    if isinstance(inlet_count, bool):
+        raise ValueError("Mixer inlet count must be an integer.")
+    try:
+        normalized_count = int(inlet_count)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Mixer inlet count must be an integer.") from error
+    try:
+        numeric_count = float(inlet_count)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Mixer inlet count must be an integer.") from error
+    if not math.isfinite(numeric_count) or numeric_count != normalized_count:
+        raise ValueError("Mixer inlet count must be an integer.")
+    if normalized_count < 2:
+        raise ValueError("Mixer inlet count must be at least two.")
+
+    cleaned_mixer_id = str(mixer_id).strip()
+    copied_units = copy.deepcopy(units)
+    matches = [
+        unit
+        for unit in copied_units
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_mixer_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_mixer_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_mixer_id}' is duplicated.")
+    mixer = matches[0]
+    if str(mixer.get("type", "")).strip().lower() != "mixer":
+        raise ValueError(f"Graph unit '{cleaned_mixer_id}' is not a mixer.")
+
+    current_ports = _validated_mixer_inlet_ports(
+        cleaned_mixer_id,
+        mixer.get("ports"),
+    )
+    retained_ports = {
+        f"in_{index}" for index in range(normalized_count)
+    }
+    removed_ports = set(current_ports) - retained_ports
+    for index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            raise ValueError(f"Graph connection {index} must be an object.")
+        if str(connection.get("type", "")).strip().lower() != "material":
+            continue
+        target = connection.get("target")
+        if not isinstance(target, dict):
+            raise ValueError(
+                f"Graph connection {index} requires a target object."
+            )
+        if (
+            str(target.get("kind", "")).strip().lower() == "unit"
+            and str(target.get("id", "")).strip() == cleaned_mixer_id
+            and str(target.get("port", "")).strip() in removed_ports
+        ):
+            connection_id = str(connection.get("id", "")).strip() or str(index)
+            raise ValueError(
+                f"Disconnect mixer connection '{connection_id}' before "
+                f"removing port '{str(target.get('port', '')).strip()}'."
+            )
+
+    mixer["ports"]["material_in"] = [
+        f"in_{index}" for index in range(normalized_count)
+    ]
+    validate_catalog_unit(mixer)
+    return copied_units
 
 
 def validate_starter_unit_projection(
