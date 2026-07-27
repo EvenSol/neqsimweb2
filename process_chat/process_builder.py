@@ -964,8 +964,12 @@ class ProcessBuilder:
         if not isinstance(spec, dict):
             raise ValueError("Process specification must be an object.")
         if "graph" in spec:
+            graph_spec = spec.get("graph")
+            wrapper_name = str(spec.get("name", "")).strip()
+            if isinstance(graph_spec, dict) and wrapper_name:
+                graph_spec = {**graph_spec, "name": wrapper_name}
             return self.build_acyclic_graph(
-                spec.get("graph"),
+                graph_spec,
                 spec.get("inlet_specs"),
                 spec.get("execution_order"),
             )
