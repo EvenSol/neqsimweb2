@@ -1372,6 +1372,72 @@ def _unique_connection_id(stem: str, existing_ids: set[str]) -> str:
     return connection_id
 
 
+def material_connection_name(connection: Any) -> str:
+    """Return one explicit material-stream name with an ID fallback."""
+    if not isinstance(connection, dict):
+        raise ValueError("Material connection must be an object.")
+    connection_id = str(connection.get("id", "")).strip()
+    if not connection_id:
+        raise ValueError("Material connection requires an id.")
+    if str(connection.get("type", "")).strip().lower() != "material":
+        raise ValueError(
+            f"Connection '{connection_id}' is not a material stream."
+        )
+    raw_name = connection.get("name")
+    if raw_name is None:
+        return connection_id
+    stream_name = str(raw_name).strip()
+    if not stream_name:
+        raise ValueError(
+            f"Material connection '{connection_id}' requires a stream name."
+        )
+    return stream_name
+
+
+def rename_material_connection(
+    connections: list[Any],
+    connection_id: str,
+    stream_name: str,
+    reserved_names: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Rename one material path without changing its stable graph identity."""
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+    cleaned_connection_id = str(connection_id).strip()
+    if not cleaned_connection_id:
+        raise ValueError("Material connection id cannot be empty.")
+    cleaned_name = str(stream_name).strip()
+    if not cleaned_name:
+        raise ValueError("Material stream name cannot be empty.")
+
+    copied_connections = copy.deepcopy(connections)
+    connection_index = _connection_index(
+        copied_connections,
+        cleaned_connection_id,
+    )
+    selected = copied_connections[connection_index]
+    if str(selected.get("type", "")).strip().lower() != "material":
+        raise ValueError(
+            f"Connection '{cleaned_connection_id}' is not a material stream."
+        )
+
+    peer_name_keys = {
+        material_connection_name(connection).casefold()
+        for index, connection in enumerate(copied_connections)
+        if index != connection_index
+        and isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+    }
+    peer_name_keys.update(_normalized_name_keys(reserved_names))
+    if cleaned_name.casefold() in peer_name_keys:
+        raise ValueError(
+            f"Material stream name '{cleaned_name}' is already in use."
+        )
+
+    selected["name"] = cleaned_name
+    return copied_connections
+
+
 def _graph_port_inventory(
     inlets: list[Any],
     units: list[Any],
@@ -1666,6 +1732,7 @@ def connect_graph_ports(
     copied_connections.append(
         {
             "id": connection_id,
+            "name": connection_id,
             "type": cleaned_type,
             "source": normalized_endpoints["source"],
             "target": normalized_endpoints["target"],
@@ -3091,6 +3158,7 @@ def material_connection_rows(
 
     rows: list[dict[str, str]] = []
     seen_ids: set[str] = set()
+    seen_names: set[str] = set()
     for index, connection in enumerate(connections):
         if not isinstance(connection, dict):
             raise ValueError(f"Graph connection {index} must be an object.")
@@ -3102,6 +3170,13 @@ def material_connection_rows(
         seen_ids.add(connection_id)
         if str(connection.get("type", "")).strip().lower() != "material":
             continue
+        stream_name = material_connection_name(connection)
+        stream_name_key = stream_name.casefold()
+        if stream_name_key in seen_names:
+            raise ValueError(
+                f"Material stream name '{stream_name}' is duplicated."
+            )
+        seen_names.add(stream_name_key)
 
         source = connection.get("source")
         target = connection.get("target")
@@ -3120,8 +3195,9 @@ def material_connection_rows(
         rows.append(
             {
                 "id": connection_id,
+                "name": stream_name,
                 "label": (
-                    f"{source_id}:{source_port} → "
+                    f"{stream_name} · {source_id}:{source_port} → "
                     f"{target_id}:{target_port}"
                 ),
             }

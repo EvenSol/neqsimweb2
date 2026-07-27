@@ -29,6 +29,7 @@ from process_chat.flowsheet_editor import (
     inline_unit_property_rows,
     insert_inline_unit_on_connection,
     insert_mixer_on_connection,
+    material_connection_name,
     material_connection_rows,
     process_unit_property_rows,
     record_graph_history,
@@ -40,6 +41,7 @@ from process_chat.flowsheet_editor import (
     replace_inline_unit,
     replace_inline_unit_type,
     reroute_graph_connection,
+    rename_material_connection,
     rename_material_inlet,
     rename_inline_unit,
     undo_graph_history,
@@ -2400,7 +2402,11 @@ class GraphDraftLifecycleTest(unittest.TestCase):
             [
                 {
                     "id": "feed-to-cooler",
-                    "label": "feed:out → product-cooler:in",
+                    "name": "feed-to-cooler",
+                    "label": (
+                        "feed-to-cooler · "
+                        "feed:out → product-cooler:in"
+                    ),
                 }
             ],
         )
@@ -2847,9 +2853,63 @@ class GraphPortConnectionTest(unittest.TestCase):
         )
         self.assertEqual(updated[-1]["source"], source)
         self.assertEqual(updated[-1]["target"], target)
+        self.assertEqual(updated[-1]["name"], connection_id)
         self.assertEqual(len(self.connections), 3)
         source["id"] = "changed"
         self.assertEqual(updated[-1]["source"]["id"], "feed-b")
+
+    def test_renames_material_stream_without_changing_graph_identity(self):
+        original = copy.deepcopy(self.connections)
+        updated = rename_material_connection(
+            self.connections,
+            "feed-a-mixer",
+            "Well A to inlet mixer",
+        )
+
+        self.assertEqual(self.connections, original)
+        self.assertEqual(updated[0]["id"], "feed-a-mixer")
+        self.assertEqual(updated[0]["name"], "Well A to inlet mixer")
+        self.assertEqual(updated[0]["source"], original[0]["source"])
+        self.assertEqual(updated[0]["target"], original[0]["target"])
+        self.assertEqual(
+            material_connection_name(updated[0]),
+            "Well A to inlet mixer",
+        )
+
+    def test_material_stream_names_are_unique_and_nonblank(self):
+        named_connections = copy.deepcopy(self.connections)
+        named_connections[0]["name"] = "Mixer feed"
+        with self.assertRaisesRegex(ValueError, "already in use"):
+            rename_material_connection(
+                named_connections,
+                "mixer-heater",
+                " mixer FEED ",
+            )
+        with self.assertRaisesRegex(ValueError, "already in use"):
+            rename_material_connection(
+                named_connections,
+                "mixer-heater",
+                "Feed A",
+                {"feed a"},
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            rename_material_connection(
+                named_connections,
+                "mixer-heater",
+                " ",
+            )
+
+        named_connections[1]["name"] = " "
+        with self.assertRaisesRegex(ValueError, "requires a stream name"):
+            material_connection_rows(named_connections)
+
+    def test_rejects_renaming_energy_connection_as_material_stream(self):
+        with self.assertRaisesRegex(ValueError, "not a material stream"):
+            rename_material_connection(
+                self.connections,
+                "utility-heater",
+                "Heater duty",
+            )
 
     def test_connects_splitter_branch_and_energy_link(self):
         without_energy = disconnect_graph_connection(
