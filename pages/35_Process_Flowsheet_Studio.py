@@ -2188,7 +2188,12 @@ def _pressure_profile_dataframe(
     equipment_table: pd.DataFrame,
 ) -> pd.DataFrame:
     """Compare solved outlet pressures with the current case specifications."""
-    process_steps = {step["name"]: step for step in spec["process"]}
+    process_steps = {
+        str(step.get("name", "")).strip().casefold(): step
+        for step in spec.get("process", [])
+        if isinstance(step, dict)
+        and str(step.get("name", "")).strip()
+    }
     retained_unit_ids = {
         str(unit.get("id", "")).strip()
         for unit in spec.get("units", [])
