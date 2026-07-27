@@ -36,6 +36,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         builder = ProcessBuilder()
         builder._process_name = 'Two-feed "satellite" mixer'
         builder._spec = {
+            "name": 'Two-feed "satellite" mixer',
             "graph": {
                 "name": 'Two-feed "satellite" mixer',
                 "units": [
@@ -128,6 +129,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         builder, source_model = self._build_case(1.05)
         source_result = source_model.run(timeout_ms=180_000)
         script = builder.to_python_script()
+        payload_line = next(
+            line for line in script.splitlines()
+            if line.startswith("case_data = json.loads(")
+        )
+        serialized_literal = payload_line.removeprefix(
+            "case_data = json.loads("
+        ).removesuffix(")")
+        self.assertEqual(
+            json.loads(ast.literal_eval(serialized_literal)),
+            builder.spec,
+        )
         namespace: dict[str, object] = {}
 
         with tempfile.TemporaryDirectory() as temp_dir:
