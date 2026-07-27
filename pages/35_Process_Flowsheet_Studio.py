@@ -1649,6 +1649,42 @@ def _build_template_graph(
     return units, connections
 
 
+def _has_material_connection(
+    connections: Any,
+    source: tuple[str, str, str],
+    target: tuple[str, str, str],
+) -> bool:
+    """Return whether one exact material-port connection is active."""
+    if not isinstance(connections, list):
+        return False
+    for connection in connections:
+        if (
+            not isinstance(connection, dict)
+            or connection.get("type") != "material"
+        ):
+            continue
+        source_record = connection.get("source")
+        target_record = connection.get("target")
+        if not isinstance(source_record, dict) or not isinstance(
+            target_record,
+            dict,
+        ):
+            continue
+        if (
+            str(source_record.get("kind", "")).strip(),
+            str(source_record.get("id", "")).strip(),
+            str(source_record.get("port", "")).strip(),
+        ) != source:
+            continue
+        if (
+            str(target_record.get("kind", "")).strip(),
+            str(target_record.get("id", "")).strip(),
+            str(target_record.get("port", "")).strip(),
+        ) == target:
+            return True
+    return False
+
+
 def _build_case_spec(
     case_name: str,
     composition: dict[str, float],
@@ -1823,6 +1859,46 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     export_cooler_retained = (
         TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
     )
+    connections = spec.get("connections", [])
+    stage_1_follows_feed = (
+        _has_material_connection(
+            connections,
+            ("inlet", PRIMARY_INLET_ID, "out"),
+            ("unit", TEMPLATE_UNIT_IDS["inlet scrubber"], "in"),
+        )
+        and _has_material_connection(
+            connections,
+            ("unit", TEMPLATE_UNIT_IDS["inlet scrubber"], "gas"),
+            ("unit", TEMPLATE_UNIT_IDS["compressor stage 1"], "in"),
+        )
+    )
+    intercooler_follows_stage_1 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 1"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["intercooler"], "in"),
+    )
+    stage_2_follows_intercooler = (
+        _has_material_connection(
+            connections,
+            ("unit", TEMPLATE_UNIT_IDS["intercooler"], "out"),
+            ("unit", TEMPLATE_UNIT_IDS["interstage scrubber"], "in"),
+        )
+        and _has_material_connection(
+            connections,
+            ("unit", TEMPLATE_UNIT_IDS["interstage scrubber"], "gas"),
+            ("unit", TEMPLATE_UNIT_IDS["compressor stage 2"], "in"),
+        )
+    )
+    export_cooler_follows_stage_2 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 2"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["export cooler"], "in"),
+    )
+    template_compressor_order_active = (
+        stage_1_follows_feed
+        and intercooler_follows_stage_1
+        and stage_2_follows_intercooler
+    )
     stage_1_pressure = (
         process[2]["params"]["outlet_pressure_bara"]
         if stage_1_retained
@@ -1861,6 +1937,7 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     if (
         stage_1_retained
         and stage_2_retained
+        and template_compressor_order_active
         and not feed_pressure < stage_1_pressure < stage_2_pressure
     ):
         raise ValueError(
@@ -1883,13 +1960,21 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
             "Intercooler",
             intercooler_pressure_drop,
             intercooler_retained,
-            stage_1_pressure if stage_1_retained else None,
+            (
+                stage_1_pressure
+                if stage_1_retained and intercooler_follows_stage_1
+                else None
+            ),
         ),
         (
             "Export cooler",
             export_pressure_drop,
             export_cooler_retained,
-            stage_2_pressure if stage_2_retained else None,
+            (
+                stage_2_pressure
+                if stage_2_retained and export_cooler_follows_stage_2
+                else None
+            ),
         ),
     ):
         if not retained:
@@ -1913,11 +1998,20 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
         warnings.append(
             f"Composition summed to {composition_total:.6f} and was normalized to 1.0."
         )
-    if stage_1_retained and stage_1_pressure / feed_pressure > 3.0:
+    if (
+        stage_1_retained
+        and stage_1_follows_feed
+        and stage_1_pressure / feed_pressure > 3.0
+    ):
         warnings.append(
             "Stage 1 pressure ratio exceeds 3.0; check compressor feasibility."
         )
-    if stage_1_retained and intercooler_retained and stage_2_retained:
+    if (
+        stage_1_retained
+        and intercooler_retained
+        and stage_2_retained
+        and template_compressor_order_active
+    ):
         stage_2_inlet_pressure = stage_1_pressure - intercooler_pressure_drop
         if stage_2_pressure / stage_2_inlet_pressure > 3.0:
             warnings.append(
@@ -2070,6 +2164,17 @@ def _pressure_profile_dataframe(
     export_cooler_retained = (
         TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
     )
+    connections = spec.get("connections", [])
+    intercooler_follows_stage_1 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 1"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["intercooler"], "in"),
+    )
+    export_cooler_follows_stage_2 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 2"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["export cooler"], "in"),
+    )
     expected_pressures: list[tuple[str, str, float]] = []
     if stage_1_retained:
         stage_1_pressure = float(
@@ -2080,7 +2185,7 @@ def _pressure_profile_dataframe(
         expected_pressures.append(
             ("Compressor stage 1", "compressor stage 1", stage_1_pressure)
         )
-        if intercooler_retained:
+        if intercooler_retained and intercooler_follows_stage_1:
             intercooler_drop = float(
                 process_steps["intercooler"]["params"]["pressure_drop_bar"]
             )
@@ -2100,7 +2205,7 @@ def _pressure_profile_dataframe(
         expected_pressures.append(
             ("Compressor stage 2", "compressor stage 2", stage_2_pressure)
         )
-        if export_cooler_retained:
+        if export_cooler_retained and export_cooler_follows_stage_2:
             export_drop = float(
                 process_steps["export cooler"]["params"]["pressure_drop_bar"]
             )
