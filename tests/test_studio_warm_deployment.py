@@ -11,6 +11,8 @@ import subprocess
 import sys
 import types
 import unittest
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -877,6 +879,28 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertTrue(omitted_profile.empty)
         self.assertIn("Status", omitted_profile.columns)
 
+        spec["process"] = [{}, None, {"name": "  "}]
+        placeholder_profile = pressure_profile_dataframe(spec, equipment_table)
+        self.assertTrue(placeholder_profile.empty)
+
+        spec["process"] = [
+            {
+                "name": "compressor stage 1",
+                "params": {"outlet_pressure_bara": 80.0},
+            },
+            {
+                "name": "intercooler",
+                "params": {"pressure_drop_bar": 1.0},
+            },
+            {
+                "name": "compressor stage 2",
+                "params": {"outlet_pressure_bara": 160.0},
+            },
+            {
+                "name": "export cooler",
+                "params": {"pressure_drop_bar": 1.0},
+            },
+        ]
         spec["units"] = [{"id": "compressor-stage-1"}]
         retained_profile = pressure_profile_dataframe(spec, equipment_table)
         self.assertEqual(
@@ -910,6 +934,197 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             reordered_profile["Operation"].tolist(),
             ["Compressor stage 1", "Compressor stage 2"],
         )
+
+    def test_workbook_and_history_only_report_active_starter_equipment(self):
+        active_steps = self._load_studio_function(
+            "_active_template_process_steps"
+        )
+        workbook_bytes = self._load_studio_function(
+            "_engineering_workbook_bytes"
+        )
+        history_record = self._load_studio_function("_case_history_record")
+        workbook_cell = self._load_studio_function("_workbook_cell")
+        pandas = __import__("pandas")
+        template_ids = {
+            "compressor stage 1": "compressor-stage-1",
+            "intercooler": "intercooler",
+            "compressor stage 2": "compressor-stage-2",
+            "export cooler": "export-cooler",
+        }
+        active_steps.__globals__["TEMPLATE_UNIT_IDS"] = template_ids
+
+        process = [
+            {},
+            {
+                "name": "compressor stage 1",
+                "params": {
+                    "outlet_pressure_bara": 80.0,
+                    "isentropic_efficiency": 0.76,
+                },
+            },
+            {
+                "name": "intercooler",
+                "params": {
+                    "outlet_temperature_C": 35.0,
+                    "pressure_drop_bar": 1.0,
+                },
+            },
+            {
+                "name": "compressor stage 2",
+                "params": {
+                    "outlet_pressure_bara": 160.0,
+                    "isentropic_efficiency": 0.77,
+                },
+            },
+            {
+                "name": "export cooler",
+                "params": {
+                    "outlet_temperature_C": 30.0,
+                    "pressure_drop_bar": 1.5,
+                },
+            },
+        ]
+        fluid = {
+            "eos_model": "srk",
+            "mixing_rule": "classic",
+            "composition_basis": "mole fraction",
+            "temperature_C": 20.0,
+            "pressure_bara": 40.0,
+            "total_flow": 20_000.0,
+            "flow_unit": "kg/hr",
+            "components": {"methane": 1.0},
+        }
+        spec = {
+            "name": "Active summary",
+            "fluid": fluid,
+            "process": process,
+            "fluid_packages": [
+                {
+                    "id": "base-fluid",
+                    "name": "Base fluid",
+                    "eos_model": "srk",
+                    "mixing_rule": "classic",
+                    "component_registry": {"methane": {}},
+                    "binary_interaction_parameters": {"source": "NeqSim"},
+                }
+            ],
+            "inlets": [
+                {
+                    "id": "feed-gas",
+                    "name": "Feed gas",
+                    "fluid_package_id": "base-fluid",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 40.0,
+                    "total_flow": 20_000.0,
+                    "flow_unit": "kg/hr",
+                    "composition_basis": "mole fraction",
+                    "composition": {"methane": 1.0},
+                }
+            ],
+            "units": [
+                {
+                    "id": "compressor-stage-1",
+                    "name": "Compressor stage 1",
+                    "type": "compressor",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                        "energy_in": [],
+                        "energy_out": ["power"],
+                    },
+                    "properties": {},
+                }
+            ],
+            "connections": [],
+        }
+        self.assertEqual(
+            list(active_steps(spec)),
+            ["compressor stage 1"],
+        )
+
+        empty_table = pandas.DataFrame()
+        convergence_summary = {
+            "unit_count": 0,
+            "unconverged_count": 0,
+            "max_iterations": 0,
+        }
+        unit_balance_summary = {
+            "unit_count": 0,
+            "max_mass_imbalance_pct": None,
+            "max_mass_imbalance_unit": None,
+            "energy_unit_count": 0,
+            "max_energy_imbalance_pct": None,
+            "max_energy_imbalance_unit": None,
+            "excluded_units": [],
+        }
+        workbook_bytes.__globals__.update(
+            {
+                "BytesIO": BytesIO,
+                "TEMPLATE_NAME": "Compression starter",
+                "_active_template_process_steps": active_steps,
+                "_build_execution_plan": lambda candidate: [],
+                "_build_inlet_fluid_specs": lambda candidate: [],
+                "_component_balance_dataframe": lambda result: empty_table,
+                "_convergence_dataframe": lambda result: empty_table,
+                "_convergence_state_label": lambda summary: "Converged",
+                "_energy_balance_dataframe": lambda result: empty_table,
+                "_energy_transfer_dataframe": lambda result: empty_table,
+                "_kpi_value": lambda result, name: None,
+                "_material_boundary_dataframe": lambda result: empty_table,
+                "_unit_balance_coverage_label": lambda summary: "n/a",
+                "_unit_balance_dataframe": lambda result: empty_table,
+                "_unit_identity_label": lambda identity: "n/a",
+                "_workbook_cell": workbook_cell,
+                "aggregate_convergence": lambda result: convergence_summary,
+                "aggregate_unit_balances": lambda result: unit_balance_summary,
+                "json": json,
+                "pd": pandas,
+                "solved_feed_flow_kg_hr": (
+                    lambda result, fallback: float(fallback)
+                ),
+            }
+        )
+        result = types.SimpleNamespace(constraints=[])
+        workbook = workbook_bytes(
+            spec,
+            result,
+            empty_table,
+            empty_table,
+            empty_table,
+            empty_table,
+            {},
+        )
+        with zipfile.ZipFile(BytesIO(workbook)) as archive:
+            workbook_xml = "\n".join(
+                archive.read(name).decode("utf-8")
+                for name in archive.namelist()
+                if name.endswith(".xml")
+            )
+        self.assertIn("Compressor stage 1", workbook_xml)
+        self.assertNotIn("Compressor stage 2", workbook_xml)
+        self.assertNotIn("Intercooler", workbook_xml)
+        self.assertNotIn("Export cooler", workbook_xml)
+
+        history_record.__globals__.update(
+            {
+                "_active_template_process_steps": active_steps,
+                "_convergence_state_label": lambda summary: "Converged",
+                "_kpi_value": lambda result, name: None,
+                "aggregate_convergence": lambda result: convergence_summary,
+                "aggregate_validation_status": lambda statuses: "PASS",
+                "json": json,
+                "solved_feed_flow_kg_hr": (
+                    lambda result, fallback: float(fallback)
+                ),
+            }
+        )
+        history = history_record(spec, result, "abc12345")
+        self.assertEqual(history["Stage 1 pressure [bara]"], 80.0)
+        self.assertEqual(history["Stage 1 efficiency [-]"], 0.76)
+        self.assertIsNone(history["Stage 2 pressure [bara]"])
+        self.assertIsNone(history["Stage 2 efficiency [-]"])
+        self.assertIsNone(history["Intercooler pressure drop [bar]"])
+        self.assertIsNone(history["Export cooler pressure drop [bar]"])
 
     def test_disconnected_starter_inventory_requires_no_graph_references(self):
         unconnected_unit_map = self._load_studio_function(
