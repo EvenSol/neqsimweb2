@@ -464,6 +464,43 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             ],
         )
 
+    def test_feed_names_reserve_restorable_starter_products(self):
+        reserved_feed_names = self._load_studio_function(
+            "_reserved_feed_names"
+        )
+        graph_name_set = self._load_studio_function("_graph_name_set")
+        terminal_names = self._load_studio_function(
+            "_terminal_material_stream_names"
+        )
+        reserved_feed_names.__globals__.update(
+            {
+                "_graph_name_set": graph_name_set,
+                "_terminal_material_stream_names": terminal_names,
+            }
+        )
+        starter_units = [
+            {
+                "id": "export-cooler",
+                "name": "Export cooler",
+                "ports": {"material_out": ["out"]},
+            }
+        ]
+        reserved_names = reserved_feed_names(
+            [],
+            [],
+            starter_units,
+            [],
+        )
+
+        self.assertIn("Export cooler [out] product", reserved_names)
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            flowsheet_editor.clone_material_inlet(
+                [{"id": "feed", "name": "Feed", "ports": {}}],
+                "feed",
+                "Export cooler [out] product",
+                reserved_names=reserved_names,
+            )
+
     def test_solve_readiness_rejects_disconnected_feeds(self):
         validate_solve_readiness = self._load_studio_function(
             "_validate_graph_solve_readiness"
