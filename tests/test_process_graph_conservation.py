@@ -112,6 +112,37 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     nested_name,
                 )
 
+    def test_build_from_spec_ignores_null_generic_wrapper_name(self):
+        builder = ProcessBuilder()
+        graph_spec = {
+            "name": "Nested graph name",
+            "units": [],
+            "connections": [],
+        }
+
+        with patch.object(
+            builder,
+            "build_acyclic_graph",
+            return_value=object(),
+        ) as graph_builder:
+            builder.build_from_spec(
+                {
+                    "name": None,
+                    "graph": graph_spec,
+                    "inlet_specs": [
+                        {
+                            "inlet_id": "feed",
+                            "name": "Feed",
+                            "fluid_spec": {},
+                        }
+                    ],
+                    "execution_order": ["feed"],
+                }
+            )
+
+        self.assertIs(graph_builder.call_args.args[0], graph_spec)
+        self.assertEqual(graph_spec["name"], "Nested graph name")
+
     def test_build_from_spec_replays_native_two_inlet_graph(self):
         source_builder, source_model = self._build_case(1.0)
         source_result = source_model.run(timeout_ms=180_000)
