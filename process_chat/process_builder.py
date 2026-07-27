@@ -9,6 +9,7 @@ Supports:
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -1050,6 +1051,8 @@ class ProcessBuilder:
         """Generate a Python script that reproduces this process."""
         if self._spec is None:
             return "# No process specification available.\n"
+        if "graph" in self._spec:
+            return self._graph_python_script()
 
         lines: List[str] = []
         fluid_spec = self._spec.get("fluid", {})
@@ -1172,6 +1175,67 @@ class ProcessBuilder:
         lines.append('print("Process simulation complete!")')
         lines.append("")
 
+        return "\n".join(lines)
+
+    def _graph_python_script(self) -> str:
+        """Generate a replayable script for the generic acyclic graph schema."""
+        graph_spec = self._spec.get("graph")
+        inlet_specs = self._spec.get("inlet_specs")
+        execution_order = self._spec.get("execution_order")
+        if not isinstance(graph_spec, dict):
+            raise ValueError("Graph script export requires a graph object.")
+        if not isinstance(inlet_specs, list) or not inlet_specs:
+            raise ValueError(
+                "Graph script export requires a non-empty inlet_specs array."
+            )
+        if not isinstance(execution_order, list) or not execution_order:
+            raise ValueError(
+                "Graph script export requires a non-empty execution_order array."
+            )
+
+        case_payload = {
+            "graph": graph_spec,
+            "inlet_specs": inlet_specs,
+            "execution_order": execution_order,
+        }
+        try:
+            serialized_case = json.dumps(
+                case_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Graph script export requires finite JSON-compatible case data."
+            ) from exc
+
+        safe = _safe_filename(self._process_name)
+        lines = [
+            '"""',
+            f"NeqSim Process: {self._process_name}",
+            "Auto-generated from the generic Process Flowsheet Studio graph.",
+            "Run from an EvenSol/neqsimweb2 checkout with neqsim installed.",
+            '"""',
+            "import json",
+            "",
+            "import neqsim",
+            "from process_chat.process_builder import ProcessBuilder",
+            "",
+            f"case_data = json.loads({serialized_case!r})",
+            "builder = ProcessBuilder()",
+            "model = builder.build_acyclic_graph(",
+            '    case_data["graph"],',
+            '    case_data["inlet_specs"],',
+            '    case_data["execution_order"],',
+            ")",
+            "result = model.run(timeout_ms=180_000)",
+            "process = model.get_process()",
+            "",
+            f"neqsim.save_neqsim(process, {safe + '.neqsim'!r})",
+            'print("Process simulation complete!")',
+            "",
+        ]
         return "\n".join(lines)
 
     # -- .neqsim file export ------------------------------------------------
