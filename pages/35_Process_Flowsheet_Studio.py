@@ -1197,10 +1197,10 @@ def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
     return plan
 
 
-def _build_graph_solver_inputs(
+def _build_graph_process_spec(
     spec: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
-    """Compile one validated Studio case for generic graph execution."""
+) -> dict[str, Any]:
+    """Compile one validated Studio case for shared ProcessBuilder execution."""
     execution_plan = _build_execution_plan(spec)
     inlet_specs = _build_inlet_fluid_specs(spec)
     graph_spec = {
@@ -1217,7 +1217,12 @@ def _build_graph_solver_inputs(
         str(step["Object ID"]).strip()
         for step in execution_plan
     ]
-    return graph_spec, inlet_specs, execution_order
+    return {
+        "name": graph_spec["name"],
+        "graph": graph_spec,
+        "inlet_specs": inlet_specs,
+        "execution_order": execution_order,
+    }
 
 
 def _validate_case_graph(
@@ -6021,13 +6026,9 @@ if run_case:
         execution_started = perf_counter()
         with st.spinner("Building and solving the NeqSim process..."):
             builder = ProcessBuilder()
-            graph_spec, inlet_specs, execution_order = (
-                _build_graph_solver_inputs(case_spec)
-            )
-            model = builder.build_acyclic_graph(
-                graph_spec,
-                inlet_specs,
-                execution_order,
+            graph_process_spec = _build_graph_process_spec(case_spec)
+            model = builder.build_from_spec(
+                graph_process_spec,
             )
             result = model.run()
             model_bytes = builder.save_neqsim_bytes()
