@@ -1805,13 +1805,7 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
         )
     process = spec["process"]
 
-    stage_1_pressure = process[2]["params"]["outlet_pressure_bara"]
-    stage_2_pressure = process[5]["params"]["outlet_pressure_bara"]
     feed_pressure = fluid["pressure_bara"]
-    stage_1_efficiency = process[2]["params"]["isentropic_efficiency"]
-    stage_2_efficiency = process[5]["params"]["isentropic_efficiency"]
-    intercooler_pressure_drop = process[3]["params"]["pressure_drop_bar"]
-    export_pressure_drop = process[6]["params"]["pressure_drop_bar"]
     retained_unit_ids = {
         str(unit.get("id", "")).strip()
         for unit in spec.get("units", [])
@@ -1828,6 +1822,36 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
     )
     export_cooler_retained = (
         TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
+    )
+    stage_1_pressure = (
+        process[2]["params"]["outlet_pressure_bara"]
+        if stage_1_retained
+        else None
+    )
+    stage_2_pressure = (
+        process[5]["params"]["outlet_pressure_bara"]
+        if stage_2_retained
+        else None
+    )
+    stage_1_efficiency = (
+        process[2]["params"]["isentropic_efficiency"]
+        if stage_1_retained
+        else None
+    )
+    stage_2_efficiency = (
+        process[5]["params"]["isentropic_efficiency"]
+        if stage_2_retained
+        else None
+    )
+    intercooler_pressure_drop = (
+        process[3]["params"]["pressure_drop_bar"]
+        if intercooler_retained
+        else None
+    )
+    export_pressure_drop = (
+        process[6]["params"]["pressure_drop_bar"]
+        if export_cooler_retained
+        else None
     )
 
     if feed_pressure <= 0.0:
