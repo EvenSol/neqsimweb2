@@ -59,6 +59,7 @@ globals().update(
 
 
 _EDITOR_SYMBOL_NAMES = (
+    "MAX_MULTI_INLET_PORTS",
     "add_catalog_unit",
     "apply_graph_draft",
     "build_graph_draft_dot",
@@ -5369,6 +5370,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     min_value=(
                         2 if selected_unit["type"] == "mixer" else 1
                     ),
+                    max_value=MAX_MULTI_INLET_PORTS,
                     value=current_material_inlet_count,
                     step=1,
                     format="%d",
