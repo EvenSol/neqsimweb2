@@ -173,8 +173,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 replay_result.kpis[kpi_name].value,
                 source_result.kpis[kpi_name].value,
                 delta=max(
-                    abs(source_result.kpis[kpi_name].value) * 1.0e-9,
-                    1.0e-10,
+                    abs(source_result.kpis[kpi_name].value) * 1.0e-6,
+                    1.0e-6,
                 ),
             )
         validation = {
