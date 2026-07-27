@@ -84,7 +84,7 @@ _EDITOR_SYMBOL_NAMES = (
     "redo_graph_history",
     "remove_material_inlet",
     "remove_inline_unit",
-    "resize_mixer_inlet_ports",
+    "resize_multi_inlet_unit_ports",
     "replace_inline_unit",
     "replace_inline_unit_type",
     "reroute_graph_connection",
@@ -5352,37 +5352,40 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     f"{selected_unit_id}_{graph_widget_revision}"
                 ),
             )
-            resize_mixer = False
-            requested_mixer_inlet_count = None
-            if selected_unit["type"] == "mixer":
-                st.markdown("##### Mixer topology")
-                current_mixer_inlet_count = len(
+            resize_multi_inlet_unit = False
+            requested_material_inlet_count = None
+            if selected_unit["type"] in {"mixer", "separator"}:
+                topology_label = selected_unit["type"].capitalize()
+                st.markdown(f"##### {topology_label} topology")
+                current_material_inlet_count = len(
                     selected_unit["ports"]["material_in"]
                 )
                 st.caption(
                     "Add explicit material inlet ports for additional feeds. "
                     "Trailing ports can be removed only while disconnected."
                 )
-                requested_mixer_inlet_count = st.number_input(
+                requested_material_inlet_count = st.number_input(
                     "Material inlet ports [-]",
-                    min_value=2,
-                    value=current_mixer_inlet_count,
+                    min_value=(
+                        2 if selected_unit["type"] == "mixer" else 1
+                    ),
+                    value=current_material_inlet_count,
                     step=1,
                     format="%d",
                     key=(
-                        "flowsheet_mixer_inlet_count_"
+                        "flowsheet_material_inlet_count_"
                         f"{selected_unit_id}_{graph_widget_revision}"
                     ),
                 )
-                resize_mixer = st.button(
-                    "Apply mixer inlet count",
+                resize_multi_inlet_unit = st.button(
+                    f"Apply {selected_unit['type']} inlet count",
                     disabled=(
-                        requested_mixer_inlet_count
-                        == current_mixer_inlet_count
+                        requested_material_inlet_count
+                        == current_material_inlet_count
                     ),
                     use_container_width=True,
                     key=(
-                        "flowsheet_resize_mixer_"
+                        "flowsheet_resize_material_inlets_"
                         f"{selected_unit_id}_{graph_widget_revision}"
                     ),
                 )
@@ -5476,13 +5479,16 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 key=f"flowsheet_remove_unit_{selected_unit_id}",
             )
 
-            if resize_mixer and requested_mixer_inlet_count is not None:
+            if (
+                resize_multi_inlet_unit
+                and requested_material_inlet_count is not None
+            ):
                 try:
-                    units = resize_mixer_inlet_ports(
+                    units = resize_multi_inlet_unit_ports(
                         spec["units"],
                         spec["connections"],
                         selected_unit_id,
-                        requested_mixer_inlet_count,
+                        requested_material_inlet_count,
                     )
                     candidate_draft = create_graph_draft(
                         units,
@@ -5498,14 +5504,16 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         candidate_case["process"],
                     )
                 except ValueError as edit_error:
-                    st.error(f"Mixer topology update failed: {edit_error}")
+                    st.error(
+                        f"{topology_label} topology update failed: {edit_error}"
+                    )
                 else:
                     _record_graph_revision(
                         spec,
                         candidate_draft,
                         (
                             f"Resized '{selected_unit['name']}' to "
-                            f"{int(requested_mixer_inlet_count)} material "
+                            f"{int(requested_material_inlet_count)} material "
                             "inlet ports. Connect every required feed and run "
                             "NeqSim to solve the revised graph."
                         ),
