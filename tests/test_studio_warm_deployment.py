@@ -653,6 +653,9 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         validate_case_graph.__globals__.update(
             {
                 "CASE_SCHEMA_VERSION": 3,
+                "MAX_MULTI_INLET_PORTS": (
+                    flowsheet_editor.MAX_MULTI_INLET_PORTS
+                ),
                 "_validate_graph_integrity": lambda *args: None,
                 "_terminal_name_conflicts": lambda *args: [],
                 "_terminal_material_stream_names": lambda *args: set(),
@@ -677,6 +680,17 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "cannot exceed"):
             validate_case_graph(case_data, [])
+        legacy_mixer = {
+            "id": "legacy-mixer",
+            "name": "Legacy mixer",
+            "type": "mixer",
+            "ports": {
+                "material_in": ["feed_a", "feed_b"],
+                "material_out": ["out"],
+            },
+        }
+        case_data["units"] = [legacy_mixer]
+        validate_case_graph(case_data, [])
 
     def test_solve_readiness_rejects_disconnected_feeds(self):
         validate_solve_readiness = self._load_studio_function(
