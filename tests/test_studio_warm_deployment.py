@@ -830,6 +830,9 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         has_material_connection = self._load_studio_function(
             "_has_material_connection"
         )
+        active_steps = self._load_studio_function(
+            "_active_template_process_steps"
+        )
         pandas = __import__("pandas")
         template_ids = {
             "compressor stage 1": "compressor-stage-1",
@@ -841,9 +844,11 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             {
                 "pd": pandas,
                 "TEMPLATE_UNIT_IDS": template_ids,
+                "_active_template_process_steps": active_steps,
                 "_has_material_connection": has_material_connection,
             }
         )
+        active_steps.__globals__["TEMPLATE_UNIT_IDS"] = template_ids
         spec = {
             "process": [
                 {
@@ -955,8 +960,8 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
         process = [
             {},
+            {},
             {
-                "name": "compressor stage 1",
                 "params": {
                     "outlet_pressure_bara": 80.0,
                     "isentropic_efficiency": 0.76,
@@ -969,6 +974,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                     "pressure_drop_bar": 1.0,
                 },
             },
+            {},
             {
                 "name": "compressor stage 2",
                 "params": {
