@@ -34,6 +34,7 @@ from process_chat.flowsheet_editor import (
     redo_graph_history,
     remove_material_inlet,
     remove_inline_unit,
+    replace_inline_unit,
     replace_inline_unit_type,
     reroute_graph_connection,
     rename_material_inlet,
@@ -44,6 +45,7 @@ from process_chat.flowsheet_editor import (
     update_inline_unit_properties,
     update_process_unit_properties,
     validate_catalog_unit,
+    validate_starter_unit_projection,
 )
 
 
@@ -386,6 +388,102 @@ class UnitCatalogTest(unittest.TestCase):
         malformed["ports"]["material_out"] = ["wrong"]
         with self.assertRaisesRegex(ValueError, "ports do not match"):
             validate_catalog_unit(malformed)
+
+
+class StarterUnitProjectionTest(unittest.TestCase):
+    """Keep retained starter identities canonical without making them mandatory."""
+
+    def setUp(self):
+        self.expected = [
+            create_inline_unit_spec("compressor", "Stage 1 Compressor", set()),
+            create_inline_unit_spec(
+                "cooler",
+                "Intercooler",
+                {"stage-1-compressor"},
+            ),
+        ]
+
+    def test_allows_omitted_starter_units_and_unrelated_replacements(self):
+        replacement = create_inline_unit_spec(
+            "valve",
+            "Replacement Valve",
+            {"stage-1-compressor", "intercooler"},
+        )
+
+        validate_starter_unit_projection(
+            [self.expected[1], replacement],
+            self.expected,
+        )
+        validate_starter_unit_projection([replacement], self.expected)
+        validate_starter_unit_projection([], self.expected)
+
+    def test_rejects_redefinition_of_retained_starter_identity(self):
+        conflicting = {
+            **self.expected[0],
+            "type": "valve",
+            "params": {"outlet_pressure_bara": 40.0},
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "starter-template projection",
+        ):
+            validate_starter_unit_projection(
+                [conflicting, self.expected[1]],
+                self.expected,
+            )
+
+    def test_rejects_duplicate_graph_and_starter_ids(self):
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            validate_starter_unit_projection(
+                [self.expected[0], self.expected[0]],
+                self.expected,
+            )
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            validate_starter_unit_projection(
+                self.expected,
+                [self.expected[0], self.expected[0]],
+            )
+
+    def test_rejects_inlet_collision_with_omitted_starter_identity(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "conflicts with a starter-template unit identity",
+        ):
+            validate_starter_unit_projection(
+                [],
+                self.expected,
+                [
+                    {
+                        "id": "stage-1-compressor",
+                        "name": "Imported feed",
+                    }
+                ],
+            )
+
+    def test_rejects_names_that_shadow_omitted_starter_units(self):
+        replacement = create_inline_unit_spec(
+            "valve",
+            "stage 1 compressor",
+            {"stage-1-compressor", "intercooler"},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "Graph unit name .* conflicts with a starter-template",
+        ):
+            validate_starter_unit_projection(
+                [replacement],
+                self.expected,
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "Graph inlet name .* conflicts with a starter-template",
+        ):
+            validate_starter_unit_projection(
+                [],
+                self.expected,
+                [{"id": "feed", "name": "INTERCOOLER"}],
+            )
 
 
 class InletConditionMetadataTest(unittest.TestCase):
@@ -803,6 +901,32 @@ class MaterialInletLifecycleTest(unittest.TestCase):
                 {"condensate pump"},
             )
 
+    def test_clone_and_rename_reserve_omitted_starter_identities(self):
+        inlets, inlet_id = clone_material_inlet(
+            self.inlets,
+            "feed",
+            "Compressor-Stage-1",
+            {"compressor-stage-1"},
+            {"Compressor Stage 1"},
+        )
+
+        self.assertEqual(inlet_id, "compressor-stage-1-2")
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            clone_material_inlet(
+                self.inlets,
+                "feed",
+                "Compressor Stage 1",
+                {"compressor-stage-1"},
+                {"Compressor Stage 1"},
+            )
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            rename_material_inlet(
+                inlets,
+                inlet_id,
+                "Compressor Stage 1",
+                {"Compressor Stage 1"},
+            )
+
     def test_null_legacy_feed_names_do_not_create_false_collisions(self):
         legacy_inlet = {
             **copy.deepcopy(self.inlets[0]),
@@ -968,7 +1092,7 @@ class InlineInsertionTest(unittest.TestCase):
                 connections,
                 "feed-to-compressor",
                 "cooler",
-                "Feed Cooler",
+                "Feed-Cooler",
             )
         )
         self.assertEqual(new_unit_id, "feed-cooler-2")
@@ -977,6 +1101,22 @@ class InlineInsertionTest(unittest.TestCase):
             "feed-cooler-2-to-compressor-1-2",
         )
         self.assertEqual(len(new_units), 3)
+
+    def test_insert_rejects_existing_unit_name_without_mutation(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "name .* is duplicated"):
+            insert_inline_unit_on_connection(
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "cooler",
+                "COMPRESSOR 1",
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
 
     def test_insert_reserves_unconnected_inlet_ids(self):
         new_units, _, new_unit_id = insert_inline_unit_on_connection(
@@ -990,6 +1130,37 @@ class InlineInsertionTest(unittest.TestCase):
 
         self.assertEqual(new_unit_id, "satellite-feed-2")
         self.assertEqual(new_units[0]["id"], "satellite-feed-2")
+
+    def test_insert_reserves_removed_starter_ids(self):
+        new_units, _, new_unit_id = insert_inline_unit_on_connection(
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "cooler",
+            "Compressor Stage 1",
+            {"compressor-stage-1"},
+        )
+
+        self.assertEqual(new_unit_id, "compressor-stage-1-2")
+        self.assertEqual(new_units[0]["id"], "compressor-stage-1-2")
+
+    def test_insert_rejects_removed_starter_names_without_mutation(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "name .* is duplicated"):
+            insert_inline_unit_on_connection(
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "cooler",
+                "Compressor Stage 1",
+                {"compressor-stage-1"},
+                {"compressor stage 1"},
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
 
     def test_invalid_path_requests_fail_without_partial_edits(self):
         invalid_cases = (
@@ -1275,6 +1446,30 @@ class InlineUnitLifecycleTest(unittest.TestCase):
         self.assertEqual(terminal_connections, self.connections)
         self.assertEqual(len(units), len(self.units) + 1)
 
+    def test_remove_unconnected_parameterless_starter_separator(self):
+        starter_separator = {
+            "id": "inlet-scrubber",
+            "name": "Inlet scrubber",
+            "type": "separator",
+            "ports": {
+                "material_in": ["in"],
+                "material_out": ["gas", "liquid"],
+                "energy_in": [],
+                "energy_out": [],
+            },
+        }
+        original = copy.deepcopy(starter_separator)
+
+        units, connections = remove_inline_unit(
+            [starter_separator],
+            [],
+            "inlet-scrubber",
+        )
+
+        self.assertEqual(units, [])
+        self.assertEqual(connections, [])
+        self.assertEqual(starter_separator, original)
+
     def test_remove_rejects_branches_and_nonmaterial_references(self):
         units, connections, inserted_id = self._insert_valve()
         branch = {
@@ -1318,6 +1513,190 @@ class InlineUnitLifecycleTest(unittest.TestCase):
                     )
         self.assertEqual(len(units), 2)
         self.assertEqual(len(connections), 2)
+
+
+class InlineUnitReplacementTest(unittest.TestCase):
+    """Validate atomic replacement of equipment in a simple material path."""
+
+    def setUp(self):
+        self.units = [
+            create_inline_unit_spec("compressor", "Original Compressor", set()),
+            create_inline_unit_spec(
+                "cooler",
+                "Export Cooler",
+                {"original-compressor"},
+            ),
+        ]
+        self.connections = [
+            {
+                "id": "feed-to-compressor",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "original-compressor",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "compressor-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "original-compressor",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "export-cooler",
+                    "port": "in",
+                },
+            },
+        ]
+
+    def test_replace_preserves_surrounding_path_and_input_graph(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        units, connections, replacement_id = replace_inline_unit(
+            self.units,
+            self.connections,
+            "original-compressor",
+            "valve",
+            "Inlet Valve",
+        )
+
+        self.assertEqual(replacement_id, "inlet-valve")
+        self.assertEqual(
+            [unit["id"] for unit in units],
+            ["inlet-valve", "export-cooler"],
+        )
+        self.assertEqual(
+            [connection["id"] for connection in connections],
+            ["feed-to-compressor", "inlet-valve-to-export-cooler"],
+        )
+        self.assertEqual(
+            connections[0],
+            {
+                "id": "feed-to-compressor",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "inlet-valve",
+                    "port": "in",
+                },
+            },
+        )
+        self.assertEqual(
+            connections[1]["target"],
+            {
+                "kind": "unit",
+                "id": "export-cooler",
+                "port": "in",
+            },
+        )
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
+
+    def test_replace_reserves_starter_identity_and_rejects_name_conflicts(self):
+        units, _, replacement_id = replace_inline_unit(
+            self.units,
+            self.connections,
+            "original-compressor",
+            "compressor",
+            "Original Compressor",
+            {"original-compressor"},
+        )
+        self.assertEqual(replacement_id, "original-compressor-2")
+        self.assertEqual(units[0]["type"], "compressor")
+
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            replace_inline_unit(
+                self.units,
+                self.connections,
+                "original-compressor",
+                "valve",
+                "Export Cooler",
+            )
+
+    def test_full_replacement_always_allocates_a_fresh_graph_identity(self):
+        units, connections, replacement_id = replace_inline_unit(
+            self.units,
+            self.connections,
+            "original-compressor",
+            "compressor",
+            "Original Compressor",
+        )
+
+        self.assertEqual(replacement_id, "original-compressor-2")
+        self.assertEqual(units[0]["id"], replacement_id)
+        self.assertEqual(
+            connections[0]["target"]["id"],
+            replacement_id,
+        )
+        self.assertEqual(
+            connections[1]["source"]["id"],
+            replacement_id,
+        )
+
+    def test_replace_rejects_non_inline_catalog_port_shapes(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+
+        with self.assertRaisesRegex(ValueError, "ports 'in' and 'out'"):
+            replace_inline_unit(
+                self.units,
+                self.connections,
+                "original-compressor",
+                "mixer",
+                "Replacement Mixer",
+            )
+
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
+
+    def test_replace_rejects_terminal_and_branched_units_without_mutation(self):
+        original_units = copy.deepcopy(self.units)
+        original_connections = copy.deepcopy(self.connections)
+        invalid_connections = [
+            self.connections[0],
+            {
+                **self.connections[1],
+                "source": {
+                    "kind": "unit",
+                    "id": "export-cooler",
+                    "port": "out",
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "exactly one material output"):
+            replace_inline_unit(
+                self.units,
+                invalid_connections,
+                "original-compressor",
+                "valve",
+                "Inlet Valve",
+            )
+        with self.assertRaisesRegex(ValueError, "exactly one material output"):
+            replace_inline_unit(
+                self.units,
+                self.connections,
+                "export-cooler",
+                "valve",
+                "Export Valve",
+            )
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(self.connections, original_connections)
 
 
 class MixerPathInsertionTest(unittest.TestCase):
@@ -1444,6 +1823,32 @@ class MixerPathInsertionTest(unittest.TestCase):
         self.assertEqual(restored["connections"], self.connections)
         history, redone = redo_graph_history(history)
         self.assertEqual(redone, persisted)
+
+    def test_insert_mixer_reserves_removed_starter_ids(self):
+        units, _, mixer_id, _ = insert_mixer_on_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "Compressor-Stage-1",
+            {"compressor-stage-1"},
+            {"Compressor Stage 1"},
+        )
+
+        self.assertEqual(mixer_id, "compressor-stage-1-2")
+        self.assertEqual(units[0]["id"], "compressor-stage-1-2")
+
+    def test_insert_mixer_rejects_removed_starter_names(self):
+        with self.assertRaisesRegex(ValueError, "name .* is duplicated"):
+            insert_mixer_on_connection(
+                self.inlets,
+                self.units,
+                self.connections,
+                "feed-to-compressor",
+                "compressor stage 1",
+                {"compressor-stage-1"},
+                {"Compressor Stage 1"},
+            )
 
     def test_invalid_insertions_leave_graph_unchanged(self):
         invalid_cases = (

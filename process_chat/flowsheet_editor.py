@@ -1021,6 +1021,95 @@ def validate_catalog_unit(unit: Any) -> None:
     inline_unit_property_rows(unit_type, unit["params"])
 
 
+def validate_starter_unit_projection(
+    units: list[Any],
+    expected_units: list[Any],
+    inlets: list[Any] | None = None,
+) -> None:
+    """Keep retained starter nodes canonical while allowing their removal.
+
+    The backward-compatible ``process`` array still projects the starter
+    template. A graph draft may omit any of those nodes when the user
+    reorganizes the process, but it may not silently redefine a retained
+    starter identity. Replacement equipment must therefore use a new graph id.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(expected_units, list):
+        raise ValueError("Expected starter units must be an array.")
+
+    indexed_units: dict[str, dict[str, Any]] = {}
+    for index, unit in enumerate(units):
+        if not isinstance(unit, dict):
+            raise ValueError(f"Graph unit {index} must be an object.")
+        unit_id = str(unit.get("id", "")).strip()
+        if not unit_id:
+            raise ValueError(f"Graph unit {index} requires an id.")
+        if unit_id in indexed_units:
+            raise ValueError(f"Graph unit id '{unit_id}' is duplicated.")
+        indexed_units[unit_id] = unit
+
+    expected_ids: set[str] = set()
+    expected_name_keys: set[str] = set()
+    for index, expected_unit in enumerate(expected_units):
+        if not isinstance(expected_unit, dict):
+            raise ValueError(f"Starter unit {index} must be an object.")
+        expected_unit_id = str(expected_unit.get("id", "")).strip()
+        expected_unit_name = str(expected_unit.get("name", "")).strip()
+        if not expected_unit_id:
+            raise ValueError(f"Starter unit {index} requires an id.")
+        if not expected_unit_name:
+            raise ValueError(f"Starter unit {index} requires a name.")
+        if expected_unit_id in expected_ids:
+            raise ValueError(
+                f"Starter unit id '{expected_unit_id}' is duplicated."
+            )
+        expected_name_key = expected_unit_name.casefold()
+        if expected_name_key in expected_name_keys:
+            raise ValueError(
+                f"Starter unit name '{expected_unit_name}' is duplicated."
+            )
+        expected_ids.add(expected_unit_id)
+        expected_name_keys.add(expected_name_key)
+        retained_unit = indexed_units.get(expected_unit_id)
+        if retained_unit is not None and retained_unit != expected_unit:
+            raise ValueError(
+                "Graph units conflict with the starter-template projection at "
+                f"'{expected_unit_id}'."
+            )
+
+    for unit_id, unit in indexed_units.items():
+        if unit_id in expected_ids:
+            continue
+        unit_name = str(unit.get("name", "")).strip()
+        if unit_name.casefold() in expected_name_keys:
+            raise ValueError(
+                f"Graph unit name '{unit_name}' conflicts with a "
+                "starter-template unit identity."
+            )
+
+    if inlets is not None:
+        if not isinstance(inlets, list):
+            raise ValueError("Graph inlets must be an array.")
+        for index, inlet in enumerate(inlets):
+            if not isinstance(inlet, dict):
+                raise ValueError(f"Graph inlet {index} must be an object.")
+            inlet_id = str(inlet.get("id", "")).strip()
+            if not inlet_id:
+                raise ValueError(f"Graph inlet {index} requires an id.")
+            if inlet_id in expected_ids:
+                raise ValueError(
+                    f"Graph inlet id '{inlet_id}' conflicts with a "
+                    "starter-template unit identity."
+                )
+            inlet_name = str(inlet.get("name", "")).strip()
+            if inlet_name.casefold() in expected_name_keys:
+                raise ValueError(
+                    f"Graph inlet name '{inlet_name}' conflicts with a "
+                    "starter-template unit identity."
+                )
+
+
 def _connection_index(
     connections: list[Any],
     connection_id: str,
@@ -1648,6 +1737,7 @@ def insert_inline_unit_on_connection(
     unit_type: str,
     unit_name: str,
     reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     """Transactionally insert one catalog unit into a material connection.
 
@@ -1710,9 +1800,18 @@ def insert_inline_unit_on_connection(
     existing_object_ids.update(
         str(reserved_id).strip() for reserved_id in (reserved_ids or set())
     )
+    cleaned_name = str(unit_name).strip()
+    existing_name_keys = _normalized_name_keys(
+        unit.get("name")
+        for unit in copied_units
+        if isinstance(unit, dict)
+    )
+    existing_name_keys.update(_normalized_name_keys(reserved_names))
+    if cleaned_name.casefold() in existing_name_keys:
+        raise ValueError(f"Equipment name '{cleaned_name}' is duplicated.")
     new_unit = create_inline_unit_spec(
         unit_type,
-        unit_name,
+        cleaned_name,
         existing_object_ids,
     )
     validate_catalog_unit(new_unit)
@@ -1872,6 +1971,135 @@ def insert_mixer_on_connection(
         mixer_id,
         downstream_connection_id,
     )
+
+
+def replace_inline_unit(
+    units: list[Any],
+    connections: list[Any],
+    unit_id: str,
+    replacement_type: str,
+    replacement_name: str,
+    reserved_ids: set[str] | None = None,
+    reserved_names: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Replace one simple material-path unit without breaking its neighbours.
+
+    The selected unit must have exactly one material ``in`` connection and one
+    material ``out`` connection, with no energy or branch references. Removal
+    first reconnects the surrounding path on isolated copies; the replacement
+    is then inserted into that same connection. Callers therefore receive
+    either a complete replacement or the original graph remains untouched.
+    """
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+
+    inspected_units = units
+    inspected_connections = connections
+    cleaned_unit_id = str(unit_id).strip()
+    unit_matches = [
+        unit
+        for unit in inspected_units
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not unit_matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(unit_matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+    validate_catalog_unit(unit_matches[0])
+
+    cleaned_replacement_type = str(replacement_type).strip().lower()
+    replacement_definition = _INLINE_UNIT_CATALOG.get(cleaned_replacement_type)
+    if replacement_definition is None:
+        raise ValueError(
+            f"Unsupported inline unit type '{cleaned_replacement_type}'."
+        )
+    replacement_ports = replacement_definition["ports"]
+    if (
+        replacement_ports.get("material_in") != ["in"]
+        or replacement_ports.get("material_out") != ["out"]
+    ):
+        raise ValueError(
+            f"Replacement equipment '{cleaned_replacement_type}' must expose "
+            "exactly the material ports 'in' and 'out'."
+        )
+
+    peer_names = _normalized_name_keys(
+        unit.get("name")
+        for unit in inspected_units
+        if (
+            isinstance(unit, dict)
+            and str(unit.get("id", "")).strip() != cleaned_unit_id
+        )
+    )
+    peer_names.update(_normalized_name_keys(reserved_names))
+    cleaned_replacement_name = str(replacement_name).strip()
+    if cleaned_replacement_name.casefold() in peer_names:
+        raise ValueError(
+            f"Equipment name '{cleaned_replacement_name}' is duplicated."
+        )
+
+    incoming_connection_ids = [
+        str(connection.get("id", "")).strip()
+        for connection in inspected_connections
+        if (
+            isinstance(connection, dict)
+            and str(connection.get("type", "")).strip().lower() == "material"
+            and isinstance(connection.get("target"), dict)
+            and str(connection["target"].get("kind", "")).strip() == "unit"
+            and str(connection["target"].get("id", "")).strip()
+            == cleaned_unit_id
+            and str(connection["target"].get("port", "")).strip() == "in"
+        )
+    ]
+    if len(incoming_connection_ids) != 1:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' requires exactly one material "
+            "input before it can be replaced."
+        )
+    outgoing_connections = [
+        connection
+        for connection in inspected_connections
+        if (
+            isinstance(connection, dict)
+            and str(connection.get("type", "")).strip().lower() == "material"
+            and isinstance(connection.get("source"), dict)
+            and str(connection["source"].get("kind", "")).strip() == "unit"
+            and str(connection["source"].get("id", "")).strip()
+            == cleaned_unit_id
+            and str(connection["source"].get("port", "")).strip() == "out"
+        )
+    ]
+    if len(outgoing_connections) != 1:
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' requires exactly one material "
+            "output before it can be replaced."
+        )
+    replacement_connection_id = incoming_connection_ids[0]
+
+    reduced_units, reduced_connections = remove_inline_unit(
+        inspected_units,
+        inspected_connections,
+        cleaned_unit_id,
+    )
+    replaced_units, replaced_connections, replacement_id = (
+        insert_inline_unit_on_connection(
+            reduced_units,
+            reduced_connections,
+            replacement_connection_id,
+            replacement_type,
+            cleaned_replacement_name,
+            {cleaned_unit_id}.union(
+                {
+                    str(reserved_id).strip()
+                    for reserved_id in (reserved_ids or set())
+                }
+            ),
+        )
+    )
+    return replaced_units, replaced_connections, replacement_id
 
 
 def rename_inline_unit(
@@ -2086,7 +2314,6 @@ def remove_inline_unit(
         raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
     if len(unit_matches) > 1:
         raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
-    validate_catalog_unit(copied_units[unit_matches[0]])
 
     incoming_indices: list[int] = []
     outgoing_indices: list[int] = []
@@ -2137,6 +2364,7 @@ def remove_inline_unit(
     if not incoming_indices and not outgoing_indices:
         copied_units.pop(unit_matches[0])
         return copied_units, copied_connections
+    validate_catalog_unit(copied_units[unit_matches[0]])
     if len(incoming_indices) == 1 and not outgoing_indices:
         copied_connections.pop(incoming_indices[0])
         copied_units.pop(unit_matches[0])

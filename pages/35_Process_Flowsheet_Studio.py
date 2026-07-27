@@ -84,6 +84,7 @@ _EDITOR_SYMBOL_NAMES = (
     "redo_graph_history",
     "remove_material_inlet",
     "remove_inline_unit",
+    "replace_inline_unit",
     "replace_inline_unit_type",
     "reroute_graph_connection",
     "rename_material_inlet",
@@ -93,6 +94,7 @@ _EDITOR_SYMBOL_NAMES = (
     "update_inlet_conditions",
     "update_inline_unit_properties",
     "validate_catalog_unit",
+    "validate_starter_unit_projection",
 )
 globals().update(
     import_local_symbols(
@@ -454,6 +456,26 @@ def _terminal_name_conflicts(
     return [conflicts[name_key] for name_key in sorted(conflicts)]
 
 
+def _reserved_feed_names(
+    units: list[Any],
+    connections: list[Any],
+    starter_units: list[Any],
+    starter_connections: list[Any],
+) -> set[str]:
+    """Reserve active and restorable equipment and product-stream names."""
+    return (
+        _graph_name_set(starter_units)
+        .union(_graph_name_set(units))
+        .union(_terminal_material_stream_names(units, connections))
+        .union(
+            _terminal_material_stream_names(
+                starter_units,
+                starter_connections,
+            )
+        )
+    )
+
+
 def _validate_graph_solve_readiness(case_spec: dict[str, Any]) -> None:
     """Reject graph drafts whose independent feeds are not yet consumed."""
     inlets = case_spec.get("inlets")
@@ -509,6 +531,41 @@ def _secondary_inlet_map(
             continue
         result[inlet_id] = inlet
     return result
+
+
+def _unconnected_unit_map(
+    units: list[Any],
+    connections: list[Any],
+    candidate_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Return candidate units that have no material or energy references."""
+    referenced_unit_ids: set[str] = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        for endpoint_name in ("source", "target"):
+            endpoint = connection.get(endpoint_name)
+            if (
+                isinstance(endpoint, dict)
+                and str(endpoint.get("kind", "")).strip() == "unit"
+            ):
+                endpoint_id = str(endpoint.get("id", "")).strip()
+                if endpoint_id:
+                    referenced_unit_ids.add(endpoint_id)
+
+    cleaned_candidate_ids = {
+        str(candidate_id).strip()
+        for candidate_id in candidate_ids
+        if str(candidate_id).strip()
+    }
+    return {
+        unit_id: unit
+        for unit in units
+        if isinstance(unit, dict)
+        and (unit_id := str(unit.get("id", "")).strip())
+        in cleaned_candidate_ids
+        and unit_id not in referenced_unit_ids
+    }
 
 
 def _bounded_float(
@@ -1194,14 +1251,23 @@ def _validate_case_graph(
             + "."
         )
     indexed_units = _index_graph_objects(units, "units")
-    expected_units, _ = _build_template_graph(process)
+    expected_units, expected_connections = _build_template_graph(process)
+    restorable_product_conflicts = _terminal_name_conflicts(
+        inlets,
+        _terminal_material_stream_names(
+            expected_units,
+            expected_connections,
+        ),
+    )
+    if restorable_product_conflicts:
+        raise ValueError(
+            "Graph inlet names conflict with restorable starter product "
+            "streams: "
+            + ", ".join(restorable_product_conflicts)
+            + "."
+        )
     expected_unit_map = {unit["id"]: unit for unit in expected_units}
-    for expected_unit_id, expected_unit in expected_unit_map.items():
-        if indexed_units.get(expected_unit_id) != expected_unit:
-            raise ValueError(
-                "Graph units conflict with the starter-template projection at "
-                f"'{expected_unit_id}'."
-            )
+    validate_starter_unit_projection(units, expected_units, inlets)
     for unit_id, unit in indexed_units.items():
         if unit_id in expected_unit_map:
             continue
@@ -1617,6 +1683,42 @@ def _build_template_graph(
     return units, connections
 
 
+def _has_material_connection(
+    connections: Any,
+    source: tuple[str, str, str],
+    target: tuple[str, str, str],
+) -> bool:
+    """Return whether one exact material-port connection is active."""
+    if not isinstance(connections, list):
+        return False
+    for connection in connections:
+        if (
+            not isinstance(connection, dict)
+            or connection.get("type") != "material"
+        ):
+            continue
+        source_record = connection.get("source")
+        target_record = connection.get("target")
+        if not isinstance(source_record, dict) or not isinstance(
+            target_record,
+            dict,
+        ):
+            continue
+        if (
+            str(source_record.get("kind", "")).strip(),
+            str(source_record.get("id", "")).strip(),
+            str(source_record.get("port", "")).strip(),
+        ) != source:
+            continue
+        if (
+            str(target_record.get("kind", "")).strip(),
+            str(target_record.get("id", "")).strip(),
+            str(target_record.get("port", "")).strip(),
+        ) == target:
+            return True
+    return False
+
+
 def _build_case_spec(
     case_name: str,
     composition: dict[str, float],
@@ -1773,45 +1875,164 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
         )
     process = spec["process"]
 
-    stage_1_pressure = process[2]["params"]["outlet_pressure_bara"]
-    stage_2_pressure = process[5]["params"]["outlet_pressure_bara"]
     feed_pressure = fluid["pressure_bara"]
-    stage_1_efficiency = process[2]["params"]["isentropic_efficiency"]
-    stage_2_efficiency = process[5]["params"]["isentropic_efficiency"]
-    intercooler_pressure_drop = process[3]["params"]["pressure_drop_bar"]
-    export_pressure_drop = process[6]["params"]["pressure_drop_bar"]
+    retained_unit_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in spec.get("units", [])
+        if isinstance(unit, dict)
+    }
+    stage_1_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
+    )
+    intercooler_retained = (
+        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
+    )
+    stage_2_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
+    )
+    export_cooler_retained = (
+        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
+    )
+    connections = spec.get("connections", [])
+    stage_1_follows_feed = (
+        _has_material_connection(
+            connections,
+            ("inlet", PRIMARY_INLET_ID, "out"),
+            ("unit", TEMPLATE_UNIT_IDS["inlet scrubber"], "in"),
+        )
+        and _has_material_connection(
+            connections,
+            ("unit", TEMPLATE_UNIT_IDS["inlet scrubber"], "gas"),
+            ("unit", TEMPLATE_UNIT_IDS["compressor stage 1"], "in"),
+        )
+    )
+    intercooler_follows_stage_1 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 1"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["intercooler"], "in"),
+    )
+    stage_2_follows_intercooler = (
+        _has_material_connection(
+            connections,
+            ("unit", TEMPLATE_UNIT_IDS["intercooler"], "out"),
+            ("unit", TEMPLATE_UNIT_IDS["interstage scrubber"], "in"),
+        )
+        and _has_material_connection(
+            connections,
+            ("unit", TEMPLATE_UNIT_IDS["interstage scrubber"], "gas"),
+            ("unit", TEMPLATE_UNIT_IDS["compressor stage 2"], "in"),
+        )
+    )
+    export_cooler_follows_stage_2 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 2"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["export cooler"], "in"),
+    )
+    template_compressor_order_active = (
+        stage_1_follows_feed
+        and intercooler_follows_stage_1
+        and stage_2_follows_intercooler
+    )
+    stage_1_pressure = (
+        process[2]["params"]["outlet_pressure_bara"]
+        if stage_1_retained
+        else None
+    )
+    stage_2_pressure = (
+        process[5]["params"]["outlet_pressure_bara"]
+        if stage_2_retained
+        else None
+    )
+    stage_1_efficiency = (
+        process[2]["params"]["isentropic_efficiency"]
+        if stage_1_retained
+        else None
+    )
+    stage_2_efficiency = (
+        process[5]["params"]["isentropic_efficiency"]
+        if stage_2_retained
+        else None
+    )
+    intercooler_pressure_drop = (
+        process[3]["params"]["pressure_drop_bar"]
+        if intercooler_retained
+        else None
+    )
+    export_pressure_drop = (
+        process[6]["params"]["pressure_drop_bar"]
+        if export_cooler_retained
+        else None
+    )
 
     if feed_pressure <= 0.0:
         raise ValueError("Feed pressure must be greater than zero bara.")
     if fluid["total_flow"] <= 0.0:
         raise ValueError("Feed flow must be greater than zero kg/hr.")
-    if not feed_pressure < stage_1_pressure < stage_2_pressure:
+    if (
+        stage_1_retained
+        and stage_1_follows_feed
+        and not feed_pressure < stage_1_pressure
+    ):
+        raise ValueError(
+            "Pressure ordering must be feed pressure < stage 1 pressure."
+        )
+    if (
+        stage_1_retained
+        and stage_2_retained
+        and template_compressor_order_active
+        and not stage_1_pressure < stage_2_pressure
+    ):
         raise ValueError(
             "Pressure ordering must be feed pressure < stage 1 pressure "
             "< stage 2 pressure."
         )
-    for stage_number, efficiency in (
-        (1, stage_1_efficiency),
-        (2, stage_2_efficiency),
+    for stage_number, efficiency, retained in (
+        (1, stage_1_efficiency, stage_1_retained),
+        (2, stage_2_efficiency, stage_2_retained),
     ):
+        if not retained:
+            continue
         if not 0.50 <= efficiency <= 0.95:
             raise ValueError(
                 f"Compressor stage {stage_number} isentropic efficiency must be "
                 "between 0.50 and 0.95."
             )
-    for cooler_name, pressure_drop, inlet_pressure in (
-        ("Intercooler", intercooler_pressure_drop, stage_1_pressure),
-        ("Export cooler", export_pressure_drop, stage_2_pressure),
+    for cooler_name, pressure_drop, retained, inlet_pressure in (
+        (
+            "Intercooler",
+            intercooler_pressure_drop,
+            intercooler_retained,
+            (
+                stage_1_pressure
+                if stage_1_retained and intercooler_follows_stage_1
+                else None
+            ),
+        ),
+        (
+            "Export cooler",
+            export_pressure_drop,
+            export_cooler_retained,
+            (
+                stage_2_pressure
+                if stage_2_retained and export_cooler_follows_stage_2
+                else None
+            ),
+        ),
     ):
+        if not retained:
+            continue
         if not 0.0 <= pressure_drop <= 50.0:
             raise ValueError(
                 f"{cooler_name} pressure drop must be between 0 and 50 bar."
             )
-        if pressure_drop >= inlet_pressure:
+        if inlet_pressure is not None and pressure_drop >= inlet_pressure:
             raise ValueError(
                 f"{cooler_name} pressure drop must be lower than its inlet pressure."
             )
-        if pressure_drop / inlet_pressure > 0.10:
+        if (
+            inlet_pressure is not None
+            and pressure_drop / inlet_pressure > 0.10
+        ):
             warnings.append(
                 f"{cooler_name} pressure drop exceeds 10% of its inlet pressure."
             )
@@ -1819,11 +2040,25 @@ def _validate_case(spec: dict[str, Any], composition_total: float) -> list[str]:
         warnings.append(
             f"Composition summed to {composition_total:.6f} and was normalized to 1.0."
         )
-    if stage_1_pressure / feed_pressure > 3.0:
-        warnings.append("Stage 1 pressure ratio exceeds 3.0; check compressor feasibility.")
-    stage_2_inlet_pressure = stage_1_pressure - intercooler_pressure_drop
-    if stage_2_pressure / stage_2_inlet_pressure > 3.0:
-        warnings.append("Stage 2 pressure ratio exceeds 3.0; check compressor feasibility.")
+    if (
+        stage_1_retained
+        and stage_1_follows_feed
+        and stage_1_pressure / feed_pressure > 3.0
+    ):
+        warnings.append(
+            "Stage 1 pressure ratio exceeds 3.0; check compressor feasibility."
+        )
+    if (
+        stage_1_retained
+        and intercooler_retained
+        and stage_2_retained
+        and template_compressor_order_active
+    ):
+        stage_2_inlet_pressure = stage_1_pressure - intercooler_pressure_drop
+        if stage_2_pressure / stage_2_inlet_pressure > 3.0:
+            warnings.append(
+                "Stage 2 pressure ratio exceeds 3.0; check compressor feasibility."
+            )
     if fluid["eos_model"] == "gerg2008":
         warnings.append(
             "GERG-2008 is intended for gas-phase property calculations; "
@@ -1954,24 +2189,75 @@ def _pressure_profile_dataframe(
 ) -> pd.DataFrame:
     """Compare solved outlet pressures with the current case specifications."""
     process_steps = {step["name"]: step for step in spec["process"]}
-    stage_1_pressure = float(
-        process_steps["compressor stage 1"]["params"]["outlet_pressure_bara"]
+    retained_unit_ids = {
+        str(unit.get("id", "")).strip()
+        for unit in spec.get("units", [])
+        if isinstance(unit, dict)
+    }
+    stage_1_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 1"] in retained_unit_ids
     )
-    stage_2_pressure = float(
-        process_steps["compressor stage 2"]["params"]["outlet_pressure_bara"]
+    intercooler_retained = (
+        TEMPLATE_UNIT_IDS["intercooler"] in retained_unit_ids
     )
-    intercooler_drop = float(
-        process_steps["intercooler"]["params"]["pressure_drop_bar"]
+    stage_2_retained = (
+        TEMPLATE_UNIT_IDS["compressor stage 2"] in retained_unit_ids
     )
-    export_drop = float(
-        process_steps["export cooler"]["params"]["pressure_drop_bar"]
+    export_cooler_retained = (
+        TEMPLATE_UNIT_IDS["export cooler"] in retained_unit_ids
     )
-    expected_pressures = (
-        ("Compressor stage 1", "compressor stage 1", stage_1_pressure),
-        ("Intercooler", "intercooler", stage_1_pressure - intercooler_drop),
-        ("Compressor stage 2", "compressor stage 2", stage_2_pressure),
-        ("Export cooler", "export cooler", stage_2_pressure - export_drop),
+    connections = spec.get("connections", [])
+    intercooler_follows_stage_1 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 1"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["intercooler"], "in"),
     )
+    export_cooler_follows_stage_2 = _has_material_connection(
+        connections,
+        ("unit", TEMPLATE_UNIT_IDS["compressor stage 2"], "out"),
+        ("unit", TEMPLATE_UNIT_IDS["export cooler"], "in"),
+    )
+    expected_pressures: list[tuple[str, str, float]] = []
+    if stage_1_retained:
+        stage_1_pressure = float(
+            process_steps["compressor stage 1"]["params"][
+                "outlet_pressure_bara"
+            ]
+        )
+        expected_pressures.append(
+            ("Compressor stage 1", "compressor stage 1", stage_1_pressure)
+        )
+        if intercooler_retained and intercooler_follows_stage_1:
+            intercooler_drop = float(
+                process_steps["intercooler"]["params"]["pressure_drop_bar"]
+            )
+            expected_pressures.append(
+                (
+                    "Intercooler",
+                    "intercooler",
+                    stage_1_pressure - intercooler_drop,
+                )
+            )
+    if stage_2_retained:
+        stage_2_pressure = float(
+            process_steps["compressor stage 2"]["params"][
+                "outlet_pressure_bara"
+            ]
+        )
+        expected_pressures.append(
+            ("Compressor stage 2", "compressor stage 2", stage_2_pressure)
+        )
+        if export_cooler_retained and export_cooler_follows_stage_2:
+            export_drop = float(
+                process_steps["export cooler"]["params"]["pressure_drop_bar"]
+            )
+            expected_pressures.append(
+                (
+                    "Export cooler",
+                    "export cooler",
+                    stage_2_pressure - export_drop,
+                )
+            )
 
     records: list[dict[str, Any]] = []
     for display_name, object_name, expected in expected_pressures:
@@ -2018,7 +2304,18 @@ def _pressure_profile_dataframe(
                 "Detail": detail,
             }
         )
-    return pd.DataFrame(records)
+    return pd.DataFrame(
+        records,
+        columns=[
+            "Operation",
+            "Expected outlet [bara]",
+            "Calculated outlet [bara]",
+            "Deviation [bar]",
+            "Pass tolerance [bar]",
+            "Status",
+            "Detail",
+        ],
+    )
 
 
 def _constraint_dataframe(result: Any) -> pd.DataFrame:
@@ -3299,6 +3596,21 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         ).encode("utf-8")
     ).hexdigest()[:12]
     protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
+    (
+        starter_template_units,
+        starter_template_connections,
+    ) = _build_template_graph(spec["process"])
+    protected_unit_names = _graph_name_set(starter_template_units)
+    protected_unit_name_keys = _graph_name_set(
+        starter_template_units,
+        casefold=True,
+    )
+    reserved_feed_names = _reserved_feed_names(
+        spec["units"],
+        spec["connections"],
+        starter_template_units,
+        starter_template_connections,
+    )
     added_units = [
         unit
         for unit in spec["units"]
@@ -3308,6 +3620,11 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
     added_unit_map = {
         str(unit["id"]).strip(): unit for unit in added_units
     }
+    disconnected_starter_unit_map = _unconnected_unit_map(
+        spec["units"],
+        spec["connections"],
+        protected_unit_ids,
+    )
 
     with st.expander("Edit flowsheet graph", expanded=False):
         st.markdown("#### Draft flowsheet")
@@ -3473,8 +3790,18 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 f"{current_target_label}"
             )
 
-            insert_mixer_tab, reconnect_tab = st.tabs(
-                ["Insert mixer here", "Reconnect this path"]
+            (
+                insert_mixer_tab,
+                equipment_tab,
+                reconnect_tab,
+                disconnect_tab,
+            ) = st.tabs(
+                [
+                    "Insert mixer",
+                    "Equipment",
+                    "Reconnect",
+                    "Disconnect",
+                ]
             )
             with insert_mixer_tab:
                 st.caption(
@@ -3491,7 +3818,25 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         f"{graph_widget_revision}"
                     ),
                 )
-                resolved_mixer_name = mixer_name.strip() or "Feed mixer"
+                requested_mixer_name = mixer_name.strip() or "Feed mixer"
+                existing_mixer_names = _graph_name_set(
+                    spec["units"],
+                    casefold=True,
+                )
+                existing_mixer_names.update(
+                    _graph_name_set(spec["inlets"], casefold=True)
+                )
+                existing_mixer_names.update(protected_unit_name_keys)
+                resolved_mixer_name = requested_mixer_name
+                mixer_name_suffix = 2
+                while (
+                    resolved_mixer_name.casefold()
+                    in existing_mixer_names
+                ):
+                    resolved_mixer_name = (
+                        f"{requested_mixer_name} {mixer_name_suffix}"
+                    )
+                    mixer_name_suffix += 1
                 secondary_source_candidates = [
                     row
                     for row in all_material_sources
@@ -3566,6 +3911,8 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["connections"],
                             reorganize_connection_id,
                             resolved_mixer_name,
+                            protected_unit_ids,
+                            protected_unit_names,
                         )
                         secondary_connection_id = None
                         if selected_secondary_source is not None:
@@ -3624,6 +3971,277 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                                 f"'{downstream_connection_id}'. "
                                 f"{solve_notice}"
                             ),
+                        )
+                        st.rerun()
+
+            with equipment_tab:
+                st.caption(
+                    "Insert new equipment into this path or replace its "
+                    "downstream unit without manually rebuilding adjacent "
+                    "connections."
+                )
+                inline_insert_types = [
+                    unit_type
+                    for unit_type, definition in catalog.items()
+                    if definition["ports"].get("material_in") == ["in"]
+                    and definition["ports"].get("material_out") == ["out"]
+                ]
+                equipment_action = st.radio(
+                    "Equipment action",
+                    options=[
+                        "Insert equipment in this path",
+                        "Replace downstream equipment",
+                    ],
+                    horizontal=True,
+                    key=(
+                        "flowsheet_reorganize_equipment_action_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                reorganize_unit_type = st.selectbox(
+                    "Equipment type",
+                    options=inline_insert_types,
+                    format_func=lambda value: (
+                        f"{catalog[value]['label']} · "
+                        f"{catalog[value]['category']}"
+                    ),
+                    key=(
+                        "flowsheet_reorganize_equipment_type_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                reorganize_definition = catalog[reorganize_unit_type]
+                reorganize_unit_name = st.text_input(
+                    "Equipment name",
+                    value=f"New {reorganize_definition['label']}",
+                    max_chars=80,
+                    key=(
+                        "flowsheet_reorganize_equipment_name_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                requested_name = (
+                    reorganize_unit_name.strip()
+                    or f"New {reorganize_definition['label']}"
+                )
+                downstream_unit = None
+                if str(current_target.get("kind", "")).strip() == "unit":
+                    downstream_unit = next(
+                        (
+                            unit
+                            for unit in spec["units"]
+                            if (
+                                isinstance(unit, dict)
+                                and str(unit.get("id", "")).strip()
+                                == str(current_target.get("id", "")).strip()
+                            )
+                        ),
+                        None,
+                    )
+                if equipment_action == "Replace downstream equipment":
+                    retained_name_records = [
+                        unit
+                        for unit in spec["units"]
+                        if (
+                            isinstance(unit, dict)
+                            and (
+                                not isinstance(downstream_unit, dict)
+                                or str(unit.get("id", "")).strip()
+                                != str(
+                                    downstream_unit.get("id", "")
+                                ).strip()
+                            )
+                        )
+                    ]
+                else:
+                    retained_name_records = spec["units"]
+                existing_names = _graph_name_set(
+                    retained_name_records,
+                    casefold=True,
+                )
+                existing_names.update(
+                    _graph_name_set(spec["inlets"], casefold=True)
+                )
+                existing_names.update(protected_unit_name_keys)
+                resolved_name = requested_name
+                name_suffix = 2
+                while resolved_name.casefold() in existing_names:
+                    resolved_name = f"{requested_name} {name_suffix}"
+                    name_suffix += 1
+
+                if equipment_action == "Insert equipment in this path":
+                    st.markdown(
+                        f"**Preview:** {current_source_label} → "
+                        f"{resolved_name}:in → {resolved_name}:out → "
+                        f"{current_target_label}"
+                    )
+                    equipment_button_label = (
+                        "Insert equipment and preserve downstream path"
+                    )
+                    equipment_action_ready = True
+                else:
+                    if downstream_unit is None:
+                        st.warning(
+                            "This path does not terminate at equipment. Select "
+                            "a path whose downstream endpoint is a unit."
+                        )
+                        equipment_action_ready = False
+                    else:
+                        try:
+                            replace_inline_unit(
+                                spec["units"],
+                                spec["connections"],
+                                str(downstream_unit["id"]).strip(),
+                                reorganize_unit_type,
+                                resolved_name,
+                                {
+                                    *protected_unit_ids,
+                                    *(
+                                        str(inlet.get("id", "")).strip()
+                                        for inlet in spec["inlets"]
+                                        if isinstance(inlet, dict)
+                                    ),
+                                },
+                                protected_unit_names.union(
+                                    _graph_name_set(spec["inlets"])
+                                ),
+                            )
+                        except ValueError as replacement_blocker:
+                            st.warning(
+                                "This downstream unit cannot be replaced as "
+                                "one continuous path: "
+                                f"{replacement_blocker}"
+                            )
+                            equipment_action_ready = False
+                        else:
+                            downstream_name = _graph_object_name(
+                                downstream_unit,
+                                str(downstream_unit.get("id", "")).strip(),
+                            )
+                            st.markdown(
+                                f"**Preview:** replace {downstream_name} with "
+                                f"{resolved_name}; retain its upstream and "
+                                "downstream material paths."
+                            )
+                            equipment_action_ready = True
+                    equipment_button_label = (
+                        "Replace equipment and preserve surrounding path"
+                    )
+
+                st.caption("Initial properties and engineering units")
+                default_property_rows = inline_unit_property_rows(
+                    reorganize_unit_type
+                )
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Property": row["label"],
+                                "Value": row["value"],
+                                "Unit": row["unit"],
+                            }
+                            for row in default_property_rows
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                change_equipment = st.button(
+                    equipment_button_label,
+                    disabled=not equipment_action_ready,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_reorganize_change_equipment_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                if change_equipment:
+                    try:
+                        if (
+                            equipment_action
+                            == "Insert equipment in this path"
+                        ):
+                            units, connections, changed_unit_id = (
+                                insert_inline_unit_on_connection(
+                                    spec["units"],
+                                    spec["connections"],
+                                    reorganize_connection_id,
+                                    reorganize_unit_type,
+                                    resolved_name,
+                                    {
+                                        *protected_unit_ids,
+                                        *(
+                                            str(inlet.get("id", "")).strip()
+                                            for inlet in spec["inlets"]
+                                            if isinstance(inlet, dict)
+                                        ),
+                                    },
+                                    protected_unit_names.union(
+                                        _graph_name_set(spec["inlets"])
+                                    ),
+                                )
+                            )
+                            action_notice = (
+                                f"Inserted '{resolved_name}' "
+                                f"({changed_unit_id}) in "
+                                f"'{reorganize_connection_id}' while "
+                                "preserving the downstream process."
+                            )
+                        else:
+                            units, connections, changed_unit_id = (
+                                replace_inline_unit(
+                                    spec["units"],
+                                    spec["connections"],
+                                    str(downstream_unit["id"]).strip(),
+                                    reorganize_unit_type,
+                                    resolved_name,
+                                    {
+                                        *protected_unit_ids,
+                                        *(
+                                            str(inlet.get("id", "")).strip()
+                                            for inlet in spec["inlets"]
+                                            if isinstance(inlet, dict)
+                                        ),
+                                    },
+                                    protected_unit_names.union(
+                                        _graph_name_set(spec["inlets"])
+                                    ),
+                                )
+                            )
+                            replaced_label = _graph_object_name(
+                                downstream_unit,
+                                str(
+                                    downstream_unit.get("id", "")
+                                ).strip(),
+                            )
+                            action_notice = (
+                                f"Replaced '{replaced_label}' with "
+                                f"'{resolved_name}' ({changed_unit_id}) while "
+                                "preserving its surrounding material path."
+                            )
+                        candidate_draft = create_graph_draft(
+                            units,
+                            connections,
+                            spec["inlets"],
+                        )
+                        candidate_case = _apply_studio_graph_draft(
+                            spec,
+                            candidate_draft,
+                        )
+                        _validate_case_graph(
+                            candidate_case,
+                            candidate_case["process"],
+                        )
+                    except ValueError as edit_error:
+                        st.error(
+                            "Equipment change failed without changing the "
+                            f"draft: {edit_error}"
+                        )
+                    else:
+                        _record_graph_revision(
+                            spec,
+                            candidate_draft,
+                            action_notice + " Run NeqSim to solve this revision.",
                         )
                         st.rerun()
 
@@ -3715,6 +4333,70 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             ),
                         )
                         st.rerun()
+
+            with disconnect_tab:
+                st.caption(
+                    "Remove only this explicit path. Both endpoints remain "
+                    "available for a new connection, and undo restores the "
+                    "original route."
+                )
+                st.markdown(
+                    f"**Preview:** remove {current_source_label} → "
+                    f"{current_target_label}"
+                )
+                confirm_disconnect = st.checkbox(
+                    "I understand this leaves an unsolved graph draft",
+                    key=(
+                        "flowsheet_reorganize_confirm_disconnect_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                disconnect_path = st.button(
+                    "Disconnect this path",
+                    disabled=not confirm_disconnect,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_reorganize_disconnect_"
+                        f"{graph_widget_revision}"
+                    ),
+                )
+                if disconnect_path:
+                    try:
+                        connections = disconnect_graph_connection(
+                            spec["inlets"],
+                            spec["units"],
+                            spec["connections"],
+                            reorganize_connection_id,
+                        )
+                        candidate_draft = create_graph_draft(
+                            spec["units"],
+                            connections,
+                            spec["inlets"],
+                        )
+                        candidate_case = _apply_studio_graph_draft(
+                            spec,
+                            candidate_draft,
+                        )
+                        _validate_case_graph(
+                            candidate_case,
+                            candidate_case["process"],
+                        )
+                    except ValueError as edit_error:
+                        st.error(
+                            "Path disconnection failed without changing the "
+                            f"draft: {edit_error}"
+                        )
+                    else:
+                        _record_graph_revision(
+                            spec,
+                            candidate_draft,
+                            (
+                                f"Disconnected '{reorganize_connection_id}'. "
+                                "Reconnect the available endpoints before "
+                                "running NeqSim, or use undo to restore it."
+                            ),
+                        )
+                        st.rerun()
         else:
             st.info(
                 "Add or connect a material path before reorganizing the "
@@ -3761,17 +4443,15 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     source_inlet_id,
                     new_feed_name,
                     {
-                        str(unit.get("id", "")).strip()
-                        for unit in spec["units"]
-                        if isinstance(unit, dict)
-                        and str(unit.get("id", "")).strip()
+                        *protected_unit_ids,
+                        *(
+                            str(unit.get("id", "")).strip()
+                            for unit in spec["units"]
+                            if isinstance(unit, dict)
+                            and str(unit.get("id", "")).strip()
+                        ),
                     },
-                    _graph_name_set(spec["units"]).union(
-                        _terminal_material_stream_names(
-                            spec["units"],
-                            spec["connections"],
-                        )
-                    ),
+                    reserved_feed_names,
                 )
                 candidate_draft = create_graph_draft(
                     spec["units"],
@@ -3993,12 +4673,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             spec["inlets"],
                             selected_inlet_id,
                             renamed_inlet,
-                            _graph_name_set(spec["units"]).union(
-                                _terminal_material_stream_names(
-                                    spec["units"],
-                                    spec["connections"],
-                                )
-                            ),
+                            reserved_feed_names,
                         )
                         lifecycle_notice = (
                             f"Renamed feed '{selected_inlet_name}' to "
@@ -4106,6 +4781,8 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         extend_source_rows[extend_source_index]["endpoint"],
                         extend_type,
                         extend_name,
+                        protected_unit_ids,
+                        protected_unit_names,
                     )
                 )
                 candidate_draft = create_graph_draft(
@@ -4176,12 +4853,17 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
         if add_standalone:
             try:
                 reserved_ids = {
-                    str(inlet.get("id", "")).strip()
-                    for inlet in spec["inlets"]
-                    if isinstance(inlet, dict)
-                    and str(inlet.get("id", "")).strip()
+                    *protected_unit_ids,
+                    *(
+                        str(inlet.get("id", "")).strip()
+                        for inlet in spec["inlets"]
+                        if isinstance(inlet, dict)
+                        and str(inlet.get("id", "")).strip()
+                    ),
                 }
-                reserved_names = _graph_name_set(spec["inlets"])
+                reserved_names = protected_unit_names.union(
+                    _graph_name_set(spec["inlets"])
+                )
                 units, new_unit_id = add_catalog_unit(
                     spec["units"],
                     standalone_type,
@@ -4455,6 +5137,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 existing_names.update(
                     _graph_name_set(spec["inlets"], casefold=True)
                 )
+                existing_names.update(protected_unit_name_keys)
                 resolved_name = requested_name
                 name_suffix = 2
                 while resolved_name.casefold() in existing_names:
@@ -4468,11 +5151,17 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         unit_type,
                         resolved_name,
                         {
-                            str(inlet.get("id", "")).strip()
-                            for inlet in spec["inlets"]
-                            if isinstance(inlet, dict)
-                            and str(inlet.get("id", "")).strip()
+                            *protected_unit_ids,
+                            *(
+                                str(inlet.get("id", "")).strip()
+                                for inlet in spec["inlets"]
+                                if isinstance(inlet, dict)
+                                and str(inlet.get("id", "")).strip()
+                            ),
                         },
+                        protected_unit_names.union(
+                            _graph_name_set(spec["inlets"])
+                        ),
                     )
                 )
                 candidate_draft = create_graph_draft(
@@ -4727,7 +5416,9 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         spec["units"],
                         selected_unit_id,
                         renamed_unit_name,
-                        _graph_name_set(spec["inlets"]),
+                        protected_unit_names.union(
+                            _graph_name_set(spec["inlets"])
+                        ),
                     )
                     candidate_draft = create_graph_draft(
                         units,
@@ -4786,6 +5477,74 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"Removed '{selected_unit['name']}' and updated "
                             "its explicit material routes. Run NeqSim to solve "
                             "the updated graph."
+                        ),
+                    )
+                    st.rerun()
+
+        if disconnected_starter_unit_map:
+            st.divider()
+            st.markdown("#### Remove disconnected starter equipment")
+            st.caption(
+                "A starter operation becomes removable after every material "
+                "and energy path to it has been disconnected. Its reserved "
+                "identity remains unavailable to other graph objects."
+            )
+            starter_unit_id = st.selectbox(
+                "Disconnected starter equipment",
+                options=list(disconnected_starter_unit_map),
+                format_func=lambda value: (
+                    f"{disconnected_starter_unit_map[value]['name']} · "
+                    f"{disconnected_starter_unit_map[value]['type']} · {value}"
+                ),
+                key="flowsheet_disconnected_starter_unit",
+            )
+            starter_unit = disconnected_starter_unit_map[starter_unit_id]
+            confirm_starter_removal = st.checkbox(
+                "Confirm starter equipment removal",
+                key=f"flowsheet_confirm_remove_starter_{starter_unit_id}",
+                help=(
+                    "Removal deletes only the already-disconnected node. "
+                    "Reconnect the remaining open material ports before solving."
+                ),
+            )
+            remove_starter_unit = st.button(
+                "Remove disconnected starter equipment",
+                disabled=not confirm_starter_removal,
+                use_container_width=True,
+                key=f"flowsheet_remove_starter_{starter_unit_id}",
+            )
+            if remove_starter_unit:
+                try:
+                    units, connections = remove_inline_unit(
+                        spec["units"],
+                        spec["connections"],
+                        starter_unit_id,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        connections,
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"Starter equipment removal failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Removed disconnected starter equipment "
+                            f"'{starter_unit['name']}'. Reconnect the remaining "
+                            "open ports before running NeqSim."
                         ),
                     )
                     st.rerun()
