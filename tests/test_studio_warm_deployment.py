@@ -227,6 +227,47 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             )
         )
 
+    def test_multi_inlet_controls_normalize_imported_unit_type(self):
+        studio_source = (
+            self.project_root
+            / "pages"
+            / "35_Process_Flowsheet_Studio.py"
+        ).read_text(encoding="utf-8")
+        studio_tree = ast.parse(studio_source)
+        normalized_type_assignments = [
+            node
+            for node in ast.walk(studio_tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "selected_unit_type"
+                for target in node.targets
+            )
+        ]
+
+        self.assertEqual(len(normalized_type_assignments), 1)
+        self.assertEqual(
+            ast.unparse(normalized_type_assignments[0].value),
+            "str(selected_unit['type']).strip().lower()",
+        )
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Compare)
+                and isinstance(node.left, ast.Name)
+                and node.left.id == "selected_unit_type"
+                and any(isinstance(operator, ast.In) for operator in node.ops)
+                and {
+                    element.value
+                    for comparator in node.comparators
+                    if isinstance(comparator, ast.Set)
+                    for element in comparator.elts
+                    if isinstance(element, ast.Constant)
+                }
+                == {"mixer", "separator"}
+                for node in ast.walk(studio_tree)
+            )
+        )
+
     def test_original_equipment_can_be_replaced_without_rebuilding_paths(self):
         app = self._run_studio()
         path_selector = next(
