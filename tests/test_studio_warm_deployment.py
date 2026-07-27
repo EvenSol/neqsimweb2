@@ -268,6 +268,19 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             )
         )
 
+        self.assertTrue(
+            any(
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "supports_multi_inlet_resize"
+                for node in ast.walk(studio_tree)
+            )
+        )
+        self.assertIn(
+            "This imported mixer keeps legacy named inlet ports.",
+            studio_source,
+        )
+
     def test_original_equipment_can_be_replaced_without_rebuilding_paths(self):
         app = self._run_studio()
         path_selector = next(
