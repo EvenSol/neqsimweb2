@@ -32,6 +32,100 @@ from process_chat.solver_diagnostics import aggregate_energy_balance
 class MultiInletMixerConservationTest(unittest.TestCase):
     """Validate material and energy closure for independent graph inlets."""
 
+    def test_build_from_spec_dispatches_generic_graph_schema(self):
+        builder = ProcessBuilder()
+        graph_spec = {
+            "name": "Generic graph",
+            "units": [],
+            "connections": [],
+        }
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "Feed",
+                "fluid_spec": {},
+            }
+        ]
+        execution_order = ["feed"]
+        expected_model = object()
+
+        with patch.object(
+            builder,
+            "build_acyclic_graph",
+            return_value=expected_model,
+        ) as graph_builder:
+            model = builder.build_from_spec(
+                {
+                    "name": "Generic graph",
+                    "graph": graph_spec,
+                    "inlet_specs": inlet_specs,
+                    "execution_order": execution_order,
+                }
+            )
+
+        self.assertIs(model, expected_model)
+        graph_builder.assert_called_once_with(
+            graph_spec,
+            inlet_specs,
+            execution_order,
+        )
+
+    def test_build_from_spec_replays_native_two_inlet_graph(self):
+        source_builder, source_model = self._build_case(1.0)
+        source_result = source_model.run(timeout_ms=180_000)
+        replay_builder = ProcessBuilder()
+
+        replay_model = replay_builder.build_from_spec(source_builder.spec)
+        replay_result = replay_model.run(timeout_ms=180_000)
+
+        self.assertEqual(replay_builder.spec, source_builder.spec)
+        for kpi_name in (
+            "material_feed_count",
+            "material_feed_flow_kg_hr",
+            "material_product_count",
+            "material_product_flow_kg_hr",
+            "mass_balance_pct",
+            "component_balance_max_pct",
+            "energy_balance_pct",
+        ):
+            self.assertAlmostEqual(
+                replay_result.kpis[kpi_name].value,
+                source_result.kpis[kpi_name].value,
+                delta=max(
+                    abs(source_result.kpis[kpi_name].value) * 1.0e-6,
+                    1.0e-6,
+                ),
+            )
+        validation = {
+            constraint.name: constraint.status
+            for constraint in replay_result.constraints
+        }
+        self.assertEqual(validation["mass_balance"], "OK")
+        self.assertEqual(validation["component_balance"], "OK")
+        self.assertEqual(validation["energy_balance"], "OK")
+        self.assertLess(
+            replay_result.kpis["mass_balance_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(
+            replay_result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(
+            replay_result.kpis["energy_balance_pct"].value,
+            1.0e-6,
+        )
+        print(
+            "native Process Chat graph handoff benchmark:",
+            "feed=100000.0 kg/hr",
+            "mass="
+            f"{replay_result.kpis['mass_balance_pct'].value:.3e}%",
+            "components="
+            f"{replay_result.kpis['component_balance_max_pct'].value:.3e}%",
+            "energy="
+            f"{replay_result.kpis['energy_balance_pct'].value:.3e}%",
+        )
+
     def test_graph_python_export_embeds_exact_schema_and_compiles(self):
         builder = ProcessBuilder()
         builder._process_name = 'Two-feed "satellite" mixer'
