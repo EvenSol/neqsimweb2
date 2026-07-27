@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 66494)
+Total output lines: 6989
+
 """Process Flowsheet Studio for structured, reproducible NeqSim studies."""
 
 from __future__ import annotations
@@ -79,6 +82,7 @@ _EDITOR_SYMBOL_NAMES = (
     "inline_unit_property_rows",
     "insert_inline_unit_on_connection",
     "insert_mixer_on_connection",
+    "material_connection_name",
     "material_connection_rows",
     "process_unit_property_rows",
     "record_graph_history",
@@ -89,6 +93,7 @@ _EDITOR_SYMBOL_NAMES = (
     "replace_inline_unit",
     "replace_inline_unit_type",
     "reroute_graph_connection",
+    "rename_material_connection",
     "rename_material_inlet",
     "rename_inline_unit",
     "undo_graph_history",
@@ -967,6 +972,43 @@ def _validate_graph_integrity(
                 )
 
     indexed_connections = _index_graph_objects(connections, "connections")
+    reserved_stream_name_keys = {
+        str(record.get("name", "")).strip().casefold()
+        for record in [*indexed_inlets.values(), *indexed_units.values()]
+        if str(record.get("name", "")).strip()
+    }
+    connected_material_outputs = {
+        (
+            str(connection.get("source", {}).get("id", "")).strip(),
+            str(connection.get("source", {}).get("port", "")).strip(),
+        )
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+        and isinstance(connection.get("source"), dict)
+        and str(connection["source"].get("kind", "")).strip().lower()
+        == "unit"
+    }
+    for unit_id, unit in indexed_units.items():
+        unit_name = str(unit.get("name", "")).strip()
+        ports = unit.get("ports")
+        material_outputs = (
+            ports.get("material_out")
+            if isinstance(ports, dict)
+            else []
+        )
+        for raw_port in material_outputs:
+            output_port = str(raw_port).strip()
+            if (
+                unit_name
+                and output_port
+                and (unit_id, output_port)
+                not in connected_material_outputs
+            ):
+                reserved_stream_name_keys.add(
+                    f"{unit_name} [{output_port}] product".casefold()
+                )
+    material_stream_names: set[str] = set()
     used_sources: set[tuple[str, str, str, str]] = set()
     used_targets: set[tuple[str, str, str, str]] = set()
     used_routes: set[
@@ -979,6 +1021,29 @@ def _validate_graph_integrity(
             raise ValueError(
                 f"Connection '{connection_id}' type must be material or energy."
             )
+        if connection_type == "material":
+            raw_stream_name = connection.get("name")
+            stream_name = (
+                connection_id
+                if raw_stream_name is None
+                else str(raw_stream_name).strip()
+            )
+            if not stream_name:
+                raise ValueError(
+                    f"Material connection '{connection_id}' requires a "
+                    "stream name."
+                )
+            stream_name_key = stream_name.casefold()
+            if stream_name_key in material_stream_names:
+                raise ValueError(
+                    f"Material stream name '{stream_name}' is duplicated."
+                )
+            if stream_name_key in reserved_stream_name_keys:
+                raise ValueError(
+                    f"Material stream name '{stream_name}' conflicts with a "
+                    "process object or product boundary."
+                )
+            material_stream_names.add(stream_name_key)
         endpoints: dict[str, tuple[str, str, str]] = {}
         for endpoint_name in ("source", "target"):
             endpoint = connection.get(endpoint_name)
@@ -3069,6 +3134,11 @@ def _engineering_workbook_bytes(
         [
             {
                 "Connection ID": connection["id"],
+                "Stream name": (
+                    material_connection_name(connection)
+                    if str(connection["type"]).strip().lower() == "material"
+                    else ""
+                ),
                 "Type": connection["type"],
                 "Source kind": connection["source"]["kind"],
                 "Source ID": connection["source"]["id"],
@@ -3247,718 +3317,7 @@ def _case_history_record(
         "EOS": str(spec["fluid"]["eos_model"]).upper(),
         "Components": len(spec["fluid"]["components"]),
         "Feed temperature [°C]": float(spec["fluid"]["temperature_C"]),
-        "Feed pressure [bara]": float(spec["fluid"]["pressure_bara"]),
-        "Feed flow [kg/hr]": feed_flow_kg_hr,
-        "Stage 1 pressure [bara]": active_parameter(
-            "compressor stage 1",
-            "outlet_pressure_bara",
-        ),
-        "Stage 2 pressure [bara]": active_parameter(
-            "compressor stage 2",
-            "outlet_pressure_bara",
-        ),
-        "Stage 1 efficiency [-]": active_parameter(
-            "compressor stage 1",
-            "isentropic_efficiency",
-        ),
-        "Stage 2 efficiency [-]": active_parameter(
-            "compressor stage 2",
-            "isentropic_efficiency",
-        ),
-        "Intercooler pressure drop [bar]": active_parameter(
-            "intercooler",
-            "pressure_drop_bar",
-            0.0,
-        ),
-        "Export cooler pressure drop [bar]": active_parameter(
-            "export cooler",
-            "pressure_drop_bar",
-            0.0,
-        ),
-        "Compressor power [kW]": total_power_kw,
-        "Cooling duty magnitude [kW]": total_duty_kw,
-        "Specific energy [kWh/t]": specific_energy_kwh_t,
-        "Mass imbalance [%]": mass_balance_pct,
-        "Max component imbalance [%]": component_balance_pct,
-        "Iterative convergence": _convergence_state_label(
-            convergence_summary
-        ),
-        "Max convergence iterations": convergence_summary[
-            "max_iterations"
-        ],
-        "Validation": validation_status,
-    }
-
-
-def _upsert_case_history(
-    history: Any,
-    record: dict[str, Any],
-    max_cases: int = MAX_CASE_HISTORY,
-) -> list[dict[str, Any]]:
-    """Store one unique solved case while bounding session memory."""
-    if max_cases < 1:
-        raise ValueError("max_cases must be at least one.")
-    signature = record.get("_signature")
-    if not isinstance(signature, str) or not signature:
-        raise ValueError("A solved case record must have a signature.")
-
-    history_items = history if isinstance(history, list) else []
-    cleaned_history = [
-        dict(item)
-        for item in history_items
-        if isinstance(item, dict)
-        and isinstance(item.get("_signature"), str)
-        and item.get("_signature") != signature
-    ]
-    cleaned_history.append(dict(record))
-    return cleaned_history[-max_cases:]
-
-
-def _percent_delta(value: Any, baseline: Any) -> float | None:
-    """Return a finite percentage delta, or None for an unusable baseline."""
-    if value is None or baseline is None:
-        return None
-    value_float = _finite_float(value, "Case result")
-    baseline_float = _finite_float(baseline, "Baseline result")
-    if abs(baseline_float) <= 1.0e-12:
-        return None
-    return 100.0 * (value_float - baseline_float) / abs(baseline_float)
-
-
-def _case_comparison_dataframe(
-    history: Any,
-    baseline_signature: str,
-) -> pd.DataFrame:
-    """Build a workbook-style solved-case table with baseline KPI deltas."""
-    history_items = history if isinstance(history, list) else []
-    records = [
-        dict(item)
-        for item in history_items
-        if isinstance(item, dict)
-        and isinstance(item.get("_signature"), str)
-    ]
-    if not records:
-        return pd.DataFrame()
-
-    baseline = next(
-        (
-            record
-            for record in records
-            if record["_signature"] == baseline_signature
-        ),
-        records[0],
-    )
-    comparison_rows = []
-    for record in records:
-        row = {
-            key: value
-            for key, value in record.items()
-            if not key.startswith("_")
-        }
-        row["Baseline"] = (
-            "Yes" if record["_signature"] == baseline["_signature"] else ""
-        )
-        row["Power Δ vs baseline [%]"] = _percent_delta(
-            record.get("Compressor power [kW]"),
-            baseline.get("Compressor power [kW]"),
-        )
-        row["Duty Δ vs baseline [%]"] = _percent_delta(
-            record.get("Cooling duty magnitude [kW]"),
-            baseline.get("Cooling duty magnitude [kW]"),
-        )
-        row["Specific energy Δ vs baseline [%]"] = _percent_delta(
-            record.get("Specific energy [kWh/t]"),
-            baseline.get("Specific energy [kWh/t]"),
-        )
-        comparison_rows.append(row)
-    return pd.DataFrame(comparison_rows)
-
-
-def _case_history_label(record: dict[str, Any]) -> str:
-    """Return a safe selector label for a retained solved case."""
-    case_name = str(record.get("Case") or "Unnamed case")
-    signature = str(record.get("_signature") or "")[:8]
-    try:
-        feed_flow = _finite_float(
-            record.get("Feed flow [kg/hr]"),
-            "Feed flow",
-        )
-        feed_flow_text = f"{feed_flow:,.0f} kg/hr"
-    except ValueError:
-        feed_flow_text = "unknown flow"
-    return f"{case_name} · {feed_flow_text} · {signature}"
-
-
-def _load_case_history_record(
-    record: Any,
-) -> tuple[dict[str, Any], pd.DataFrame, list[str]]:
-    """Validate a retained solved-case specification for control restoration."""
-    if not isinstance(record, dict) or not isinstance(record.get("_spec"), dict):
-        raise ValueError(
-            "This retained result predates reusable case restoration. "
-            "Solve it again before restoring it."
-        )
-    return _load_case_controls(record["_spec"])
-
-
-def _template_object_label(object_name: str) -> str:
-    """Return a searchable palette label with the object's engineering type."""
-    display_name, object_type = TEMPLATE_OBJECTS[object_name]
-    return f"{display_name} · {object_type}"
-
-
-def _render_object_property_editor() -> str:
-    """Render supported properties and return the selected template object."""
-    st.markdown("#### Selected-object properties")
-    st.caption(
-        "Search the current flowsheet, select one object, and edit its supported "
-        "steady-state properties. Units are shown on every editable value."
-    )
-    selected_object = st.selectbox(
-        "Find flowsheet object",
-        options=list(TEMPLATE_OBJECTS),
-        format_func=_template_object_label,
-        key="flowsheet_selected_object",
-        help="Type while the list is open to search by object name or type.",
-    )
-    display_name, object_type = TEMPLATE_OBJECTS[selected_object]
-    st.write(f"**Selected:** {display_name}")
-    st.caption(f"Object type: {object_type}")
-
-    if selected_object == "feed gas":
-        st.info(
-            "Feed temperature, absolute pressure, mass flow, equation of state, "
-            "and molar composition are edited in the fluid basis."
-        )
-    else:
-        property_controls = TEMPLATE_PROPERTY_CONTROLS.get(
-            selected_object,
-            {},
-        )
-        unit_type = object_type.casefold()
-        params = {
-            property_name: st.session_state[definition["state_key"]]
-            for property_name, definition in property_controls.items()
-        }
-        property_rows = process_unit_property_rows(unit_type, params)
-        if not property_rows:
-            st.info(
-                "This separator performs an equilibrium split at its inlet "
-                "conditions. The native unit has no independent steady-state "
-                "property in the current schema."
-            )
-        for row in property_rows:
-            control = property_controls.get(row["key"])
-            if control is None:
-                raise ValueError(
-                    f"Template object '{selected_object}' is missing the "
-                    f"'{row['key']}' control binding."
-                )
-            minimum = max(float(row["minimum"]), control["minimum"])
-            maximum = min(float(row["maximum"]), control["maximum"])
-            st.number_input(
-                f"{row['label']} [{row['unit']}]",
-                min_value=minimum,
-                max_value=maximum,
-                step=float(row["step"]),
-                format=row["format"],
-                key=control["state_key"],
-            )
-
-    st.caption(
-        "Property edits update the structured case specification. Run NeqSim to "
-        "solve the edited case and refresh Process Chat."
-    )
-    return selected_object
-
-
-def _graph_history_for_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    """Return current history, bootstrapping an imported graph when needed."""
-    existing_history = st.session_state.get(GRAPH_HISTORY_STATE_KEY)
-    if existing_history is not None:
-        graph_history_status(existing_history)
-        return existing_history
-
-    starter_units, starter_connections = _build_template_graph(
-        spec["process"]
-    )
-    history = create_graph_history(
-        starter_units,
-        starter_connections,
-        spec["inlets"],
-    )
-    if (
-        spec["units"] != starter_units
-        or spec["connections"] != starter_connections
-    ):
-        history = record_graph_history(
-            history,
-            spec["units"],
-            spec["connections"],
-            spec["inlets"],
-        )
-        st.session_state[GRAPH_HISTORY_STATE_KEY] = history
-    return history
-
-
-def _reconcile_inlet_composition(
-    composition: dict[str, Any],
-    registry_composition: dict[str, Any],
-) -> dict[str, float]:
-    """Rebase an inlet composition onto a changed shared component registry."""
-    if not isinstance(composition, dict):
-        raise ValueError("Inlet composition must be an object.")
-    if not isinstance(registry_composition, dict) or not registry_composition:
-        raise ValueError("Shared registry composition must be non-empty.")
-
-    values: dict[str, float] = {}
-    fallback_values: dict[str, float] = {}
-    for component_name, raw_fallback in registry_composition.items():
-        if isinstance(raw_fallback, bool):
-            raise ValueError("Shared registry mole fractions must be numeric.")
-        try:
-            fallback = float(raw_fallback)
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                "Shared registry mole fractions must be numeric."
-            ) from error
-        if not math.isfinite(fallback) or fallback < 0.0:
-            raise ValueError(
-                "Shared registry mole fractions must be finite and non-negative."
-            )
-        fallback_values[component_name] = fallback
-
-        raw_value = composition.get(component_name, fallback)
-        if isinstance(raw_value, bool):
-            raise ValueError("Inlet mole fractions must be numeric.")
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError) as error:
-            raise ValueError("Inlet mole fractions must be numeric.") from error
-        if not math.isfinite(value) or value < 0.0:
-            raise ValueError(
-                "Inlet mole fractions must be finite and non-negative."
-            )
-        values[component_name] = value
-
-    total = sum(values.values())
-    if total <= 0.0:
-        values = fallback_values
-        total = sum(values.values())
-    if total <= 0.0:
-        raise ValueError("Reconciled inlet mole fractions must have a positive sum.")
-    return {
-        component_name: value / total
-        for component_name, value in values.items()
-    }
-
-
-def _apply_studio_graph_draft(
-    case_spec: dict[str, Any],
-    draft: dict[str, Any],
-) -> dict[str, Any]:
-    """Apply graph edits while keeping the primary inlet tied to case controls."""
-    if not isinstance(case_spec, dict) or not isinstance(draft, dict):
-        return apply_graph_draft(case_spec, draft)
-    if "inlets" not in draft:
-        return apply_graph_draft(case_spec, draft)
-
-    refreshed_draft = json.loads(json.dumps(draft, allow_nan=False))
-    case_process = case_spec.get("process")
-    draft_units = refreshed_draft.get("units")
-    if isinstance(case_process, list) and isinstance(draft_units, list):
-        current_template_units, _ = _build_template_graph(case_process)
-        current_template_by_id = {
-            str(unit["id"]).strip(): unit
-            for unit in current_template_units
-        }
-        refreshed_draft["units"] = [
-            json.loads(
-                json.dumps(
-                    current_template_by_id.get(
-                        str(unit.get("id", "")).strip(),
-                        unit,
-                    ),
-                    allow_nan=False,
-                )
-            )
-            if isinstance(unit, dict)
-            else unit
-            for unit in draft_units
-        ]
-    case_inlets = case_spec.get("inlets")
-    draft_inlets = refreshed_draft.get("inlets")
-    if not isinstance(case_inlets, list) or not isinstance(draft_inlets, list):
-        return apply_graph_draft(case_spec, refreshed_draft)
-    primary_case_inlets = [
-        inlet
-        for inlet in case_inlets
-        if isinstance(inlet, dict)
-        and str(inlet.get("id", "")).strip() == PRIMARY_INLET_ID
-    ]
-    primary_draft_indices = [
-        index
-        for index, inlet in enumerate(draft_inlets)
-        if isinstance(inlet, dict)
-        and str(inlet.get("id", "")).strip() == PRIMARY_INLET_ID
-    ]
-    if len(primary_case_inlets) != 1 or len(primary_draft_indices) != 1:
-        raise ValueError(
-            f"Graph drafts require exactly one primary inlet '{PRIMARY_INLET_ID}'."
-        )
-    refreshed_draft["inlets"][primary_draft_indices[0]] = json.loads(
-        json.dumps(primary_case_inlets[0], allow_nan=False)
-    )
-    primary_inlet = primary_case_inlets[0]
-    primary_package_id = str(
-        primary_inlet.get("fluid_package_id", "")
-    ).strip()
-    primary_composition = primary_inlet.get("composition")
-    if primary_package_id and isinstance(primary_composition, dict):
-        for index, inlet in enumerate(refreshed_draft["inlets"]):
-            if index == primary_draft_indices[0] or not isinstance(inlet, dict):
-                continue
-            if (
-                str(inlet.get("fluid_package_id", "")).strip()
-                != primary_package_id
-            ):
-                continue
-            composition = inlet.get("composition")
-            if (
-                isinstance(composition, dict)
-                and set(composition) != set(primary_composition)
-            ):
-                inlet["composition"] = _reconcile_inlet_composition(
-                    composition,
-                    primary_composition,
-                )
-    return apply_graph_draft(case_spec, refreshed_draft)
-
-
-def _activate_graph_revision(
-    spec: dict[str, Any],
-    history: dict[str, Any],
-    draft: dict[str, Any],
-    notice: str,
-) -> None:
-    """Validate and activate one history revision without stale solve state."""
-    candidate_case = _apply_studio_graph_draft(spec, draft)
-    _validate_case_graph(candidate_case, candidate_case["process"])
-    starter_units, starter_connections = _build_template_graph(
-        candidate_case["process"]
-    )
-    draft_inlets = draft.get("inlets")
-    has_secondary_inlets = isinstance(draft_inlets, list) and any(
-        isinstance(inlet, dict)
-        and str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID
-        for inlet in draft_inlets
-    )
-    if (
-        draft["units"] == starter_units
-        and draft["connections"] == starter_connections
-        and not has_secondary_inlets
-    ):
-        st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
-    else:
-        st.session_state[GRAPH_DRAFT_STATE_KEY] = draft
-    st.session_state[GRAPH_HISTORY_STATE_KEY] = history
-    _clear_studio_runtime(clear_history=False)
-    st.session_state[CASE_NOTICE_STATE_KEY] = notice
-
-
-def _record_graph_revision(
-    spec: dict[str, Any],
-    draft: dict[str, Any],
-    notice: str,
-) -> None:
-    """Record and activate one accepted graph edit."""
-    history = _graph_history_for_spec(spec)
-    history = record_graph_history(
-        history,
-        draft["units"],
-        draft["connections"],
-        draft.get("inlets"),
-    )
-    _activate_graph_revision(spec, history, draft, notice)
-
-
-def _render_graph_palette(spec: dict[str, Any]) -> None:
-    """Render safe lifecycle controls for the active unsolved graph."""
-    catalog = inline_unit_catalog()
-    catalog_rows = inline_unit_catalog_rows()
-    connection_rows = material_connection_rows(spec["connections"])
-    connection_labels = {
-        row["id"]: row["label"] for row in connection_rows
-    }
-    all_connection_rows = graph_connection_rows(
-        spec["inlets"],
-        spec["units"],
-        spec["connections"],
-    )
-    all_connection_labels = {
-        row["id"]: row["label"] for row in all_connection_rows
-    }
-    graph_widget_revision = hashlib.sha256(
-        json.dumps(
-            {
-                "inlets": spec["inlets"],
-                "units": spec["units"],
-                "connections": spec["connections"],
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-    protected_unit_ids = set(TEMPLATE_UNIT_IDS.values())
-    (
-        starter_template_units,
-        starter_template_connections,
-    ) = _build_template_graph(spec["process"])
-    protected_unit_names = _graph_name_set(starter_template_units)
-    protected_unit_name_keys = _graph_name_set(
-        starter_template_units,
-        casefold=True,
-    )
-    reserved_feed_names = _reserved_feed_names(
-        spec["units"],
-        spec["connections"],
-        starter_template_units,
-        starter_template_connections,
-    )
-    added_units = [
-        unit
-        for unit in spec["units"]
-        if isinstance(unit, dict)
-        and str(unit.get("id", "")).strip() not in protected_unit_ids
-    ]
-    added_unit_map = {
-        str(unit["id"]).strip(): unit for unit in added_units
-    }
-    disconnected_starter_unit_map = _unconnected_unit_map(
-        spec["units"],
-        spec["connections"],
-        protected_unit_ids,
-    )
-
-    with st.expander("Edit flowsheet graph", expanded=False):
-        st.markdown("#### Draft flowsheet")
-        st.caption(
-            "Automatically laid out from the active inlet, unit, port, and "
-            "connection schema before NeqSim execution."
-        )
-        try:
-            draft_dot = build_graph_draft_dot(
-                spec["inlets"],
-                spec["units"],
-                spec["connections"],
-            )
-        except ValueError as preview_error:
-            st.error(f"Draft flowsheet preview failed: {preview_error}")
-        else:
-            st.graphviz_chart(
-                draft_dot,
-                use_container_width=True,
-            )
-            st.caption(
-                "Blue solid paths are material streams; amber dashed paths "
-                "are energy links. Oval nodes mark inlet and product boundaries."
-            )
-
-        st.divider()
-        graph_history = _graph_history_for_spec(spec)
-        history_status = graph_history_status(graph_history)
-        st.markdown("#### Edit history")
-        history_cols = st.columns(3)
-        history_cols[0].caption(
-            "Graph revision "
-            f"{history_status['position']} of {history_status['total']}"
-        )
-        undo_edit = history_cols[1].button(
-            "Undo graph edit",
-            disabled=not history_status["can_undo"],
-            use_container_width=True,
-            key="flowsheet_undo_graph_edit",
-        )
-        redo_edit = history_cols[2].button(
-            "Redo graph edit",
-            disabled=not history_status["can_redo"],
-            use_container_width=True,
-            key="flowsheet_redo_graph_edit",
-        )
-        if undo_edit or redo_edit:
-            try:
-                if undo_edit:
-                    graph_history, selected_draft = undo_graph_history(
-                        graph_history
-                    )
-                    navigation_notice = (
-                        "Undid the latest graph edit. "
-                        "Run NeqSim to solve this revision."
-                    )
-                else:
-                    graph_history, selected_draft = redo_graph_history(
-                        graph_history
-                    )
-                    navigation_notice = (
-                        "Redid the next graph edit. "
-                        "Run NeqSim to solve this revision."
-                    )
-                _activate_graph_revision(
-                    spec,
-                    graph_history,
-                    selected_draft,
-                    navigation_notice,
-                )
-            except ValueError as history_error:
-                st.error(f"Graph history navigation failed: {history_error}")
-            else:
-                st.rerun()
-
-        st.divider()
-        st.markdown("#### Reorganize an existing process")
-        st.caption(
-            "Select an existing material path and change it in one undoable "
-            "transaction. You do not need to disconnect the process first."
-        )
-        if connection_rows:
-            reorganize_connection_id = st.selectbox(
-                "Material path to reorganize",
-                options=list(connection_labels),
-                format_func=connection_labels.__getitem__,
-                key=(
-                    "flowsheet_reorganize_connection_"
-                    f"{graph_widget_revision}"
-                ),
-            )
-            reorganize_connection = next(
-                connection
-                for connection in spec["connections"]
-                if (
-                    isinstance(connection, dict)
-                    and str(connection.get("id", "")).strip()
-                    == reorganize_connection_id
-                )
-            )
-            current_source = reorganize_connection["source"]
-            current_target = reorganize_connection["target"]
-
-            all_material_sources = graph_port_rows(
-                spec["inlets"],
-                spec["units"],
-                spec["connections"],
-                "material",
-                "source",
-            )
-            all_material_targets = graph_port_rows(
-                spec["inlets"],
-                spec["units"],
-                spec["connections"],
-                "material",
-                "target",
-            )
-
-            def candidate_port_rows(
-                rows: list[dict[str, Any]],
-                current_endpoint: dict[str, Any],
-            ) -> list[dict[str, Any]]:
-                current_key = tuple(
-                    str(current_endpoint.get(field, "")).strip()
-                    for field in ("kind", "id", "port")
-                )
-                candidates = [
-                    row
-                    for row in rows
-                    if (
-                        not row["connected"]
-                        or tuple(
-                            str(row["endpoint"].get(field, "")).strip()
-                            for field in ("kind", "id", "port")
-                        )
-                        == current_key
-                    )
-                ]
-                return sorted(
-                    candidates,
-                    key=lambda row: (
-                        tuple(
-                            str(row["endpoint"].get(field, "")).strip()
-                            for field in ("kind", "id", "port")
-                        )
-                        != current_key,
-                        row["label"].casefold(),
-                    ),
-                )
-
-            source_candidates = candidate_port_rows(
-                all_material_sources,
-                current_source,
-            )
-            target_candidates = candidate_port_rows(
-                all_material_targets,
-                current_target,
-            )
-            current_source_label = source_candidates[0]["label"]
-            current_target_label = target_candidates[0]["label"]
-            st.info(
-                f"Current route: {current_source_label} → "
-                f"{current_target_label}"
-            )
-
-            (
-                insert_mixer_tab,
-                equipment_tab,
-                reconnect_tab,
-                disconnect_tab,
-            ) = st.tabs(
-                [
-                    "Insert mixer",
-                    "Equipment",
-                    "Reconnect",
-                    "Disconnect",
-                ]
-            )
-            with insert_mixer_tab:
-                st.caption(
-                    "The current source will enter mixer port in_0. The mixer "
-                    "outlet will reconnect to the current downstream target, "
-                    "while in_1 remains available for another feed."
-                )
-                mixer_name = st.text_input(
-                    "Mixer name",
-                    value="Feed mixer",
-                    max_chars=80,
-                    key=(
-                        "flowsheet_reorganize_mixer_name_"
-                        f"{graph_widget_revision}"
-                    ),
-                )
-                requested_mixer_name = mixer_name.strip() or "Feed mixer"
-                existing_mixer_names = _graph_name_set(
-                    spec["units"],
-                    casefold=True,
-                )
-                existing_mixer_names.update(
-                    _graph_name_set(spec["inlets"], casefold=True)
-                )
-                existing_mixer_names.update(protected_unit_name_keys)
-                resolved_mixer_name = requested_mixer_name
-                mixer_name_suffix = 2
-                while (
-                    resolved_mixer_name.casefold()
-                    in existing_mixer_names
-                ):
-                    resolved_mixer_name = (
-                        f"{requested_mixer_name} {mixer_name_suffix}"
-                    )
-                    mixer_name_suffix += 1
-                secondary_source_candidates = [
-                    row
-                    for row in all_material_sources
-                    if not row["connected"]
-                ]
-                selected_secondary_source = None
-                if secondary_source_candidates:
-                    secondary_source_index = st.selectbox(
+        "Feed pressure [bara]": f…6494 tokens truncated…condary_source_index = st.selectbox(
                         "Second mixer inlet",
                         options=[
                             None,
@@ -5162,6 +4521,97 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"Disconnected '{disconnect_id}'. "
                             "Use undo to restore the path or reconnect "
                             "available ports before solving."
+                        ),
+                    )
+                    st.rerun()
+
+        if connection_rows:
+            st.divider()
+            st.markdown("#### Name material streams")
+            st.caption(
+                "Assign an engineering stream name while preserving the "
+                "connection's stable graph ID and both endpoint ports."
+            )
+            stream_row_by_id = {
+                row["id"]: row for row in connection_rows
+            }
+            stream_connection_id = st.selectbox(
+                "Material stream",
+                options=list(connection_labels),
+                format_func=connection_labels.__getitem__,
+                key=(
+                    "flowsheet_named_stream_connection_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            stream_row = stream_row_by_id[stream_connection_id]
+            edited_stream_name = st.text_input(
+                "Engineering stream name",
+                value=stream_row["name"],
+                key=(
+                    "flowsheet_named_stream_value_"
+                    f"{stream_connection_id}_{graph_widget_revision}"
+                ),
+                help=(
+                    "Names must be unique across material paths, feeds, "
+                    "equipment, and terminal product streams."
+                ),
+            )
+            save_stream_name = st.button(
+                "Save material stream name",
+                disabled=(
+                    edited_stream_name.strip()
+                    == stream_row["name"]
+                ),
+                use_container_width=True,
+                key=(
+                    "flowsheet_save_stream_name_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            if save_stream_name:
+                reserved_stream_names = (
+                    _graph_name_set(spec["inlets"])
+                    .union(_graph_name_set(spec["units"]))
+                    .union(
+                        _terminal_material_stream_names(
+                            spec["units"],
+                            spec["connections"],
+                        )
+                    )
+                )
+                try:
+                    connections = rename_material_connection(
+                        spec["connections"],
+                        stream_connection_id,
+                        edited_stream_name,
+                        reserved_stream_names,
+                    )
+                    candidate_draft = create_graph_draft(
+                        spec["units"],
+                        connections,
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"Material stream rename failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Renamed material stream "
+                            f"'{stream_row['name']}' to "
+                            f"'{edited_stream_name.strip()}'."
                         ),
                     )
                     st.rerun()

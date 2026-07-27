@@ -3109,7 +3109,13 @@ def build_graph_draft_dot(
             edge_style = 'color="#d97706", fontcolor="#92400e", style="dashed"'
         else:
             edge_style = 'color="#2563eb", fontcolor="#1e40af"'
-        edge_label = f"{source_port} \u2192 {target_port}"
+        if connection_type == "material":
+            edge_label = (
+                f"{material_connection_name(connection)}\n"
+                f"{source_port} \u2192 {target_port}"
+            )
+        else:
+            edge_label = f"{source_port} \u2192 {target_port}"
         lines.append(
             f"  {source_dot_id} -> {target_dot_id} "
             f"[label={_dot_text(edge_label)}, {edge_style}];"

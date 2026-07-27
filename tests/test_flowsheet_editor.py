@@ -3544,6 +3544,8 @@ class GraphDraftDiagramTest(unittest.TestCase):
         self.assertIn("separator:liquid\\nPRODUCT", dot)
         self.assertEqual(dot.count(" -> "), 7)
         self.assertEqual(dot.count('style="dashed"'), 1)
+        self.assertIn("feed-a-mixer\\nout → in_0", dot)
+        self.assertIn("heater-separator\\nout → in", dot)
         self.assertIn("duty → duty", dot)
 
     def test_layout_is_connection_order_independent_and_input_safe(self):
