@@ -851,6 +851,53 @@ class ProcessBuilder:
                     str(connection["id"]).strip(),
                 ),
             )
+            if unit_type in {"mixer", "separator"}:
+                ports = unit_spec.get("ports")
+                declared_inputs = (
+                    ports.get("material_in")
+                    if isinstance(ports, dict)
+                    else None
+                )
+                if not isinstance(declared_inputs, list) or not declared_inputs:
+                    raise ValueError(
+                        f"{unit_type.capitalize()} '{node_id}' requires "
+                        "declared material inlet ports."
+                    )
+                connected_inputs = [
+                    str(connection["target"].get("port", "")).strip()
+                    for connection in incoming
+                ]
+                missing_inputs = sorted(
+                    set(declared_inputs).difference(connected_inputs)
+                )
+                unexpected_inputs = sorted(
+                    set(connected_inputs).difference(declared_inputs)
+                )
+                if (
+                    len(connected_inputs) != len(declared_inputs)
+                    or missing_inputs
+                    or unexpected_inputs
+                ):
+                    details = []
+                    if missing_inputs:
+                        details.append(
+                            "missing: " + ", ".join(missing_inputs)
+                        )
+                    if unexpected_inputs:
+                        details.append(
+                            "unexpected: " + ", ".join(unexpected_inputs)
+                        )
+                    if not details:
+                        details.append(
+                            f"declared {len(declared_inputs)}, connected "
+                            f"{len(connected_inputs)}"
+                        )
+                    raise ValueError(
+                        f"{unit_type.capitalize()} '{node_id}' material inlet "
+                        "connections must match declared ports ("
+                        + "; ".join(details)
+                        + ")."
+                    )
             if not incoming:
                 raise ValueError(
                     f"Unit '{node_id}' requires at least one material inlet."
