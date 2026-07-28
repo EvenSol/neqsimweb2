@@ -2220,7 +2220,10 @@ def insert_inline_unit_on_connection(
     }
     downstream_connection_id = _unique_connection_id(
         f"{new_unit['id']}-to-{target_id}",
-        _connection_identity_keys(copied_connections),
+        _connection_identity_keys(copied_connections).union(
+            existing_name_keys,
+            {cleaned_name.casefold()},
+        ),
     )
     copied_connections.insert(
         selected_index + 1,
@@ -2322,9 +2325,20 @@ def insert_mixer_on_connection(
         "id": mixer_id,
         "port": "in_0",
     }
+    downstream_reserved_keys = _connection_identity_keys(
+        copied_connections
+    )
+    downstream_reserved_keys.update(
+        _normalized_name_keys(
+            record.get("name")
+            for record in [*inlets, *copied_units]
+            if isinstance(record, dict)
+        )
+    )
+    downstream_reserved_keys.update(_normalized_name_keys(reserved_names))
     downstream_connection_id = _unique_connection_id(
         f"{mixer_id}-out-to-{target_id}",
-        _connection_identity_keys(copied_connections),
+        downstream_reserved_keys,
     )
     copied_connections.insert(
         selected_index + 1,
@@ -3131,7 +3145,12 @@ def build_graph_draft_dot(
                 f"{connection_type}_in port '{target_port}'."
             )
         if connection_type == "material":
-            connected_outputs.add((source_id, source_port))
+            connected_outputs.add(
+                (
+                    source_id,
+                    canonical_material_output_port(source_port),
+                )
+            )
         rendered_connections.append(
             (
                 connection,
@@ -3212,7 +3231,10 @@ def build_graph_draft_dot(
                 raise ValueError(
                     f"Graph preview unit '{unit_id}' has an empty output port."
                 )
-            if (unit_id, port_name) in connected_outputs:
+            if (
+                unit_id,
+                canonical_material_output_port(port_name),
+            ) in connected_outputs:
                 continue
             product_dot_id = f"product_{product_index}"
             product_index += 1

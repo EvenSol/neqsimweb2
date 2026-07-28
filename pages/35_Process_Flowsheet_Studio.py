@@ -1028,17 +1028,7 @@ def _validate_graph_integrity(
                 f"Connection '{connection_id}' type must be material or energy."
             )
         if connection_type == "material":
-            raw_stream_name = connection.get("name")
-            stream_name = (
-                connection_id
-                if raw_stream_name is None
-                else str(raw_stream_name).strip()
-            )
-            if not stream_name:
-                raise ValueError(
-                    f"Material connection '{connection_id}' requires a "
-                    "stream name."
-                )
+            stream_name = material_connection_name(connection)
             stream_name_key = stream_name.casefold()
             if stream_name_key in material_stream_names:
                 raise ValueError(

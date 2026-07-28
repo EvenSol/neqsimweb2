@@ -1168,6 +1168,21 @@ class InlineInsertionTest(unittest.TestCase):
         self.assertEqual(self.units, original_units)
         self.assertEqual(self.connections, original_connections)
 
+    def test_insert_reserves_process_names_for_downstream_stream_id(self):
+        _, connections, _ = insert_inline_unit_on_connection(
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "pump",
+            "Feed pump",
+            reserved_names={"feed-pump-to-compressor-1"},
+        )
+
+        self.assertEqual(
+            connections[1]["id"],
+            "feed-pump-to-compressor-1-2",
+        )
+
     def test_invalid_path_requests_fail_without_partial_edits(self):
         invalid_cases = (
             ("missing", self.connections, "Unknown graph connection"),
@@ -2064,6 +2079,22 @@ class MixerPathInsertionTest(unittest.TestCase):
                 {"compressor-stage-1"},
                 {"Compressor Stage 1"},
             )
+
+    def test_insert_mixer_reserves_process_names_for_downstream_stream_id(self):
+        _, connections, _, downstream_id = insert_mixer_on_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "Feed mixer",
+            reserved_names={"feed-mixer-out-to-feed-compressor"},
+        )
+
+        self.assertEqual(
+            downstream_id,
+            "feed-mixer-out-to-feed-compressor-2",
+        )
+        self.assertEqual(connections[1]["id"], downstream_id)
 
     def test_invalid_insertions_leave_graph_unchanged(self):
         invalid_cases = (
@@ -3679,6 +3710,54 @@ class GraphDraftDiagramTest(unittest.TestCase):
         self.assertIn(r'Feed \"quoted\"\nINLET', dot)
         self.assertNotIn('feed"; unsafe ->', dot)
         self.assertIn("inlet_0 -> unit_0", dot)
+
+    def test_layout_suppresses_products_for_connected_output_aliases(self):
+        units = [
+            {
+                "id": "heater",
+                "name": "Heater",
+                "type": "heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out", "main"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+            {
+                "id": "cooler",
+                "name": "Cooler",
+                "type": "cooler",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+        ]
+        connections = [
+            {
+                "id": "heater-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "main",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "cooler",
+                    "port": "in",
+                },
+            }
+        ]
+
+        dot = build_graph_draft_dot([], units, connections)
+
+        self.assertNotIn("heater:out\\nPRODUCT", dot)
+        self.assertNotIn("heater:main\\nPRODUCT", dot)
+        self.assertIn("cooler:out\\nPRODUCT", dot)
 
     def test_invalid_preview_graphs_fail_explicitly(self):
         invalid_cases = (

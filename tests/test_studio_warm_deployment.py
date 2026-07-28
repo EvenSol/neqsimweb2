@@ -84,6 +84,9 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             "canonical_material_output_port": (
                 flowsheet_editor.canonical_material_output_port
             ),
+            "material_connection_name": (
+                flowsheet_editor.material_connection_name
+            ),
             "json": json,
             "math": math,
         }
