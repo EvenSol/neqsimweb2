@@ -849,6 +849,7 @@ class ProcessBuilder:
         connection_ids: set[str] = set()
         connection_name_keys: set[str] = set()
         connection_names: set[str] = set()
+        connected_source_ports: set[tuple[str, str, str]] = set()
         reserved_name_keys = {
             name.casefold() for name in inlet_names.union(unit_names)
         }
@@ -890,6 +891,17 @@ class ProcessBuilder:
                 raise ValueError(
                     f"Connection '{connection_id}' requires source and target objects."
                 )
+            source_key = (
+                str(source.get("kind", "")).strip().lower(),
+                str(source.get("id", "")).strip(),
+                str(source.get("port", "")).strip().lower(),
+            )
+            if source_key in connected_source_ports:
+                raise ValueError(
+                    f"Material output port {source_key[1]}:{source_key[2]} "
+                    "already has a connection; use a splitter for branching."
+                )
+            connected_source_ports.add(source_key)
             target_kind = str(target.get("kind", "")).strip().lower()
             target_id = str(target.get("id", "")).strip()
             if target_kind != "unit" or target_id not in indexed_units:

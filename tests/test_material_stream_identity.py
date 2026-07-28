@@ -234,6 +234,68 @@ class MaterialStreamIdentityTest(unittest.TestCase):
                         ["well-a", "well-b", "inlet-mixer"],
                     )
 
+    def test_rejects_duplicate_source_port_before_native_build(self):
+        inlet_specs = [
+            self._inlet("well-a", "Well A feed", 12_000.0),
+        ]
+        graph_spec = {
+            "name": "Invalid implicit branch",
+            "units": [
+                {
+                    "id": "inlet-mixer",
+                    "name": "Inlet mixer",
+                    "type": "mixer",
+                    "ports": {
+                        "material_in": ["in_0", "in_1"],
+                        "material_out": ["out"],
+                    },
+                    "params": {},
+                }
+            ],
+            "connections": [
+                {
+                    "id": "well-a-to-mixer-0",
+                    "name": "Well A branch 0",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "well-a",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "inlet-mixer",
+                        "port": "in_0",
+                    },
+                },
+                {
+                    "id": "well-a-to-mixer-1",
+                    "name": "Well A branch 1",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "well-a",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "inlet-mixer",
+                        "port": "in_1",
+                    },
+                },
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "output port well-a:out already has a connection",
+        ):
+            ProcessBuilder().build_acyclic_graph(
+                graph_spec,
+                inlet_specs,
+                ["well-a", "inlet-mixer"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
