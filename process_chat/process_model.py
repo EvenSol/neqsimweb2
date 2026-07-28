@@ -1359,11 +1359,12 @@ class NeqSimProcessModel:
                     produced_fluids.add("product", fluid)
                 equipment_outlets.append((stream, label))
 
-        feeds = []
-        feed_fluids = _MaterialBoundaryIdentityTracker()
+        feed_candidates = []
+        indirect_feed_fluids = _MaterialBoundaryIdentityTracker()
         for stream in stream_units:
             fluid = NeqSimProcessModel._material_fluid_reference(stream)
-            is_consumed = consumed.contains("feed", stream) or (
+            is_directly_consumed = consumed.contains("feed", stream)
+            is_consumed = is_directly_consumed or (
                 fluid is not None
                 and consumed_fluids.contains("feed", fluid)
             )
@@ -1372,14 +1373,21 @@ class NeqSimProcessModel:
                 and produced_fluids.contains("product", fluid)
             )
             if is_consumed and not is_produced:
-                if (
-                    fluid is not None
-                    and feed_fluids.contains("feed", fluid)
-                ):
-                    continue
-                feeds.append(stream)
-                if fluid is not None:
-                    feed_fluids.add("feed", fluid)
+                feed_candidates.append(
+                    (stream, fluid, is_directly_consumed)
+                )
+                if fluid is not None and not is_directly_consumed:
+                    indirect_feed_fluids.add("feed", fluid)
+
+        feeds = []
+        for stream, fluid, is_directly_consumed in feed_candidates:
+            if (
+                is_directly_consumed
+                and fluid is not None
+                and indirect_feed_fluids.contains("feed", fluid)
+            ):
+                continue
+            feeds.append(stream)
 
         products = []
         for stream, label in equipment_outlets:

@@ -2888,6 +2888,35 @@ class GraphPortConnectionTest(unittest.TestCase):
         )
         self.assertEqual(updated[-1]["name"], connection_id)
 
+    def test_default_stream_name_avoids_process_object_names(self):
+        inlets = copy.deepcopy(self.inlets)
+        inlets[0]["name"] = (
+            "MATERIAL-FEED-B-OUT-TO-MIXER-IN-1"
+        )
+
+        updated, connection_id = connect_graph_ports(
+            inlets,
+            self.units,
+            self.connections,
+            "material",
+            {
+                "kind": "inlet",
+                "id": "feed-b",
+                "port": "out",
+            },
+            {
+                "kind": "unit",
+                "id": "mixer",
+                "port": "in_1",
+            },
+        )
+
+        self.assertEqual(
+            connection_id,
+            "material-feed-b-out-to-mixer-in-1-2",
+        )
+        self.assertEqual(updated[-1]["name"], connection_id)
+
     def test_renames_material_stream_without_changing_graph_identity(self):
         original = copy.deepcopy(self.connections)
         updated = rename_material_connection(

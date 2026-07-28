@@ -1996,6 +1996,96 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
+    def test_connectivity_preserves_distinct_feeds_sharing_one_fluid(self):
+        shared_fluid = object()
+        feed_a = _FallbackAliasedStream(
+            "feed a",
+            100.0,
+            shared_fluid,
+        )
+        feed_b = _FallbackAliasedStream(
+            "feed b",
+            50.0,
+            shared_fluid,
+        )
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 50.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed_a,
+                feed_b,
+                _FallbackHeater(feed_a, product_a),
+                _FallbackHeater(feed_b, product_b),
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (feed_a, feed_b, product_a, product_b)
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["feed a", "feed b"],
+        )
+        self.assertEqual(
+            result.kpis["material_feed_flow_kg_hr"].value,
+            150.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_prefers_external_feed_over_fluid_alias(self):
+        shared_fluid = object()
+        feed = _FallbackAliasedStream(
+            "feed",
+            100.0,
+            shared_fluid,
+        )
+        named_alias = _FallbackAliasedStream(
+            "named feed connection",
+            100.0,
+            shared_fluid,
+        )
+        product = _FallbackStream("product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed,
+                named_alias,
+                _FallbackHeater(named_alias, product),
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (feed, named_alias, product)
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["feed"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
     def test_connectivity_discovers_absorber_solvent_feed(self):
         gas_feed = _FallbackStream("gas feed", 100.0)
         heated_gas = _FallbackStream("heated gas", 100.0)

@@ -1384,6 +1384,75 @@ def _connection_identity_keys(connections: list[Any]) -> set[str]:
     return keys
 
 
+def _reserved_material_stream_name_keys(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    new_source: dict[str, str],
+) -> set[str]:
+    """Return process and surviving terminal names unavailable to a new stream."""
+    reserved = _normalized_name_keys(
+        record.get("name")
+        for record in [*inlets, *units]
+        if isinstance(record, dict)
+    )
+    connected_outputs = {
+        (
+            str(connection.get("source", {}).get("id", "")).strip(),
+            canonical_material_output_port(
+                connection.get("source", {}).get("port", "")
+            ),
+        )
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+        and isinstance(connection.get("source"), dict)
+        and str(connection["source"].get("kind", "")).strip().lower()
+        == "unit"
+    }
+    if str(new_source.get("kind", "")).strip().lower() == "unit":
+        connected_outputs.add(
+            (
+                str(new_source.get("id", "")).strip(),
+                canonical_material_output_port(
+                    new_source.get("port", "")
+                ),
+            )
+        )
+
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        unit_id = str(unit.get("id", "")).strip()
+        unit_name = str(unit.get("name", "")).strip()
+        ports = unit.get("ports")
+        material_outputs = (
+            ports.get("material_out")
+            if isinstance(ports, dict)
+            else None
+        )
+        if (
+            not unit_id
+            or not unit_name
+            or not isinstance(material_outputs, list)
+        ):
+            continue
+        for raw_port in material_outputs:
+            output_port = str(raw_port).strip()
+            if (
+                output_port
+                and (
+                    unit_id,
+                    canonical_material_output_port(output_port),
+                )
+                not in connected_outputs
+            ):
+                reserved.add(
+                    f"{unit_name} [{output_port}] product".casefold()
+                )
+    return reserved
+
+
 def _unique_connection_id(stem: str, reserved_keys: set[str]) -> str:
     """Return a stable ID that cannot shadow an existing material stream."""
     connection_id = _slugify(stem)
@@ -1718,12 +1787,24 @@ def connect_graph_ports(
         )
 
     copied_connections = inventory["connections"]
+    reserved_connection_keys = _connection_identity_keys(
+        copied_connections
+    )
+    if cleaned_type == "material":
+        reserved_connection_keys.update(
+            _reserved_material_stream_name_keys(
+                inlets,
+                units,
+                copied_connections,
+                normalized_endpoints["source"],
+            )
+        )
     connection_id = _unique_connection_id(
         (
             f"{cleaned_type}-{source_key[2]}-{source_key[3]}-to-"
             f"{target_key[2]}-{target_key[3]}"
         ),
-        _connection_identity_keys(copied_connections),
+        reserved_connection_keys,
     )
     copied_connections.append(
         {
