@@ -394,6 +394,53 @@ class MaterialStreamIdentityTest(unittest.TestCase):
                 ["well-a", "heater", "cooler-a", "cooler-b"],
             )
 
+    def test_reserves_raw_terminal_alias_name_before_native_build(self):
+        inlet_specs = [
+            self._inlet("well-a", "Well A feed", 12_000.0),
+        ]
+        graph_spec = {
+            "name": "Conflicting aliased terminal name",
+            "units": [
+                {
+                    "id": "separator",
+                    "name": "Inlet separator",
+                    "type": "separator",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["vapor"],
+                    },
+                    "params": {},
+                }
+            ],
+            "connections": [
+                {
+                    "id": "well-a-to-separator",
+                    "name": "INLET SEPARATOR [VAPOR] PRODUCT",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "well-a",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "separator",
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "conflicts with a terminal product boundary",
+        ):
+            ProcessBuilder().build_acyclic_graph(
+                graph_spec,
+                inlet_specs,
+                ["well-a", "separator"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -954,10 +954,14 @@ class ProcessBuilder:
                 else []
             )
             for raw_port in material_outputs:
-                output_port = self._canonical_material_output_port(raw_port)
+                output_port = str(raw_port).strip().lower()
+                canonical_output_port = (
+                    self._canonical_material_output_port(output_port)
+                )
                 if (
                     not output_port
-                    or (unit_id, output_port) in connected_output_ports
+                    or (unit_id, canonical_output_port)
+                    in connected_output_ports
                 ):
                     continue
                 boundary_name = (
