@@ -1391,6 +1391,11 @@ def _reserved_material_stream_name_keys(
     new_source: dict[str, str],
 ) -> set[str]:
     """Return process and surviving terminal names unavailable to a new stream."""
+    units_by_id = {
+        str(unit.get("id", "")).strip(): unit
+        for unit in units
+        if isinstance(unit, dict)
+    }
     reserved = _normalized_name_keys(
         record.get("name")
         for record in [*inlets, *units]
@@ -1398,9 +1403,10 @@ def _reserved_material_stream_name_keys(
     )
     connected_outputs = {
         (
-            str(connection.get("source", {}).get("id", "")).strip(),
+            source_id,
             canonical_material_output_port(
-                connection.get("source", {}).get("port", "")
+                connection.get("source", {}).get("port", ""),
+                units_by_id.get(source_id, {}).get("type"),
             ),
         )
         for connection in connections
@@ -1409,13 +1415,18 @@ def _reserved_material_stream_name_keys(
         and isinstance(connection.get("source"), dict)
         and str(connection["source"].get("kind", "")).strip().lower()
         == "unit"
+        for source_id in [
+            str(connection["source"].get("id", "")).strip()
+        ]
     }
     if str(new_source.get("kind", "")).strip().lower() == "unit":
+        source_id = str(new_source.get("id", "")).strip()
         connected_outputs.add(
             (
-                str(new_source.get("id", "")).strip(),
+                source_id,
                 canonical_material_output_port(
-                    new_source.get("port", "")
+                    new_source.get("port", ""),
+                    units_by_id.get(source_id, {}).get("type"),
                 ),
             )
         )
@@ -1443,7 +1454,10 @@ def _reserved_material_stream_name_keys(
                 output_port
                 and (
                     unit_id,
-                    canonical_material_output_port(output_port),
+                    canonical_material_output_port(
+                        output_port,
+                        unit.get("type"),
+                    ),
                 )
                 not in connected_outputs
             ):
@@ -1600,6 +1614,19 @@ def _graph_port_inventory(
                         f"{connection_type} port."
                     )
                 cleaned_by_direction[direction] = cleaned_ports
+                if connection_type == "material" and direction == "source":
+                    canonical_ports = [
+                        canonical_material_output_port(
+                            port,
+                            unit.get("type"),
+                        )
+                        for port in cleaned_ports
+                    ]
+                    if len(canonical_ports) != len(set(canonical_ports)):
+                        raise ValueError(
+                            f"Graph unit '{unit_id}' material output ports "
+                            "alias the same native outlet."
+                        )
                 for port in cleaned_ports:
                     add_port(
                         connection_type,
@@ -3145,10 +3172,18 @@ def build_graph_draft_dot(
                 f"{connection_type}_in port '{target_port}'."
             )
         if connection_type == "material":
+            source_unit_type = (
+                units_by_id[source_id].get("type")
+                if source_kind == "unit"
+                else None
+            )
             connected_outputs.add(
                 (
                     source_id,
-                    canonical_material_output_port(source_port),
+                    canonical_material_output_port(
+                        source_port,
+                        source_unit_type,
+                    ),
                 )
             )
         rendered_connections.append(
@@ -3233,7 +3268,10 @@ def build_graph_draft_dot(
                 )
             if (
                 unit_id,
-                canonical_material_output_port(port_name),
+                canonical_material_output_port(
+                    port_name,
+                    unit.get("type"),
+                ),
             ) in connected_outputs:
                 continue
             product_dot_id = f"product_{product_index}"

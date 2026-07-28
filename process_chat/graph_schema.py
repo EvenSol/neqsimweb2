@@ -6,8 +6,23 @@ import re
 from typing import Any
 
 
-def canonical_material_output_port(raw_port: Any) -> str:
-    """Map graph aliases that resolve to one native material outlet."""
+_SEPARATOR_UNIT_TYPES = {
+    "separator",
+    "two_phase_separator",
+    "three_phase_separator",
+    "gas_scrubber",
+}
+
+
+def canonical_material_output_port(
+    raw_port: Any,
+    unit_type: Any = None,
+) -> str:
+    """Map graph aliases that resolve to one native material outlet.
+
+    Generic separator ``out``/``main`` ports resolve to the native gas outlet,
+    so they share identity with ``gas``/``vapor`` for graph validation.
+    """
     output_port = str(raw_port).strip().lower()
     indexed_port = re.fullmatch(
         r"(?:out|split)[_-]?(\d+)",
@@ -15,12 +30,18 @@ def canonical_material_output_port(raw_port: Any) -> str:
     )
     if indexed_port:
         return f"split_{int(indexed_port.group(1))}"
-    return {
+    canonical_port = {
         "main": "out",
         "vapor": "gas",
         "oil": "liquid",
         "aqueous": "water",
     }.get(output_port, output_port)
+    if (
+        str(unit_type).strip().lower() in _SEPARATOR_UNIT_TYPES
+        and canonical_port == "out"
+    ):
+        return "gas"
+    return canonical_port
 
 
 def material_connection_name(connection: Any) -> str:

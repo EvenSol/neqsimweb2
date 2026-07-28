@@ -396,6 +396,11 @@ def _terminal_material_stream_names(
     connections: list[Any],
 ) -> set[str]:
     """Return names the native builder will assign to product boundaries."""
+    unit_types = {
+        str(unit.get("id", "")).strip(): unit.get("type")
+        for unit in units
+        if isinstance(unit, dict)
+    }
     connected_outputs: set[tuple[str, str]] = set()
     for connection in connections:
         if not isinstance(connection, dict):
@@ -407,10 +412,14 @@ def _terminal_material_stream_names(
             continue
         if str(source.get("kind", "")).strip().lower() != "unit":
             continue
+        source_id = str(source.get("id", "")).strip()
         connected_outputs.add(
             (
-                str(source.get("id", "")).strip(),
-                canonical_material_output_port(source.get("port", "")),
+                source_id,
+                canonical_material_output_port(
+                    source.get("port", ""),
+                    unit_types.get(source_id),
+                ),
             )
         )
 
@@ -430,7 +439,8 @@ def _terminal_material_stream_names(
         for raw_port in material_outputs:
             output_port = str(raw_port).strip().lower()
             canonical_output_port = canonical_material_output_port(
-                output_port
+                output_port,
+                unit.get("type"),
             )
             if (
                 output_port
@@ -962,6 +972,19 @@ def _validate_graph_integrity(
                     raise ValueError(f"Unit '{unit_id}' {key} has an empty port.")
                 if len(cleaned_ports) != len(set(cleaned_ports)):
                     raise ValueError(f"Unit '{unit_id}' {key} ports must be unique.")
+                if key == "material_out":
+                    canonical_ports = [
+                        canonical_material_output_port(
+                            port,
+                            unit.get("type"),
+                        )
+                        for port in cleaned_ports
+                    ]
+                    if len(canonical_ports) != len(set(canonical_ports)):
+                        raise ValueError(
+                            f"Unit '{unit_id}' material output ports alias "
+                            "the same native outlet."
+                        )
                 normalized_unit_ports[unit_id][key] = cleaned_ports
             ambiguous_ports = set(
                 normalized_unit_ports[unit_id][input_key]
@@ -981,9 +1004,10 @@ def _validate_graph_integrity(
     terminal_stream_name_keys: set[str] = set()
     connected_material_outputs = {
         (
-            str(connection.get("source", {}).get("id", "")).strip(),
+            source_id,
             canonical_material_output_port(
-                connection.get("source", {}).get("port", "")
+                connection.get("source", {}).get("port", ""),
+                indexed_units.get(source_id, {}).get("type"),
             ),
         )
         for connection in connections
@@ -992,6 +1016,9 @@ def _validate_graph_integrity(
         and isinstance(connection.get("source"), dict)
         and str(connection["source"].get("kind", "")).strip().lower()
         == "unit"
+        for source_id in [
+            str(connection["source"].get("id", "")).strip()
+        ]
     }
     for unit_id, unit in indexed_units.items():
         unit_name = str(unit.get("name", "")).strip()
@@ -1004,7 +1031,8 @@ def _validate_graph_integrity(
         for raw_port in material_outputs:
             output_port = str(raw_port).strip()
             canonical_output_port = canonical_material_output_port(
-                output_port
+                output_port,
+                unit.get("type"),
             )
             if (
                 unit_name
@@ -1111,9 +1139,19 @@ def _validate_graph_integrity(
             raise ValueError(
                 f"Connection '{connection_id}' cannot connect a node to itself."
             )
-        source_key = (connection_type, *source)
+        canonical_source = source
+        if connection_type == "material" and source[0] == "unit":
+            canonical_source = (
+                source[0],
+                source[1],
+                canonical_material_output_port(
+                    source[2],
+                    indexed_units[source[1]].get("type"),
+                ),
+            )
+        source_key = (connection_type, *canonical_source)
         target_key = (connection_type, *target)
-        route_key = (connection_type, *source, *target)
+        route_key = (connection_type, *canonical_source, *target)
         if source_key in used_sources:
             raise ValueError(
                 f"Graph output port {source[1]}:{source[2]} has multiple connections."

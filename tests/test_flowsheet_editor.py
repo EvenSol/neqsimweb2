@@ -2985,6 +2985,63 @@ class GraphPortConnectionTest(unittest.TestCase):
             },
             aliases,
         )
+        self.assertEqual(
+            canonical_material_output_port("out", "separator"),
+            "gas",
+        )
+        self.assertEqual(
+            canonical_material_output_port(
+                "main",
+                "three_phase_separator",
+            ),
+            "gas",
+        )
+        self.assertEqual(
+            canonical_material_output_port("out", "heater"),
+            "out",
+        )
+
+    def test_rejects_separator_ports_that_alias_one_native_outlet(self):
+        units = copy.deepcopy(self.units)
+        units[0] = {
+            "id": "separator",
+            "name": "Inlet separator",
+            "type": "separator",
+            "ports": {
+                "material_in": ["in"],
+                "material_out": ["out", "gas"],
+            },
+            "params": {},
+        }
+        connections = [
+            {
+                "id": "feed-a-separator",
+                "name": "Feed A to separator",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "in",
+                },
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "material output ports alias the same native outlet",
+        ):
+            graph_port_rows(
+                self.inlets,
+                units,
+                connections,
+                "material",
+                "source",
+            )
 
     def test_material_stream_names_are_unique_and_nonblank(self):
         named_connections = copy.deepcopy(self.connections)

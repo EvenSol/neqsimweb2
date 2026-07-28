@@ -631,6 +631,42 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ):
             validate_graph_integrity([], units, [])
 
+    def test_graph_integrity_rejects_separator_native_output_aliases(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+        index_graph_objects = self._load_studio_function(
+            "_index_graph_objects"
+        )
+        index_graph_objects.__globals__["_required_identifier"] = (
+            required_identifier
+        )
+        validate_graph_integrity = self._load_studio_function(
+            "_validate_graph_integrity"
+        )
+        validate_graph_integrity.__globals__["_index_graph_objects"] = (
+            index_graph_objects
+        )
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet separator",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out", "gas"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "material output ports alias the same native outlet",
+        ):
+            validate_graph_integrity([], units, [])
+
     def test_graph_name_set_ignores_null_and_blank_names(self):
         graph_name_set = self._load_studio_function("_graph_name_set")
         records = [

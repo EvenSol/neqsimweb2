@@ -629,16 +629,25 @@ class ProcessBuilder:
         """Add named native streams for every unconnected material output port."""
         from neqsim import jneqsim
 
+        unit_types = {
+            str(unit_spec.get("id", "")).strip(): str(
+                unit_spec.get("type", "")
+            ).strip()
+            for unit_spec in unit_specs
+            if isinstance(unit_spec, dict)
+        }
         connected_outputs: set[tuple[str, str]] = set()
         for connection in connections:
             source = connection["source"]
             if str(source.get("kind", "")).strip().lower() != "unit":
                 continue
+            source_id = str(source.get("id", "")).strip()
             connected_outputs.add(
                 (
-                    str(source.get("id", "")).strip(),
+                    source_id,
                     canonical_material_output_port(
-                        source.get("port", "")
+                        source.get("port", ""),
+                        unit_types.get(source_id),
                     ),
                 )
             )
@@ -664,7 +673,10 @@ class ProcessBuilder:
             for raw_port in material_outputs:
                 output_port = str(raw_port).strip().lower()
                 canonical_output_port = (
-                    canonical_material_output_port(output_port)
+                    canonical_material_output_port(
+                        output_port,
+                        unit_spec.get("type"),
+                    )
                 )
                 if not output_port:
                     raise ValueError(
@@ -828,7 +840,7 @@ class ProcessBuilder:
             )
             if isinstance(material_outputs, list):
                 canonical_outputs = [
-                    canonical_material_output_port(port)
+                    canonical_material_output_port(port, unit_type)
                     for port in material_outputs
                 ]
                 if len(canonical_outputs) != len(set(canonical_outputs)):
@@ -905,11 +917,19 @@ class ProcessBuilder:
                 raise ValueError(
                     f"Connection '{connection_id}' requires source and target objects."
                 )
+            source_kind = str(source.get("kind", "")).strip().lower()
+            source_id = str(source.get("id", "")).strip()
+            source_unit_type = (
+                indexed_units[source_id].get("type")
+                if source_kind == "unit" and source_id in indexed_units
+                else None
+            )
             source_key = (
-                str(source.get("kind", "")).strip().lower(),
-                str(source.get("id", "")).strip(),
+                source_kind,
+                source_id,
                 canonical_material_output_port(
-                    source.get("port", "")
+                    source.get("port", ""),
+                    source_unit_type,
                 ),
             )
             if source_key in connected_source_ports:
@@ -928,14 +948,18 @@ class ProcessBuilder:
 
         connected_output_ports = {
             (
-                str(connection["source"].get("id", "")).strip(),
+                source_id,
                 canonical_material_output_port(
-                    connection["source"].get("port", "")
+                    connection["source"].get("port", ""),
+                    indexed_units.get(source_id, {}).get("type"),
                 ),
             )
             for connection in connections
             if str(connection["source"].get("kind", "")).strip().lower()
             == "unit"
+            for source_id in [
+                str(connection["source"].get("id", "")).strip()
+            ]
         }
         terminal_boundary_name_keys: set[str] = set()
         for unit_id, unit_spec in indexed_units.items():
@@ -948,7 +972,10 @@ class ProcessBuilder:
             for raw_port in material_outputs:
                 output_port = str(raw_port).strip().lower()
                 canonical_output_port = (
-                    canonical_material_output_port(output_port)
+                    canonical_material_output_port(
+                        output_port,
+                        unit_spec.get("type"),
+                    )
                 )
                 if (
                     not output_port
