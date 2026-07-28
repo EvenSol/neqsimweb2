@@ -470,6 +470,79 @@ class MaterialStreamIdentityTest(unittest.TestCase):
                 ["well-a", "separator"],
             )
 
+    def test_rejects_case_insensitive_duplicate_terminal_boundaries(self):
+        inlet_specs = [
+            self._inlet("well-a", "Well A feed", 12_000.0),
+            self._inlet("well-b", "Well B feed", 8_000.0),
+        ]
+        graph_spec = {
+            "name": "Ambiguous product boundaries",
+            "units": [
+                {
+                    "id": "heater-a",
+                    "name": "Product heater",
+                    "type": "heater",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {"outlet_temperature_c": 25.0},
+                },
+                {
+                    "id": "heater-b",
+                    "name": "product HEATER",
+                    "type": "heater",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {"outlet_temperature_c": 25.0},
+                },
+            ],
+            "connections": [
+                {
+                    "id": "well-a-to-heater",
+                    "name": "Well A transfer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "well-a",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "heater-a",
+                        "port": "in",
+                    },
+                },
+                {
+                    "id": "well-b-to-heater",
+                    "name": "Well B transfer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "well-b",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "heater-b",
+                        "port": "in",
+                    },
+                },
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Terminal product stream name .* is duplicated",
+        ):
+            ProcessBuilder().build_acyclic_graph(
+                graph_spec,
+                inlet_specs,
+                ["well-a", "well-b", "heater-a", "heater-b"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
