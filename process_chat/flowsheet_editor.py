@@ -1367,11 +1367,28 @@ def _connection_index(
     return matches[0]
 
 
-def _unique_connection_id(stem: str, existing_ids: set[str]) -> str:
-    """Return a stable connection id without overwriting an existing edge."""
+def _connection_identity_keys(connections: list[Any]) -> set[str]:
+    """Return case-insensitive IDs and effective material-stream names."""
+    keys = {
+        str(connection.get("id", "")).strip().casefold()
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("id", "")).strip()
+    }
+    keys.update(
+        material_connection_name(connection).casefold()
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+    )
+    return keys
+
+
+def _unique_connection_id(stem: str, reserved_keys: set[str]) -> str:
+    """Return a stable ID that cannot shadow an existing material stream."""
     connection_id = _slugify(stem)
     suffix = 2
-    while connection_id in existing_ids:
+    while connection_id.casefold() in reserved_keys:
         connection_id = f"{_slugify(stem)}-{suffix}"
         suffix += 1
     return connection_id
@@ -1701,16 +1718,12 @@ def connect_graph_ports(
         )
 
     copied_connections = inventory["connections"]
-    existing_ids = {
-        str(connection["id"]).strip()
-        for connection in copied_connections
-    }
     connection_id = _unique_connection_id(
         (
             f"{cleaned_type}-{source_key[2]}-{source_key[3]}-to-"
             f"{target_key[2]}-{target_key[3]}"
         ),
-        existing_ids,
+        _connection_identity_keys(copied_connections),
     )
     copied_connections.append(
         {
@@ -2124,14 +2137,9 @@ def insert_inline_unit_on_connection(
         "id": new_unit["id"],
         "port": "in",
     }
-    existing_connection_ids = {
-        str(connection.get("id", "")).strip()
-        for connection in copied_connections
-        if isinstance(connection, dict)
-    }
     downstream_connection_id = _unique_connection_id(
         f"{new_unit['id']}-to-{target_id}",
-        existing_connection_ids,
+        _connection_identity_keys(copied_connections),
     )
     copied_connections.insert(
         selected_index + 1,
@@ -2233,13 +2241,9 @@ def insert_mixer_on_connection(
         "id": mixer_id,
         "port": "in_0",
     }
-    existing_connection_ids = {
-        str(connection.get("id", "")).strip()
-        for connection in copied_connections
-    }
     downstream_connection_id = _unique_connection_id(
         f"{mixer_id}-out-to-{target_id}",
-        existing_connection_ids,
+        _connection_identity_keys(copied_connections),
     )
     copied_connections.insert(
         selected_index + 1,
