@@ -16,6 +16,7 @@ import re
 import tempfile
 from typing import Any, Dict, List, Optional
 
+from .graph_schema import material_connection_name
 from .process_model import NeqSimProcessModel
 
 
@@ -488,6 +489,23 @@ class ProcessBuilder:
         raise ValueError(message)
 
     @staticmethod
+    def _canonical_material_output_port(raw_port: Any) -> str:
+        """Map graph aliases that resolve to one native outlet."""
+        output_port = str(raw_port).strip().lower()
+        indexed_port = re.fullmatch(
+            r"(?:out|split)[_-]?(\d+)",
+            output_port,
+        )
+        if indexed_port:
+            return f"split_{int(indexed_port.group(1))}"
+        return {
+            "main": "out",
+            "vapor": "gas",
+            "oil": "liquid",
+            "aqueous": "water",
+        }.get(output_port, output_port)
+
+    @staticmethod
     def _configure_graph_splitter(
         unit: Any,
         unit_id: str,
@@ -633,7 +651,9 @@ class ProcessBuilder:
             connected_outputs.add(
                 (
                     str(source.get("id", "")).strip(),
-                    str(source.get("port", "")).strip().lower(),
+                    self._canonical_material_output_port(
+                        source.get("port", "")
+                    ),
                 )
             )
 
@@ -653,11 +673,14 @@ class ProcessBuilder:
                 )
             for raw_port in material_outputs:
                 output_port = str(raw_port).strip().lower()
+                canonical_output_port = (
+                    self._canonical_material_output_port(output_port)
+                )
                 if not output_port:
                     raise ValueError(
                         f"Unit '{unit_id}' has an empty material output port."
                     )
-                endpoint_key = (unit_id, output_port)
+                endpoint_key = (unit_id, canonical_output_port)
                 if endpoint_key in connected_outputs:
                     continue
 
@@ -698,22 +721,6 @@ class ProcessBuilder:
             )
         return terminal_streams
 
-    @staticmethod
-    def _material_connection_name(connection: dict) -> str:
-        """Return one connection's explicit native stream name."""
-        connection_id = str(connection.get("id", "")).strip()
-        if not connection_id:
-            raise ValueError("Material connection requires an id.")
-        raw_name = connection.get("name")
-        if raw_name is None:
-            return connection_id
-        stream_name = str(raw_name).strip()
-        if not stream_name:
-            raise ValueError(
-                f"Material connection '{connection_id}' requires a stream name."
-            )
-        return stream_name
-
     def _add_material_connection_stream(
         self,
         connection: dict,
@@ -735,7 +742,7 @@ class ProcessBuilder:
             inlet_streams,
             unit_objects,
         )
-        stream_name = self._material_connection_name(connection)
+        stream_name = material_connection_name(connection)
         StreamClass = jneqsim.process.equipment.stream.Stream
         try:
             material_stream = StreamClass(stream_name, source_stream)
@@ -822,6 +829,22 @@ class ProcessBuilder:
                 raise ValueError(f"Unit '{unit_id}' params must be an object.")
             indexed_units[unit_id] = unit_spec
             unit_names.add(unit_name)
+            ports = unit_spec.get("ports")
+            material_outputs = (
+                ports.get("material_out")
+                if isinstance(ports, dict)
+                else None
+            )
+            if isinstance(material_outputs, list):
+                canonical_outputs = [
+                    self._canonical_material_output_port(port)
+                    for port in material_outputs
+                ]
+                if len(canonical_outputs) != len(set(canonical_outputs)):
+                    raise ValueError(
+                        f"Unit '{unit_id}' material output ports alias the "
+                        "same native outlet."
+                    )
 
         expected_ids = [*inlet_ids, *indexed_units]
         ordered_ids = [str(node_id).strip() for node_id in execution_order]
@@ -872,7 +895,7 @@ class ProcessBuilder:
                     f"Connection '{connection_id}' is not a material connection. "
                     "Energy links require a later executor stage."
                 )
-            connection_name = self._material_connection_name(connection)
+            connection_name = material_connection_name(connection)
             connection_name_key = connection_name.casefold()
             if connection_name_key in connection_name_keys:
                 raise ValueError(
@@ -894,7 +917,9 @@ class ProcessBuilder:
             source_key = (
                 str(source.get("kind", "")).strip().lower(),
                 str(source.get("id", "")).strip(),
-                str(source.get("port", "")).strip().lower(),
+                self._canonical_material_output_port(
+                    source.get("port", "")
+                ),
             )
             if source_key in connected_source_ports:
                 raise ValueError(
@@ -913,7 +938,9 @@ class ProcessBuilder:
         connected_output_ports = {
             (
                 str(connection["source"].get("id", "")).strip(),
-                str(connection["source"].get("port", "")).strip().lower(),
+                self._canonical_material_output_port(
+                    connection["source"].get("port", "")
+                ),
             )
             for connection in connections
             if str(connection["source"].get("kind", "")).strip().lower()
@@ -927,7 +954,7 @@ class ProcessBuilder:
                 else []
             )
             for raw_port in material_outputs:
-                output_port = str(raw_port).strip().lower()
+                output_port = self._canonical_material_output_port(raw_port)
                 if (
                     not output_port
                     or (unit_id, output_port) in connected_output_ports

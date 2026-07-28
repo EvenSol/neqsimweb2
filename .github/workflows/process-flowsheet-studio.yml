@@ -6,6 +6,7 @@ on:
       - "pages/35_Process_Flowsheet_Studio.py"
       - "process_chat/process_builder.py"
       - "process_chat/flowsheet_editor.py"
+      - "process_chat/graph_schema.py"
       - "process_chat/runtime_imports.py"
       - "process_chat/solver_diagnostics.py"
       - "process_chat/process_model.py"
@@ -43,6 +44,7 @@ jobs:
             pages/35_Process_Flowsheet_Studio.py \
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
+            process_chat/graph_schema.py \
             process_chat/runtime_imports.py \
             process_chat/solver_diagnostics.py \
             process_chat/process_model.py \

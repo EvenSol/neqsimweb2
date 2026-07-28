@@ -296,6 +296,104 @@ class MaterialStreamIdentityTest(unittest.TestCase):
                 ["well-a", "inlet-mixer"],
             )
 
+    def test_rejects_aliased_source_ports_before_native_build(self):
+        inlet_specs = [
+            self._inlet("well-a", "Well A feed", 12_000.0),
+        ]
+        units = [
+            {
+                "id": "heater",
+                "name": "Feed heater",
+                "type": "heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                },
+                "params": {},
+            },
+            {
+                "id": "cooler-a",
+                "name": "Branch cooler A",
+                "type": "cooler",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                },
+                "params": {},
+            },
+            {
+                "id": "cooler-b",
+                "name": "Branch cooler B",
+                "type": "cooler",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                },
+                "params": {},
+            },
+        ]
+        connections = [
+            {
+                "id": "well-a-to-heater",
+                "name": "Well A to heater",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "well-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "heater-to-cooler-a",
+                "name": "Heater branch A",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "cooler-a",
+                    "port": "in",
+                },
+            },
+            {
+                "id": "heater-to-cooler-b",
+                "name": "Heater branch B",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "main",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "cooler-b",
+                    "port": "in",
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "output port heater:out already has a connection",
+        ):
+            ProcessBuilder().build_acyclic_graph(
+                {
+                    "name": "Invalid aliased branch",
+                    "units": units,
+                    "connections": connections,
+                },
+                inlet_specs,
+                ["well-a", "heater", "cooler-a", "cooler-b"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

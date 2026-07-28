@@ -9,6 +9,8 @@ import math
 import re
 from typing import Any
 
+from .graph_schema import material_connection_name
+
 
 GRAPH_DRAFT_SCHEMA_VERSION = 1
 GRAPH_HISTORY_SCHEMA_VERSION = 1
@@ -1370,28 +1372,6 @@ def _unique_connection_id(stem: str, existing_ids: set[str]) -> str:
         connection_id = f"{_slugify(stem)}-{suffix}"
         suffix += 1
     return connection_id
-
-
-def material_connection_name(connection: Any) -> str:
-    """Return one explicit material-stream name with an ID fallback."""
-    if not isinstance(connection, dict):
-        raise ValueError("Material connection must be an object.")
-    connection_id = str(connection.get("id", "")).strip()
-    if not connection_id:
-        raise ValueError("Material connection requires an id.")
-    if str(connection.get("type", "")).strip().lower() != "material":
-        raise ValueError(
-            f"Connection '{connection_id}' is not a material stream."
-        )
-    raw_name = connection.get("name")
-    if raw_name is None:
-        return connection_id
-    stream_name = str(raw_name).strip()
-    if not stream_name:
-        raise ValueError(
-            f"Material connection '{connection_id}' requires a stream name."
-        )
-    return stream_name
 
 
 def rename_material_connection(
