@@ -1326,7 +1326,7 @@ class NeqSimProcessModel:
                     field = stream_class.getDeclaredField("stream")
                     field.setAccessible(True)
                     source = field.get(stream)
-                    if source is not None and source != stream:
+                    if source is not None and source is not stream:
                         return source
                     return None
                 except Exception:

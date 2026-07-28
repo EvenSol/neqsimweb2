@@ -2097,6 +2097,51 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 
+    def test_reflection_alias_source_uses_object_identity(self):
+        class _EqualSource:
+            def __eq__(self, other):
+                return True
+
+        class _StreamField:
+            def __init__(self, source):
+                self._source = source
+
+            def setAccessible(self, accessible):
+                self._accessible = accessible
+
+            def get(self, stream):
+                return self._source
+
+        class _ReflectiveStreamClass:
+            def __init__(self, source):
+                self._field = _StreamField(source)
+
+            def getSimpleName(self):
+                return "Stream"
+
+            def getDeclaredField(self, name):
+                if name != "stream":
+                    raise AttributeError(name)
+                return self._field
+
+            def getSuperclass(self):
+                return None
+
+        class _ReflectiveStream:
+            def __init__(self, source):
+                self._stream_class = _ReflectiveStreamClass(source)
+
+            def getClass(self):
+                return self._stream_class
+
+        source = _EqualSource()
+        stream = _ReflectiveStream(source)
+
+        self.assertIs(
+            NeqSimProcessModel._material_stream_source_reference(stream),
+            source,
+        )
+
     def test_connectivity_scopes_alias_to_its_specific_shared_fluid_feed(self):
         shared_fluid = object()
         direct_feed = _FallbackAliasedStream(
