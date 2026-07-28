@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+
+def canonical_material_output_port(raw_port: Any) -> str:
+    """Map graph aliases that resolve to one native material outlet."""
+    output_port = str(raw_port).strip().lower()
+    indexed_port = re.fullmatch(
+        r"(?:out|split)[_-]?(\d+)",
+        output_port,
+    )
+    if indexed_port:
+        return f"split_{int(indexed_port.group(1))}"
+    return {
+        "main": "out",
+        "vapor": "gas",
+        "oil": "liquid",
+        "aqueous": "water",
+    }.get(output_port, output_port)
 
 
 def material_connection_name(connection: Any) -> str:

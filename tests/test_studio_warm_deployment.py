@@ -79,7 +79,14 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
             and node.name == function_name
         )
-        namespace = {"Any": Any, "json": json, "math": math}
+        namespace = {
+            "Any": Any,
+            "canonical_material_output_port": (
+                flowsheet_editor.canonical_material_output_port
+            ),
+            "json": json,
+            "math": math,
+        }
         exec(
             compile(
                 ast.Module(body=[function], type_ignores=[]),
@@ -620,6 +627,33 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                     "port": "liquid",
                 },
             },
+        ]
+
+        self.assertEqual(
+            terminal_names(units, connections),
+            {"Inlet scrubber [liquid] product"},
+        )
+
+    def test_terminal_names_use_canonical_port_occupancy(self):
+        terminal_names = self._load_studio_function(
+            "_terminal_material_stream_names"
+        )
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet scrubber",
+                "ports": {"material_out": ["vapor", "liquid"]},
+            }
+        ]
+        connections = [
+            {
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "gas",
+                },
+            }
         ]
 
         self.assertEqual(

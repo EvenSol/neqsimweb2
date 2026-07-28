@@ -63,6 +63,7 @@ _EDITOR_SYMBOL_NAMES = (
     "add_catalog_unit",
     "apply_graph_draft",
     "build_graph_draft_dot",
+    "canonical_material_output_port",
     "clone_material_inlet",
     "connect_graph_ports",
     "create_graph_draft",
@@ -409,7 +410,7 @@ def _terminal_material_stream_names(
         connected_outputs.add(
             (
                 str(source.get("id", "")).strip(),
-                str(source.get("port", "")).strip().lower(),
+                canonical_material_output_port(source.get("port", "")),
             )
         )
 
@@ -428,9 +429,12 @@ def _terminal_material_stream_names(
             continue
         for raw_port in material_outputs:
             output_port = str(raw_port).strip().lower()
+            canonical_output_port = canonical_material_output_port(
+                output_port
+            )
             if (
                 output_port
-                and (unit_id, output_port) not in connected_outputs
+                and (unit_id, canonical_output_port) not in connected_outputs
             ):
                 result.add(f"{unit_name} [{output_port}] product")
     return result
@@ -977,7 +981,9 @@ def _validate_graph_integrity(
     connected_material_outputs = {
         (
             str(connection.get("source", {}).get("id", "")).strip(),
-            str(connection.get("source", {}).get("port", "")).strip(),
+            canonical_material_output_port(
+                connection.get("source", {}).get("port", "")
+            ),
         )
         for connection in connections
         if isinstance(connection, dict)
@@ -996,10 +1002,13 @@ def _validate_graph_integrity(
         )
         for raw_port in material_outputs:
             output_port = str(raw_port).strip()
+            canonical_output_port = canonical_material_output_port(
+                output_port
+            )
             if (
                 unit_name
                 and output_port
-                and (unit_id, output_port)
+                and (unit_id, canonical_output_port)
                 not in connected_material_outputs
             ):
                 reserved_stream_name_keys.add(

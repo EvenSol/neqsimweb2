@@ -9,7 +9,10 @@ import math
 import re
 from typing import Any
 
-from .graph_schema import material_connection_name
+from .graph_schema import (
+    canonical_material_output_port,
+    material_connection_name,
+)
 
 
 GRAPH_DRAFT_SCHEMA_VERSION = 1

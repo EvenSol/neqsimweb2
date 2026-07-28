@@ -12,6 +12,7 @@ from process_chat.flowsheet_editor import (
     add_catalog_unit,
     apply_graph_draft,
     build_graph_draft_dot,
+    canonical_material_output_port,
     clone_material_inlet,
     connect_graph_ports,
     create_graph_draft,
@@ -2874,6 +2875,26 @@ class GraphPortConnectionTest(unittest.TestCase):
         self.assertEqual(
             material_connection_name(updated[0]),
             "Well A to inlet mixer",
+        )
+
+    def test_canonicalizes_native_material_output_aliases(self):
+        aliases = {
+            "main": "out",
+            "VAPOR": "gas",
+            " oil ": "liquid",
+            "aqueous": "water",
+            "out0": "split_0",
+            "out_2": "split_2",
+            "split-3": "split_3",
+            "custom": "custom",
+        }
+
+        self.assertEqual(
+            {
+                raw_port: canonical_material_output_port(raw_port)
+                for raw_port in aliases
+            },
+            aliases,
         )
 
     def test_material_stream_names_are_unique_and_nonblank(self):

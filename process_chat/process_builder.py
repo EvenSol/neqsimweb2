@@ -16,7 +16,10 @@ import re
 import tempfile
 from typing import Any, Dict, List, Optional
 
-from .graph_schema import material_connection_name
+from .graph_schema import (
+    canonical_material_output_port,
+    material_connection_name,
+)
 from .process_model import NeqSimProcessModel
 
 
@@ -489,23 +492,6 @@ class ProcessBuilder:
         raise ValueError(message)
 
     @staticmethod
-    def _canonical_material_output_port(raw_port: Any) -> str:
-        """Map graph aliases that resolve to one native outlet."""
-        output_port = str(raw_port).strip().lower()
-        indexed_port = re.fullmatch(
-            r"(?:out|split)[_-]?(\d+)",
-            output_port,
-        )
-        if indexed_port:
-            return f"split_{int(indexed_port.group(1))}"
-        return {
-            "main": "out",
-            "vapor": "gas",
-            "oil": "liquid",
-            "aqueous": "water",
-        }.get(output_port, output_port)
-
-    @staticmethod
     def _configure_graph_splitter(
         unit: Any,
         unit_id: str,
@@ -651,7 +637,7 @@ class ProcessBuilder:
             connected_outputs.add(
                 (
                     str(source.get("id", "")).strip(),
-                    self._canonical_material_output_port(
+                    canonical_material_output_port(
                         source.get("port", "")
                     ),
                 )
@@ -674,7 +660,7 @@ class ProcessBuilder:
             for raw_port in material_outputs:
                 output_port = str(raw_port).strip().lower()
                 canonical_output_port = (
-                    self._canonical_material_output_port(output_port)
+                    canonical_material_output_port(output_port)
                 )
                 if not output_port:
                     raise ValueError(
@@ -837,7 +823,7 @@ class ProcessBuilder:
             )
             if isinstance(material_outputs, list):
                 canonical_outputs = [
-                    self._canonical_material_output_port(port)
+                    canonical_material_output_port(port)
                     for port in material_outputs
                 ]
                 if len(canonical_outputs) != len(set(canonical_outputs)):
@@ -917,7 +903,7 @@ class ProcessBuilder:
             source_key = (
                 str(source.get("kind", "")).strip().lower(),
                 str(source.get("id", "")).strip(),
-                self._canonical_material_output_port(
+                canonical_material_output_port(
                     source.get("port", "")
                 ),
             )
@@ -938,7 +924,7 @@ class ProcessBuilder:
         connected_output_ports = {
             (
                 str(connection["source"].get("id", "")).strip(),
-                self._canonical_material_output_port(
+                canonical_material_output_port(
                     connection["source"].get("port", "")
                 ),
             )
@@ -956,7 +942,7 @@ class ProcessBuilder:
             for raw_port in material_outputs:
                 output_port = str(raw_port).strip().lower()
                 canonical_output_port = (
-                    self._canonical_material_output_port(output_port)
+                    canonical_material_output_port(output_port)
                 )
                 if (
                     not output_port
