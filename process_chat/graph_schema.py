@@ -11,6 +11,7 @@ _SEPARATOR_UNIT_TYPES = {
     "two_phase_separator",
     "three_phase_separator",
     "gas_scrubber",
+    "membrane_separator",
 }
 
 

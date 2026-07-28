@@ -2997,6 +2997,13 @@ class GraphPortConnectionTest(unittest.TestCase):
             "gas",
         )
         self.assertEqual(
+            canonical_material_output_port(
+                "out",
+                "membrane_separator",
+            ),
+            "gas",
+        )
+        self.assertEqual(
             canonical_material_output_port("out", "heater"),
             "out",
         )

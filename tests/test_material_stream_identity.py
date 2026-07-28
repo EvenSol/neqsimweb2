@@ -427,48 +427,50 @@ class MaterialStreamIdentityTest(unittest.TestCase):
         inlet_specs = [
             self._inlet("well-a", "Well A feed", 12_000.0),
         ]
-        graph_spec = {
-            "name": "Invalid separator gas branch",
-            "units": [
-                {
-                    "id": "separator",
-                    "name": "Inlet separator",
-                    "type": "separator",
-                    "ports": {
-                        "material_in": ["in"],
-                        "material_out": ["out", "gas"],
-                    },
-                    "params": {},
+        for unit_type in ("separator", "membrane_separator"):
+            with self.subTest(unit_type=unit_type):
+                graph_spec = {
+                    "name": "Invalid separator gas branch",
+                    "units": [
+                        {
+                            "id": "separator",
+                            "name": "Inlet separator",
+                            "type": unit_type,
+                            "ports": {
+                                "material_in": ["in"],
+                                "material_out": ["out", "gas"],
+                            },
+                            "params": {},
+                        }
+                    ],
+                    "connections": [
+                        {
+                            "id": "well-a-to-separator",
+                            "name": "Well A to separator",
+                            "type": "material",
+                            "source": {
+                                "kind": "inlet",
+                                "id": "well-a",
+                                "port": "out",
+                            },
+                            "target": {
+                                "kind": "unit",
+                                "id": "separator",
+                                "port": "in",
+                            },
+                        }
+                    ],
                 }
-            ],
-            "connections": [
-                {
-                    "id": "well-a-to-separator",
-                    "name": "Well A to separator",
-                    "type": "material",
-                    "source": {
-                        "kind": "inlet",
-                        "id": "well-a",
-                        "port": "out",
-                    },
-                    "target": {
-                        "kind": "unit",
-                        "id": "separator",
-                        "port": "in",
-                    },
-                }
-            ],
-        }
 
-        with self.assertRaisesRegex(
-            ValueError,
-            "material output ports alias the same native outlet",
-        ):
-            ProcessBuilder().build_acyclic_graph(
-                graph_spec,
-                inlet_specs,
-                ["well-a", "separator"],
-            )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "material output ports alias the same native outlet",
+                ):
+                    ProcessBuilder().build_acyclic_graph(
+                        graph_spec,
+                        inlet_specs,
+                        ["well-a", "separator"],
+                    )
 
     def test_reserves_raw_terminal_alias_name_before_native_build(self):
         inlet_specs = [
