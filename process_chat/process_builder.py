@@ -645,7 +645,11 @@ class ProcessBuilder:
 
         StreamClass = jneqsim.process.equipment.stream.Stream
         terminal_streams: Dict[str, Any] = {}
-        used_names = set(reserved_names)
+        used_name_keys = {
+            str(name).strip().casefold()
+            for name in reserved_names
+            if str(name).strip()
+        }
         for unit_spec in unit_specs:
             unit_id = str(unit_spec["id"]).strip()
             unit_name = str(unit_spec["name"]).strip()
@@ -671,7 +675,8 @@ class ProcessBuilder:
                     continue
 
                 boundary_name = f"{unit_name} [{output_port}] product"
-                if boundary_name in used_names:
+                boundary_name_key = boundary_name.casefold()
+                if boundary_name_key in used_name_keys:
                     raise ValueError(
                         f"Terminal stream name '{boundary_name}' is duplicated."
                     )
@@ -695,7 +700,7 @@ class ProcessBuilder:
 
                 boundary_id = f"{unit_id}:{output_port}"
                 terminal_streams[boundary_id] = terminal_stream
-                used_names.add(boundary_name)
+                used_name_keys.add(boundary_name_key)
                 self._build_log.append(
                     f"Added terminal product stream: {boundary_id}"
                 )
@@ -932,6 +937,7 @@ class ProcessBuilder:
             if str(connection["source"].get("kind", "")).strip().lower()
             == "unit"
         }
+        terminal_boundary_name_keys: set[str] = set()
         for unit_id, unit_spec in indexed_units.items():
             ports = unit_spec.get("ports")
             material_outputs = (
@@ -965,6 +971,12 @@ class ProcessBuilder:
                         f"Terminal product stream name '{boundary_name}' "
                         "conflicts with an inlet or equipment name."
                     )
+                if boundary_name_key in terminal_boundary_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "is duplicated."
+                    )
+                terminal_boundary_name_keys.add(boundary_name_key)
 
         process_name = str(graph_spec.get("name", "Graph Process")).strip()
         self._process_name = process_name or "Graph Process"
