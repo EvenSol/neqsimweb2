@@ -91,12 +91,22 @@ class _FallbackFluid:
 
 
 class _FallbackAliasedStream(_FallbackStream):
-    def __init__(self, name, mass_flow, fluid_reference):
+    def __init__(
+        self,
+        name,
+        mass_flow,
+        fluid_reference,
+        source_stream=None,
+    ):
         super().__init__(name, mass_flow)
         self._fluid_reference = fluid_reference
+        self._source_stream = source_stream
 
     def getFluid(self):
         return self._fluid_reference
+
+    def getSourceStream(self):
+        return self._source_stream
 
 
 class _FallbackProcess:
@@ -2055,6 +2065,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             "named feed connection",
             100.0,
             shared_fluid,
+            feed,
         )
         product = _FallbackStream("product", 100.0)
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
@@ -2083,6 +2094,67 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
                 if row["role"] == "feed"
             ],
             ["feed"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_scopes_alias_to_its_specific_shared_fluid_feed(self):
+        shared_fluid = object()
+        direct_feed = _FallbackAliasedStream(
+            "direct feed",
+            100.0,
+            shared_fluid,
+        )
+        aliased_feed = _FallbackAliasedStream(
+            "aliased feed",
+            50.0,
+            shared_fluid,
+        )
+        named_alias = _FallbackAliasedStream(
+            "named feed connection",
+            50.0,
+            shared_fluid,
+            aliased_feed,
+        )
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 50.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                direct_feed,
+                aliased_feed,
+                named_alias,
+                _FallbackHeater(direct_feed, product_a),
+                _FallbackHeater(named_alias, product_b),
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                direct_feed,
+                aliased_feed,
+                named_alias,
+                product_a,
+                product_b,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["direct feed", "aliased feed"],
+        )
+        self.assertEqual(
+            result.kpis["material_feed_flow_kg_hr"].value,
+            150.0,
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 

@@ -1298,6 +1298,44 @@ class NeqSimProcessModel:
         return None
 
     @staticmethod
+    def _material_stream_source_reference(stream: Any) -> Optional[Any]:
+        """Return the specific upstream stream wrapped by a stream alias."""
+        for method_name in (
+            "getSourceStream",
+            "getUpstreamStream",
+            "getParentStream",
+        ):
+            if not hasattr(stream, method_name):
+                continue
+            try:
+                source = getattr(stream, method_name)()
+            except Exception:
+                continue
+            if source is not None and source is not stream:
+                return source
+
+        try:
+            stream_class = stream.getClass()
+            if (
+                str(stream_class.getSimpleName()).lower()
+                not in _MATERIAL_STREAM_UNIT_CLASSES
+            ):
+                return None
+            while stream_class is not None:
+                try:
+                    field = stream_class.getDeclaredField("stream")
+                    field.setAccessible(True)
+                    source = field.get(stream)
+                    if source is not None and source != stream:
+                        return source
+                    return None
+                except Exception:
+                    stream_class = stream_class.getSuperclass()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _material_consumption_trackers(
         units: List[Any],
     ) -> Tuple[
@@ -1360,11 +1398,10 @@ class NeqSimProcessModel:
                 equipment_outlets.append((stream, label))
 
         feed_candidates = []
-        indirect_feed_fluids = _MaterialBoundaryIdentityTracker()
+        candidate_streams = _MaterialBoundaryIdentityTracker()
         for stream in stream_units:
             fluid = NeqSimProcessModel._material_fluid_reference(stream)
-            is_directly_consumed = consumed.contains("feed", stream)
-            is_consumed = is_directly_consumed or (
+            is_consumed = consumed.contains("feed", stream) or (
                 fluid is not None
                 and consumed_fluids.contains("feed", fluid)
             )
@@ -1374,17 +1411,20 @@ class NeqSimProcessModel:
             )
             if is_consumed and not is_produced:
                 feed_candidates.append(
-                    (stream, fluid, is_directly_consumed)
+                    (
+                        stream,
+                        NeqSimProcessModel._material_stream_source_reference(
+                            stream
+                        ),
+                    )
                 )
-                if fluid is not None and not is_directly_consumed:
-                    indirect_feed_fluids.add("feed", fluid)
+                candidate_streams.add("feed", stream)
 
         feeds = []
-        for stream, fluid, is_directly_consumed in feed_candidates:
+        for stream, source_stream in feed_candidates:
             if (
-                is_directly_consumed
-                and fluid is not None
-                and indirect_feed_fluids.contains("feed", fluid)
+                source_stream is not None
+                and candidate_streams.contains("feed", source_stream)
             ):
                 continue
             feeds.append(stream)

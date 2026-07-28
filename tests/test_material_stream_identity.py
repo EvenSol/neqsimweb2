@@ -159,6 +159,35 @@ class MaterialStreamIdentityTest(unittest.TestCase):
         )
         self.assertLess(energy_residual_pct, 1.0e-6)
 
+    def test_native_alias_dedup_is_scoped_to_its_source_stream(self):
+        from neqsim import jneqsim
+
+        shared_fluid = ProcessBuilder().create_fluid_from_spec(
+            self._inlet("shared", "Shared", 100.0)["fluid_spec"]
+        )
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        HeaterClass = jneqsim.process.equipment.heatexchanger.Heater
+        direct_feed = StreamClass("direct feed", shared_fluid)
+        aliased_feed = StreamClass("aliased feed", shared_fluid)
+        named_alias = StreamClass("named feed connection", aliased_feed)
+        heater_a = HeaterClass("heater a", direct_feed)
+        heater_b = HeaterClass("heater b", named_alias)
+
+        feeds, _ = NeqSimProcessModel._connectivity_material_boundaries(
+            [
+                direct_feed,
+                aliased_feed,
+                named_alias,
+                heater_a,
+                heater_b,
+            ]
+        )
+
+        self.assertEqual(
+            [str(stream.getName()) for stream in feeds],
+            ["direct feed", "aliased feed"],
+        )
+
     def test_rejects_duplicate_or_reserved_stream_names_before_native_build(self):
         inlet_specs = [
             self._inlet("well-a", "Well A feed", 12_000.0),
