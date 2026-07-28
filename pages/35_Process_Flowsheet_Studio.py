@@ -978,6 +978,7 @@ def _validate_graph_integrity(
         for record in [*indexed_inlets.values(), *indexed_units.values()]
         if str(record.get("name", "")).strip()
     }
+    terminal_stream_name_keys: set[str] = set()
     connected_material_outputs = {
         (
             str(connection.get("source", {}).get("id", "")).strip(),
@@ -1011,9 +1012,20 @@ def _validate_graph_integrity(
                 and (unit_id, canonical_output_port)
                 not in connected_material_outputs
             ):
-                reserved_stream_name_keys.add(
-                    f"{unit_name} [{output_port}] product".casefold()
-                )
+                boundary_name = f"{unit_name} [{output_port}] product"
+                boundary_name_key = boundary_name.casefold()
+                if boundary_name_key in terminal_stream_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "is duplicated."
+                    )
+                if boundary_name_key in reserved_stream_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "conflicts with an inlet or equipment name."
+                    )
+                terminal_stream_name_keys.add(boundary_name_key)
+                reserved_stream_name_keys.add(boundary_name_key)
     material_stream_names: set[str] = set()
     used_sources: set[tuple[str, str, str, str]] = set()
     used_targets: set[tuple[str, str, str, str]] = set()

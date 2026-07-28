@@ -586,6 +586,51 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ):
             validate_graph_integrity(inlets, units, connections)
 
+    def test_graph_integrity_rejects_duplicate_terminal_product_names(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+        index_graph_objects = self._load_studio_function(
+            "_index_graph_objects"
+        )
+        index_graph_objects.__globals__["_required_identifier"] = (
+            required_identifier
+        )
+        validate_graph_integrity = self._load_studio_function(
+            "_validate_graph_integrity"
+        )
+        validate_graph_integrity.__globals__["_index_graph_objects"] = (
+            index_graph_objects
+        )
+        units = [
+            {
+                "id": "heater-a",
+                "name": "Product heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+            {
+                "id": "heater-b",
+                "name": "product HEATER",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Terminal product stream name .* is duplicated",
+        ):
+            validate_graph_integrity([], units, [])
+
     def test_graph_name_set_ignores_null_and_blank_names(self):
         graph_name_set = self._load_studio_function("_graph_name_set")
         records = [
