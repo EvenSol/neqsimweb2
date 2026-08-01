@@ -2252,7 +2252,7 @@ def _stream_dataframe(model: Any) -> pd.DataFrame:
                 "Pressure [bara]": stream.pressure_bara,
                 "Mass flow [kg/hr]": stream.flow_rate_kg_hr,
                 "Molar flow [mol/s]": stream.flow_rate_mol_sec,
-                "Owner": stream.owner_name,
+                "Owner": getattr(stream, "owner_name", ""),
             }
         )
     return pd.DataFrame(records).drop_duplicates()
