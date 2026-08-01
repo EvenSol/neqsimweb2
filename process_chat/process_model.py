@@ -2472,19 +2472,10 @@ class NeqSimProcessModel:
         return result
 
     def list_streams(self) -> List[StreamInfo]:
-        """List each exact stream once, preferring its shortest stable alias."""
+        """List each exact stream once in indexed process/topology order."""
         result = []
         seen_streams = _NativeObjectIdentitySet()
-        sorted_streams = sorted(
-            self._streams.items(),
-            key=lambda item: (
-                str(item[0]).count("."),
-                len(str(item[0])),
-                str(item[0]).casefold(),
-                str(item[0]),
-            ),
-        )
-        for name, s in sorted_streams:
+        for name, s in self._streams.items():
             if seen_streams.contains(s):
                 continue
             seen_streams.add(s)
