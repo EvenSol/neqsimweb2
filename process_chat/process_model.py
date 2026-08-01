@@ -4192,21 +4192,17 @@ class NeqSimProcessModel:
         """
         from neqsim import jneqsim
 
-        seen_ids: set = set()
+        seen_streams = _NativeObjectIdentitySet()
 
         # Sort by key length so shorter (unqualified) names are preferred
         sorted_streams = sorted(self._streams.items(), key=lambda x: len(x[0]))
 
         for stream_name, s in sorted_streams:
-            # Deduplicate: only process each Java stream object once.
-            # Use Java hashCode() since JPype proxies have different Python ids.
-            try:
-                java_hash = int(s.hashCode())
-            except Exception:
-                java_hash = id(s)
-            if java_hash in seen_ids:
+            # Deduplicate by exact native object identity. Java hashCode() is
+            # value-based for several NeqSim streams and may collide.
+            if seen_streams.contains(s):
                 continue
-            seen_ids.add(java_hash)
+            seen_streams.add(s)
 
             try:
                 fluid = s.getFluid()
