@@ -6,10 +6,12 @@ on:
       - "pages/35_Process_Flowsheet_Studio.py"
       - "process_chat/process_builder.py"
       - "process_chat/flowsheet_editor.py"
+      - "process_chat/graph_schema.py"
       - "process_chat/runtime_imports.py"
       - "process_chat/solver_diagnostics.py"
       - "process_chat/process_model.py"
       - "tests/test_flowsheet_editor.py"
+      - "tests/test_material_stream_identity.py"
       - "tests/test_process_graph_conservation.py"
       - "tests/test_runtime_imports.py"
       - "tests/test_solver_diagnostics.py"
@@ -42,10 +44,12 @@ jobs:
             pages/35_Process_Flowsheet_Studio.py \
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
+            process_chat/graph_schema.py \
             process_chat/runtime_imports.py \
             process_chat/solver_diagnostics.py \
             process_chat/process_model.py \
             tests/test_flowsheet_editor.py \
+            tests/test_material_stream_identity.py \
             tests/test_process_graph_conservation.py \
             tests/test_runtime_imports.py \
             tests/test_solver_diagnostics.py \
@@ -56,6 +60,8 @@ jobs:
         run: python tests/test_studio_warm_deployment.py -v
       - name: Run draft graph editor regression tests
         run: python tests/test_flowsheet_editor.py -v
+      - name: Run named material stream regression tests
+        run: python tests/test_material_stream_identity.py -v
       - name: Run solver diagnostic adapter tests
         run: python tests/test_solver_diagnostics.py -v
       - name: Run native multi-inlet conservation benchmark

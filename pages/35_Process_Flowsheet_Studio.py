@@ -64,6 +64,7 @@ _EDITOR_SYMBOL_NAMES = (
     "add_catalog_unit",
     "apply_graph_draft",
     "build_graph_draft_dot",
+    "canonical_material_output_port",
     "clone_material_inlet",
     "connect_graph_ports",
     "create_graph_draft",
@@ -80,6 +81,7 @@ _EDITOR_SYMBOL_NAMES = (
     "inline_unit_property_rows",
     "insert_inline_unit_on_connection",
     "insert_mixer_on_connection",
+    "material_connection_name",
     "material_connection_rows",
     "process_unit_property_rows",
     "record_graph_history",
@@ -91,6 +93,7 @@ _EDITOR_SYMBOL_NAMES = (
     "replace_inline_unit",
     "replace_inline_unit_type",
     "reroute_graph_connection",
+    "rename_material_connection",
     "rename_material_inlet",
     "rename_inline_unit",
     "splitter_allocation_rows",
@@ -397,6 +400,11 @@ def _terminal_material_stream_names(
     connections: list[Any],
 ) -> set[str]:
     """Return names the native builder will assign to product boundaries."""
+    unit_types = {
+        str(unit.get("id", "")).strip(): unit.get("type")
+        for unit in units
+        if isinstance(unit, dict)
+    }
     connected_outputs: set[tuple[str, str]] = set()
     for connection in connections:
         if not isinstance(connection, dict):
@@ -408,10 +416,14 @@ def _terminal_material_stream_names(
             continue
         if str(source.get("kind", "")).strip().lower() != "unit":
             continue
+        source_id = str(source.get("id", "")).strip()
         connected_outputs.add(
             (
-                str(source.get("id", "")).strip(),
-                str(source.get("port", "")).strip().lower(),
+                source_id,
+                canonical_material_output_port(
+                    source.get("port", ""),
+                    unit_types.get(source_id),
+                ),
             )
         )
 
@@ -430,9 +442,13 @@ def _terminal_material_stream_names(
             continue
         for raw_port in material_outputs:
             output_port = str(raw_port).strip().lower()
+            canonical_output_port = canonical_material_output_port(
+                output_port,
+                unit.get("type"),
+            )
             if (
                 output_port
-                and (unit_id, output_port) not in connected_outputs
+                and (unit_id, canonical_output_port) not in connected_outputs
             ):
                 result.add(f"{unit_name} [{output_port}] product")
     return result
@@ -960,6 +976,19 @@ def _validate_graph_integrity(
                     raise ValueError(f"Unit '{unit_id}' {key} has an empty port.")
                 if len(cleaned_ports) != len(set(cleaned_ports)):
                     raise ValueError(f"Unit '{unit_id}' {key} ports must be unique.")
+                if key == "material_out":
+                    canonical_ports = [
+                        canonical_material_output_port(
+                            port,
+                            unit.get("type"),
+                        )
+                        for port in cleaned_ports
+                    ]
+                    if len(canonical_ports) != len(set(canonical_ports)):
+                        raise ValueError(
+                            f"Unit '{unit_id}' material output ports alias "
+                            "the same native outlet."
+                        )
                 normalized_unit_ports[unit_id][key] = cleaned_ports
             ambiguous_ports = set(
                 normalized_unit_ports[unit_id][input_key]
@@ -971,6 +1000,65 @@ def _validate_graph_integrity(
                 )
 
     indexed_connections = _index_graph_objects(connections, "connections")
+    reserved_stream_name_keys = {
+        str(record.get("name", "")).strip().casefold()
+        for record in [*indexed_inlets.values(), *indexed_units.values()]
+        if str(record.get("name", "")).strip()
+    }
+    terminal_stream_name_keys: set[str] = set()
+    connected_material_outputs = {
+        (
+            source_id,
+            canonical_material_output_port(
+                connection.get("source", {}).get("port", ""),
+                indexed_units.get(source_id, {}).get("type"),
+            ),
+        )
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+        and isinstance(connection.get("source"), dict)
+        and str(connection["source"].get("kind", "")).strip().lower()
+        == "unit"
+        for source_id in [
+            str(connection["source"].get("id", "")).strip()
+        ]
+    }
+    for unit_id, unit in indexed_units.items():
+        unit_name = str(unit.get("name", "")).strip()
+        ports = unit.get("ports")
+        material_outputs = (
+            ports.get("material_out")
+            if isinstance(ports, dict)
+            else []
+        )
+        for raw_port in material_outputs:
+            output_port = str(raw_port).strip()
+            canonical_output_port = canonical_material_output_port(
+                output_port,
+                unit.get("type"),
+            )
+            if (
+                unit_name
+                and output_port
+                and (unit_id, canonical_output_port)
+                not in connected_material_outputs
+            ):
+                boundary_name = f"{unit_name} [{output_port}] product"
+                boundary_name_key = boundary_name.casefold()
+                if boundary_name_key in terminal_stream_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "is duplicated."
+                    )
+                if boundary_name_key in reserved_stream_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "conflicts with an inlet or equipment name."
+                    )
+                terminal_stream_name_keys.add(boundary_name_key)
+                reserved_stream_name_keys.add(boundary_name_key)
+    material_stream_names: set[str] = set()
     used_sources: set[tuple[str, str, str, str]] = set()
     used_targets: set[tuple[str, str, str, str]] = set()
     used_routes: set[
@@ -983,6 +1071,19 @@ def _validate_graph_integrity(
             raise ValueError(
                 f"Connection '{connection_id}' type must be material or energy."
             )
+        if connection_type == "material":
+            stream_name = material_connection_name(connection)
+            stream_name_key = stream_name.casefold()
+            if stream_name_key in material_stream_names:
+                raise ValueError(
+                    f"Material stream name '{stream_name}' is duplicated."
+                )
+            if stream_name_key in reserved_stream_name_keys:
+                raise ValueError(
+                    f"Material stream name '{stream_name}' conflicts with a "
+                    "process object or product boundary."
+                )
+            material_stream_names.add(stream_name_key)
         endpoints: dict[str, tuple[str, str, str]] = {}
         for endpoint_name in ("source", "target"):
             endpoint = connection.get(endpoint_name)
@@ -1042,9 +1143,19 @@ def _validate_graph_integrity(
             raise ValueError(
                 f"Connection '{connection_id}' cannot connect a node to itself."
             )
-        source_key = (connection_type, *source)
+        canonical_source = source
+        if connection_type == "material" and source[0] == "unit":
+            canonical_source = (
+                source[0],
+                source[1],
+                canonical_material_output_port(
+                    source[2],
+                    indexed_units[source[1]].get("type"),
+                ),
+            )
+        source_key = (connection_type, *canonical_source)
         target_key = (connection_type, *target)
-        route_key = (connection_type, *source, *target)
+        route_key = (connection_type, *canonical_source, *target)
         if source_key in used_sources:
             raise ValueError(
                 f"Graph output port {source[1]}:{source[2]} has multiple connections."
@@ -3073,6 +3184,11 @@ def _engineering_workbook_bytes(
         [
             {
                 "Connection ID": connection["id"],
+                "Stream name": (
+                    material_connection_name(connection)
+                    if str(connection["type"]).strip().lower() == "material"
+                    else ""
+                ),
                 "Type": connection["type"],
                 "Source kind": connection["source"]["kind"],
                 "Source ID": connection["source"]["id"],
@@ -5166,6 +5282,97 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"Disconnected '{disconnect_id}'. "
                             "Use undo to restore the path or reconnect "
                             "available ports before solving."
+                        ),
+                    )
+                    st.rerun()
+
+        if connection_rows:
+            st.divider()
+            st.markdown("#### Name material streams")
+            st.caption(
+                "Assign an engineering stream name while preserving the "
+                "connection's stable graph ID and both endpoint ports."
+            )
+            stream_row_by_id = {
+                row["id"]: row for row in connection_rows
+            }
+            stream_connection_id = st.selectbox(
+                "Material stream",
+                options=list(connection_labels),
+                format_func=connection_labels.__getitem__,
+                key=(
+                    "flowsheet_named_stream_connection_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            stream_row = stream_row_by_id[stream_connection_id]
+            edited_stream_name = st.text_input(
+                "Engineering stream name",
+                value=stream_row["name"],
+                key=(
+                    "flowsheet_named_stream_value_"
+                    f"{stream_connection_id}_{graph_widget_revision}"
+                ),
+                help=(
+                    "Names must be unique across material paths, feeds, "
+                    "equipment, and terminal product streams."
+                ),
+            )
+            save_stream_name = st.button(
+                "Save material stream name",
+                disabled=(
+                    edited_stream_name.strip()
+                    == stream_row["name"]
+                ),
+                use_container_width=True,
+                key=(
+                    "flowsheet_save_stream_name_"
+                    f"{graph_widget_revision}"
+                ),
+            )
+            if save_stream_name:
+                reserved_stream_names = (
+                    _graph_name_set(spec["inlets"])
+                    .union(_graph_name_set(spec["units"]))
+                    .union(
+                        _terminal_material_stream_names(
+                            spec["units"],
+                            spec["connections"],
+                        )
+                    )
+                )
+                try:
+                    connections = rename_material_connection(
+                        spec["connections"],
+                        stream_connection_id,
+                        edited_stream_name,
+                        reserved_stream_names,
+                    )
+                    candidate_draft = create_graph_draft(
+                        spec["units"],
+                        connections,
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"Material stream rename failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Renamed material stream "
+                            f"'{stream_row['name']}' to "
+                            f"'{edited_stream_name.strip()}'."
                         ),
                     )
                     st.rerun()

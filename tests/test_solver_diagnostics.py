@@ -91,12 +91,22 @@ class _FallbackFluid:
 
 
 class _FallbackAliasedStream(_FallbackStream):
-    def __init__(self, name, mass_flow, fluid_reference):
+    def __init__(
+        self,
+        name,
+        mass_flow,
+        fluid_reference,
+        source_stream=None,
+    ):
         super().__init__(name, mass_flow)
         self._fluid_reference = fluid_reference
+        self._source_stream = source_stream
 
     def getFluid(self):
         return self._fluid_reference
+
+    def getSourceStream(self):
+        return self._source_stream
 
 
 class _FallbackProcess:
@@ -1993,6 +2003,203 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(
             result.kpis["material_feed_flow_kg_hr"].value,
             100.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_preserves_distinct_feeds_sharing_one_fluid(self):
+        shared_fluid = object()
+        feed_a = _FallbackAliasedStream(
+            "feed a",
+            100.0,
+            shared_fluid,
+        )
+        feed_b = _FallbackAliasedStream(
+            "feed b",
+            50.0,
+            shared_fluid,
+        )
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 50.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed_a,
+                feed_b,
+                _FallbackHeater(feed_a, product_a),
+                _FallbackHeater(feed_b, product_b),
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (feed_a, feed_b, product_a, product_b)
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["feed a", "feed b"],
+        )
+        self.assertEqual(
+            result.kpis["material_feed_flow_kg_hr"].value,
+            150.0,
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_connectivity_prefers_external_feed_over_fluid_alias(self):
+        shared_fluid = object()
+        feed = _FallbackAliasedStream(
+            "feed",
+            100.0,
+            shared_fluid,
+        )
+        named_alias = _FallbackAliasedStream(
+            "named feed connection",
+            100.0,
+            shared_fluid,
+            feed,
+        )
+        product = _FallbackStream("product", 100.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                feed,
+                named_alias,
+                _FallbackHeater(named_alias, product),
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (feed, named_alias, product)
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["feed"],
+        )
+        self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_reflection_alias_source_uses_object_identity(self):
+        class _EqualSource:
+            def __eq__(self, other):
+                return True
+
+        class _StreamField:
+            def __init__(self, source):
+                self._source = source
+
+            def setAccessible(self, accessible):
+                self._accessible = accessible
+
+            def get(self, stream):
+                return self._source
+
+        class _ReflectiveStreamClass:
+            def __init__(self, source):
+                self._field = _StreamField(source)
+
+            def getSimpleName(self):
+                return "Stream"
+
+            def getDeclaredField(self, name):
+                if name != "stream":
+                    raise AttributeError(name)
+                return self._field
+
+            def getSuperclass(self):
+                return None
+
+        class _ReflectiveStream:
+            def __init__(self, source):
+                self._stream_class = _ReflectiveStreamClass(source)
+
+            def getClass(self):
+                return self._stream_class
+
+        source = _EqualSource()
+        stream = _ReflectiveStream(source)
+
+        self.assertIs(
+            NeqSimProcessModel._material_stream_source_reference(stream),
+            source,
+        )
+
+    def test_connectivity_scopes_alias_to_its_specific_shared_fluid_feed(self):
+        shared_fluid = object()
+        direct_feed = _FallbackAliasedStream(
+            "direct feed",
+            100.0,
+            shared_fluid,
+        )
+        aliased_feed = _FallbackAliasedStream(
+            "aliased feed",
+            50.0,
+            shared_fluid,
+        )
+        named_alias = _FallbackAliasedStream(
+            "named feed connection",
+            50.0,
+            shared_fluid,
+            aliased_feed,
+        )
+        product_a = _FallbackStream("product a", 100.0)
+        product_b = _FallbackStream("product b", 50.0)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._proc = _FallbackProcess(
+            [
+                direct_feed,
+                aliased_feed,
+                named_alias,
+                _FallbackHeater(direct_feed, product_a),
+                _FallbackHeater(named_alias, product_b),
+            ]
+        )
+        model._source_bytes = None
+        model._units = {}
+        model._streams = {
+            stream.getName(): stream
+            for stream in (
+                direct_feed,
+                aliased_feed,
+                named_alias,
+                product_a,
+                product_b,
+            )
+        }
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+
+        result = model._extract_results()
+
+        self.assertEqual(
+            [
+                row["stream_name"]
+                for row in result.raw["material_boundaries"]
+                if row["role"] == "feed"
+            ],
+            ["direct feed", "aliased feed"],
+        )
+        self.assertEqual(
+            result.kpis["material_feed_flow_kg_hr"].value,
+            150.0,
         )
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
 

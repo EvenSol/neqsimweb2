@@ -1298,6 +1298,44 @@ class NeqSimProcessModel:
         return None
 
     @staticmethod
+    def _material_stream_source_reference(stream: Any) -> Optional[Any]:
+        """Return the specific upstream stream wrapped by a stream alias."""
+        for method_name in (
+            "getSourceStream",
+            "getUpstreamStream",
+            "getParentStream",
+        ):
+            if not hasattr(stream, method_name):
+                continue
+            try:
+                source = getattr(stream, method_name)()
+            except Exception:
+                continue
+            if source is not None and source is not stream:
+                return source
+
+        try:
+            stream_class = stream.getClass()
+            if (
+                str(stream_class.getSimpleName()).lower()
+                not in _MATERIAL_STREAM_UNIT_CLASSES
+            ):
+                return None
+            while stream_class is not None:
+                try:
+                    field = stream_class.getDeclaredField("stream")
+                    field.setAccessible(True)
+                    source = field.get(stream)
+                    if source is not None and source is not stream:
+                        return source
+                    return None
+                except Exception:
+                    stream_class = stream_class.getSuperclass()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _material_consumption_trackers(
         units: List[Any],
     ) -> Tuple[
@@ -1359,7 +1397,8 @@ class NeqSimProcessModel:
                     produced_fluids.add("product", fluid)
                 equipment_outlets.append((stream, label))
 
-        feeds = []
+        feed_candidates = []
+        candidate_streams = _MaterialBoundaryIdentityTracker()
         for stream in stream_units:
             fluid = NeqSimProcessModel._material_fluid_reference(stream)
             is_consumed = consumed.contains("feed", stream) or (
@@ -1371,7 +1410,24 @@ class NeqSimProcessModel:
                 and produced_fluids.contains("product", fluid)
             )
             if is_consumed and not is_produced:
-                feeds.append(stream)
+                feed_candidates.append(
+                    (
+                        stream,
+                        NeqSimProcessModel._material_stream_source_reference(
+                            stream
+                        ),
+                    )
+                )
+                candidate_streams.add("feed", stream)
+
+        feeds = []
+        for stream, source_stream in feed_candidates:
+            if (
+                source_stream is not None
+                and candidate_streams.contains("feed", source_stream)
+            ):
+                continue
+            feeds.append(stream)
 
         products = []
         for stream, label in equipment_outlets:

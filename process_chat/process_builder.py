@@ -16,6 +16,10 @@ import re
 import tempfile
 from typing import Any, Dict, List, Optional
 
+from .graph_schema import (
+    canonical_material_output_port,
+    material_connection_name,
+)
 from .process_model import NeqSimProcessModel
 
 
@@ -625,21 +629,36 @@ class ProcessBuilder:
         """Add named native streams for every unconnected material output port."""
         from neqsim import jneqsim
 
+        unit_types = {
+            str(unit_spec.get("id", "")).strip(): str(
+                unit_spec.get("type", "")
+            ).strip()
+            for unit_spec in unit_specs
+            if isinstance(unit_spec, dict)
+        }
         connected_outputs: set[tuple[str, str]] = set()
         for connection in connections:
             source = connection["source"]
             if str(source.get("kind", "")).strip().lower() != "unit":
                 continue
+            source_id = str(source.get("id", "")).strip()
             connected_outputs.add(
                 (
-                    str(source.get("id", "")).strip(),
-                    str(source.get("port", "")).strip().lower(),
+                    source_id,
+                    canonical_material_output_port(
+                        source.get("port", ""),
+                        unit_types.get(source_id),
+                    ),
                 )
             )
 
         StreamClass = jneqsim.process.equipment.stream.Stream
         terminal_streams: Dict[str, Any] = {}
-        used_names = set(reserved_names)
+        used_name_keys = {
+            str(name).strip().casefold()
+            for name in reserved_names
+            if str(name).strip()
+        }
         for unit_spec in unit_specs:
             unit_id = str(unit_spec["id"]).strip()
             unit_name = str(unit_spec["name"]).strip()
@@ -653,16 +672,23 @@ class ProcessBuilder:
                 )
             for raw_port in material_outputs:
                 output_port = str(raw_port).strip().lower()
+                canonical_output_port = (
+                    canonical_material_output_port(
+                        output_port,
+                        unit_spec.get("type"),
+                    )
+                )
                 if not output_port:
                     raise ValueError(
                         f"Unit '{unit_id}' has an empty material output port."
                     )
-                endpoint_key = (unit_id, output_port)
+                endpoint_key = (unit_id, canonical_output_port)
                 if endpoint_key in connected_outputs:
                     continue
 
                 boundary_name = f"{unit_name} [{output_port}] product"
-                if boundary_name in used_names:
+                boundary_name_key = boundary_name.casefold()
+                if boundary_name_key in used_name_keys:
                     raise ValueError(
                         f"Terminal stream name '{boundary_name}' is duplicated."
                     )
@@ -686,7 +712,7 @@ class ProcessBuilder:
 
                 boundary_id = f"{unit_id}:{output_port}"
                 terminal_streams[boundary_id] = terminal_stream
-                used_names.add(boundary_name)
+                used_name_keys.add(boundary_name_key)
                 self._build_log.append(
                     f"Added terminal product stream: {boundary_id}"
                 )
@@ -697,6 +723,43 @@ class ProcessBuilder:
                 "output port."
             )
         return terminal_streams
+
+    def _add_material_connection_stream(
+        self,
+        connection: dict,
+        inlet_streams: Dict[str, Any],
+        unit_objects: Dict[str, Any],
+        process_system: Any,
+        connection_streams: Dict[str, Any],
+    ) -> Any:
+        """Materialize one named stream between explicit graph ports."""
+        from neqsim import jneqsim
+
+        connection_id = str(connection.get("id", "")).strip()
+        if connection_id in connection_streams:
+            raise ValueError(
+                f"Material connection '{connection_id}' was materialized twice."
+            )
+        source_stream = self.resolve_material_output(
+            connection["source"],
+            inlet_streams,
+            unit_objects,
+        )
+        stream_name = material_connection_name(connection)
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        try:
+            material_stream = StreamClass(stream_name, source_stream)
+            process_system.add(material_stream)
+        except Exception as exc:
+            raise ValueError(
+                f"Could not create native material stream '{stream_name}' "
+                f"for connection '{connection_id}'."
+            ) from exc
+        connection_streams[connection_id] = material_stream
+        self._build_log.append(
+            f"Added material stream: {connection_id} ({stream_name})"
+        )
+        return material_stream
 
     def build_acyclic_graph(
         self,
@@ -769,6 +832,22 @@ class ProcessBuilder:
                 raise ValueError(f"Unit '{unit_id}' params must be an object.")
             indexed_units[unit_id] = unit_spec
             unit_names.add(unit_name)
+            ports = unit_spec.get("ports")
+            material_outputs = (
+                ports.get("material_out")
+                if isinstance(ports, dict)
+                else None
+            )
+            if isinstance(material_outputs, list):
+                canonical_outputs = [
+                    canonical_material_output_port(port, unit_type)
+                    for port in material_outputs
+                ]
+                if len(canonical_outputs) != len(set(canonical_outputs)):
+                    raise ValueError(
+                        f"Unit '{unit_id}' material output ports alias the "
+                        "same native outlet."
+                    )
 
         expected_ids = [*inlet_ids, *indexed_units]
         ordered_ids = [str(node_id).strip() for node_id in execution_order]
@@ -793,6 +872,13 @@ class ProcessBuilder:
         incoming_material: Dict[str, list[dict]] = {
             unit_id: [] for unit_id in indexed_units
         }
+        connection_ids: set[str] = set()
+        connection_name_keys: set[str] = set()
+        connection_names: set[str] = set()
+        connected_source_ports: set[tuple[str, str, str]] = set()
+        reserved_name_keys = {
+            name.casefold() for name in inlet_names.union(unit_names)
+        }
         for connection_index, connection in enumerate(connections):
             if not isinstance(connection, dict):
                 raise ValueError(
@@ -802,17 +888,56 @@ class ProcessBuilder:
             connection_id = str(connection.get("id", "")).strip()
             if not connection_id:
                 raise ValueError(f"Connection {connection_index} requires an id.")
+            if connection_id in connection_ids:
+                raise ValueError(
+                    f"Connection id '{connection_id}' is duplicated."
+                )
+            connection_ids.add(connection_id)
             if connection_type != "material":
                 raise ValueError(
                     f"Connection '{connection_id}' is not a material connection. "
                     "Energy links require a later executor stage."
                 )
+            connection_name = material_connection_name(connection)
+            connection_name_key = connection_name.casefold()
+            if connection_name_key in connection_name_keys:
+                raise ValueError(
+                    f"Material stream name '{connection_name}' is duplicated."
+                )
+            if connection_name_key in reserved_name_keys:
+                raise ValueError(
+                    f"Material stream name '{connection_name}' conflicts with "
+                    "an inlet or equipment name."
+                )
+            connection_name_keys.add(connection_name_key)
+            connection_names.add(connection_name)
             source = connection.get("source")
             target = connection.get("target")
             if not isinstance(source, dict) or not isinstance(target, dict):
                 raise ValueError(
                     f"Connection '{connection_id}' requires source and target objects."
                 )
+            source_kind = str(source.get("kind", "")).strip().lower()
+            source_id = str(source.get("id", "")).strip()
+            source_unit_type = (
+                indexed_units[source_id].get("type")
+                if source_kind == "unit" and source_id in indexed_units
+                else None
+            )
+            source_key = (
+                source_kind,
+                source_id,
+                canonical_material_output_port(
+                    source.get("port", ""),
+                    source_unit_type,
+                ),
+            )
+            if source_key in connected_source_ports:
+                raise ValueError(
+                    f"Material output port {source_key[1]}:{source_key[2]} "
+                    "already has a connection; use a splitter for branching."
+                )
+            connected_source_ports.add(source_key)
             target_kind = str(target.get("kind", "")).strip().lower()
             target_id = str(target.get("id", "")).strip()
             if target_kind != "unit" or target_id not in indexed_units:
@@ -820,6 +945,65 @@ class ProcessBuilder:
                     f"Connection '{connection_id}' requires a known unit target."
                 )
             incoming_material[target_id].append(connection)
+
+        connected_output_ports = {
+            (
+                source_id,
+                canonical_material_output_port(
+                    connection["source"].get("port", ""),
+                    indexed_units.get(source_id, {}).get("type"),
+                ),
+            )
+            for connection in connections
+            if str(connection["source"].get("kind", "")).strip().lower()
+            == "unit"
+            for source_id in [
+                str(connection["source"].get("id", "")).strip()
+            ]
+        }
+        terminal_boundary_name_keys: set[str] = set()
+        for unit_id, unit_spec in indexed_units.items():
+            ports = unit_spec.get("ports")
+            material_outputs = (
+                ports.get("material_out")
+                if isinstance(ports, dict)
+                else []
+            )
+            for raw_port in material_outputs:
+                output_port = str(raw_port).strip().lower()
+                canonical_output_port = (
+                    canonical_material_output_port(
+                        output_port,
+                        unit_spec.get("type"),
+                    )
+                )
+                if (
+                    not output_port
+                    or (unit_id, canonical_output_port)
+                    in connected_output_ports
+                ):
+                    continue
+                boundary_name = (
+                    f"{str(unit_spec['name']).strip()} "
+                    f"[{output_port}] product"
+                )
+                boundary_name_key = boundary_name.casefold()
+                if boundary_name_key in connection_name_keys:
+                    raise ValueError(
+                        f"Material stream name '{boundary_name}' conflicts "
+                        "with a terminal product boundary."
+                    )
+                if boundary_name_key in reserved_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "conflicts with an inlet or equipment name."
+                    )
+                if boundary_name_key in terminal_boundary_name_keys:
+                    raise ValueError(
+                        f"Terminal product stream name '{boundary_name}' "
+                        "is duplicated."
+                    )
+                terminal_boundary_name_keys.add(boundary_name_key)
 
         process_name = str(graph_spec.get("name", "Graph Process")).strip()
         self._process_name = process_name or "Graph Process"
@@ -835,6 +1019,7 @@ class ProcessBuilder:
         ProcessSystem = jneqsim.process.processmodel.ProcessSystem
         process_system = ProcessSystem()
         unit_objects: Dict[str, Any] = {}
+        connection_streams: Dict[str, Any] = {}
 
         for node_id in ordered_ids:
             if node_id in inlet_streams:
@@ -932,10 +1117,12 @@ class ProcessBuilder:
                         f"{'s' if minimum_inlets != 1 else ''}."
                     )
                 source_streams = [
-                    self.resolve_material_output(
-                        connection["source"],
+                    self._add_material_connection_stream(
+                        connection,
                         inlet_streams,
                         unit_objects,
+                        process_system,
+                        connection_streams,
                     )
                     for connection in incoming
                 ]
@@ -967,10 +1154,12 @@ class ProcessBuilder:
                         f"Unit '{node_id}' requires exactly one material inlet; "
                         f"found {len(incoming)}."
                     )
-                source_stream = self.resolve_material_output(
-                    incoming[0]["source"],
+                source_stream = self._add_material_connection_stream(
+                    incoming[0],
                     inlet_streams,
                     unit_objects,
+                    process_system,
+                    connection_streams,
                 )
                 unit = self._create_unit(
                     str(unit_spec["name"]).strip(),
@@ -1005,7 +1194,7 @@ class ProcessBuilder:
             inlet_streams,
             unit_objects,
             process_system,
-            inlet_names.union(unit_names),
+            inlet_names.union(unit_names).union(connection_names),
         )
         self._build_log.append("Running acyclic graph simulation...")
         NeqSimProcessModel._run_until_converged(process_system)

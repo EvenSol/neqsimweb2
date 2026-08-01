@@ -9,6 +9,11 @@ import math
 import re
 from typing import Any
 
+from .graph_schema import (
+    canonical_material_output_port,
+    material_connection_name,
+)
+
 
 GRAPH_DRAFT_SCHEMA_VERSION = 1
 GRAPH_HISTORY_SCHEMA_VERSION = 1
@@ -1677,14 +1682,158 @@ def _connection_index(
     return matches[0]
 
 
-def _unique_connection_id(stem: str, existing_ids: set[str]) -> str:
-    """Return a stable connection id without overwriting an existing edge."""
+def _connection_identity_keys(connections: list[Any]) -> set[str]:
+    """Return case-insensitive IDs and effective material-stream names."""
+    keys = {
+        str(connection.get("id", "")).strip().casefold()
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("id", "")).strip()
+    }
+    keys.update(
+        material_connection_name(connection).casefold()
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+    )
+    return keys
+
+
+def _reserved_material_stream_name_keys(
+    inlets: list[Any],
+    units: list[Any],
+    connections: list[Any],
+    new_source: dict[str, str],
+) -> set[str]:
+    """Return process and surviving terminal names unavailable to a new stream."""
+    units_by_id = {
+        str(unit.get("id", "")).strip(): unit
+        for unit in units
+        if isinstance(unit, dict)
+    }
+    reserved = _normalized_name_keys(
+        record.get("name")
+        for record in [*inlets, *units]
+        if isinstance(record, dict)
+    )
+    connected_outputs = {
+        (
+            source_id,
+            canonical_material_output_port(
+                connection.get("source", {}).get("port", ""),
+                units_by_id.get(source_id, {}).get("type"),
+            ),
+        )
+        for connection in connections
+        if isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+        and isinstance(connection.get("source"), dict)
+        and str(connection["source"].get("kind", "")).strip().lower()
+        == "unit"
+        for source_id in [
+            str(connection["source"].get("id", "")).strip()
+        ]
+    }
+    if str(new_source.get("kind", "")).strip().lower() == "unit":
+        source_id = str(new_source.get("id", "")).strip()
+        connected_outputs.add(
+            (
+                source_id,
+                canonical_material_output_port(
+                    new_source.get("port", ""),
+                    units_by_id.get(source_id, {}).get("type"),
+                ),
+            )
+        )
+
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        unit_id = str(unit.get("id", "")).strip()
+        unit_name = str(unit.get("name", "")).strip()
+        ports = unit.get("ports")
+        material_outputs = (
+            ports.get("material_out")
+            if isinstance(ports, dict)
+            else None
+        )
+        if (
+            not unit_id
+            or not unit_name
+            or not isinstance(material_outputs, list)
+        ):
+            continue
+        for raw_port in material_outputs:
+            output_port = str(raw_port).strip()
+            if (
+                output_port
+                and (
+                    unit_id,
+                    canonical_material_output_port(
+                        output_port,
+                        unit.get("type"),
+                    ),
+                )
+                not in connected_outputs
+            ):
+                reserved.add(
+                    f"{unit_name} [{output_port}] product".casefold()
+                )
+    return reserved
+
+
+def _unique_connection_id(stem: str, reserved_keys: set[str]) -> str:
+    """Return a stable ID that cannot shadow an existing material stream."""
     connection_id = _slugify(stem)
     suffix = 2
-    while connection_id in existing_ids:
+    while connection_id.casefold() in reserved_keys:
         connection_id = f"{_slugify(stem)}-{suffix}"
         suffix += 1
     return connection_id
+
+
+def rename_material_connection(
+    connections: list[Any],
+    connection_id: str,
+    stream_name: str,
+    reserved_names: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Rename one material path without changing its stable graph identity."""
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+    cleaned_connection_id = str(connection_id).strip()
+    if not cleaned_connection_id:
+        raise ValueError("Material connection id cannot be empty.")
+    cleaned_name = str(stream_name).strip()
+    if not cleaned_name:
+        raise ValueError("Material stream name cannot be empty.")
+
+    copied_connections = copy.deepcopy(connections)
+    connection_index = _connection_index(
+        copied_connections,
+        cleaned_connection_id,
+    )
+    selected = copied_connections[connection_index]
+    if str(selected.get("type", "")).strip().lower() != "material":
+        raise ValueError(
+            f"Connection '{cleaned_connection_id}' is not a material stream."
+        )
+
+    peer_name_keys = {
+        material_connection_name(connection).casefold()
+        for index, connection in enumerate(copied_connections)
+        if index != connection_index
+        and isinstance(connection, dict)
+        and str(connection.get("type", "")).strip().lower() == "material"
+    }
+    peer_name_keys.update(_normalized_name_keys(reserved_names))
+    if cleaned_name.casefold() in peer_name_keys:
+        raise ValueError(
+            f"Material stream name '{cleaned_name}' is already in use."
+        )
+
+    selected["name"] = cleaned_name
+    return copied_connections
 
 
 def _graph_port_inventory(
@@ -1780,6 +1929,19 @@ def _graph_port_inventory(
                         f"{connection_type} port."
                     )
                 cleaned_by_direction[direction] = cleaned_ports
+                if connection_type == "material" and direction == "source":
+                    canonical_ports = [
+                        canonical_material_output_port(
+                            port,
+                            unit.get("type"),
+                        )
+                        for port in cleaned_ports
+                    ]
+                    if len(canonical_ports) != len(set(canonical_ports)):
+                        raise ValueError(
+                            f"Graph unit '{unit_id}' material output ports "
+                            "alias the same native outlet."
+                        )
                 for port in cleaned_ports:
                     add_port(
                         connection_type,
@@ -1967,20 +2129,29 @@ def connect_graph_ports(
         )
 
     copied_connections = inventory["connections"]
-    existing_ids = {
-        str(connection["id"]).strip()
-        for connection in copied_connections
-    }
+    reserved_connection_keys = _connection_identity_keys(
+        copied_connections
+    )
+    if cleaned_type == "material":
+        reserved_connection_keys.update(
+            _reserved_material_stream_name_keys(
+                inlets,
+                units,
+                copied_connections,
+                normalized_endpoints["source"],
+            )
+        )
     connection_id = _unique_connection_id(
         (
             f"{cleaned_type}-{source_key[2]}-{source_key[3]}-to-"
             f"{target_key[2]}-{target_key[3]}"
         ),
-        existing_ids,
+        reserved_connection_keys,
     )
     copied_connections.append(
         {
             "id": connection_id,
+            "name": connection_id,
             "type": cleaned_type,
             "source": normalized_endpoints["source"],
             "target": normalized_endpoints["target"],
@@ -2221,6 +2392,11 @@ def reroute_graph_connection(
     connection_type = str(
         copied_connections[selected_index]["type"]
     ).strip().lower()
+    selected_stream_name = (
+        material_connection_name(copied_connections[selected_index])
+        if connection_type == "material"
+        else None
+    )
     remaining_connections = [
         connection
         for index, connection in enumerate(copied_connections)
@@ -2241,6 +2417,8 @@ def reroute_graph_connection(
     )
     connected.remove(replacement)
     replacement["id"] = cleaned_connection_id
+    if selected_stream_name is not None:
+        replacement["name"] = selected_stream_name
     connected.insert(selected_index, replacement)
     _graph_port_inventory(inlets, units, connected)
     _validate_acyclic_material_connections(connected)
@@ -2382,14 +2560,12 @@ def insert_inline_unit_on_connection(
         "id": new_unit["id"],
         "port": "in",
     }
-    existing_connection_ids = {
-        str(connection.get("id", "")).strip()
-        for connection in copied_connections
-        if isinstance(connection, dict)
-    }
     downstream_connection_id = _unique_connection_id(
         f"{new_unit['id']}-to-{target_id}",
-        existing_connection_ids,
+        _connection_identity_keys(copied_connections).union(
+            existing_name_keys,
+            {cleaned_name.casefold()},
+        ),
     )
     copied_connections.insert(
         selected_index + 1,
@@ -2491,13 +2667,20 @@ def insert_mixer_on_connection(
         "id": mixer_id,
         "port": "in_0",
     }
-    existing_connection_ids = {
-        str(connection.get("id", "")).strip()
-        for connection in copied_connections
-    }
+    downstream_reserved_keys = _connection_identity_keys(
+        copied_connections
+    )
+    downstream_reserved_keys.update(
+        _normalized_name_keys(
+            record.get("name")
+            for record in [*inlets, *copied_units]
+            if isinstance(record, dict)
+        )
+    )
+    downstream_reserved_keys.update(_normalized_name_keys(reserved_names))
     downstream_connection_id = _unique_connection_id(
         f"{mixer_id}-out-to-{target_id}",
-        existing_connection_ids,
+        downstream_reserved_keys,
     )
     copied_connections.insert(
         selected_index + 1,
@@ -3304,7 +3487,20 @@ def build_graph_draft_dot(
                 f"{connection_type}_in port '{target_port}'."
             )
         if connection_type == "material":
-            connected_outputs.add((source_id, source_port))
+            source_unit_type = (
+                units_by_id[source_id].get("type")
+                if source_kind == "unit"
+                else None
+            )
+            connected_outputs.add(
+                (
+                    source_id,
+                    canonical_material_output_port(
+                        source_port,
+                        source_unit_type,
+                    ),
+                )
+            )
         rendered_connections.append(
             (
                 connection,
@@ -3357,7 +3553,13 @@ def build_graph_draft_dot(
             edge_style = 'color="#d97706", fontcolor="#92400e", style="dashed"'
         else:
             edge_style = 'color="#2563eb", fontcolor="#1e40af"'
-        edge_label = f"{source_port} \u2192 {target_port}"
+        if connection_type == "material":
+            edge_label = (
+                f"{material_connection_name(connection)}\n"
+                f"{source_port} \u2192 {target_port}"
+            )
+        else:
+            edge_label = f"{source_port} \u2192 {target_port}"
         lines.append(
             f"  {source_dot_id} -> {target_dot_id} "
             f"[label={_dot_text(edge_label)}, {edge_style}];"
@@ -3379,7 +3581,13 @@ def build_graph_draft_dot(
                 raise ValueError(
                     f"Graph preview unit '{unit_id}' has an empty output port."
                 )
-            if (unit_id, port_name) in connected_outputs:
+            if (
+                unit_id,
+                canonical_material_output_port(
+                    port_name,
+                    unit.get("type"),
+                ),
+            ) in connected_outputs:
                 continue
             product_dot_id = f"product_{product_index}"
             product_index += 1
@@ -3406,6 +3614,7 @@ def material_connection_rows(
 
     rows: list[dict[str, str]] = []
     seen_ids: set[str] = set()
+    seen_names: set[str] = set()
     for index, connection in enumerate(connections):
         if not isinstance(connection, dict):
             raise ValueError(f"Graph connection {index} must be an object.")
@@ -3417,6 +3626,13 @@ def material_connection_rows(
         seen_ids.add(connection_id)
         if str(connection.get("type", "")).strip().lower() != "material":
             continue
+        stream_name = material_connection_name(connection)
+        stream_name_key = stream_name.casefold()
+        if stream_name_key in seen_names:
+            raise ValueError(
+                f"Material stream name '{stream_name}' is duplicated."
+            )
+        seen_names.add(stream_name_key)
 
         source = connection.get("source")
         target = connection.get("target")
@@ -3435,8 +3651,9 @@ def material_connection_rows(
         rows.append(
             {
                 "id": connection_id,
+                "name": stream_name,
                 "label": (
-                    f"{source_id}:{source_port} → "
+                    f"{stream_name} · {source_id}:{source_port} → "
                     f"{target_id}:{target_port}"
                 ),
             }

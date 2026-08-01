@@ -79,7 +79,17 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
             and node.name == function_name
         )
-        namespace = {"Any": Any, "json": json, "math": math}
+        namespace = {
+            "Any": Any,
+            "canonical_material_output_port": (
+                flowsheet_editor.canonical_material_output_port
+            ),
+            "material_connection_name": (
+                flowsheet_editor.material_connection_name
+            ),
+            "json": json,
+            "math": math,
+        }
         exec(
             compile(
                 ast.Module(body=[function], type_ignores=[]),
@@ -576,6 +586,87 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ):
             validate_graph_integrity(inlets, units, connections)
 
+    def test_graph_integrity_rejects_duplicate_terminal_product_names(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+        index_graph_objects = self._load_studio_function(
+            "_index_graph_objects"
+        )
+        index_graph_objects.__globals__["_required_identifier"] = (
+            required_identifier
+        )
+        validate_graph_integrity = self._load_studio_function(
+            "_validate_graph_integrity"
+        )
+        validate_graph_integrity.__globals__["_index_graph_objects"] = (
+            index_graph_objects
+        )
+        units = [
+            {
+                "id": "heater-a",
+                "name": "Product heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+            {
+                "id": "heater-b",
+                "name": "product HEATER",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Terminal product stream name .* is duplicated",
+        ):
+            validate_graph_integrity([], units, [])
+
+    def test_graph_integrity_rejects_separator_native_output_aliases(self):
+        required_identifier = self._load_studio_function(
+            "_required_identifier"
+        )
+        index_graph_objects = self._load_studio_function(
+            "_index_graph_objects"
+        )
+        index_graph_objects.__globals__["_required_identifier"] = (
+            required_identifier
+        )
+        validate_graph_integrity = self._load_studio_function(
+            "_validate_graph_integrity"
+        )
+        validate_graph_integrity.__globals__["_index_graph_objects"] = (
+            index_graph_objects
+        )
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet separator",
+                "type": "separator",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out", "gas"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "material output ports alias the same native outlet",
+        ):
+            validate_graph_integrity([], units, [])
+
     def test_graph_name_set_ignores_null_and_blank_names(self):
         graph_name_set = self._load_studio_function("_graph_name_set")
         records = [
@@ -620,6 +711,33 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                     "port": "liquid",
                 },
             },
+        ]
+
+        self.assertEqual(
+            terminal_names(units, connections),
+            {"Inlet scrubber [liquid] product"},
+        )
+
+    def test_terminal_names_use_canonical_port_occupancy(self):
+        terminal_names = self._load_studio_function(
+            "_terminal_material_stream_names"
+        )
+        units = [
+            {
+                "id": "separator",
+                "name": "Inlet scrubber",
+                "ports": {"material_out": ["vapor", "liquid"]},
+            }
+        ]
+        connections = [
+            {
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "gas",
+                },
+            }
         ]
 
         self.assertEqual(

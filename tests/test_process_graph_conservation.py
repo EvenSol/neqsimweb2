@@ -1703,6 +1703,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     [
                         "dry gas",
                         "rich gas",
+                        "dry-gas-to-mixer",
+                        "rich-gas-to-mixer",
                         "feed mixer",
                         "feed mixer [out] product",
                     ],
@@ -2200,7 +2202,19 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     [
                         "gas rich feed",
                         "liquid rich feed",
+                        (
+                            "material-gas-rich-feed-out-to-"
+                            "feed-mixer-in-0"
+                        ),
+                        (
+                            "material-liquid-rich-feed-out-to-"
+                            "feed-mixer-in-1"
+                        ),
                         "feed mixer",
+                        (
+                            "material-feed-mixer-out-to-"
+                            "product-separator-in"
+                        ),
                         "product separator",
                         "product separator [gas] product",
                         "product separator [liquid] product",

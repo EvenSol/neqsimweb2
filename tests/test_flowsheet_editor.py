@@ -13,6 +13,7 @@ from process_chat.flowsheet_editor import (
     add_catalog_unit,
     apply_graph_draft,
     build_graph_draft_dot,
+    canonical_material_output_port,
     clone_material_inlet,
     connect_graph_ports,
     create_graph_draft,
@@ -30,6 +31,7 @@ from process_chat.flowsheet_editor import (
     inline_unit_property_rows,
     insert_inline_unit_on_connection,
     insert_mixer_on_connection,
+    material_connection_name,
     material_connection_rows,
     process_unit_property_rows,
     record_graph_history,
@@ -42,6 +44,7 @@ from process_chat.flowsheet_editor import (
     replace_inline_unit,
     replace_inline_unit_type,
     reroute_graph_connection,
+    rename_material_connection,
     rename_material_inlet,
     rename_inline_unit,
     splitter_allocation_rows,
@@ -1169,6 +1172,21 @@ class InlineInsertionTest(unittest.TestCase):
         self.assertEqual(self.units, original_units)
         self.assertEqual(self.connections, original_connections)
 
+    def test_insert_reserves_process_names_for_downstream_stream_id(self):
+        _, connections, _ = insert_inline_unit_on_connection(
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "pump",
+            "Feed pump",
+            reserved_names={"feed-pump-to-compressor-1"},
+        )
+
+        self.assertEqual(
+            connections[1]["id"],
+            "feed-pump-to-compressor-1-2",
+        )
+
     def test_invalid_path_requests_fail_without_partial_edits(self):
         invalid_cases = (
             ("missing", self.connections, "Unknown graph connection"),
@@ -2200,6 +2218,22 @@ class MixerPathInsertionTest(unittest.TestCase):
                 {"Compressor Stage 1"},
             )
 
+    def test_insert_mixer_reserves_process_names_for_downstream_stream_id(self):
+        _, connections, _, downstream_id = insert_mixer_on_connection(
+            self.inlets,
+            self.units,
+            self.connections,
+            "feed-to-compressor",
+            "Feed mixer",
+            reserved_names={"feed-mixer-out-to-feed-compressor"},
+        )
+
+        self.assertEqual(
+            downstream_id,
+            "feed-mixer-out-to-feed-compressor-2",
+        )
+        self.assertEqual(connections[1]["id"], downstream_id)
+
     def test_invalid_insertions_leave_graph_unchanged(self):
         invalid_cases = (
             (
@@ -2538,7 +2572,11 @@ class GraphDraftLifecycleTest(unittest.TestCase):
             [
                 {
                     "id": "feed-to-cooler",
-                    "label": "feed:out → product-cooler:in",
+                    "name": "feed-to-cooler",
+                    "label": (
+                        "feed-to-cooler · "
+                        "feed:out → product-cooler:in"
+                    ),
                 }
             ],
         )
@@ -2985,9 +3023,205 @@ class GraphPortConnectionTest(unittest.TestCase):
         )
         self.assertEqual(updated[-1]["source"], source)
         self.assertEqual(updated[-1]["target"], target)
+        self.assertEqual(updated[-1]["name"], connection_id)
         self.assertEqual(len(self.connections), 3)
         source["id"] = "changed"
         self.assertEqual(updated[-1]["source"]["id"], "feed-b")
+
+    def test_default_stream_name_avoids_existing_stream_names(self):
+        connections = copy.deepcopy(self.connections)
+        connections[0]["name"] = (
+            "MATERIAL-FEED-B-OUT-TO-MIXER-IN-1"
+        )
+
+        updated, connection_id = connect_graph_ports(
+            self.inlets,
+            self.units,
+            connections,
+            "material",
+            {
+                "kind": "inlet",
+                "id": "feed-b",
+                "port": "out",
+            },
+            {
+                "kind": "unit",
+                "id": "mixer",
+                "port": "in_1",
+            },
+        )
+
+        self.assertEqual(
+            connection_id,
+            "material-feed-b-out-to-mixer-in-1-2",
+        )
+        self.assertEqual(updated[-1]["name"], connection_id)
+
+    def test_default_stream_name_avoids_process_object_names(self):
+        inlets = copy.deepcopy(self.inlets)
+        inlets[0]["name"] = (
+            "MATERIAL-FEED-B-OUT-TO-MIXER-IN-1"
+        )
+
+        updated, connection_id = connect_graph_ports(
+            inlets,
+            self.units,
+            self.connections,
+            "material",
+            {
+                "kind": "inlet",
+                "id": "feed-b",
+                "port": "out",
+            },
+            {
+                "kind": "unit",
+                "id": "mixer",
+                "port": "in_1",
+            },
+        )
+
+        self.assertEqual(
+            connection_id,
+            "material-feed-b-out-to-mixer-in-1-2",
+        )
+        self.assertEqual(updated[-1]["name"], connection_id)
+
+    def test_renames_material_stream_without_changing_graph_identity(self):
+        original = copy.deepcopy(self.connections)
+        updated = rename_material_connection(
+            self.connections,
+            "feed-a-mixer",
+            "Well A to inlet mixer",
+        )
+
+        self.assertEqual(self.connections, original)
+        self.assertEqual(updated[0]["id"], "feed-a-mixer")
+        self.assertEqual(updated[0]["name"], "Well A to inlet mixer")
+        self.assertEqual(updated[0]["source"], original[0]["source"])
+        self.assertEqual(updated[0]["target"], original[0]["target"])
+        self.assertEqual(
+            material_connection_name(updated[0]),
+            "Well A to inlet mixer",
+        )
+
+    def test_canonicalizes_native_material_output_aliases(self):
+        aliases = {
+            "main": "out",
+            "VAPOR": "gas",
+            " oil ": "liquid",
+            "aqueous": "water",
+            "out0": "split_0",
+            "out_2": "split_2",
+            "split-3": "split_3",
+            "custom": "custom",
+        }
+
+        self.assertEqual(
+            {
+                raw_port: canonical_material_output_port(raw_port)
+                for raw_port in aliases
+            },
+            aliases,
+        )
+        self.assertEqual(
+            canonical_material_output_port("out", "separator"),
+            "gas",
+        )
+        self.assertEqual(
+            canonical_material_output_port(
+                "main",
+                "three_phase_separator",
+            ),
+            "gas",
+        )
+        self.assertEqual(
+            canonical_material_output_port(
+                "out",
+                "membrane_separator",
+            ),
+            "gas",
+        )
+        self.assertEqual(
+            canonical_material_output_port("out", "heater"),
+            "out",
+        )
+
+    def test_rejects_separator_ports_that_alias_one_native_outlet(self):
+        units = copy.deepcopy(self.units)
+        units[0] = {
+            "id": "separator",
+            "name": "Inlet separator",
+            "type": "separator",
+            "ports": {
+                "material_in": ["in"],
+                "material_out": ["out", "gas"],
+            },
+            "params": {},
+        }
+        connections = [
+            {
+                "id": "feed-a-separator",
+                "name": "Feed A to separator",
+                "type": "material",
+                "source": {
+                    "kind": "inlet",
+                    "id": "feed-a",
+                    "port": "out",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "separator",
+                    "port": "in",
+                },
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "material output ports alias the same native outlet",
+        ):
+            graph_port_rows(
+                self.inlets,
+                units,
+                connections,
+                "material",
+                "source",
+            )
+
+    def test_material_stream_names_are_unique_and_nonblank(self):
+        named_connections = copy.deepcopy(self.connections)
+        named_connections[0]["name"] = "Mixer feed"
+        with self.assertRaisesRegex(ValueError, "already in use"):
+            rename_material_connection(
+                named_connections,
+                "mixer-heater",
+                " mixer FEED ",
+            )
+        with self.assertRaisesRegex(ValueError, "already in use"):
+            rename_material_connection(
+                named_connections,
+                "mixer-heater",
+                "Feed A",
+                {"feed a"},
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            rename_material_connection(
+                named_connections,
+                "mixer-heater",
+                " ",
+            )
+
+        named_connections[1]["name"] = " "
+        with self.assertRaisesRegex(ValueError, "requires a stream name"):
+            material_connection_rows(named_connections)
+
+    def test_rejects_renaming_energy_connection_as_material_stream(self):
+        with self.assertRaisesRegex(ValueError, "not a material stream"):
+            rename_material_connection(
+                self.connections,
+                "utility-heater",
+                "Heater duty",
+            )
 
     def test_connects_splitter_branch_and_energy_link(self):
         without_energy = disconnect_graph_connection(
@@ -3245,6 +3479,7 @@ class GraphPortConnectionTest(unittest.TestCase):
         )
 
         self.assertEqual(updated[0]["id"], "feed-a-mixer")
+        self.assertEqual(updated[0]["name"], "feed-a-mixer")
         self.assertEqual(
             updated[0]["source"],
             {"kind": "inlet", "id": "feed-b", "port": "out"},
@@ -3267,6 +3502,22 @@ class GraphPortConnectionTest(unittest.TestCase):
             ("feed-a", "out"),
             {(row["id"], row["port"]) for row in available_sources},
         )
+
+        explicitly_named = copy.deepcopy(self.connections)
+        explicitly_named[0]["name"] = "Well A to inlet mixer"
+        renamed_route = reroute_graph_connection(
+            self.inlets,
+            self.units,
+            explicitly_named,
+            "feed-a-mixer",
+            {"kind": "inlet", "id": "feed-b", "port": "out"},
+            {"kind": "unit", "id": "mixer", "port": "in_1"},
+        )
+        self.assertEqual(
+            renamed_route[0]["name"],
+            "Well A to inlet mixer",
+        )
+        self.assertEqual(explicitly_named[0]["name"], "Well A to inlet mixer")
 
     def test_reroute_rejects_occupied_ports_and_material_cycles(self):
         original_connections = copy.deepcopy(self.connections)
@@ -3622,6 +3873,8 @@ class GraphDraftDiagramTest(unittest.TestCase):
         self.assertIn("separator:liquid\\nPRODUCT", dot)
         self.assertEqual(dot.count(" -> "), 7)
         self.assertEqual(dot.count('style="dashed"'), 1)
+        self.assertIn("feed-a-mixer\\nout → in_0", dot)
+        self.assertIn("heater-separator\\nout → in", dot)
         self.assertIn("duty → duty", dot)
 
     def test_layout_is_connection_order_independent_and_input_safe(self):
@@ -3659,6 +3912,54 @@ class GraphDraftDiagramTest(unittest.TestCase):
         self.assertIn(r'Feed \"quoted\"\nINLET', dot)
         self.assertNotIn('feed"; unsafe ->', dot)
         self.assertIn("inlet_0 -> unit_0", dot)
+
+    def test_layout_suppresses_products_for_connected_output_aliases(self):
+        units = [
+            {
+                "id": "heater",
+                "name": "Heater",
+                "type": "heater",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out", "main"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+            {
+                "id": "cooler",
+                "name": "Cooler",
+                "type": "cooler",
+                "ports": {
+                    "material_in": ["in"],
+                    "material_out": ["out"],
+                    "energy_in": [],
+                    "energy_out": [],
+                },
+            },
+        ]
+        connections = [
+            {
+                "id": "heater-to-cooler",
+                "type": "material",
+                "source": {
+                    "kind": "unit",
+                    "id": "heater",
+                    "port": "main",
+                },
+                "target": {
+                    "kind": "unit",
+                    "id": "cooler",
+                    "port": "in",
+                },
+            }
+        ]
+
+        dot = build_graph_draft_dot([], units, connections)
+
+        self.assertNotIn("heater:out\\nPRODUCT", dot)
+        self.assertNotIn("heater:main\\nPRODUCT", dot)
+        self.assertIn("cooler:out\\nPRODUCT", dot)
 
     def test_invalid_preview_graphs_fail_explicitly(self):
         invalid_cases = (
