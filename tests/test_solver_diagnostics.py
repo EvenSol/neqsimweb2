@@ -2718,9 +2718,38 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         rows = model.list_streams()
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].name, "feed")
+        self.assertEqual(rows[0].name, "feed unit.feed")
         self.assertEqual(rows[0].process_system, "main process")
         self.assertEqual(rows[0].flow_rate_kg_hr, 100.0)
+
+    def test_list_streams_preserves_topology_order_while_deduplicating(self):
+        feed = _FallbackStream("feed", 40.0, hash_code=1)
+        intermediate = _FallbackStream("intermediate", 40.0, hash_code=2)
+        product = _FallbackStream("product", 40.0, hash_code=3)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "feed unit.feed": feed,
+            "intermediate equipment.with a very long outlet name": intermediate,
+            "terminal.product": product,
+            "feed": feed,
+            "intermediate": intermediate,
+            "product": product,
+        }
+        model._stream_ps_name = {
+            name: "main process"
+            for name in model._streams
+        }
+
+        rows = model.list_streams()
+
+        self.assertEqual(
+            [row.name for row in rows],
+            [
+                "feed unit.feed",
+                "intermediate equipment.with a very long outlet name",
+                "terminal.product",
+            ],
+        )
 
     def test_list_streams_keeps_independent_shared_fluid_streams(self):
         shared_fluid = object()
