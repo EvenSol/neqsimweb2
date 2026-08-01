@@ -84,6 +84,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
     def _build_two_sided_heat_exchanger_case(
         flow_scale: float,
         declared_input_ports=None,
+        downstream_source_port=None,
     ):
         inlet_specs = []
         for inlet_id, name, temperature_C, total_flow, components in (
@@ -168,11 +169,43 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 },
             ],
         }
+        execution_order = ["hot-feed", "cold-feed", "cross-exchanger"]
+        if downstream_source_port is not None:
+            graph_spec["units"].append(
+                {
+                    "id": "hot-side-heater",
+                    "name": "hot side heater",
+                    "type": "heater",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {"out_temperature_C": 60.0},
+                }
+            )
+            graph_spec["connections"].append(
+                {
+                    "id": "hot-side-product",
+                    "name": "hot side product",
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": downstream_source_port,
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "hot-side-heater",
+                        "port": "in",
+                    },
+                }
+            )
+            execution_order.append("hot-side-heater")
         builder = ProcessBuilder()
         model = builder.build_acyclic_graph(
             graph_spec,
             inlet_specs,
-            ["hot-feed", "cold-feed", "cross-exchanger"],
+            execution_order,
         )
         return builder, model
 
@@ -190,6 +223,16 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                         1.0,
                         declared_ports,
                     )
+
+    def test_rejects_undeclared_heat_exchanger_output_alias(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "uses undeclared material output port 'out'",
+        ):
+            self._build_two_sided_heat_exchanger_case(
+                1.0,
+                downstream_source_port="out",
+            )
 
     def test_native_two_sided_heat_exchanger_conserves_nearby_points(self):
         outlet_temperatures = []
