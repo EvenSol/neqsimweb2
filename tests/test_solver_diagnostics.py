@@ -2818,6 +2818,42 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertIn("first native feed.temperature_C", kpis)
         self.assertIn("second native feed.temperature_C", kpis)
 
+    def test_model_index_preserves_distinct_native_hash_collisions(self):
+        from neqsim import jneqsim
+
+        first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
+        second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
+        first_fluid.addComponent("methane", 1.0)
+        second_fluid.addComponent("methane", 1.0)
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        HeaterClass = jneqsim.process.equipment.heatexchanger.Heater
+        ProcessClass = jneqsim.process.processmodel.ProcessSystem
+        first_feed = StreamClass("feed one", first_fluid)
+        second_feed = StreamClass("feed two", second_fluid)
+        first_heater = HeaterClass("heater one", first_feed)
+        second_heater = HeaterClass("heater two", second_feed)
+        first_heater.getOutletStream().setName("Aa")
+        second_heater.getOutletStream().setName("BB")
+        process = ProcessClass("native hash collision graph")
+        for unit in (
+            first_feed,
+            second_feed,
+            first_heater,
+            second_heater,
+        ):
+            process.add(unit)
+
+        self.assertEqual(
+            int(first_heater.getOutletStream().hashCode()),
+            int(second_heater.getOutletStream().hashCode()),
+        )
+        model = NeqSimProcessModel.from_process_system(process)
+
+        self.assertIsNotNone(model.get_stream("Aa"))
+        self.assertIsNotNone(model.get_stream("BB"))
+        self.assertIn("Aa", {stream.name for stream in model.list_streams()})
+        self.assertIn("BB", {stream.name for stream in model.list_streams()})
+
     def test_native_reference_tracking_ignores_value_hash_equality(self):
         from neqsim import jneqsim
 
