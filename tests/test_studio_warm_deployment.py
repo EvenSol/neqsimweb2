@@ -168,6 +168,30 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             ["compressor discharge"],
         )
 
+    def test_selected_equipment_preserves_empty_stream_columns(self):
+        selected_tables = self._load_studio_function(
+            "_selected_object_result_tables"
+        )
+        selected_tables.__globals__["TEMPLATE_OBJECTS"] = {
+            "compressor stage 1": object(),
+        }
+        stream_table = pd.DataFrame(
+            columns=["Stream", "Owner", "Pressure [bara]"]
+        )
+        equipment_table = pd.DataFrame(columns=["Equipment"])
+
+        _, selected_streams = selected_tables(
+            "compressor stage 1",
+            stream_table,
+            equipment_table,
+        )
+
+        self.assertTrue(selected_streams.empty)
+        self.assertEqual(
+            selected_streams.columns.tolist(),
+            stream_table.columns.tolist(),
+        )
+
     def test_page_recovers_stale_editor_module(self):
         del flowsheet_editor.connect_graph_ports
 
