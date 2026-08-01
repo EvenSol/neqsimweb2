@@ -16,6 +16,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import process_chat.flowsheet_editor as flowsheet_editor
 import process_chat.solver_diagnostics as solver_diagnostics
 from streamlit.testing.v1 import AppTest
@@ -89,6 +90,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             ),
             "json": json,
             "math": math,
+            "pd": pd,
         }
         exec(
             compile(
@@ -99,6 +101,33 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             namespace,
         )
         return namespace[function_name]
+
+    def test_stream_workbook_keeps_identity_deduplicated_short_names(self):
+        stream_dataframe = self._load_studio_function("_stream_dataframe")
+        streams = [
+            types.SimpleNamespace(
+                name="feed gas",
+                temperature_C=20.0,
+                pressure_bara=45.0,
+                flow_rate_kg_hr=40.0,
+                flow_rate_mol_sec=2.5,
+            ),
+            types.SimpleNamespace(
+                name="compressor discharge",
+                temperature_C=55.0,
+                pressure_bara=90.0,
+                flow_rate_kg_hr=40.0,
+                flow_rate_mol_sec=2.5,
+            ),
+        ]
+        model = types.SimpleNamespace(list_streams=lambda: streams)
+
+        table = stream_dataframe(model)
+
+        self.assertEqual(
+            table["Stream"].tolist(),
+            ["feed gas", "compressor discharge"],
+        )
 
     def test_page_recovers_stale_editor_module(self):
         del flowsheet_editor.connect_graph_ports
