@@ -2242,11 +2242,9 @@ def _solver_status(
 
 
 def _stream_dataframe(model: Any) -> pd.DataFrame:
-    """Create a compact stream table without duplicate short aliases."""
+    """Create a compact table from identity-deduplicated stream rows."""
     records = []
     for stream in model.list_streams():
-        if "." not in stream.name and "/" not in stream.name and stream.name != "feed gas":
-            continue
         records.append(
             {
                 "Stream": stream.name,
@@ -2254,6 +2252,7 @@ def _stream_dataframe(model: Any) -> pd.DataFrame:
                 "Pressure [bara]": stream.pressure_bara,
                 "Mass flow [kg/hr]": stream.flow_rate_kg_hr,
                 "Molar flow [mol/s]": stream.flow_rate_mol_sec,
+                "Owner": getattr(stream, "owner_name", ""),
             }
         )
     return pd.DataFrame(records).drop_duplicates()
@@ -2288,11 +2287,11 @@ def _selected_object_result_tables(
         name = str(value).casefold()
         return name == selected_key or name.endswith(f"/{selected_key}")
 
-    def stream_matches(value: Any) -> bool:
+    def stream_matches(value: Any, owner_value: Any = "") -> bool:
         name = str(value).casefold()
         if name == selected_key:
             return True
-        owner = name.split(".", 1)[0]
+        owner = str(owner_value).casefold() or name.split(".", 1)[0]
         return owner == selected_key or owner.endswith(f"/{selected_key}")
 
     if "Equipment" in equipment_table.columns:
@@ -2303,9 +2302,21 @@ def _selected_object_result_tables(
         selected_equipment = equipment_table.iloc[0:0].copy()
 
     if "Stream" in stream_table.columns:
-        selected_streams = stream_table[
-            stream_table["Stream"].map(stream_matches)
-        ].copy()
+        if "Owner" in stream_table.columns:
+            stream_mask = pd.Series(
+                [
+                    stream_matches(name, owner)
+                    for name, owner in zip(
+                        stream_table["Stream"],
+                        stream_table["Owner"],
+                    )
+                ],
+                index=stream_table.index,
+                dtype=bool,
+            )
+        else:
+            stream_mask = stream_table["Stream"].map(stream_matches)
+        selected_streams = stream_table[stream_mask].copy()
     else:
         selected_streams = stream_table.iloc[0:0].copy()
 

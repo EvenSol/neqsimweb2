@@ -16,6 +16,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import process_chat.flowsheet_editor as flowsheet_editor
 import process_chat.solver_diagnostics as solver_diagnostics
 from streamlit.testing.v1 import AppTest
@@ -89,6 +90,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             ),
             "json": json,
             "math": math,
+            "pd": pd,
         }
         exec(
             compile(
@@ -99,6 +101,95 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             namespace,
         )
         return namespace[function_name]
+
+    def test_stream_workbook_keeps_alias_and_owner_identity(self):
+        stream_dataframe = self._load_studio_function("_stream_dataframe")
+        streams = [
+            types.SimpleNamespace(
+                name="feed gas",
+                temperature_C=20.0,
+                pressure_bara=45.0,
+                flow_rate_kg_hr=40.0,
+                flow_rate_mol_sec=2.5,
+            ),
+            types.SimpleNamespace(
+                name="compressor discharge",
+                temperature_C=55.0,
+                pressure_bara=90.0,
+                flow_rate_kg_hr=40.0,
+                flow_rate_mol_sec=2.5,
+                owner_name="compressor stage 1",
+            ),
+        ]
+        model = types.SimpleNamespace(list_streams=lambda: streams)
+
+        table = stream_dataframe(model)
+
+        self.assertEqual(
+            table["Stream"].tolist(),
+            ["feed gas", "compressor discharge"],
+        )
+        self.assertEqual(table["Owner"].tolist(), ["", "compressor stage 1"])
+
+    def test_selected_equipment_keeps_qualified_outlet_results(self):
+        selected_tables = self._load_studio_function(
+            "_selected_object_result_tables"
+        )
+        selected_tables.__globals__["TEMPLATE_OBJECTS"] = {
+            "compressor stage 1": object(),
+        }
+        stream_table = pd.DataFrame(
+            {
+                "Stream": [
+                    "feed gas",
+                    "compressor discharge",
+                ],
+                "Owner": ["", "compressor stage 1"],
+                "Pressure [bara]": [45.0, 90.0],
+            }
+        )
+        equipment_table = pd.DataFrame(
+            {
+                "Equipment": ["compressor stage 1"],
+                "Power [kW]": [3500.0],
+            }
+        )
+
+        selected_equipment, selected_streams = selected_tables(
+            "compressor stage 1",
+            stream_table,
+            equipment_table,
+        )
+
+        self.assertEqual(len(selected_equipment), 1)
+        self.assertEqual(
+            selected_streams["Stream"].tolist(),
+            ["compressor discharge"],
+        )
+
+    def test_selected_equipment_preserves_empty_stream_columns(self):
+        selected_tables = self._load_studio_function(
+            "_selected_object_result_tables"
+        )
+        selected_tables.__globals__["TEMPLATE_OBJECTS"] = {
+            "compressor stage 1": object(),
+        }
+        stream_table = pd.DataFrame(
+            columns=["Stream", "Owner", "Pressure [bara]"]
+        )
+        equipment_table = pd.DataFrame(columns=["Equipment"])
+
+        _, selected_streams = selected_tables(
+            "compressor stage 1",
+            stream_table,
+            equipment_table,
+        )
+
+        self.assertTrue(selected_streams.empty)
+        self.assertEqual(
+            selected_streams.columns.tolist(),
+            stream_table.columns.tolist(),
+        )
 
     def test_page_recovers_stale_editor_module(self):
         del flowsheet_editor.connect_graph_ports

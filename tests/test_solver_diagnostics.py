@@ -13,6 +13,7 @@ from process_chat.process_builder import ProcessBuilder
 from process_chat.process_model import (
     NeqSimProcessModel,
     _MaterialBoundaryIdentityTracker,
+    _NativeObjectIdentitySet,
 )
 from process_chat.solver_diagnostics import (
     aggregate_convergence,
@@ -2691,6 +2692,167 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(summary["product_count"], 1.0)
         self.assertEqual(summary["product_flow_kg_hr"], 100.0)
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_native_identity_set_ignores_hash_and_value_equality(self):
+        first_stream = _FallbackStream("first", 40.0, hash_code=17)
+        second_stream = _FallbackStream("second", 60.0, hash_code=17)
+        identities = _NativeObjectIdentitySet()
+
+        identities.add(first_stream)
+
+        self.assertTrue(identities.contains(first_stream))
+        self.assertFalse(identities.contains(second_stream))
+
+    def test_list_streams_deduplicates_aliases_by_stream_identity(self):
+        stream = _FallbackStream("feed", 100.0, hash_code=17)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "feed unit.feed": stream,
+            "feed": stream,
+        }
+        model._stream_ps_name = {
+            "feed unit.feed": "main process",
+            "feed": "main process",
+        }
+
+        rows = model.list_streams()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].name, "feed")
+        self.assertEqual(rows[0].owner_name, "feed unit")
+        self.assertEqual(rows[0].process_system, "main process")
+        self.assertEqual(rows[0].flow_rate_kg_hr, 100.0)
+
+    def test_list_streams_preserves_topology_order_while_deduplicating(self):
+        feed = _FallbackStream("feed", 40.0, hash_code=1)
+        intermediate = _FallbackStream("intermediate", 40.0, hash_code=2)
+        product = _FallbackStream("product", 40.0, hash_code=3)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "feed unit.feed": feed,
+            "intermediate equipment.with a very long outlet name": intermediate,
+            "terminal.product": product,
+            "feed": feed,
+            "intermediate": intermediate,
+            "product": product,
+        }
+        model._stream_ps_name = {
+            name: "main process"
+            for name in model._streams
+        }
+
+        rows = model.list_streams()
+
+        self.assertEqual(
+            [row.name for row in rows],
+            [
+                "feed",
+                "intermediate",
+                "product",
+            ],
+        )
+        self.assertEqual(
+            [row.owner_name for row in rows],
+            ["feed unit", "intermediate equipment", "terminal"],
+        )
+
+    def test_list_streams_keeps_independent_shared_fluid_streams(self):
+        shared_fluid = object()
+        first_stream = _FallbackAliasedStream(
+            "first feed",
+            40.0,
+            shared_fluid,
+        )
+        second_stream = _FallbackAliasedStream(
+            "second feed",
+            60.0,
+            shared_fluid,
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "first feed": first_stream,
+            "second feed": second_stream,
+        }
+        model._stream_ps_name = {
+            "first feed": "main process",
+            "second feed": "main process",
+        }
+
+        rows = model.list_streams()
+
+        self.assertEqual(
+            [(row.name, row.flow_rate_kg_hr) for row in rows],
+            [("first feed", 40.0), ("second feed", 60.0)],
+        )
+
+    def test_stream_fluid_properties_survive_native_hash_collisions(self):
+        from neqsim import jneqsim
+
+        first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
+        second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
+        first_fluid.addComponent("methane", 1.0)
+        second_fluid.addComponent("methane", 1.0)
+        first_stream = jneqsim.process.equipment.stream.Stream(
+            "native feed",
+            first_fluid,
+        )
+        second_stream = jneqsim.process.equipment.stream.Stream(
+            "native feed",
+            second_fluid,
+        )
+        first_stream.setFlowRate(40.0, "kg/hr")
+        second_stream.setFlowRate(60.0, "kg/hr")
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "first native feed": first_stream,
+            "second native feed": second_stream,
+        }
+        kpis = {}
+
+        self.assertEqual(
+            int(first_stream.hashCode()),
+            int(second_stream.hashCode()),
+        )
+        model._extract_stream_fluid_properties(kpis)
+
+        self.assertIn("first native feed.temperature_C", kpis)
+        self.assertIn("second native feed.temperature_C", kpis)
+
+    def test_model_index_preserves_distinct_native_hash_collisions(self):
+        from neqsim import jneqsim
+
+        first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
+        second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
+        first_fluid.addComponent("methane", 1.0)
+        second_fluid.addComponent("methane", 1.0)
+        StreamClass = jneqsim.process.equipment.stream.Stream
+        HeaterClass = jneqsim.process.equipment.heatexchanger.Heater
+        ProcessClass = jneqsim.process.processmodel.ProcessSystem
+        first_feed = StreamClass("feed one", first_fluid)
+        second_feed = StreamClass("feed two", second_fluid)
+        first_heater = HeaterClass("heater one", first_feed)
+        second_heater = HeaterClass("heater two", second_feed)
+        first_heater.getOutletStream().setName("Aa")
+        second_heater.getOutletStream().setName("BB")
+        process = ProcessClass("native hash collision graph")
+        for unit in (
+            first_feed,
+            second_feed,
+            first_heater,
+            second_heater,
+        ):
+            process.add(unit)
+
+        self.assertEqual(
+            int(first_heater.getOutletStream().hashCode()),
+            int(second_heater.getOutletStream().hashCode()),
+        )
+        model = NeqSimProcessModel.from_process_system(process)
+
+        self.assertIsNotNone(model.get_stream("Aa"))
+        self.assertIsNotNone(model.get_stream("BB"))
+        self.assertIn("Aa", {stream.name for stream in model.list_streams()})
+        self.assertIn("BB", {stream.name for stream in model.list_streams()})
 
     def test_native_reference_tracking_ignores_value_hash_equality(self):
         from neqsim import jneqsim

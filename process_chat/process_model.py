@@ -152,28 +152,52 @@ _ENERGY_BALANCE_DUTY_UNIT_CLASSES = {
 }
 
 
+class _NativeObjectIdentitySet:
+    """Retain exact native or Python object references without value equality."""
+
+    def __init__(self) -> None:
+        self._python_objects: List[Any] = []
+        self._java_map: Any = None
+        try:
+            import jpype
+
+            if jpype.isJVMStarted():
+                identity_map = jpype.JClass("java.util.IdentityHashMap")
+                self._java_map = identity_map()
+        except Exception:
+            pass
+
+    def contains(self, value: Any) -> bool:
+        """Return whether this exact native or Python reference was recorded."""
+        if self._java_map is not None:
+            try:
+                return bool(self._java_map.containsKey(value))
+            except Exception:
+                pass
+        return any(recorded is value for recorded in self._python_objects)
+
+    def add(self, value: Any) -> None:
+        """Retain one exact reference, ignoring an already recorded alias."""
+        if self._java_map is not None:
+            try:
+                self._java_map.put(value, True)
+                return
+            except Exception:
+                pass
+        if not self.contains(value):
+            self._python_objects.append(value)
+
+
 class _MaterialBoundaryIdentityTracker:
     """Track native stream references without relying on collision-prone hashes."""
 
     _ROLES = ("feed", "product")
 
     def __init__(self) -> None:
-        self._python_streams = {
-            role: []
+        self._role_streams = {
+            role: _NativeObjectIdentitySet()
             for role in self._ROLES
         }
-        self._java_maps: Dict[str, Any] = {}
-        try:
-            import jpype
-
-            if jpype.isJVMStarted():
-                identity_map = jpype.JClass("java.util.IdentityHashMap")
-                self._java_maps = {
-                    role: identity_map()
-                    for role in self._ROLES
-                }
-        except Exception:
-            pass
 
     def _validate_role(self, role: str) -> None:
         if role not in self._ROLES:
@@ -184,28 +208,12 @@ class _MaterialBoundaryIdentityTracker:
     def contains(self, role: str, stream: Any) -> bool:
         """Return whether this exact stream reference was recorded for a role."""
         self._validate_role(role)
-        java_map = self._java_maps.get(role)
-        if java_map is not None:
-            try:
-                return bool(java_map.containsKey(stream))
-            except Exception:
-                pass
-        return any(
-            recorded_stream is stream
-            for recorded_stream in self._python_streams[role]
-        )
+        return self._role_streams[role].contains(stream)
 
     def add(self, role: str, stream: Any) -> None:
         """Remember one exact native or Python stream reference for a role."""
         self._validate_role(role)
-        java_map = self._java_maps.get(role)
-        if java_map is not None:
-            try:
-                java_map.put(stream, True)
-                return
-            except Exception:
-                pass
-        self._python_streams[role].append(stream)
+        self._role_streams[role].add(stream)
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +315,7 @@ class StreamInfo:
     flow_rate_kg_hr: Optional[float] = None
     flow_rate_mol_sec: Optional[float] = None
     process_system: str = ""
+    owner_name: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +951,7 @@ class NeqSimProcessModel:
         # Always use qualified keys ("unitName.streamName") as primary to
         # guarantee stable KPI comparisons across base vs scenario runs.
         # Also add short aliases for stream names that are globally unique.
-        seen_java_ids = set()  # track Java object identity to skip duplicates
+        seen_streams = _NativeObjectIdentitySet()
         raw_name_count: Dict[str, int] = {}  # count how many units produce same stream name
 
         # Iterate all_units_flat to preserve ps_name for stream tracking
@@ -971,13 +980,9 @@ class NeqSimProcessModel:
                                     if s is not None:
                                         sname = str(s.getName()) if s.getName() else None
                                         if sname:
-                                            try:
-                                                java_id = int(s.hashCode())
-                                            except Exception:
-                                                java_id = id(s)
-                                            if java_id in seen_java_ids:
+                                            if seen_streams.contains(s):
                                                 continue  # same Java object already indexed
-                                            seen_java_ids.add(java_id)
+                                            seen_streams.add(s)
                                             key = f"{uname}.{sname}"
                                             if key not in self._streams:
                                                 self._streams[key] = s
@@ -990,13 +995,9 @@ class NeqSimProcessModel:
                             if s is not None:
                                 sname = str(s.getName()) if s.getName() else None
                                 if sname:
-                                    try:
-                                        java_id = int(s.hashCode())
-                                    except Exception:
-                                        java_id = id(s)
-                                    if java_id in seen_java_ids:
+                                    if seen_streams.contains(s):
                                         continue  # same Java object already indexed
-                                    seen_java_ids.add(java_id)
+                                    seen_streams.add(s)
                                     key = f"{uname}.{sname}"
                                     self._streams[key] = s
                                     self._stream_ps_name[key] = ps_name
@@ -2464,11 +2465,43 @@ class NeqSimProcessModel:
         return result
 
     def list_streams(self) -> List[StreamInfo]:
-        """List all streams with current conditions."""
+        """List exact streams in topology order with stable display aliases."""
         result = []
+        stream_groups = []
         for name, s in self._streams.items():
+            for identity, _grouped_stream, aliases in stream_groups:
+                if identity.contains(s):
+                    aliases.append(name)
+                    break
+            else:
+                identity = _NativeObjectIdentitySet()
+                identity.add(s)
+                stream_groups.append((identity, s, [name]))
+
+        for _identity, s, aliases in stream_groups:
+            name = min(
+                aliases,
+                key=lambda alias: (
+                    str(alias).count("."),
+                    len(str(alias)),
+                    str(alias).casefold(),
+                    str(alias),
+                ),
+            )
             ps_name = self._stream_ps_name.get(name, "")
-            info = StreamInfo(name=name, process_system=ps_name)
+            owner_name = next(
+                (
+                    str(alias).split(".", 1)[0]
+                    for alias in aliases
+                    if "." in str(alias)
+                ),
+                "",
+            )
+            info = StreamInfo(
+                name=name,
+                process_system=ps_name,
+                owner_name=owner_name,
+            )
             try:
                 info.temperature_C = float(s.getTemperature("C"))
             except Exception:
@@ -4165,27 +4198,23 @@ class NeqSimProcessModel:
         
         Skips streams with near-zero flow (< 0.01 kg/hr) to avoid
         numerically spurious values from empty separator outlets.
-        Deduplicates by Java object id to avoid repeated entries for
+        Deduplicates by exact native object identity to avoid repeated entries for
         the same stream registered under multiple aliases (e.g.
         'feed gas' and 'feed gas.feed gas').
         """
         from neqsim import jneqsim
 
-        seen_ids: set = set()
+        seen_streams = _NativeObjectIdentitySet()
 
         # Sort by key length so shorter (unqualified) names are preferred
         sorted_streams = sorted(self._streams.items(), key=lambda x: len(x[0]))
 
         for stream_name, s in sorted_streams:
-            # Deduplicate: only process each Java stream object once.
-            # Use Java hashCode() since JPype proxies have different Python ids.
-            try:
-                java_hash = int(s.hashCode())
-            except Exception:
-                java_hash = id(s)
-            if java_hash in seen_ids:
+            # Deduplicate by exact native object identity. Java hashCode() is
+            # value-based for several NeqSim streams and may collide.
+            if seen_streams.contains(s):
                 continue
-            seen_ids.add(java_hash)
+            seen_streams.add(s)
 
             try:
                 fluid = s.getFluid()
