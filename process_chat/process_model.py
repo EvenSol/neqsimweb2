@@ -315,6 +315,7 @@ class StreamInfo:
     flow_rate_kg_hr: Optional[float] = None
     flow_rate_mol_sec: Optional[float] = None
     process_system: str = ""
+    owner_name: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -2472,15 +2473,43 @@ class NeqSimProcessModel:
         return result
 
     def list_streams(self) -> List[StreamInfo]:
-        """List each exact stream once in indexed process/topology order."""
+        """List exact streams in topology order with stable display aliases."""
         result = []
-        seen_streams = _NativeObjectIdentitySet()
+        stream_groups = []
         for name, s in self._streams.items():
-            if seen_streams.contains(s):
-                continue
-            seen_streams.add(s)
+            for identity, grouped_stream, aliases in stream_groups:
+                if identity.contains(s):
+                    aliases.append(name)
+                    break
+            else:
+                identity = _NativeObjectIdentitySet()
+                identity.add(s)
+                stream_groups.append((identity, s, [name]))
+
+        for _identity, s, aliases in stream_groups:
+            name = min(
+                aliases,
+                key=lambda alias: (
+                    str(alias).count("."),
+                    len(str(alias)),
+                    str(alias).casefold(),
+                    str(alias),
+                ),
+            )
             ps_name = self._stream_ps_name.get(name, "")
-            info = StreamInfo(name=name, process_system=ps_name)
+            owner_name = next(
+                (
+                    str(alias).split(".", 1)[0]
+                    for alias in aliases
+                    if "." in str(alias)
+                ),
+                "",
+            )
+            info = StreamInfo(
+                name=name,
+                process_system=ps_name,
+                owner_name=owner_name,
+            )
             try:
                 info.temperature_C = float(s.getTemperature("C"))
             except Exception:
