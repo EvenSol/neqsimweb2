@@ -13,6 +13,7 @@ from process_chat.process_builder import ProcessBuilder
 from process_chat.process_model import (
     NeqSimProcessModel,
     _MaterialBoundaryIdentityTracker,
+    _NativeObjectIdentitySet,
 )
 from process_chat.solver_diagnostics import (
     aggregate_convergence,
@@ -2691,6 +2692,64 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(summary["product_count"], 1.0)
         self.assertEqual(summary["product_flow_kg_hr"], 100.0)
         self.assertEqual(result.kpis["mass_balance_pct"].value, 0.0)
+
+    def test_native_identity_set_ignores_hash_and_value_equality(self):
+        first_stream = _FallbackStream("first", 40.0, hash_code=17)
+        second_stream = _FallbackStream("second", 60.0, hash_code=17)
+        identities = _NativeObjectIdentitySet()
+
+        identities.add(first_stream)
+
+        self.assertTrue(identities.contains(first_stream))
+        self.assertFalse(identities.contains(second_stream))
+
+    def test_list_streams_deduplicates_aliases_by_stream_identity(self):
+        stream = _FallbackStream("feed", 100.0, hash_code=17)
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "feed unit.feed": stream,
+            "feed": stream,
+        }
+        model._stream_ps_name = {
+            "feed unit.feed": "main process",
+            "feed": "main process",
+        }
+
+        rows = model.list_streams()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].name, "feed")
+        self.assertEqual(rows[0].process_system, "main process")
+        self.assertEqual(rows[0].flow_rate_kg_hr, 100.0)
+
+    def test_list_streams_keeps_independent_shared_fluid_streams(self):
+        shared_fluid = object()
+        first_stream = _FallbackAliasedStream(
+            "first feed",
+            40.0,
+            shared_fluid,
+        )
+        second_stream = _FallbackAliasedStream(
+            "second feed",
+            60.0,
+            shared_fluid,
+        )
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "first feed": first_stream,
+            "second feed": second_stream,
+        }
+        model._stream_ps_name = {
+            "first feed": "main process",
+            "second feed": "main process",
+        }
+
+        rows = model.list_streams()
+
+        self.assertEqual(
+            [(row.name, row.flow_rate_kg_hr) for row in rows],
+            [("first feed", 40.0), ("second feed", 60.0)],
+        )
 
     def test_native_reference_tracking_ignores_value_hash_equality(self):
         from neqsim import jneqsim
