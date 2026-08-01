@@ -951,7 +951,7 @@ class NeqSimProcessModel:
         # Always use qualified keys ("unitName.streamName") as primary to
         # guarantee stable KPI comparisons across base vs scenario runs.
         # Also add short aliases for stream names that are globally unique.
-        seen_java_ids = set()  # track Java object identity to skip duplicates
+        seen_streams = _NativeObjectIdentitySet()
         raw_name_count: Dict[str, int] = {}  # count how many units produce same stream name
 
         # Iterate all_units_flat to preserve ps_name for stream tracking
@@ -980,13 +980,9 @@ class NeqSimProcessModel:
                                     if s is not None:
                                         sname = str(s.getName()) if s.getName() else None
                                         if sname:
-                                            try:
-                                                java_id = int(s.hashCode())
-                                            except Exception:
-                                                java_id = id(s)
-                                            if java_id in seen_java_ids:
+                                            if seen_streams.contains(s):
                                                 continue  # same Java object already indexed
-                                            seen_java_ids.add(java_id)
+                                            seen_streams.add(s)
                                             key = f"{uname}.{sname}"
                                             if key not in self._streams:
                                                 self._streams[key] = s
@@ -999,13 +995,9 @@ class NeqSimProcessModel:
                             if s is not None:
                                 sname = str(s.getName()) if s.getName() else None
                                 if sname:
-                                    try:
-                                        java_id = int(s.hashCode())
-                                    except Exception:
-                                        java_id = id(s)
-                                    if java_id in seen_java_ids:
+                                    if seen_streams.contains(s):
                                         continue  # same Java object already indexed
-                                    seen_java_ids.add(java_id)
+                                    seen_streams.add(s)
                                     key = f"{uname}.{sname}"
                                     self._streams[key] = s
                                     self._stream_ps_name[key] = ps_name
