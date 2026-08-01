@@ -2751,6 +2751,39 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
             [("first feed", 40.0), ("second feed", 60.0)],
         )
 
+    def test_stream_fluid_properties_survive_native_hash_collisions(self):
+        from neqsim import jneqsim
+
+        first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
+        second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
+        first_fluid.addComponent("methane", 1.0)
+        second_fluid.addComponent("methane", 1.0)
+        first_stream = jneqsim.process.equipment.stream.Stream(
+            "native feed",
+            first_fluid,
+        )
+        second_stream = jneqsim.process.equipment.stream.Stream(
+            "native feed",
+            second_fluid,
+        )
+        first_stream.setFlowRate(40.0, "kg/hr")
+        second_stream.setFlowRate(60.0, "kg/hr")
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._streams = {
+            "first native feed": first_stream,
+            "second native feed": second_stream,
+        }
+        kpis = {}
+
+        self.assertEqual(
+            int(first_stream.hashCode()),
+            int(second_stream.hashCode()),
+        )
+        model._extract_stream_fluid_properties(kpis)
+
+        self.assertIn("first native feed.temperature_C", kpis)
+        self.assertIn("second native feed.temperature_C", kpis)
+
     def test_native_reference_tracking_ignores_value_hash_equality(self):
         from neqsim import jneqsim
 
