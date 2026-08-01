@@ -70,6 +70,7 @@ class UnitCatalogTest(unittest.TestCase):
                 "compressor",
                 "cooler",
                 "heater",
+                "heat_exchanger",
                 "valve",
                 "pump",
                 "expander",
@@ -97,6 +98,19 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(
             second_copy["cooler"]["ports"]["material_out"],
             ["out"],
+        )
+
+        heat_exchanger = second_copy["heat_exchanger"]
+        self.assertEqual(
+            heat_exchanger["ports"],
+            {
+                "material_in": ["hot_in", "cold_in"],
+                "material_out": ["hot_out", "cold_out"],
+            },
+        )
+        self.assertEqual(
+            heat_exchanger["default_params"],
+            {"ua_w_per_k": 100_000.0},
         )
 
     def test_create_unit_uses_defaults_and_collision_free_id(self):
@@ -286,6 +300,12 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(splitter_row["value"], 0.5)
         self.assertEqual(splitter_row["minimum"], 0.0)
         self.assertEqual(splitter_row["maximum"], 1.0)
+        heat_exchanger_row = inline_unit_property_rows(
+            "heat_exchanger"
+        )[0]
+        self.assertEqual(heat_exchanger_row["key"], "ua_w_per_k")
+        self.assertEqual(heat_exchanger_row["unit"], "W/K")
+        self.assertEqual(heat_exchanger_row["value"], 100_000.0)
 
     def test_splitter_property_rows_migrate_normalized_array_alias(self):
         rows = inline_unit_property_rows(
@@ -3144,6 +3164,14 @@ class GraphPortConnectionTest(unittest.TestCase):
         self.assertEqual(
             canonical_material_output_port("out", "heater"),
             "out",
+        )
+        self.assertEqual(
+            canonical_material_output_port("out_0", "heat_exchanger"),
+            "hot_out",
+        )
+        self.assertEqual(
+            canonical_material_output_port("out_1", "heat_exchanger"),
+            "cold_out",
         )
 
     def test_rejects_separator_ports_that_alias_one_native_outlet(self):

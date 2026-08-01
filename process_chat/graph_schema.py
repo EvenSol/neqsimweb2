@@ -13,6 +13,7 @@ _SEPARATOR_UNIT_TYPES = {
     "gas_scrubber",
     "membrane_separator",
 }
+_TWO_SIDED_HEAT_EXCHANGER_UNIT_TYPES = {"heat_exchanger"}
 
 
 def canonical_material_output_port(
@@ -25,12 +26,19 @@ def canonical_material_output_port(
     so they share identity with ``gas``/``vapor`` for graph validation.
     """
     output_port = str(raw_port).strip().lower()
+    normalized_unit_type = str(unit_type).strip().lower()
     indexed_port = re.fullmatch(
         r"(?:out|split)[_-]?(\d+)",
         output_port,
     )
     if indexed_port:
-        return f"split_{int(indexed_port.group(1))}"
+        output_index = int(indexed_port.group(1))
+        if normalized_unit_type in _TWO_SIDED_HEAT_EXCHANGER_UNIT_TYPES:
+            return {
+                0: "hot_out",
+                1: "cold_out",
+            }.get(output_index, f"heat_exchanger_out_{output_index}")
+        return f"split_{output_index}"
     canonical_port = {
         "main": "out",
         "vapor": "gas",
@@ -38,7 +46,7 @@ def canonical_material_output_port(
         "aqueous": "water",
     }.get(output_port, output_port)
     if (
-        str(unit_type).strip().lower() in _SEPARATOR_UNIT_TYPES
+        normalized_unit_type in _SEPARATOR_UNIT_TYPES
         and canonical_port == "out"
     ):
         return "gas"

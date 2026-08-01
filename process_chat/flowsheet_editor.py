@@ -45,6 +45,7 @@ _GRAPH_NODE_STYLES = {
     "compressor": ("#dbeafe", "#2563eb"),
     "cooler": ("#cffafe", "#0891b2"),
     "heater": ("#ffedd5", "#ea580c"),
+    "heat_exchanger": ("#fee2e2", "#dc2626"),
     "valve": ("#f3e8ff", "#9333ea"),
     "pump": ("#dcfce7", "#16a34a"),
     "expander": ("#fef3c7", "#d97706"),
@@ -146,6 +147,31 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
                 200.0,
                 0.1,
                 "%.3f",
+            ),
+        },
+    },
+    "heat_exchanger": {
+        "label": "Heat Exchanger",
+        "category": "Heat transfer",
+        "description": (
+            "Exchange heat between explicit hot and cold material sides "
+            "using a specified overall UA."
+        ),
+        "ports": {
+            "material_in": ["hot_in", "cold_in"],
+            "material_out": ["hot_out", "cold_out"],
+        },
+        "default_params": {
+            "ua_w_per_k": 100_000.0,
+        },
+        "properties": {
+            "ua_w_per_k": _number_property(
+                "Overall conductance UA",
+                "W/K",
+                1.0,
+                1_000_000_000.0,
+                1_000.0,
+                "%.2f",
             ),
         },
     },
