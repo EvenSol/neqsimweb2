@@ -111,7 +111,6 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 pressure_bara=45.0,
                 flow_rate_kg_hr=40.0,
                 flow_rate_mol_sec=2.5,
-                owner_name="",
             ),
             types.SimpleNamespace(
                 name="compressor discharge",
