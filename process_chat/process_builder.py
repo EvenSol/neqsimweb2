@@ -953,13 +953,38 @@ class ProcessBuilder:
                 if source_kind == "unit" and source_id in indexed_units
                 else None
             )
+            canonical_source_port = canonical_material_output_port(
+                source.get("port", ""),
+                source_unit_type,
+            )
+            if source_kind == "unit" and source_id in indexed_units:
+                source_ports = indexed_units[source_id].get("ports")
+                declared_outputs = (
+                    source_ports.get("material_out")
+                    if isinstance(source_ports, dict)
+                    else None
+                )
+                canonical_declared_outputs = (
+                    {
+                        canonical_material_output_port(
+                            port,
+                            source_unit_type,
+                        )
+                        for port in declared_outputs
+                    }
+                    if isinstance(declared_outputs, list)
+                    else set()
+                )
+                if canonical_source_port not in canonical_declared_outputs:
+                    raise ValueError(
+                        f"Connection '{connection_id}' uses undeclared "
+                        f"material output port '{source.get('port', '')}' "
+                        f"on unit '{source_id}'."
+                    )
             source_key = (
                 source_kind,
                 source_id,
-                canonical_material_output_port(
-                    source.get("port", ""),
-                    source_unit_type,
-                ),
+                canonical_source_port,
             )
             if source_key in connected_source_ports:
                 raise ValueError(
