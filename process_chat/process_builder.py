@@ -872,6 +872,16 @@ class ProcessBuilder:
                     canonical_material_output_port(port, unit_type)
                     for port in material_outputs
                 ]
+                if (
+                    unit_type == "heat_exchanger"
+                    and canonical_outputs
+                    != ["hot_out", "cold_out"]
+                ):
+                    raise ValueError(
+                        f"Heat exchanger '{unit_id}' requires declared "
+                        "material output ports in fixed order: hot_out, "
+                        "cold_out."
+                    )
                 if len(canonical_outputs) != len(set(canonical_outputs)):
                     raise ValueError(
                         f"Unit '{unit_id}' material output ports alias the "

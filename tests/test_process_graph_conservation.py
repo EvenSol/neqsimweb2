@@ -84,6 +84,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
     def _build_two_sided_heat_exchanger_case(
         flow_scale: float,
         declared_input_ports=None,
+        declared_output_ports=None,
         downstream_source_port=None,
     ):
         inlet_specs = []
@@ -131,7 +132,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                             declared_input_ports
                             or ("hot_in", "cold_in")
                         ),
-                        "material_out": ["hot_out", "cold_out"],
+                        "material_out": list(
+                            declared_output_ports
+                            or ("hot_out", "cold_out")
+                        ),
                     },
                     "params": {"ua_w_per_k": 100_000.0},
                 }
@@ -233,6 +237,30 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 1.0,
                 downstream_source_port="out",
             )
+
+    def test_rejects_noncanonical_heat_exchanger_output_contract(self):
+        for declared_ports in (
+            ("out", "hot_out", "cold_out"),
+            ("cold_out", "hot_out"),
+        ):
+            with self.subTest(declared_ports=declared_ports):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "fixed order: hot_out, cold_out",
+                ):
+                    self._build_two_sided_heat_exchanger_case(
+                        1.0,
+                        declared_output_ports=declared_ports,
+                    )
+
+    def test_accepts_indexed_heat_exchanger_output_aliases(self):
+        _, model = self._build_two_sided_heat_exchanger_case(
+            1.0,
+            declared_output_ports=("out_0", "out_1"),
+        )
+        result = model.run(timeout_ms=180_000)
+        self.assertEqual(result.kpis["material_product_count"].value, 2.0)
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
 
     def test_native_two_sided_heat_exchanger_conserves_nearby_points(self):
         outlet_temperatures = []
