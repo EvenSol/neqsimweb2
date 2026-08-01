@@ -126,6 +126,7 @@ _ENERGY_BALANCE_ADIABATIC_UNIT_CLASSES = {
     "filter",
     "gasscrubber",
     "gasscrubbersimple",
+    "heatexchanger",
     "mixer",
     "recycle",
     "separator",

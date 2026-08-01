@@ -36,6 +36,46 @@ from process_chat.solver_diagnostics import aggregate_energy_balance
 class MultiInletMixerConservationTest(unittest.TestCase):
     """Validate material and energy closure for independent graph inlets."""
 
+    def test_resolves_explicit_heat_exchanger_output_sides(self):
+        hot_out = object()
+        cold_out = object()
+
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "HeatExchanger"
+
+        class _HeatExchanger:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getOutStream(index):
+                return [hot_out, cold_out][index]
+
+        builder = ProcessBuilder()
+        units = {"cross-exchanger": _HeatExchanger()}
+        for port, expected in (
+            ("hot_out", hot_out),
+            ("cold_out", cold_out),
+            ("out_0", hot_out),
+            ("out_1", cold_out),
+        ):
+            with self.subTest(port=port):
+                self.assertIs(
+                    builder.resolve_material_output(
+                        {
+                            "kind": "unit",
+                            "id": "cross-exchanger",
+                            "port": port,
+                        },
+                        {},
+                        units,
+                    ),
+                    expected,
+                )
+
     def test_build_from_spec_dispatches_generic_graph_schema(self):
         builder = ProcessBuilder()
         graph_spec = {

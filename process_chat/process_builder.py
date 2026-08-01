@@ -123,6 +123,7 @@ _PARAM_SETTERS = {
     "polytropicefficiency":    lambda v: f"setPolytropicEfficiency({float(v)})",
     "pressure_drop_bar":       lambda v: f"setPressureDrop({float(v)})",
     "pressure_drop":           lambda v: f"setPressureDrop({float(v)})",
+    "ua_w_per_k":              lambda v: f"setUAvalue({float(v)})",
     "duty_kw":                 lambda v: f"setDuty({float(v) * 1000})",
     "duty":                    lambda v: f"setDuty({float(v) * 1000})",
     "speed":                   lambda v: f"setSpeed({float(v)})",
@@ -181,6 +182,9 @@ def _apply_param(unit, key: str, value):
     elif k in ("pressure_drop_bar", "pressure_drop"):
         if hasattr(unit, "setPressureDrop"):
             unit.setPressureDrop(float(value))
+    elif k in ("ua_w_per_k", "ua_value"):
+        if hasattr(unit, "setUAvalue"):
+            unit.setUAvalue(float(value))
     elif k in ("duty_kw", "duty"):
         if hasattr(unit, "setDuty"):
             unit.setDuty(float(value) * 1000)  # kW → W
@@ -448,8 +452,33 @@ class ProcessBuilder:
             raise ValueError(f"Unknown material unit '{source_id}'.")
         unit = unit_objects[source_id]
 
+        try:
+            native_unit_class = str(
+                unit.getClass().getSimpleName()
+            ).strip().lower()
+        except Exception:
+            native_unit_class = ""
+        if native_unit_class == "heatexchanger":
+            source_port = canonical_material_output_port(
+                source_port,
+                "heat_exchanger",
+            )
+
+        heat_exchanger_port_index = {
+            "hot_out": 0,
+            "cold_out": 1,
+        }.get(source_port)
+        if heat_exchanger_port_index is not None:
+            getter_names = ("getOutStream",)
+            getter_args = (heat_exchanger_port_index,)
+        else:
+            getter_names = None
+            getter_args = ()
+
         indexed_port = re.fullmatch(r"(?:out|split)[_-]?(\d+)", source_port)
-        if indexed_port:
+        if getter_names is not None:
+            pass
+        elif indexed_port:
             getter_names = ("getSplitStream",)
             getter_args = (int(indexed_port.group(1)),)
         else:
@@ -1036,7 +1065,7 @@ class ProcessBuilder:
                     str(connection["id"]).strip(),
                 ),
             )
-            if unit_type in {"mixer", "separator"}:
+            if unit_type in {"mixer", "separator", "heat_exchanger"}:
                 ports = unit_spec.get("ports")
                 declared_inputs = (
                     ports.get("material_in")
@@ -1101,15 +1130,30 @@ class ProcessBuilder:
                         + "; ".join(details)
                         + ")."
                     )
+                if unit_type == "heat_exchanger":
+                    incoming_by_port = {
+                        str(connection["target"].get("port", "")).strip(): (
+                            connection
+                        )
+                        for connection in incoming
+                    }
+                    incoming = [
+                        incoming_by_port[port]
+                        for port in normalized_declared_inputs
+                    ]
             if not incoming:
                 raise ValueError(
                     f"Unit '{node_id}' requires at least one material inlet."
                 )
 
-            if unit_type == "mixer" or (
+            if unit_type in {"mixer", "heat_exchanger"} or (
                 unit_type == "separator" and len(incoming) > 1
             ):
-                minimum_inlets = 2 if unit_type == "mixer" else 1
+                minimum_inlets = (
+                    2
+                    if unit_type in {"mixer", "heat_exchanger"}
+                    else 1
+                )
                 if len(incoming) < minimum_inlets:
                     raise ValueError(
                         f"{unit_type.capitalize()} '{node_id}' requires at "
@@ -1137,7 +1181,10 @@ class ProcessBuilder:
                     source_streams[1:],
                 ):
                     try:
-                        unit.addStream(source_stream)
+                        if unit_type == "heat_exchanger":
+                            unit.addInStream(source_stream)
+                        else:
+                            unit.addStream(source_stream)
                     except Exception as exc:
                         connection_id = str(connection["id"]).strip()
                         raise ValueError(
