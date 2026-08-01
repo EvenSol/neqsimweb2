@@ -102,7 +102,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         )
         return namespace[function_name]
 
-    def test_stream_workbook_keeps_identity_deduplicated_short_names(self):
+    def test_stream_workbook_keeps_identity_deduplicated_primary_names(self):
         stream_dataframe = self._load_studio_function("_stream_dataframe")
         streams = [
             types.SimpleNamespace(
@@ -113,7 +113,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 flow_rate_mol_sec=2.5,
             ),
             types.SimpleNamespace(
-                name="compressor discharge",
+                name="compressor stage 1.compressor discharge",
                 temperature_C=55.0,
                 pressure_bara=90.0,
                 flow_rate_kg_hr=40.0,
@@ -126,7 +126,42 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
         self.assertEqual(
             table["Stream"].tolist(),
-            ["feed gas", "compressor discharge"],
+            ["feed gas", "compressor stage 1.compressor discharge"],
+        )
+
+    def test_selected_equipment_keeps_qualified_outlet_results(self):
+        selected_tables = self._load_studio_function(
+            "_selected_object_result_tables"
+        )
+        selected_tables.__globals__["TEMPLATE_OBJECTS"] = {
+            "compressor stage 1": object(),
+        }
+        stream_table = pd.DataFrame(
+            {
+                "Stream": [
+                    "feed gas",
+                    "compressor stage 1.compressor discharge",
+                ],
+                "Pressure [bara]": [45.0, 90.0],
+            }
+        )
+        equipment_table = pd.DataFrame(
+            {
+                "Equipment": ["compressor stage 1"],
+                "Power [kW]": [3500.0],
+            }
+        )
+
+        selected_equipment, selected_streams = selected_tables(
+            "compressor stage 1",
+            stream_table,
+            equipment_table,
+        )
+
+        self.assertEqual(len(selected_equipment), 1)
+        self.assertEqual(
+            selected_streams["Stream"].tolist(),
+            ["compressor stage 1.compressor discharge"],
         )
 
     def test_page_recovers_stale_editor_module(self):
