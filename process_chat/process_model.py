@@ -2477,7 +2477,7 @@ class NeqSimProcessModel:
         result = []
         stream_groups = []
         for name, s in self._streams.items():
-            for identity, grouped_stream, aliases in stream_groups:
+            for identity, _grouped_stream, aliases in stream_groups:
                 if identity.contains(s):
                     aliases.append(name)
                     break
@@ -4206,7 +4206,7 @@ class NeqSimProcessModel:
         
         Skips streams with near-zero flow (< 0.01 kg/hr) to avoid
         numerically spurious values from empty separator outlets.
-        Deduplicates by Java object id to avoid repeated entries for
+        Deduplicates by exact native object identity to avoid repeated entries for
         the same stream registered under multiple aliases (e.g.
         'feed gas' and 'feed gas.feed gas').
         """
