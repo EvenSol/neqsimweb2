@@ -2303,13 +2303,17 @@ def _selected_object_result_tables(
 
     if "Stream" in stream_table.columns:
         if "Owner" in stream_table.columns:
-            stream_mask = [
-                stream_matches(name, owner)
-                for name, owner in zip(
-                    stream_table["Stream"],
-                    stream_table["Owner"],
-                )
-            ]
+            stream_mask = pd.Series(
+                [
+                    stream_matches(name, owner)
+                    for name, owner in zip(
+                        stream_table["Stream"],
+                        stream_table["Owner"],
+                    )
+                ],
+                index=stream_table.index,
+                dtype=bool,
+            )
         else:
             stream_mask = stream_table["Stream"].map(stream_matches)
         selected_streams = stream_table[stream_mask].copy()
