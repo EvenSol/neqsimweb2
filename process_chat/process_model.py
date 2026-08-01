@@ -152,28 +152,52 @@ _ENERGY_BALANCE_DUTY_UNIT_CLASSES = {
 }
 
 
+class _NativeObjectIdentitySet:
+    """Retain exact native or Python object references without value equality."""
+
+    def __init__(self) -> None:
+        self._python_objects: List[Any] = []
+        self._java_map: Any = None
+        try:
+            import jpype
+
+            if jpype.isJVMStarted():
+                identity_map = jpype.JClass("java.util.IdentityHashMap")
+                self._java_map = identity_map()
+        except Exception:
+            pass
+
+    def contains(self, value: Any) -> bool:
+        """Return whether this exact native or Python reference was recorded."""
+        if self._java_map is not None:
+            try:
+                return bool(self._java_map.containsKey(value))
+            except Exception:
+                pass
+        return any(recorded is value for recorded in self._python_objects)
+
+    def add(self, value: Any) -> None:
+        """Retain one exact reference, ignoring an already recorded alias."""
+        if self._java_map is not None:
+            try:
+                self._java_map.put(value, True)
+                return
+            except Exception:
+                pass
+        if not self.contains(value):
+            self._python_objects.append(value)
+
+
 class _MaterialBoundaryIdentityTracker:
     """Track native stream references without relying on collision-prone hashes."""
 
     _ROLES = ("feed", "product")
 
     def __init__(self) -> None:
-        self._python_streams = {
-            role: []
+        self._role_streams = {
+            role: _NativeObjectIdentitySet()
             for role in self._ROLES
         }
-        self._java_maps: Dict[str, Any] = {}
-        try:
-            import jpype
-
-            if jpype.isJVMStarted():
-                identity_map = jpype.JClass("java.util.IdentityHashMap")
-                self._java_maps = {
-                    role: identity_map()
-                    for role in self._ROLES
-                }
-        except Exception:
-            pass
 
     def _validate_role(self, role: str) -> None:
         if role not in self._ROLES:
@@ -184,28 +208,12 @@ class _MaterialBoundaryIdentityTracker:
     def contains(self, role: str, stream: Any) -> bool:
         """Return whether this exact stream reference was recorded for a role."""
         self._validate_role(role)
-        java_map = self._java_maps.get(role)
-        if java_map is not None:
-            try:
-                return bool(java_map.containsKey(stream))
-            except Exception:
-                pass
-        return any(
-            recorded_stream is stream
-            for recorded_stream in self._python_streams[role]
-        )
+        return self._role_streams[role].contains(stream)
 
     def add(self, role: str, stream: Any) -> None:
         """Remember one exact native or Python stream reference for a role."""
         self._validate_role(role)
-        java_map = self._java_maps.get(role)
-        if java_map is not None:
-            try:
-                java_map.put(stream, True)
-                return
-            except Exception:
-                pass
-        self._python_streams[role].append(stream)
+        self._role_streams[role].add(stream)
 
 
 # ---------------------------------------------------------------------------
@@ -2464,9 +2472,22 @@ class NeqSimProcessModel:
         return result
 
     def list_streams(self) -> List[StreamInfo]:
-        """List all streams with current conditions."""
+        """List each exact stream once, preferring its shortest stable alias."""
         result = []
-        for name, s in self._streams.items():
+        seen_streams = _NativeObjectIdentitySet()
+        sorted_streams = sorted(
+            self._streams.items(),
+            key=lambda item: (
+                str(item[0]).count("."),
+                len(str(item[0])),
+                str(item[0]).casefold(),
+                str(item[0]),
+            ),
+        )
+        for name, s in sorted_streams:
+            if seen_streams.contains(s):
+                continue
+            seen_streams.add(s)
             ps_name = self._stream_ps_name.get(name, "")
             info = StreamInfo(name=name, process_system=ps_name)
             try:
