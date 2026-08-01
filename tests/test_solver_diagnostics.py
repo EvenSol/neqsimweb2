@@ -2718,7 +2718,8 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         rows = model.list_streams()
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].name, "feed unit.feed")
+        self.assertEqual(rows[0].name, "feed")
+        self.assertEqual(rows[0].owner_name, "feed unit")
         self.assertEqual(rows[0].process_system, "main process")
         self.assertEqual(rows[0].flow_rate_kg_hr, 100.0)
 
@@ -2745,10 +2746,14 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         self.assertEqual(
             [row.name for row in rows],
             [
-                "feed unit.feed",
-                "intermediate equipment.with a very long outlet name",
-                "terminal.product",
+                "feed",
+                "intermediate",
+                "product",
             ],
+        )
+        self.assertEqual(
+            [row.owner_name for row in rows],
+            ["feed unit", "intermediate equipment", "terminal"],
         )
 
     def test_list_streams_keeps_independent_shared_fluid_streams(self):
