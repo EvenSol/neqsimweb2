@@ -2242,11 +2242,9 @@ def _solver_status(
 
 
 def _stream_dataframe(model: Any) -> pd.DataFrame:
-    """Create a compact stream table without duplicate short aliases."""
+    """Create a compact table from identity-deduplicated stream rows."""
     records = []
     for stream in model.list_streams():
-        if "." not in stream.name and "/" not in stream.name and stream.name != "feed gas":
-            continue
         records.append(
             {
                 "Stream": stream.name,
