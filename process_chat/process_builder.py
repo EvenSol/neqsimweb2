@@ -1090,6 +1090,16 @@ class ProcessBuilder:
                         f"{unit_type.capitalize()} '{node_id}' requires "
                         "unique non-empty declared material inlet ports."
                     )
+                if (
+                    unit_type == "heat_exchanger"
+                    and normalized_declared_inputs
+                    != ["hot_in", "cold_in"]
+                ):
+                    raise ValueError(
+                        f"Heat exchanger '{node_id}' requires declared "
+                        "material inlet ports in fixed order: hot_in, "
+                        "cold_in."
+                    )
                 connected_inputs = [
                     str(connection["target"].get("port", "")).strip()
                     for connection in incoming

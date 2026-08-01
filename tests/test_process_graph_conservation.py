@@ -81,7 +81,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 )
 
     @staticmethod
-    def _build_two_sided_heat_exchanger_case(flow_scale: float):
+    def _build_two_sided_heat_exchanger_case(
+        flow_scale: float,
+        declared_input_ports=None,
+    ):
         inlet_specs = []
         for inlet_id, name, temperature_C, total_flow, components in (
             (
@@ -123,7 +126,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     "name": "cross exchanger",
                     "type": "heat_exchanger",
                     "ports": {
-                        "material_in": ["hot_in", "cold_in"],
+                        "material_in": list(
+                            declared_input_ports
+                            or ("hot_in", "cold_in")
+                        ),
                         "material_out": ["hot_out", "cold_out"],
                     },
                     "params": {"ua_w_per_k": 100_000.0},
@@ -169,6 +175,21 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ["hot-feed", "cold-feed", "cross-exchanger"],
         )
         return builder, model
+
+    def test_rejects_noncanonical_heat_exchanger_inlet_contract(self):
+        for declared_ports in (
+            ("cold_in", "hot_in"),
+            ("hot_in", "cold_in", "spare_in"),
+        ):
+            with self.subTest(declared_ports=declared_ports):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "fixed order: hot_in, cold_in",
+                ):
+                    self._build_two_sided_heat_exchanger_case(
+                        1.0,
+                        declared_ports,
+                    )
 
     def test_native_two_sided_heat_exchanger_conserves_nearby_points(self):
         outlet_temperatures = []
