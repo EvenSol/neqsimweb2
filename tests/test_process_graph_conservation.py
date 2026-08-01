@@ -24,8 +24,10 @@ from process_chat.flowsheet_editor import (
     replace_inline_unit_type,
     resize_mixer_inlet_ports,
     resize_separator_inlet_ports,
+    resize_splitter_outlet_ports,
     undo_graph_history,
     update_inline_unit_properties,
+    update_splitter_allocations,
 )
 from process_chat.process_builder import ProcessBuilder
 from process_chat.solver_diagnostics import aggregate_energy_balance
@@ -1437,6 +1439,87 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         return builder, model, history, graph_spec
 
+    @staticmethod
+    def _build_palette_three_way_splitter_case(flow_scale: float):
+        inlet_specs = [
+            {
+                "inlet_id": "branch-feed",
+                "name": "branch feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.80,
+                        "n-hexane": 0.20,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 30.0,
+                    "total_flow": 30_000.0 * flow_scale,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        editor_inlets = [
+            {
+                "id": inlet["inlet_id"],
+                "name": inlet["name"],
+                **inlet["fluid_spec"],
+            }
+            for inlet in inlet_specs
+        ]
+        units, splitter_id = add_catalog_unit(
+            [],
+            "splitter",
+            "three-way product splitter",
+            {"branch-feed"},
+            {"branch feed"},
+        )
+        units = resize_splitter_outlet_ports(
+            units,
+            [],
+            splitter_id,
+            3,
+        )
+        units = update_splitter_allocations(
+            units,
+            splitter_id,
+            [2.0, 3.0, 5.0],
+        )
+        connections, _ = connect_graph_ports(
+            editor_inlets,
+            units,
+            [],
+            "material",
+            {
+                "kind": "inlet",
+                "id": "branch-feed",
+                "port": "out",
+            },
+            {
+                "kind": "unit",
+                "id": splitter_id,
+                "port": "in",
+            },
+        )
+        graph_spec = json.loads(
+            json.dumps(
+                {
+                    "name": "Palette-built three-way splitter benchmark",
+                    "units": units,
+                    "connections": connections,
+                },
+                allow_nan=False,
+            )
+        )
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["branch-feed", splitter_id],
+        )
+        return builder, model, graph_spec
+
     def test_splitter_defaults_preserve_explicit_legacy_settings(self):
         from neqsim import jneqsim as _jneqsim  # noqa: F401
 
@@ -2569,6 +2652,75 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 )
                 print(
                     "native palette equal-split benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"feed={expected_flow:.1f} kg/hr",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+
+    def test_palette_three_way_splitter_round_trip_and_close(self):
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model, graph_spec = (
+                    self._build_palette_three_way_splitter_case(flow_scale)
+                )
+                result = model.run(timeout_ms=180_000)
+                expected_flow = 30_000.0 * flow_scale
+                product_flows = sorted(
+                    row["mass_flow_kg_hr"]
+                    for row in result.raw["material_boundaries"]
+                    if row["role"] == "product"
+                )
+
+                self.assertEqual(len(product_flows), 3)
+                for actual, factor in zip(product_flows, (0.2, 0.3, 0.5)):
+                    self.assertAlmostEqual(
+                        actual,
+                        expected_flow * factor,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertEqual(
+                    result.kpis["material_product_count"].value,
+                    3.0,
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertIn(
+                    "Configured graph splitter: three-way-product-splitter "
+                    "(out_0=0.200000, out_1=0.300000, out_2=0.500000)",
+                    builder.build_log,
+                )
+                persisted = json.loads(
+                    json.dumps(graph_spec, allow_nan=False)
+                )
+                splitter = persisted["units"][0]
+                self.assertEqual(
+                    splitter["ports"]["material_out"],
+                    ["out_0", "out_1", "out_2"],
+                )
+                self.assertEqual(
+                    splitter["params"],
+                    {"split_factors": [0.2, 0.3, 0.5]},
+                )
+                print(
+                    "native palette three-way splitter benchmark:",
                     f"scale={flow_scale:.2f}",
                     f"feed={expected_flow:.1f} kg/hr",
                     f"mass={result.kpis['mass_balance_pct'].value:.3e}%",

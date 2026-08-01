@@ -60,6 +60,7 @@ globals().update(
 
 _EDITOR_SYMBOL_NAMES = (
     "MAX_MULTI_INLET_PORTS",
+    "MAX_SPLITTER_OUTLET_PORTS",
     "add_catalog_unit",
     "apply_graph_draft",
     "build_graph_draft_dot",
@@ -86,15 +87,18 @@ _EDITOR_SYMBOL_NAMES = (
     "remove_material_inlet",
     "remove_inline_unit",
     "resize_multi_inlet_unit_ports",
+    "resize_splitter_outlet_ports",
     "replace_inline_unit",
     "replace_inline_unit_type",
     "reroute_graph_connection",
     "rename_material_inlet",
     "rename_inline_unit",
+    "splitter_allocation_rows",
     "undo_graph_history",
     "update_inlet_composition",
     "update_inlet_conditions",
     "update_inline_unit_properties",
+    "update_splitter_allocations",
     "validate_catalog_unit",
     "validate_starter_unit_projection",
 )
@@ -5334,9 +5338,18 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 "Values use the executable graph schema and explicit "
                 "engineering units."
             )
-            property_rows = inline_unit_property_rows(
-                selected_unit_type,
-                selected_unit["params"],
+            splitter_rows = (
+                splitter_allocation_rows(selected_unit)
+                if selected_unit_type == "splitter"
+                else []
+            )
+            property_rows = (
+                []
+                if selected_unit_type == "splitter"
+                else inline_unit_property_rows(
+                    selected_unit_type,
+                    selected_unit["params"],
+                )
             )
             property_updates: dict[str, float] = {}
             for row in property_rows:
@@ -5353,21 +5366,62 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         f"{graph_widget_revision}"
                     ),
                 )
+            splitter_weights: list[float] = []
+            if splitter_rows:
+                st.caption(
+                    "Enter non-negative branch weights. The Studio normalizes "
+                    "them to flow fractions whose sum is 1.0."
+                )
+                for row in splitter_rows:
+                    splitter_weights.append(
+                        st.number_input(
+                            f"{row['label']} [{row['unit']}]",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=float(row["value"]),
+                            step=0.01,
+                            format="%.4f",
+                            key=(
+                                "flowsheet_splitter_allocation_"
+                                f"{selected_unit_id}_{row['port']}_"
+                                f"{graph_widget_revision}"
+                            ),
+                        )
+                    )
             properties_changed = any(
                 property_updates[row["key"]] != row["value"]
                 for row in property_rows
             )
-            save_properties = st.button(
-                "Save equipment properties",
-                disabled=not properties_changed,
-                use_container_width=True,
-                key=(
-                    "flowsheet_save_unit_properties_"
-                    f"{selected_unit_id}_{graph_widget_revision}"
-                ),
+            splitter_allocations_changed = any(
+                weight != row["value"]
+                for weight, row in zip(splitter_weights, splitter_rows)
             )
+            save_properties = False
+            if not splitter_rows:
+                save_properties = st.button(
+                    "Save equipment properties",
+                    disabled=not properties_changed,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_save_unit_properties_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+            save_splitter_allocations = False
+            if splitter_rows:
+                save_splitter_allocations = st.button(
+                    "Save splitter allocations",
+                    disabled=not splitter_allocations_changed,
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_save_splitter_allocations_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
             resize_multi_inlet_unit = False
             requested_material_inlet_count = None
+            resize_splitter_outlets = False
+            requested_material_outlet_count = None
             selected_material_inlets = selected_unit.get("ports", {}).get(
                 "material_in",
                 [],
@@ -5425,6 +5479,44 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     use_container_width=True,
                     key=(
                         "flowsheet_resize_material_inlets_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+            if selected_unit_type == "splitter":
+                st.markdown("##### Splitter topology")
+                selected_material_outlets = selected_unit.get(
+                    "ports",
+                    {},
+                ).get("material_out", [])
+                current_material_outlet_count = len(
+                    selected_material_outlets
+                )
+                st.caption(
+                    "Add explicit branch outlets. Trailing outlets can be "
+                    "removed only while disconnected; retained allocations "
+                    "are renormalized."
+                )
+                requested_material_outlet_count = st.number_input(
+                    "Material outlet ports [-]",
+                    min_value=2,
+                    max_value=MAX_SPLITTER_OUTLET_PORTS,
+                    value=current_material_outlet_count,
+                    step=1,
+                    format="%d",
+                    key=(
+                        "flowsheet_material_outlet_count_"
+                        f"{selected_unit_id}_{graph_widget_revision}"
+                    ),
+                )
+                resize_splitter_outlets = st.button(
+                    "Apply splitter outlet count",
+                    disabled=(
+                        requested_material_outlet_count
+                        == current_material_outlet_count
+                    ),
+                    use_container_width=True,
+                    key=(
+                        "flowsheet_resize_material_outlets_"
                         f"{selected_unit_id}_{graph_widget_revision}"
                     ),
                 )
@@ -5555,6 +5647,83 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                             f"{int(requested_material_inlet_count)} material "
                             "inlet ports. Connect every required feed and run "
                             "NeqSim to solve the revised graph."
+                        ),
+                    )
+                    st.rerun()
+
+            if (
+                resize_splitter_outlets
+                and requested_material_outlet_count is not None
+            ):
+                try:
+                    units = resize_splitter_outlet_ports(
+                        spec["units"],
+                        spec["connections"],
+                        selected_unit_id,
+                        requested_material_outlet_count,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        spec["connections"],
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"Splitter topology update failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Resized '{selected_unit['name']}' to "
+                            f"{int(requested_material_outlet_count)} material "
+                            "outlet ports. Connect the new branches, review "
+                            "their allocations, and run NeqSim."
+                        ),
+                    )
+                    st.rerun()
+
+            if save_splitter_allocations:
+                try:
+                    units = update_splitter_allocations(
+                        spec["units"],
+                        selected_unit_id,
+                        splitter_weights,
+                    )
+                    candidate_draft = create_graph_draft(
+                        units,
+                        spec["connections"],
+                        spec["inlets"],
+                    )
+                    candidate_case = _apply_studio_graph_draft(
+                        spec,
+                        candidate_draft,
+                    )
+                    _validate_case_graph(
+                        candidate_case,
+                        candidate_case["process"],
+                    )
+                except ValueError as edit_error:
+                    st.error(
+                        f"Splitter allocation update failed: {edit_error}"
+                    )
+                else:
+                    _record_graph_revision(
+                        spec,
+                        candidate_draft,
+                        (
+                            f"Updated normalized branch allocations for "
+                            f"'{selected_unit['name']}'. Run NeqSim to solve "
+                            "the revised graph."
                         ),
                     )
                     st.rerun()

@@ -8,6 +8,7 @@ import unittest
 
 from process_chat.flowsheet_editor import (
     MAX_MULTI_INLET_PORTS,
+    MAX_SPLITTER_OUTLET_PORTS,
     _validate_acyclic_material_connections,
     add_catalog_unit,
     apply_graph_draft,
@@ -37,16 +38,19 @@ from process_chat.flowsheet_editor import (
     remove_inline_unit,
     resize_mixer_inlet_ports,
     resize_separator_inlet_ports,
+    resize_splitter_outlet_ports,
     replace_inline_unit,
     replace_inline_unit_type,
     reroute_graph_connection,
     rename_material_inlet,
     rename_inline_unit,
+    splitter_allocation_rows,
     undo_graph_history,
     update_inlet_composition,
     update_inlet_conditions,
     update_inline_unit_properties,
     update_process_unit_properties,
+    update_splitter_allocations,
     validate_catalog_unit,
     validate_starter_unit_projection,
 )
@@ -80,7 +84,7 @@ class UnitCatalogTest(unittest.TestCase):
             "Splitter",
         )
         self.assertIn(
-            "editable out_0 flow fraction",
+            "normalized multi-outlet allocations",
             splitter_row["Description"],
         )
 
@@ -1399,6 +1403,140 @@ class MixerInletPortLifecycleTest(unittest.TestCase):
                 separator_connections,
                 separator_id,
                 MAX_MULTI_INLET_PORTS + 1,
+            )
+
+
+class SplitterOutletPortLifecycleTest(unittest.TestCase):
+    """Validate scalable splitter branches and normalized allocations."""
+
+    def setUp(self):
+        self.units, self.splitter_id = add_catalog_unit(
+            [],
+            "splitter",
+            "Product splitter",
+        )
+
+    def test_expands_contiguous_outlets_and_preserves_input_graph(self):
+        original_units = copy.deepcopy(self.units)
+        expanded = resize_splitter_outlet_ports(
+            self.units,
+            [],
+            self.splitter_id,
+            3,
+        )
+
+        self.assertEqual(
+            expanded[0]["ports"]["material_out"],
+            ["out_0", "out_1", "out_2"],
+        )
+        self.assertEqual(self.units, original_units)
+        self.assertEqual(
+            expanded[0]["params"],
+            {"split_factors": [1.0 / 3.0] * 3},
+        )
+        self.assertEqual(
+            [row["port"] for row in splitter_allocation_rows(expanded[0])],
+            ["out_0", "out_1", "out_2"],
+        )
+        validate_catalog_unit(expanded[0])
+
+    def test_updates_and_renormalizes_multi_branch_allocations(self):
+        expanded = resize_splitter_outlet_ports(
+            self.units,
+            [],
+            self.splitter_id,
+            3,
+        )
+        updated = update_splitter_allocations(
+            expanded,
+            self.splitter_id,
+            [2.0, 3.0, 5.0],
+        )
+
+        self.assertEqual(
+            updated[0]["params"],
+            {"split_factors": [0.2, 0.3, 0.5]},
+        )
+        self.assertEqual(
+            [row["value"] for row in splitter_allocation_rows(updated[0])],
+            [0.2, 0.3, 0.5],
+        )
+        self.assertEqual(
+            expanded[0]["params"],
+            {"split_factors": [1.0 / 3.0] * 3},
+        )
+
+        reduced = resize_splitter_outlet_ports(
+            updated,
+            [],
+            self.splitter_id,
+            2,
+        )
+        self.assertEqual(
+            reduced[0]["ports"]["material_out"],
+            ["out_0", "out_1"],
+        )
+        self.assertEqual(reduced[0]["params"], {"split_factor": 0.4})
+
+    def test_rejects_connected_removals_and_invalid_outlet_shapes(self):
+        expanded = resize_splitter_outlet_ports(
+            self.units,
+            [],
+            self.splitter_id,
+            3,
+        )
+        expanded, heater_id = add_catalog_unit(
+            expanded,
+            "heater",
+            "Third branch heater",
+        )
+        connections, connection_id = connect_graph_ports(
+            [],
+            expanded,
+            [],
+            "material",
+            {
+                "kind": "unit",
+                "id": self.splitter_id,
+                "port": "out_2",
+            },
+            {"kind": "unit", "id": heater_id, "port": "in"},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            f"Disconnect splitter connection '{connection_id}'",
+        ):
+            resize_splitter_outlet_ports(
+                expanded,
+                connections,
+                self.splitter_id,
+                2,
+            )
+
+        for outlet_count, message in (
+            (1, "at least 2"),
+            (2.5, "Material outlet count must be an integer"),
+            (True, "Material outlet count must be an integer"),
+            (MAX_SPLITTER_OUTLET_PORTS + 1, "cannot exceed"),
+        ):
+            with self.subTest(outlet_count=outlet_count):
+                with self.assertRaisesRegex(ValueError, message):
+                    resize_splitter_outlet_ports(
+                        self.units,
+                        [],
+                        self.splitter_id,
+                        outlet_count,
+                    )
+
+        malformed = copy.deepcopy(expanded[0])
+        malformed["ports"]["material_out"] = ["out_0", "out_2"]
+        with self.assertRaisesRegex(ValueError, "must be contiguous"):
+            validate_catalog_unit(malformed)
+        with self.assertRaisesRegex(ValueError, "must have a positive sum"):
+            update_splitter_allocations(
+                expanded,
+                self.splitter_id,
+                [0.0, 0.0, 0.0],
             )
 
 

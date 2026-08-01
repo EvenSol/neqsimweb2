@@ -14,6 +14,7 @@ GRAPH_DRAFT_SCHEMA_VERSION = 1
 GRAPH_HISTORY_SCHEMA_VERSION = 1
 MAX_GRAPH_HISTORY_ENTRIES = 50
 MAX_MULTI_INLET_PORTS = 64
+MAX_SPLITTER_OUTLET_PORTS = 64
 
 
 def _number_property(
@@ -297,8 +298,9 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "label": "Splitter",
         "category": "Flow routing",
         "description": (
-            "Divide one material stream between two branch outlets with an "
-            "editable out_0 flow fraction."
+            "Divide one material stream between branch outlets with an "
+            "editable out_0 flow fraction or normalized multi-outlet "
+            "allocations."
         ),
         "ports": {
             "material_in": ["in"],
@@ -1088,6 +1090,157 @@ def _validated_separator_inlet_ports(
     return list(material_inputs)
 
 
+def _validated_splitter_outlet_ports(
+    unit_id: str,
+    ports: Any,
+) -> list[str]:
+    """Return a splitter's contiguous, explicitly indexed outlet ports."""
+    if not isinstance(ports, dict):
+        raise ValueError(f"Inline splitter '{unit_id}' requires ports.")
+    if ports.get("material_in") != ["in"]:
+        raise ValueError(
+            f"Inline splitter '{unit_id}' requires the material inlet port 'in'."
+        )
+    material_outputs = ports.get("material_out")
+    if not isinstance(material_outputs, list) or len(material_outputs) < 2:
+        raise ValueError(
+            f"Inline splitter '{unit_id}' requires at least two material "
+            "outlet ports."
+        )
+    if len(material_outputs) > MAX_SPLITTER_OUTLET_PORTS:
+        raise ValueError(
+            f"Inline splitter '{unit_id}' cannot exceed "
+            f"{MAX_SPLITTER_OUTLET_PORTS} material outlet ports."
+        )
+    expected_outputs = [
+        f"out_{index}" for index in range(len(material_outputs))
+    ]
+    if material_outputs != expected_outputs:
+        raise ValueError(
+            f"Inline splitter '{unit_id}' material outlet ports must be "
+            "contiguous from 'out_0'."
+        )
+    unexpected_port_groups = sorted(
+        key
+        for key, value in ports.items()
+        if key not in {"material_in", "material_out"} and value
+    )
+    if unexpected_port_groups:
+        raise ValueError(
+            f"Inline splitter '{unit_id}' has unsupported port group "
+            f"'{unexpected_port_groups[0]}'."
+        )
+    return list(material_outputs)
+
+
+def _normalized_splitter_factors(
+    unit_id: str,
+    params: Any,
+    outlet_count: int,
+) -> list[float]:
+    """Return finite normalized allocations for every declared outlet."""
+    if not isinstance(params, dict):
+        raise ValueError(f"Inline splitter '{unit_id}' params must be an object.")
+    parameter_keys = set(params)
+    unknown = sorted(parameter_keys - {"split_factor", "split_factors"})
+    if unknown:
+        raise ValueError(
+            f"Process splitter has unsupported property '{unknown[0]}'."
+        )
+    if {"split_factor", "split_factors"} <= parameter_keys:
+        raise ValueError(
+            "Process splitter has conflicting split_factor and split_factors "
+            "properties."
+        )
+
+    if "split_factor" in params:
+        if outlet_count != 2:
+            raise ValueError(
+                "Process splitter legacy split_factor requires exactly two "
+                "material outlet ports."
+            )
+        raw_factor = params["split_factor"]
+        if isinstance(raw_factor, bool):
+            raise ValueError("Process splitter split_factor must be numeric.")
+        try:
+            split_factor = float(raw_factor)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Process splitter split_factor must be numeric."
+            ) from error
+        if not math.isfinite(split_factor):
+            raise ValueError("Process splitter split_factor must be finite.")
+        if split_factor < 0.0 or split_factor > 1.0:
+            raise ValueError(
+                "Process splitter split_factor must be between 0.0 and 1.0."
+            )
+        return [split_factor, 1.0 - split_factor]
+
+    if "split_factors" in params:
+        raw_factors = params["split_factors"]
+        if not isinstance(raw_factors, list):
+            raise ValueError(
+                "Process splitter split_factors must be an array."
+            )
+        if len(raw_factors) != outlet_count:
+            raise ValueError(
+                "Process splitter split_factors must match the declared "
+                f"{outlet_count} material outlet ports."
+            )
+        factors: list[float] = []
+        for raw_factor in raw_factors:
+            if isinstance(raw_factor, bool):
+                raise ValueError(
+                    "Process splitter split_factors must be numeric."
+                )
+            try:
+                factor = float(raw_factor)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "Process splitter split_factors must be numeric."
+                ) from error
+            if not math.isfinite(factor) or factor < 0.0:
+                raise ValueError(
+                    "Process splitter split_factors must be finite and "
+                    "non-negative."
+                )
+            factors.append(factor)
+        factor_scale = max(factors)
+        if factor_scale <= 0.0:
+            raise ValueError(
+                "Process splitter split_factors must have a positive sum."
+            )
+        scaled_factors = [factor / factor_scale for factor in factors]
+        scaled_sum = sum(scaled_factors)
+        return [factor / scaled_sum for factor in scaled_factors]
+
+    return [1.0 / outlet_count for _ in range(outlet_count)]
+
+
+def splitter_allocation_rows(unit: Any) -> list[dict[str, Any]]:
+    """Return one normalized dimensionless allocation row per splitter outlet."""
+    if not isinstance(unit, dict):
+        raise ValueError("Splitter unit must be an object.")
+    unit_id = str(unit.get("id", "")).strip()
+    if str(unit.get("type", "")).strip().lower() != "splitter":
+        raise ValueError(f"Graph unit '{unit_id}' is not a splitter.")
+    outlets = _validated_splitter_outlet_ports(unit_id, unit.get("ports"))
+    factors = _normalized_splitter_factors(
+        unit_id,
+        unit.get("params"),
+        len(outlets),
+    )
+    return [
+        {
+            "port": port,
+            "label": f"Outlet {port} allocation",
+            "unit": "-",
+            "value": factor,
+        }
+        for port, factor in zip(outlets, factors)
+    ]
+
+
 def validate_catalog_unit(unit: Any) -> None:
     """Validate that a unit matches the editor catalog's executable shape."""
     if not isinstance(unit, dict):
@@ -1106,13 +1259,24 @@ def validate_catalog_unit(unit: Any) -> None:
         _validated_mixer_inlet_ports(unit_id, unit.get("ports"))
     elif unit_type == "separator":
         _validated_separator_inlet_ports(unit_id, unit.get("ports"))
+    elif unit_type == "splitter":
+        outlets = _validated_splitter_outlet_ports(
+            unit_id,
+            unit.get("ports"),
+        )
+        _normalized_splitter_factors(
+            unit_id,
+            unit.get("params"),
+            len(outlets),
+        )
     elif unit.get("ports") != definition["ports"]:
         raise ValueError(
             f"Inline unit '{unit_id}' ports do not match the '{unit_type}' catalog."
         )
     if not isinstance(unit.get("params"), dict):
         raise ValueError(f"Inline unit '{unit_id}' params must be an object.")
-    inline_unit_property_rows(unit_type, unit["params"])
+    if unit_type != "splitter":
+        inline_unit_property_rows(unit_type, unit["params"])
 
 
 def resize_multi_inlet_unit_ports(
@@ -1253,6 +1417,157 @@ def resize_separator_inlet_ports(
         separator_id,
         inlet_count,
     )
+
+
+def resize_splitter_outlet_ports(
+    units: list[Any],
+    connections: list[Any],
+    splitter_id: str,
+    outlet_count: Any,
+) -> list[dict[str, Any]]:
+    """Resize a splitter's branch outlets without dropping connected routes."""
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    if not isinstance(connections, list):
+        raise ValueError("Graph connections must be an array.")
+    if isinstance(outlet_count, bool):
+        raise ValueError("Material outlet count must be an integer.")
+    try:
+        normalized_count = int(outlet_count)
+        numeric_count = float(outlet_count)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Material outlet count must be an integer.") from error
+    if not math.isfinite(numeric_count) or numeric_count != normalized_count:
+        raise ValueError("Material outlet count must be an integer.")
+    if normalized_count < 2:
+        raise ValueError("Splitter outlet count must be at least 2.")
+    if normalized_count > MAX_SPLITTER_OUTLET_PORTS:
+        raise ValueError(
+            "Material outlet count cannot exceed "
+            f"{MAX_SPLITTER_OUTLET_PORTS}."
+        )
+
+    cleaned_unit_id = str(splitter_id).strip()
+    copied_units = copy.deepcopy(units)
+    matches = [
+        unit
+        for unit in copied_units
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+    splitter = matches[0]
+    if str(splitter.get("type", "")).strip().lower() != "splitter":
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' is not a splitter."
+        )
+    current_ports = _validated_splitter_outlet_ports(
+        cleaned_unit_id,
+        splitter.get("ports"),
+    )
+    current_factors = _normalized_splitter_factors(
+        cleaned_unit_id,
+        splitter.get("params"),
+        len(current_ports),
+    )
+    requested_ports = [
+        f"out_{index}" for index in range(normalized_count)
+    ]
+    removed_ports = set(current_ports) - set(requested_ports)
+    for index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            raise ValueError(f"Graph connection {index} must be an object.")
+        if str(connection.get("type", "")).strip().lower() != "material":
+            continue
+        source = connection.get("source")
+        if not isinstance(source, dict):
+            raise ValueError(
+                f"Graph connection {index} requires a source object."
+            )
+        if (
+            str(source.get("kind", "")).strip().lower() == "unit"
+            and str(source.get("id", "")).strip() == cleaned_unit_id
+            and str(source.get("port", "")).strip() in removed_ports
+        ):
+            connection_id = str(connection.get("id", "")).strip() or str(index)
+            raise ValueError(
+                f"Disconnect splitter connection '{connection_id}' before "
+                f"removing port '{str(source.get('port', '')).strip()}'."
+            )
+
+    if normalized_count > len(current_factors):
+        appended_weight = 1.0 / len(current_factors)
+        resized_factors = [
+            *current_factors,
+            *[
+                appended_weight
+                for _ in range(normalized_count - len(current_factors))
+            ],
+        ]
+    else:
+        resized_factors = current_factors[:normalized_count]
+    factor_sum = sum(resized_factors)
+    if factor_sum <= 0.0:
+        resized_factors = [
+            1.0 / normalized_count for _ in range(normalized_count)
+        ]
+    else:
+        resized_factors = [
+            factor / factor_sum for factor in resized_factors
+        ]
+
+    splitter["ports"]["material_out"] = requested_ports
+    if normalized_count == 2:
+        splitter["params"] = {"split_factor": resized_factors[0]}
+    else:
+        splitter["params"] = {"split_factors": resized_factors}
+    validate_catalog_unit(splitter)
+    return copied_units
+
+
+def update_splitter_allocations(
+    units: list[Any],
+    splitter_id: str,
+    allocation_weights: Any,
+) -> list[dict[str, Any]]:
+    """Transactionally normalize and store one allocation per outlet."""
+    if not isinstance(units, list):
+        raise ValueError("Graph units must be an array.")
+    cleaned_unit_id = str(splitter_id).strip()
+    copied_units = copy.deepcopy(units)
+    matches = [
+        unit
+        for unit in copied_units
+        if isinstance(unit, dict)
+        and str(unit.get("id", "")).strip() == cleaned_unit_id
+    ]
+    if not matches:
+        raise ValueError(f"Unknown graph unit '{cleaned_unit_id}'.")
+    if len(matches) > 1:
+        raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
+    splitter = matches[0]
+    if str(splitter.get("type", "")).strip().lower() != "splitter":
+        raise ValueError(
+            f"Graph unit '{cleaned_unit_id}' is not a splitter."
+        )
+    outlets = _validated_splitter_outlet_ports(
+        cleaned_unit_id,
+        splitter.get("ports"),
+    )
+    factors = _normalized_splitter_factors(
+        cleaned_unit_id,
+        {"split_factors": allocation_weights},
+        len(outlets),
+    )
+    if len(outlets) == 2:
+        splitter["params"] = {"split_factor": factors[0]}
+    else:
+        splitter["params"] = {"split_factors": factors}
+    validate_catalog_unit(splitter)
+    return copied_units
 
 
 def validate_starter_unit_projection(
