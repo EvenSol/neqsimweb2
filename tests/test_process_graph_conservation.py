@@ -30,7 +30,11 @@ from process_chat.flowsheet_editor import (
     update_splitter_allocations,
 )
 from process_chat.process_builder import ProcessBuilder
-from process_chat.solver_diagnostics import aggregate_energy_balance
+from process_chat.solver_diagnostics import (
+    aggregate_energy_balance,
+    aggregate_unit_balances,
+    unit_balance_rows,
+)
 
 
 class MultiInletMixerConservationTest(unittest.TestCase):
@@ -75,6 +79,186 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     ),
                     expected,
                 )
+
+    @staticmethod
+    def _build_two_sided_heat_exchanger_case(flow_scale: float):
+        inlet_specs = []
+        for inlet_id, name, temperature_C, total_flow, components in (
+            (
+                "hot-feed",
+                "hot feed",
+                120.0,
+                50_000.0,
+                {"methane": 0.90, "ethane": 0.10},
+            ),
+            (
+                "cold-feed",
+                "cold feed",
+                20.0,
+                40_000.0,
+                {"methane": 0.95, "ethane": 0.05},
+            ),
+        ):
+            inlet_specs.append(
+                {
+                    "inlet_id": inlet_id,
+                    "name": name,
+                    "fluid_spec": {
+                        "eos_model": "srk",
+                        "mixing_rule": 2,
+                        "components": components,
+                        "composition_basis": "mole_fraction",
+                        "temperature_C": temperature_C,
+                        "pressure_bara": 50.0,
+                        "total_flow": total_flow * flow_scale,
+                        "flow_unit": "kg/hr",
+                    },
+                }
+            )
+        graph_spec = {
+            "name": "Native two-sided heat exchanger benchmark",
+            "units": [
+                {
+                    "id": "cross-exchanger",
+                    "name": "cross exchanger",
+                    "type": "heat_exchanger",
+                    "ports": {
+                        "material_in": ["hot_in", "cold_in"],
+                        "material_out": ["hot_out", "cold_out"],
+                    },
+                    "params": {"ua_w_per_k": 100_000.0},
+                }
+            ],
+            "connections": [
+                {
+                    "id": "hot-side-feed",
+                    "name": "hot side feed",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "hot-feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "hot_in",
+                    },
+                },
+                {
+                    "id": "cold-side-feed",
+                    "name": "cold side feed",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "cold-feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "cold_in",
+                    },
+                },
+            ],
+        }
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["hot-feed", "cold-feed", "cross-exchanger"],
+        )
+        return builder, model
+
+    def test_native_two_sided_heat_exchanger_conserves_nearby_points(self):
+        outlet_temperatures = []
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model = (
+                    self._build_two_sided_heat_exchanger_case(flow_scale)
+                )
+                result = model.run(timeout_ms=180_000)
+                exchanger = model.get_unit("cross exchanger")
+                hot_out_C = float(
+                    exchanger.getOutStream(0).getTemperature("C")
+                )
+                cold_out_C = float(
+                    exchanger.getOutStream(1).getTemperature("C")
+                )
+                outlet_temperatures.append((hot_out_C, cold_out_C))
+
+                self.assertEqual(
+                    builder.spec["graph"]["units"][0]["params"],
+                    {"ua_w_per_k": 100_000.0},
+                )
+                self.assertAlmostEqual(
+                    float(exchanger.getUAvalue()),
+                    100_000.0,
+                )
+                self.assertGreater(hot_out_C, 20.0)
+                self.assertLess(hot_out_C, 120.0)
+                self.assertGreater(cold_out_C, 20.0)
+                self.assertLess(cold_out_C, 120.0)
+                self.assertGreater(
+                    float(exchanger.getApproachTemperature()),
+                    0.0,
+                )
+
+                self.assertEqual(
+                    result.kpis["material_feed_count"].value,
+                    2.0,
+                )
+                self.assertEqual(
+                    result.kpis["material_product_count"].value,
+                    2.0,
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                validation = {
+                    constraint.name: constraint.status
+                    for constraint in result.constraints
+                }
+                self.assertEqual(validation["mass_balance"], "OK")
+                self.assertEqual(validation["component_balance"], "OK")
+                self.assertEqual(validation["energy_balance"], "OK")
+
+                exchanger_rows = [
+                    row
+                    for row in unit_balance_rows(result)
+                    if row["unit_name"] == "cross exchanger"
+                ]
+                self.assertEqual(len(exchanger_rows), 1)
+                self.assertEqual(exchanger_rows[0]["inlet_count"], 2)
+                self.assertEqual(exchanger_rows[0]["outlet_count"], 2)
+                unit_summary = aggregate_unit_balances(result)
+                self.assertTrue(unit_summary["coverage_complete"])
+                self.assertLess(
+                    unit_summary["max_mass_imbalance_pct"],
+                    1.0e-6,
+                )
+                self.assertLess(
+                    unit_summary["max_energy_imbalance_pct"],
+                    1.0e-6,
+                )
+
+        self.assertGreater(
+            outlet_temperatures[1][0],
+            outlet_temperatures[0][0],
+        )
+        self.assertLess(
+            outlet_temperatures[1][1],
+            outlet_temperatures[0][1],
+        )
 
     def test_build_from_spec_dispatches_generic_graph_schema(self):
         builder = ProcessBuilder()
