@@ -3792,6 +3792,11 @@ class NeqSimProcessModel:
                 for prop, getter, unit in [
                     ("outletPressure_bara", "getOutletPressure", "bara"),
                     ("pressureDrop_bar", "getPressureDrop", "bar"),
+                    (
+                        "percentValveOpening",
+                        "getPercentValveOpening",
+                        "%",
+                    ),
                 ]:
                     if hasattr(u, getter):
                         try:
@@ -3803,7 +3808,7 @@ class NeqSimProcessModel:
                 if hasattr(u, "getCv"):
                     try:
                         kpis[f"{prefix}.Cv"] = KPI(
-                            f"{prefix}.Cv", float(u.getCv()), "[-]"
+                            f"{prefix}.Cv", float(u.getCv()), "US Cv"
                         )
                     except Exception:
                         pass
