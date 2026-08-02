@@ -2407,6 +2407,171 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                 )
 
+    def test_native_valve_opening_sizes_cv_at_nearby_points(self):
+        cv_by_scale = {}
+        for flow_scale in (1.0, 1.05):
+            cv_by_opening = {}
+            temperature_by_opening = {}
+            for opening_pct in (100.0, 60.0):
+                with self.subTest(
+                    flow_scale=flow_scale,
+                    opening_pct=opening_pct,
+                ):
+                    units, valve_id = add_catalog_unit(
+                        [],
+                        "valve",
+                        "metering valve",
+                    )
+                    units[0]["params"].update(
+                        {
+                            "outlet_pressure_bara": 30.0,
+                            "percent_valve_opening": opening_pct,
+                        }
+                    )
+                    graph_spec = {
+                        "name": "Native valve opening benchmark",
+                        "units": units,
+                        "connections": [
+                            {
+                                "id": "feed-to-metering-valve",
+                                "type": "material",
+                                "source": {
+                                    "kind": "inlet",
+                                    "id": "feed",
+                                    "port": "out",
+                                },
+                                "target": {
+                                    "kind": "unit",
+                                    "id": valve_id,
+                                    "port": "in",
+                                },
+                            }
+                        ],
+                    }
+                    expected_flow = 10_000.0 * flow_scale
+                    inlet_specs = [
+                        {
+                            "inlet_id": "feed",
+                            "name": "feed",
+                            "fluid_spec": {
+                                "eos_model": "srk",
+                                "mixing_rule": 2,
+                                "components": {
+                                    "methane": 0.90,
+                                    "ethane": 0.10,
+                                },
+                                "composition_basis": "mole_fraction",
+                                "temperature_C": 30.0,
+                                "pressure_bara": 80.0,
+                                "total_flow": expected_flow,
+                                "flow_unit": "kg/hr",
+                            },
+                        }
+                    ]
+                    builder = ProcessBuilder()
+                    model = builder.build_acyclic_graph(
+                        graph_spec,
+                        inlet_specs,
+                        ["feed", valve_id],
+                    )
+                    result = model.run(timeout_ms=180_000)
+                    valve = next(
+                        unit
+                        for unit in model.get_process().getUnitOperations()
+                        if str(unit.getName()) == "metering valve"
+                    )
+
+                    opening_kpi = result.kpis[
+                        "metering valve.percentValveOpening"
+                    ]
+                    cv_kpi = result.kpis["metering valve.Cv"]
+                    self.assertAlmostEqual(
+                        float(valve.getPercentValveOpening()),
+                        opening_pct,
+                        delta=1.0e-12,
+                    )
+                    self.assertAlmostEqual(
+                        opening_kpi.value,
+                        opening_pct,
+                        delta=1.0e-12,
+                    )
+                    self.assertEqual(opening_kpi.unit, "%")
+                    self.assertAlmostEqual(
+                        cv_kpi.value,
+                        float(valve.getCv()),
+                        delta=1.0e-12,
+                    )
+                    self.assertEqual(cv_kpi.unit, "US Cv")
+                    self.assertAlmostEqual(
+                        float(valve.getOutletStream().getPressure("bara")),
+                        30.0,
+                        delta=0.05,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis["material_product_flow_kg_hr"].value,
+                        expected_flow,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                    self.assertLess(
+                        result.kpis["mass_balance_pct"].value,
+                        1.0e-6,
+                    )
+                    self.assertLess(
+                        result.kpis["component_balance_max_pct"].value,
+                        1.0e-6,
+                    )
+                    self.assertLess(
+                        result.kpis["energy_balance_pct"].value,
+                        1.0e-6,
+                    )
+                    self.assertFalse(
+                        [
+                            constraint
+                            for constraint in result.constraints
+                            if constraint.status == "VIOLATION"
+                        ]
+                    )
+                    self.assertIn(
+                        "Acyclic graph built and converged successfully.",
+                        builder.build_log,
+                    )
+                    self.assertEqual(
+                        json.loads(json.dumps(graph_spec, allow_nan=False)),
+                        graph_spec,
+                    )
+                    cv_by_opening[opening_pct] = cv_kpi.value
+                    temperature_by_opening[opening_pct] = float(
+                        valve.getOutletStream().getTemperature("C")
+                    )
+                    print(
+                        "native valve-opening benchmark:",
+                        f"scale={flow_scale:.2f}",
+                        f"opening={opening_pct:.1f}%",
+                        f"Cv={cv_kpi.value:.6f} US Cv",
+                        f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                        "components="
+                        f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                        f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                    )
+
+            self.assertGreater(cv_by_opening[60.0], cv_by_opening[100.0])
+            self.assertGreater(
+                cv_by_opening[60.0] / cv_by_opening[100.0],
+                1.5,
+            )
+            self.assertAlmostEqual(
+                temperature_by_opening[60.0],
+                temperature_by_opening[100.0],
+                delta=1.0e-8,
+            )
+            cv_by_scale[flow_scale] = cv_by_opening
+
+        for opening_pct in (100.0, 60.0):
+            self.assertGreater(
+                cv_by_scale[1.05][opening_pct],
+                cv_by_scale[1.0][opening_pct],
+            )
+
     def test_native_separator_liquid_routes_to_pump_and_closes(self):
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
