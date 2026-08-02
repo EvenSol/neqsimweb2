@@ -97,6 +97,192 @@ class ExpanderPropertyExtractionTest(unittest.TestCase):
                 self.assertEqual(kpi.unit, unit)
 
 
+class NativeExpanderConservationTest(unittest.TestCase):
+    """Benchmark native expander recovery and nearby-point closure."""
+
+    @staticmethod
+    def _run_case(flow_scale: float, efficiency: float):
+        units, expander_id = add_catalog_unit(
+            [],
+            "expander",
+            "turbo expander",
+        )
+        units[0]["params"].update(
+            {
+                "outlet_pressure_bara": 30.0,
+                "isentropic_efficiency": efficiency,
+            }
+        )
+        graph_spec = {
+            "name": "Native expander recovery benchmark",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-turbo-expander",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": expander_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        expected_flow = 10_000.0 * flow_scale
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 30.0,
+                    "pressure_bara": 80.0,
+                    "total_flow": expected_flow,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", expander_id],
+        )
+        result = model.run(timeout_ms=180_000)
+
+        return builder, graph_spec, result, expected_flow
+
+    def test_native_recovery_conserves_and_trends_at_nearby_points(self):
+        recovered_power = {}
+        outlet_temperature = {}
+
+        for flow_scale in (1.0, 1.05):
+            for efficiency in (0.80, 0.70):
+                with self.subTest(
+                    flow_scale=flow_scale,
+                    efficiency=efficiency,
+                ):
+                    builder, graph_spec, result, expected_flow = (
+                        self._run_case(flow_scale, efficiency)
+                    )
+                    signed_power = result.kpis[
+                        "turbo expander.power_kW"
+                    ]
+                    recovery = result.kpis[
+                        "turbo expander.recoveredPower_kW"
+                    ]
+                    temperature = result.kpis[
+                        "turbo expander.outletTemperature_K"
+                    ]
+                    recovered_power[(flow_scale, efficiency)] = (
+                        recovery.value
+                    )
+                    outlet_temperature[(flow_scale, efficiency)] = (
+                        temperature.value
+                    )
+
+                    self.assertEqual(signed_power.unit, "kW")
+                    self.assertEqual(recovery.unit, "kW")
+                    self.assertLess(signed_power.value, 0.0)
+                    self.assertGreater(recovery.value, 0.0)
+                    self.assertAlmostEqual(
+                        recovery.value,
+                        -signed_power.value,
+                        delta=1.0e-9,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "turbo expander.outletPressure_bara"
+                        ].value,
+                        30.0,
+                        delta=0.05,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "turbo expander.isentropicEfficiency"
+                        ].value,
+                        efficiency,
+                        delta=1.0e-12,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "material_product_flow_kg_hr"
+                        ].value,
+                        expected_flow,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                    for balance_name in (
+                        "mass_balance_pct",
+                        "component_balance_max_pct",
+                        "energy_balance_pct",
+                        "unit_mass_balance_max_pct",
+                        "unit_energy_balance_max_pct",
+                    ):
+                        self.assertLess(
+                            result.kpis[balance_name].value,
+                            1.0e-6,
+                        )
+                    self.assertFalse(
+                        [
+                            constraint
+                            for constraint in result.constraints
+                            if constraint.status == "VIOLATION"
+                        ]
+                    )
+                    self.assertIn(
+                        "Acyclic graph built and converged successfully.",
+                        builder.build_log,
+                    )
+                    self.assertEqual(
+                        json.loads(json.dumps(graph_spec, allow_nan=False)),
+                        graph_spec,
+                    )
+                    print(
+                        "native expander benchmark:",
+                        f"scale={flow_scale:.2f}",
+                        f"efficiency={efficiency:.2f}",
+                        f"recovery={recovery.value:.6f} kW",
+                        f"outlet={temperature.value:.6f} K",
+                        f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                        "components="
+                        f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                        f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                    )
+
+        for flow_scale in (1.0, 1.05):
+            self.assertGreater(
+                recovered_power[(flow_scale, 0.80)],
+                recovered_power[(flow_scale, 0.70)],
+            )
+            self.assertLess(
+                outlet_temperature[(flow_scale, 0.80)],
+                outlet_temperature[(flow_scale, 0.70)],
+            )
+        for efficiency in (0.80, 0.70):
+            self.assertAlmostEqual(
+                recovered_power[(1.05, efficiency)]
+                / recovered_power[(1.0, efficiency)],
+                1.05,
+                delta=1.0e-8,
+            )
+            self.assertAlmostEqual(
+                outlet_temperature[(1.05, efficiency)],
+                outlet_temperature[(1.0, efficiency)],
+                delta=0.05,
+            )
+
+
 class MultiInletMixerConservationTest(unittest.TestCase):
     """Validate material and energy closure for independent graph inlets."""
 
