@@ -3772,6 +3772,41 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
 
+            # ---------- Expander ----------
+            elif java_class == "Expander":
+                for prop, getter, unit in [
+                    ("inletPressure_bara", "getInletPressure", "bara"),
+                    ("outletPressure_bara", "getOutletPressure", "bara"),
+                    ("inletTemperature_K", "getInletTemperature", "K"),
+                    ("outletTemperature_K", "getOutletTemperature", "K"),
+                    (
+                        "isentropicEfficiency",
+                        "getIsentropicEfficiency",
+                        "[-]",
+                    ),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(
+                                f"{prefix}.{prop}", val, unit
+                            )
+                        except Exception:
+                            pass
+                if hasattr(u, "getPower"):
+                    try:
+                        # NeqSim reports recovered shaft work as negative
+                        # process power. Present recovery as a positive KPI
+                        # while retaining the signed .power_kW system KPI.
+                        recovered_power_kW = -float(u.getPower()) / 1000.0
+                        kpis[f"{prefix}.recoveredPower_kW"] = KPI(
+                            f"{prefix}.recoveredPower_kW",
+                            recovered_power_kW,
+                            "kW",
+                        )
+                    except Exception:
+                        pass
+
             # ---------- Pump / ESPPump ----------
             elif java_class in ("Pump", "ESPPump"):
                 for prop, getter, unit in [
