@@ -178,13 +178,17 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
     "valve": {
         "label": "Valve",
         "category": "Pressure change",
-        "description": "Reduce pressure through a throttling valve.",
+        "description": (
+            "Reduce pressure through a throttling valve with an explicit "
+            "steady-state opening."
+        ),
         "ports": {
             "material_in": ["in"],
             "material_out": ["out"],
         },
         "default_params": {
             "outlet_pressure_bara": 40.0,
+            "percent_valve_opening": 100.0,
         },
         "properties": {
             "outlet_pressure_bara": _number_property(
@@ -192,6 +196,14 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
                 "bara (absolute)",
                 0.01,
                 500.0,
+                1.0,
+                "%.2f",
+            ),
+            "percent_valve_opening": _number_property(
+                "Valve opening",
+                "%",
+                1.0,
+                100.0,
                 1.0,
                 "%.2f",
             ),
@@ -465,6 +477,16 @@ def process_unit_property_rows(
         selected_params["split_factor"] = (
             scaled_factors[0] / sum(scaled_factors)
         )
+
+    if (
+        cleaned_type == "valve"
+        and "percent_valve_opening" not in selected_params
+    ):
+        # Earlier graph schemas stored only the specified outlet pressure.
+        # Preserve that behavior by migrating them to a fully open valve.
+        selected_params["percent_valve_opening"] = definition[
+            "default_params"
+        ]["percent_valve_opening"]
 
     property_keys = set(definition["properties"])
     parameter_keys = set(selected_params)
