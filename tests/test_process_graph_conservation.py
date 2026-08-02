@@ -2337,7 +2337,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 self.assertEqual(graph_spec["units"][0]["type"], "valve")
                 self.assertEqual(
                     graph_spec["units"][0]["params"],
-                    {"outlet_pressure_bara": 40.0},
+                    {
+                        "outlet_pressure_bara": 40.0,
+                        "percent_valve_opening": 100.0,
+                    },
                 )
                 self.assertAlmostEqual(
                     float(valve.getOutletStream().getPressure("bara")),

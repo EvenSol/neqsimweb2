@@ -306,6 +306,29 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(heat_exchanger_row["key"], "ua_w_per_k")
         self.assertEqual(heat_exchanger_row["unit"], "W/K")
         self.assertEqual(heat_exchanger_row["value"], 100_000.0)
+        valve_rows = inline_unit_property_rows("valve")
+        self.assertEqual(
+            [row["key"] for row in valve_rows],
+            ["outlet_pressure_bara", "percent_valve_opening"],
+        )
+        self.assertEqual(valve_rows[1]["label"], "Valve opening")
+        self.assertEqual(valve_rows[1]["unit"], "%")
+        self.assertEqual(valve_rows[1]["value"], 100.0)
+        self.assertEqual(valve_rows[1]["minimum"], 1.0)
+        self.assertEqual(valve_rows[1]["maximum"], 100.0)
+
+    def test_valve_property_rows_migrate_legacy_pressure_only_params(self):
+        legacy_params = {"outlet_pressure_bara": 40.0}
+        rows = inline_unit_property_rows("valve", legacy_params)
+
+        self.assertEqual(
+            {row["key"]: row["value"] for row in rows},
+            {
+                "outlet_pressure_bara": 40.0,
+                "percent_valve_opening": 100.0,
+            },
+        )
+        self.assertEqual(legacy_params, {"outlet_pressure_bara": 40.0})
 
     def test_splitter_property_rows_migrate_normalized_array_alias(self):
         rows = inline_unit_property_rows(
@@ -345,6 +368,14 @@ class UnitCatalogTest(unittest.TestCase):
                 "valve",
                 {"outlet_pressure_bara": 40.0, "unknown": 1.0},
                 "unsupported property 'unknown'",
+            ),
+            (
+                "valve",
+                {
+                    "outlet_pressure_bara": 40.0,
+                    "percent_valve_opening": 0.0,
+                },
+                "property 'percent_valve_opening' must be between",
             ),
             (
                 "pump",
