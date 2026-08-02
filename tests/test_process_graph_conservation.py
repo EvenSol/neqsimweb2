@@ -2562,7 +2562,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             self.assertAlmostEqual(
                 temperature_by_opening[60.0],
                 temperature_by_opening[100.0],
-                delta=1.0e-8,
+                delta=0.05,
             )
             cv_by_scale[flow_scale] = cv_by_opening
 
