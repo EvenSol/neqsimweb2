@@ -2347,6 +2347,23 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     40.0,
                     delta=0.05,
                 )
+                self.assertAlmostEqual(
+                    float(valve.getPercentValveOpening()),
+                    100.0,
+                    delta=1.0e-12,
+                )
+                opening_kpi = result.kpis[
+                    "export conditioning.percentValveOpening"
+                ]
+                self.assertAlmostEqual(
+                    opening_kpi.value,
+                    100.0,
+                    delta=1.0e-12,
+                )
+                self.assertEqual(opening_kpi.unit, "%")
+                cv_kpi = result.kpis["export conditioning.Cv"]
+                self.assertGreater(cv_kpi.value, 0.0)
+                self.assertEqual(cv_kpi.unit, "US Cv")
                 expected_flow = 20_000.0 * flow_scale
                 self.assertAlmostEqual(
                     result.kpis["material_product_flow_kg_hr"].value,
