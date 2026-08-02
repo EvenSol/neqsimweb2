@@ -30,11 +30,71 @@ from process_chat.flowsheet_editor import (
     update_splitter_allocations,
 )
 from process_chat.process_builder import ProcessBuilder
+from process_chat.process_model import NeqSimProcessModel
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
     aggregate_unit_balances,
     unit_balance_rows,
 )
+
+
+class ExpanderPropertyExtractionTest(unittest.TestCase):
+    """Validate explicit solved-property mapping for native expanders."""
+
+    def test_reports_expander_state_and_positive_recovered_power(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Expander"
+
+        class _Expander:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getInletPressure():
+                return 80.0
+
+            @staticmethod
+            def getOutletPressure():
+                return 30.0
+
+            @staticmethod
+            def getInletTemperature():
+                return 303.15
+
+            @staticmethod
+            def getOutletTemperature():
+                return 243.66
+
+            @staticmethod
+            def getIsentropicEfficiency():
+                return 0.80
+
+            @staticmethod
+            def getPower():
+                return -236_788.86
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"turbo expander": _Expander()}
+        kpis = {}
+
+        model._extract_unit_properties(kpis)
+
+        expected = {
+            "inletPressure_bara": (80.0, "bara"),
+            "outletPressure_bara": (30.0, "bara"),
+            "inletTemperature_K": (303.15, "K"),
+            "outletTemperature_K": (243.66, "K"),
+            "isentropicEfficiency": (0.80, "[-]"),
+            "recoveredPower_kW": (236.78886, "kW"),
+        }
+        for property_name, (value, unit) in expected.items():
+            with self.subTest(property_name=property_name):
+                kpi = kpis[f"turbo expander.{property_name}"]
+                self.assertAlmostEqual(kpi.value, value, delta=1.0e-10)
+                self.assertEqual(kpi.unit, unit)
 
 
 class MultiInletMixerConservationTest(unittest.TestCase):
