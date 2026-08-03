@@ -59,7 +59,7 @@ _EQUIP_INFO: Dict[str, tuple] = {
     "pump":                   ("pump.Pump",                           "getOutletStream"),
     "mixer":                  ("mixer.Mixer",                         "getOutletStream"),
     "splitter":               ("splitter.Splitter",                   "getSplitStream"),
-    "pipeline":               ("pipeline.AdiabaticPipe",              "getOutletStream"),
+    "pipeline":               ("pipeline.PipeBeggsAndBrills",        "getOutletStream"),
     "adiabatic_pipe":         ("pipeline.AdiabaticPipe",              "getOutletStream"),
     "simple_absorber":        ("absorber.SimpleAbsorber",             "getGasOutStream"),
     "simple_teg_absorber":    ("absorber.SimpleTEGAbsorber",          "getGasOutStream"),
@@ -1524,6 +1524,13 @@ class ProcessBuilder:
 
             lines.append(f"{var} = {java_path}('{name}', {inlet_expr})")
 
+            if eq_type == "pipeline":
+                lines.append(
+                    f"{var}.setHeatTransferMode("
+                    "jneqsim.process.equipment.pipeline.PipeBeggsAndBrills."
+                    "HeatTransferMode.ADIABATIC)"
+                )
+
             # Parameters
             for pkey, pval in params.items():
                 setter_fn = _PARAM_SETTERS.get(pkey.lower().strip())
@@ -1856,7 +1863,7 @@ class ProcessBuilder:
             "pump":                   lambda n, s: base.pump.Pump(n, s),
             "mixer":                  lambda n, s: _build_mixer(base, n, s),
             "splitter":               lambda n, s: base.splitter.Splitter(n, s),
-            "pipeline":               lambda n, s: base.pipeline.AdiabaticPipe(n, s),
+            "pipeline":               lambda n, s: base.pipeline.PipeBeggsAndBrills(n, s),
             "adiabatic_pipe":         lambda n, s: base.pipeline.AdiabaticPipe(n, s),
             "simple_absorber":        lambda n, s: base.absorber.SimpleAbsorber(n, s),
             "simple_teg_absorber":    lambda n, s: base.absorber.SimpleTEGAbsorber(n, s),
@@ -1899,6 +1906,11 @@ class ProcessBuilder:
             raise ValueError(f"Unknown equipment type: '{eq_type}'")
 
         unit = ctor(name, inlet_stream)
+
+        if eq_type == "pipeline":
+            unit.setHeatTransferMode(
+                base.pipeline.PipeBeggsAndBrills.HeatTransferMode.ADIABATIC
+            )
 
         # Apply parameters
         for k, v in params.items():
