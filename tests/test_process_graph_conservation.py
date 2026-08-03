@@ -407,6 +407,7 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(properties["branchCount"], 3.0)
         self.assertEqual(properties["solvedBranchCount"], 2.0)
         self.assertEqual(properties["configuredBranch2Fraction"], 0.0)
+        self.assertNotIn("outletFlowTotal_kg_hr", properties)
         self.assertNotIn("flowClosure_pct", properties)
 
     def test_zero_flow_splitter_withholds_undefined_fraction_sum(self):
@@ -598,6 +599,7 @@ class MixerPropertyExtractionTest(unittest.TestCase):
 
         self.assertEqual(properties["inletCount"], 3.0)
         self.assertEqual(properties["solvedInletCount"], 2.0)
+        self.assertNotIn("inletFlowTotal_kg_hr", properties)
         self.assertNotIn("inlet0Fraction", properties)
         self.assertNotIn("inlet1Fraction", properties)
         self.assertNotIn("flowClosure_pct", properties)

@@ -2590,13 +2590,17 @@ class NeqSimProcessModel:
         if topology_count_known:
             properties["branchCount"] = float(split_count)
         properties["solvedBranchCount"] = float(solved_outlet_count)
-        if topology_count_known:
+        if (
+            topology_count_known
+            and split_count is not None
+            and solved_outlet_count == split_count
+        ):
             properties["outletFlowTotal_kg_hr"] = outlet_flow_total_kg_hr
         if (
             topology_count_known
             and split_count is not None
-            and math.isfinite(inlet_flow_kg_hr)
             and solved_outlet_count == split_count
+            and math.isfinite(inlet_flow_kg_hr)
         ):
             flow_closure_kg_hr = (
                 outlet_flow_total_kg_hr - inlet_flow_kg_hr
@@ -2645,16 +2649,16 @@ class NeqSimProcessModel:
             solved_inlet_count += 1
 
         properties["solvedInletCount"] = float(solved_inlet_count)
-        properties["inletFlowTotal_kg_hr"] = inlet_flow_total_kg_hr
-        if (
-            solved_inlet_count == inlet_count
-            and abs(inlet_flow_total_kg_hr)
-            > _UNIT_BALANCE_SCALE_FLOOR_KG_HR
-        ):
-            for index, inlet_flow_kg_hr in inlet_flows.items():
-                properties[f"inlet{index}Fraction"] = (
-                    inlet_flow_kg_hr / inlet_flow_total_kg_hr
-                )
+        if solved_inlet_count == inlet_count:
+            properties["inletFlowTotal_kg_hr"] = inlet_flow_total_kg_hr
+            if (
+                abs(inlet_flow_total_kg_hr)
+                > _UNIT_BALANCE_SCALE_FLOOR_KG_HR
+            ):
+                for index, inlet_flow_kg_hr in inlet_flows.items():
+                    properties[f"inlet{index}Fraction"] = (
+                        inlet_flow_kg_hr / inlet_flow_total_kg_hr
+                    )
 
         try:
             outlet_flow_kg_hr = float(
