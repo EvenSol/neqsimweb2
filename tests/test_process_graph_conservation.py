@@ -262,6 +262,58 @@ class PumpPropertyExtractionTest(unittest.TestCase):
             expected["hydraulicPower_kW"][0],
         )
 
+    def test_esp_uses_native_actual_head_instead_of_bulk_density(self):
+        class _Fluid:
+            @staticmethod
+            def getDensity(unit):
+                if unit != "kg/m3":
+                    raise AssertionError(unit)
+                return 50.0
+
+        class _InletStream:
+            @staticmethod
+            def getFluid():
+                return _Fluid()
+
+            @staticmethod
+            def getFlowRate(unit):
+                if unit != "m3/sec":
+                    raise AssertionError(unit)
+                return 0.01
+
+        class _ESPPump:
+            @staticmethod
+            def getInletPressure():
+                return 10.0
+
+            @staticmethod
+            def getOutletPressure():
+                return 30.0
+
+            @staticmethod
+            def getActualHead():
+                return 450.0
+
+            @staticmethod
+            def getInletStream():
+                return _InletStream()
+
+        properties = NeqSimProcessModel._pump_operating_properties(
+            _ESPPump(),
+        )
+
+        self.assertEqual(properties["head_m"], 450.0)
+        self.assertEqual(properties["pressureRise_bar"], 20.0)
+        self.assertEqual(properties["hydraulicPower_kW"], 20.0)
+        bulk_density_head = (
+            20.0e5 / (50.0 * 9.80665)
+        )
+        self.assertNotAlmostEqual(
+            properties["head_m"],
+            bulk_density_head,
+            delta=1.0e-6,
+        )
+
 
 class NativePumpPerformanceTest(unittest.TestCase):
     """Benchmark editable native pump performance at nearby points."""
