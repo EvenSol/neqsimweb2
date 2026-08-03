@@ -3772,6 +3772,35 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
 
+            # ---------- Pipeline hydraulics ----------
+            elif java_class in (
+                "Pipeline",
+                "AdiabaticPipe",
+                "PipeBeggsAndBrills",
+                "OnePhasePipeLine",
+            ):
+                for prop, getter, unit in [
+                    ("length_m", "getLength", "m"),
+                    ("diameter_m", "getDiameter", "m"),
+                    ("roughness_m", "getPipeWallRoughness", "m"),
+                    ("inletPressure_bara", "getInletPressure", "bara"),
+                    ("outletPressure_bara", "getOutletPressure", "bara"),
+                    ("pressureDrop_bar", "getPressureDrop", "bar"),
+                    ("inletTemperature_K", "getInletTemperature", "K"),
+                    ("outletTemperature_K", "getOutletTemperature", "K"),
+                    ("velocity_m_s", "getVelocity", "m/s"),
+                    ("reynoldsNumber", "getReynoldsNumber", "[-]"),
+                    ("frictionFactor", "getFrictionFactor", "[-]"),
+                ]:
+                    if hasattr(u, getter):
+                        try:
+                            val = float(getattr(u, getter)())
+                            kpis[f"{prefix}.{prop}"] = KPI(
+                                f"{prefix}.{prop}", val, unit
+                            )
+                        except Exception:
+                            pass
+
             # ---------- Expander ----------
             elif java_class == "Expander":
                 for prop, getter, unit in [
