@@ -408,6 +408,8 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(properties["solvedBranchCount"], 2.0)
         self.assertEqual(properties["configuredBranch2Fraction"], 0.0)
         self.assertNotIn("outletFlowTotal_kg_hr", properties)
+        self.assertNotIn("branch0Fraction", properties)
+        self.assertNotIn("branch1Fraction", properties)
         self.assertNotIn("flowClosure_pct", properties)
 
     def test_zero_flow_splitter_withholds_undefined_fraction_sum(self):
@@ -504,6 +506,8 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(properties["branch0Flow_kg_hr"], 25.0)
         self.assertEqual(properties["branch1Flow_kg_hr"], 75.0)
         self.assertNotIn("outletFlowTotal_kg_hr", properties)
+        self.assertNotIn("branch0Fraction", properties)
+        self.assertNotIn("branch1Fraction", properties)
         self.assertNotIn("flowClosure_kg_hr", properties)
 
         kpis = {}
