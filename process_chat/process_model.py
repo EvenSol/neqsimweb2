@@ -2578,6 +2578,66 @@ class NeqSimProcessModel:
         return properties
 
     @staticmethod
+    def _mixer_operating_properties(unit: Any) -> Dict[str, float]:
+        """Return solved mixer inlet allocations and mass-flow closure."""
+        properties: Dict[str, float] = {}
+        try:
+            inlet_count = int(unit.getNumberOfInputStreams())
+        except Exception:
+            return properties
+        if inlet_count < 0 or inlet_count > 256:
+            return properties
+
+        properties["inletCount"] = float(inlet_count)
+        inlet_flow_total_kg_hr = 0.0
+        solved_inlet_count = 0
+        inlet_flows: Dict[int, float] = {}
+        for index in range(inlet_count):
+            try:
+                inlet_flow_kg_hr = float(
+                    unit.getStream(index).getFlowRate("kg/hr")
+                )
+            except Exception:
+                continue
+            if not math.isfinite(inlet_flow_kg_hr):
+                continue
+            properties[f"inlet{index}Flow_kg_hr"] = inlet_flow_kg_hr
+            inlet_flows[index] = inlet_flow_kg_hr
+            inlet_flow_total_kg_hr += inlet_flow_kg_hr
+            solved_inlet_count += 1
+
+        properties["solvedInletCount"] = float(solved_inlet_count)
+        properties["inletFlowTotal_kg_hr"] = inlet_flow_total_kg_hr
+        if abs(inlet_flow_total_kg_hr) > 0.0:
+            for index, inlet_flow_kg_hr in inlet_flows.items():
+                properties[f"inlet{index}Fraction"] = (
+                    inlet_flow_kg_hr / inlet_flow_total_kg_hr
+                )
+
+        try:
+            outlet_flow_kg_hr = float(
+                unit.getOutletStream().getFlowRate("kg/hr")
+            )
+        except Exception:
+            outlet_flow_kg_hr = math.nan
+        if math.isfinite(outlet_flow_kg_hr):
+            properties["outletFlow_kg_hr"] = outlet_flow_kg_hr
+        if (
+            math.isfinite(outlet_flow_kg_hr)
+            and solved_inlet_count == inlet_count
+        ):
+            flow_closure_kg_hr = (
+                outlet_flow_kg_hr - inlet_flow_total_kg_hr
+            )
+            properties["flowClosure_kg_hr"] = flow_closure_kg_hr
+            properties["flowClosure_pct"] = (
+                abs(flow_closure_kg_hr)
+                / max(abs(inlet_flow_total_kg_hr), 1.0e-12)
+                * 100.0
+            )
+        return properties
+
+    @staticmethod
     def _routing_property_unit(property_name: str) -> str:
         """Return the explicit engineering unit for routing properties."""
         if property_name.endswith("_kg_hr"):
@@ -2652,6 +2712,9 @@ class NeqSimProcessModel:
 
             if "Splitter" in java_class:
                 props.update(self._splitter_operating_properties(u))
+
+            if java_class == "Mixer":
+                props.update(self._mixer_operating_properties(u))
 
             # Flow rate, T, P for Stream-type units
             if java_class == "Stream":
@@ -4140,6 +4203,15 @@ class NeqSimProcessModel:
             # ---------- Splitter ----------
             elif "Splitter" in java_class:
                 for prop, val in self._splitter_operating_properties(u).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        self._routing_property_unit(prop),
+                    )
+
+            # ---------- Mixer ----------
+            elif java_class == "Mixer":
+                for prop, val in self._mixer_operating_properties(u).items():
                     kpis[f"{prefix}.{prop}"] = KPI(
                         f"{prefix}.{prop}",
                         val,
