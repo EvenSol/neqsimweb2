@@ -2561,8 +2561,8 @@ class NeqSimProcessModel:
             properties["inletFlow_kg_hr"] = inlet_flow_kg_hr
 
         outlet_flow_total_kg_hr = 0.0
+        solved_outlet_flows_kg_hr: Dict[int, float] = {}
         solved_outlet_count = 0
-        solved_fraction_sum = 0.0
         for index in range(probe_count):
             try:
                 configured_fraction = float(unit.getSplitFactor(index))
@@ -2582,16 +2582,9 @@ class NeqSimProcessModel:
             if not math.isfinite(outlet_flow_kg_hr):
                 continue
             properties[f"branch{index}Flow_kg_hr"] = outlet_flow_kg_hr
+            solved_outlet_flows_kg_hr[index] = outlet_flow_kg_hr
             outlet_flow_total_kg_hr += outlet_flow_kg_hr
             solved_outlet_count += 1
-            if (
-                math.isfinite(inlet_flow_kg_hr)
-                and abs(inlet_flow_kg_hr)
-                > _UNIT_BALANCE_SCALE_FLOOR_KG_HR
-            ):
-                solved_fraction = outlet_flow_kg_hr / inlet_flow_kg_hr
-                properties[f"branch{index}Fraction"] = solved_fraction
-                solved_fraction_sum += solved_fraction
 
         if topology_count_known:
             properties["branchCount"] = float(split_count)
@@ -2622,6 +2615,11 @@ class NeqSimProcessModel:
                 * 100.0
             )
             if abs(inlet_flow_kg_hr) > _UNIT_BALANCE_SCALE_FLOOR_KG_HR:
+                solved_fraction_sum = 0.0
+                for index, outlet_flow_kg_hr in solved_outlet_flows_kg_hr.items():
+                    solved_fraction = outlet_flow_kg_hr / inlet_flow_kg_hr
+                    properties[f"branch{index}Fraction"] = solved_fraction
+                    solved_fraction_sum += solved_fraction
                 properties["splitFractionSum"] = solved_fraction_sum
         return properties
 
