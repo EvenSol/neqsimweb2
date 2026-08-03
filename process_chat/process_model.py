@@ -2418,6 +2418,12 @@ class NeqSimProcessModel:
         pressure rise and inlet actual volumetric flow.
         """
         properties: Dict[str, float] = {}
+        try:
+            native_unit_class = (
+                str(unit.getClass().getSimpleName()).strip().lower()
+            )
+        except Exception:
+            native_unit_class = ""
         for property_name, getter_name in (
             ("inletPressure_bara", "getInletPressure"),
             ("outletPressure_bara", "getOutletPressure"),
@@ -2432,6 +2438,11 @@ class NeqSimProcessModel:
                 value = float(getattr(unit, getter_name)())
             except Exception:
                 continue
+            if (
+                property_name == "efficiency"
+                and native_unit_class == "esppump"
+            ):
+                value /= 100.0
             if math.isfinite(value):
                 properties[property_name] = value
 
@@ -2519,6 +2530,11 @@ class NeqSimProcessModel:
                         fval = float(val)
                         if prop in ("power_kW", "duty_kW"):
                             fval = fval / 1000.0  # W -> kW
+                        if (
+                            prop == "isentropicEfficiency"
+                            and java_class == "ESPPump"
+                        ):
+                            fval /= 100.0
                         # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
                         if fval == 0.0 and prop == "duty_kW" and java_class in self._DUTY_UNITS:
                             if hasattr(u, "getEnergyInput"):
