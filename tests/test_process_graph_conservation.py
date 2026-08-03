@@ -185,6 +185,109 @@ class PumpParameterApplicationTest(unittest.TestCase):
 class SplitterPropertyExtractionTest(unittest.TestCase):
     """Validate solved splitter allocations and explicit flow closure."""
 
+    def test_native_count_drives_index_diagram_and_summary_past_ten_branches(self):
+        class _JavaClass:
+            def __init__(self, simple_name):
+                self.simple_name = simple_name
+
+            def getSimpleName(self):
+                return self.simple_name
+
+            def getName(self):
+                return f"neqsim.process.equipment.{self.simple_name}"
+
+        class _Stream:
+            def __init__(self, name, native_id, flow_kg_hr):
+                self.name = name
+                self.native_id = native_id
+                self.flow_kg_hr = flow_kg_hr
+
+            def getName(self):
+                return self.name
+
+            def hashCode(self):
+                return self.native_id
+
+            def getTemperature(self, unit):
+                if unit != "C":
+                    raise AssertionError(unit)
+                return 25.0
+
+            def getPressure(self, unit):
+                if unit != "bara":
+                    raise AssertionError(unit)
+                return 10.0
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        inlet = _Stream("feed", 1, 120.0)
+        branches = [
+            _Stream(f"branch {index}", 100 + index, 10.0)
+            for index in range(12)
+        ]
+
+        class _Splitter:
+            @staticmethod
+            def getName():
+                return "wide split"
+
+            @staticmethod
+            def getClass():
+                return _JavaClass("Splitter")
+
+            @staticmethod
+            def getSplitNumber():
+                return len(branches)
+
+            @staticmethod
+            def getInletStream():
+                return inlet
+
+            @staticmethod
+            def getSplitStream(index):
+                return branches[index]
+
+            @staticmethod
+            def getSplitFactor(_index):
+                return 1.0 / len(branches)
+
+        class _Sink:
+            @staticmethod
+            def getName():
+                return "branch 11 sink"
+
+            @staticmethod
+            def getClass():
+                return _JavaClass("Sink")
+
+            @staticmethod
+            def getInletStream():
+                return branches[11]
+
+        class _Process:
+            @staticmethod
+            def getName():
+                return "wide splitter process"
+
+            @staticmethod
+            def getClass():
+                return _JavaClass("ProcessSystem")
+
+            @staticmethod
+            def getUnitOperations():
+                return [_Splitter(), _Sink()]
+
+        model = NeqSimProcessModel(_Process())
+
+        self.assertIn("wide split.branch 11", model._streams)
+        diagram = model.get_diagram_dot(show_stream_values=False)
+        self.assertIn('n0 -> n1 [label="branch 11"]', diagram)
+        summary = model.get_model_summary()
+        self.assertIn("OUT (SPLIT 11): branch 11", summary)
+
     def test_reports_native_branch_fractions_and_workbook_properties(self):
         class _JavaClass:
             @staticmethod

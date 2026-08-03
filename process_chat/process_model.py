@@ -29,6 +29,7 @@ _ENERGY_BALANCE_OK_PCT = 0.01
 _ENERGY_BALANCE_WARN_PCT = 1.0
 _UNIT_BALANCE_SCALE_FLOOR_KG_HR = 1.0e-9
 _UNIT_BALANCE_SCALE_FLOOR_KW = 1.0e-9
+_MAX_NATIVE_SPLIT_STREAM_COUNT = 256
 _STANDARD_GRAVITY_M_S2 = 9.80665
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
@@ -152,6 +153,25 @@ _ENERGY_BALANCE_DUTY_UNIT_CLASSES = {
     "heater",
     "watercooler",
 }
+
+
+def _native_split_stream_count(unit: Any) -> Optional[int]:
+    """Return a validated native splitter outlet count when available."""
+    try:
+        split_count = int(unit.getSplitNumber())
+    except Exception:
+        return None
+    if split_count < 0 or split_count > _MAX_NATIVE_SPLIT_STREAM_COUNT:
+        return None
+    return split_count
+
+
+def _split_stream_probe_count(unit: Any, fallback_limit: int) -> int:
+    """Prefer native splitter topology while retaining bounded legacy probing."""
+    split_count = _native_split_stream_count(unit)
+    if split_count is not None:
+        return split_count
+    return max(0, min(int(fallback_limit), _MAX_NATIVE_SPLIT_STREAM_COUNT))
 
 
 class _NativeObjectIdentitySet:
@@ -976,7 +996,7 @@ class NeqSimProcessModel:
                 if hasattr(u, method_name):
                     try:
                         if method_name == "getSplitStream":
-                            for i in range(10):
+                            for i in range(_split_stream_probe_count(u, 10)):
                                 try:
                                     s = u.getSplitStream(i)
                                     if s is not None:
@@ -1120,7 +1140,12 @@ class NeqSimProcessModel:
         for method_name in ("getOutStream", "getSplitStream"):
             if not hasattr(unit, method_name):
                 continue
-            for index in range(100):
+            probe_count = (
+                _split_stream_probe_count(unit, 100)
+                if method_name == "getSplitStream"
+                else 100
+            )
+            for index in range(probe_count):
                 try:
                     stream = getattr(unit, method_name)(index)
                 except Exception:
@@ -2270,7 +2295,7 @@ class NeqSimProcessModel:
 
             # Splitter outputs via getSplitStream(i)
             if hasattr(u, "getSplitStream"):
-                for i in range(10):
+                for i in range(_split_stream_probe_count(u, 10)):
                     try:
                         s = u.getSplitStream(i)
                         if s is not None:
@@ -2511,11 +2536,8 @@ class NeqSimProcessModel:
         fixed-flow and remainder specifications are represented correctly.
         """
         properties: Dict[str, float] = {}
-        try:
-            split_count = int(unit.getSplitNumber())
-        except Exception:
-            return properties
-        if split_count < 0 or split_count > 256:
+        split_count = _native_split_stream_count(unit)
+        if split_count is None:
             return properties
 
         try:
@@ -5072,7 +5094,7 @@ class NeqSimProcessModel:
                             pass
 
             if "Splitter" in utype and hasattr(u, "getSplitStream"):
-                for j in range(10):
+                for j in range(_split_stream_probe_count(u, 10)):
                     try:
                         s = u.getSplitStream(j)
                         if s is not None:
