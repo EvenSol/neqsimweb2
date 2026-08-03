@@ -113,6 +113,28 @@ class PumpParameterApplicationTest(unittest.TestCase):
 
         self.assertEqual(pump.efficiency, 0.75)
 
+    def test_native_esp_efficiency_converts_fraction_to_percent(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "ESPPump"
+
+        class _ESPPump:
+            efficiency = None
+
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            def setIsentropicEfficiency(self, value):
+                self.efficiency = value
+
+        esp_pump = _ESPPump()
+
+        _apply_param(esp_pump, "efficiency", 0.75)
+
+        self.assertEqual(esp_pump.efficiency, 75.0)
+
     def test_generic_efficiency_still_prefers_equipment_setter(self):
         class _Separator:
             efficiency = None
@@ -263,6 +285,11 @@ class PumpPropertyExtractionTest(unittest.TestCase):
         )
 
     def test_esp_uses_native_actual_head_instead_of_bulk_density(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "ESPPump"
+
         class _Fluid:
             @staticmethod
             def getDensity(unit):
@@ -283,6 +310,10 @@ class PumpPropertyExtractionTest(unittest.TestCase):
 
         class _ESPPump:
             @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
             def getInletPressure():
                 return 10.0
 
@@ -295,13 +326,17 @@ class PumpPropertyExtractionTest(unittest.TestCase):
                 return 450.0
 
             @staticmethod
+            def getIsentropicEfficiency():
+                return 75.0
+
+            @staticmethod
             def getInletStream():
                 return _InletStream()
 
-        properties = NeqSimProcessModel._pump_operating_properties(
-            _ESPPump(),
-        )
+        esp_pump = _ESPPump()
+        properties = NeqSimProcessModel._pump_operating_properties(esp_pump)
 
+        self.assertEqual(properties["efficiency"], 0.75)
         self.assertEqual(properties["head_m"], 450.0)
         self.assertEqual(properties["pressureRise_bar"], 20.0)
         self.assertEqual(properties["hydraulicPower_kW"], 20.0)
@@ -312,6 +347,19 @@ class PumpPropertyExtractionTest(unittest.TestCase):
             properties["head_m"],
             bulk_density_head,
             delta=1.0e-6,
+        )
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"well esp": esp_pump}
+        model._unit_ps_name = {"well esp": "main"}
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(kpis["well esp.efficiency"].value, 0.75)
+        workbook_properties = model.list_units()[0].properties
+        self.assertEqual(workbook_properties["efficiency"], 0.75)
+        self.assertEqual(
+            workbook_properties["isentropicEfficiency"],
+            0.75,
         )
 
 
