@@ -2411,9 +2411,11 @@ class NeqSimProcessModel:
     def _pump_operating_properties(unit: Any) -> Dict[str, float]:
         """Return finite solved pump properties using supported native APIs.
 
-        NeqSim pressure-specified pumps do not expose a generic ``getHead``
-        method. Hydraulic head and power are therefore derived from the solved
-        pressure rise, inlet density, and inlet actual volumetric flow.
+        NeqSim ESP pumps expose ``getActualHead``, which reflects stage
+        head and gas-void-fraction degradation. Other pressure-specified pumps
+        do not expose native head, so their hydraulic head is derived from the
+        solved pressure rise and inlet density. Hydraulic power is derived from
+        pressure rise and inlet actual volumetric flow.
         """
         properties: Dict[str, float] = {}
         for property_name, getter_name in (
@@ -2472,9 +2474,18 @@ class NeqSimProcessModel:
 
         properties["pressureRise_bar"] = pressure_rise_bar
         pressure_rise_pa = pressure_rise_bar * 1.0e5
-        properties["head_m"] = (
-            pressure_rise_pa / (density_kg_m3 * _STANDARD_GRAVITY_M_S2)
-        )
+        if hasattr(unit, "getActualHead"):
+            try:
+                actual_head_m = float(unit.getActualHead())
+            except Exception:
+                actual_head_m = math.nan
+            if math.isfinite(actual_head_m) and actual_head_m >= 0.0:
+                properties["head_m"] = actual_head_m
+        else:
+            properties["head_m"] = (
+                pressure_rise_pa
+                / (density_kg_m3 * _STANDARD_GRAVITY_M_S2)
+            )
         properties["hydraulicPower_kW"] = (
             pressure_rise_pa * volumetric_flow_m3_s / 1000.0
         )
