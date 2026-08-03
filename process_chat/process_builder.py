@@ -206,6 +206,10 @@ def _apply_param(unit, key: str, value):
     elif k == "efficiency":
         if hasattr(unit, "setEfficiency"):
             unit.setEfficiency(float(value))
+        elif hasattr(unit, "setIsentropicEfficiency"):
+            # Pump exposes isentropic efficiency rather than the generic
+            # separator-style setEfficiency API.
+            unit.setIsentropicEfficiency(float(value))
     elif k == "head":
         if hasattr(unit, "setHead"):
             unit.setHead(float(value))
@@ -1533,7 +1537,17 @@ class ProcessBuilder:
 
             # Parameters
             for pkey, pval in params.items():
-                setter_fn = _PARAM_SETTERS.get(pkey.lower().strip())
+                normalized_key = pkey.lower().strip()
+                if (
+                    normalized_key == "efficiency"
+                    and eq_type in ("pump", "esp_pump")
+                ):
+                    setter_call = (
+                        f"setIsentropicEfficiency({float(pval)})"
+                    )
+                    lines.append(f"{var}.{setter_call}")
+                    continue
+                setter_fn = _PARAM_SETTERS.get(normalized_key)
                 if setter_fn:
                     setter_call = setter_fn(pval)
                     if setter_call is not None:
