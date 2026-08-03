@@ -59,7 +59,7 @@ _EQUIP_INFO: Dict[str, tuple] = {
     "pump":                   ("pump.Pump",                           "getOutletStream"),
     "mixer":                  ("mixer.Mixer",                         "getOutletStream"),
     "splitter":               ("splitter.Splitter",                   "getSplitStream"),
-    "pipeline":               ("pipeline.Pipeline",                   "getOutletStream"),
+    "pipeline":               ("pipeline.AdiabaticPipe",              "getOutletStream"),
     "adiabatic_pipe":         ("pipeline.AdiabaticPipe",              "getOutletStream"),
     "simple_absorber":        ("absorber.SimpleAbsorber",             "getGasOutStream"),
     "simple_teg_absorber":    ("absorber.SimpleTEGAbsorber",          "getGasOutStream"),
@@ -140,7 +140,7 @@ _PARAM_SETTERS = {
     "pipe_length":             lambda v: f"setLength({float(v)})",
     "diameter":                lambda v: f"setDiameter({float(v)})",
     "pipe_diameter":           lambda v: f"setDiameter({float(v)})",
-    "roughness":               lambda v: f"setRoughness({float(v)})",
+    "roughness":               lambda v: f"setPipeWallRoughness({float(v)})",
     "split_factor":            lambda v: f"setSplitFactor({float(v)})",
     "number_of_stages":        lambda v: f"setNumberOfStages({int(v)})",
     "numberofstages":          lambda v: f"setNumberOfStages({int(v)})",
@@ -216,7 +216,9 @@ def _apply_param(unit, key: str, value):
         if hasattr(unit, "setDiameter"):
             unit.setDiameter(float(value))
     elif k == "roughness":
-        if hasattr(unit, "setRoughness"):
+        if hasattr(unit, "setPipeWallRoughness"):
+            unit.setPipeWallRoughness(float(value))
+        elif hasattr(unit, "setRoughness"):
             unit.setRoughness(float(value))
     elif k == "split_factor":
         if hasattr(unit, "setSplitFactor"):
@@ -1854,7 +1856,7 @@ class ProcessBuilder:
             "pump":                   lambda n, s: base.pump.Pump(n, s),
             "mixer":                  lambda n, s: _build_mixer(base, n, s),
             "splitter":               lambda n, s: base.splitter.Splitter(n, s),
-            "pipeline":               lambda n, s: base.pipeline.Pipeline(n, s),
+            "pipeline":               lambda n, s: base.pipeline.AdiabaticPipe(n, s),
             "adiabatic_pipe":         lambda n, s: base.pipeline.AdiabaticPipe(n, s),
             "simple_absorber":        lambda n, s: base.absorber.SimpleAbsorber(n, s),
             "simple_teg_absorber":    lambda n, s: base.absorber.SimpleTEGAbsorber(n, s),
