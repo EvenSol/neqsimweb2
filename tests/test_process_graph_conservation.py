@@ -233,6 +233,7 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         expected = {
             "inletFlow_kg_hr": (100.0, "kg/hr"),
             "branchCount": (2.0, "[-]"),
+            "solvedBranchCount": (2.0, "[-]"),
             "branch0Flow_kg_hr": (25.0, "kg/hr"),
             "branch1Flow_kg_hr": (75.0, "kg/hr"),
             "branch0Fraction": (0.25, "[-]"),
@@ -258,6 +259,43 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
                     value,
                     delta=1.0e-12,
                 )
+
+    def test_preserves_native_topology_count_when_one_branch_is_unreadable(self):
+        class _Stream:
+            def __init__(self, flow_kg_hr):
+                self.flow_kg_hr = flow_kg_hr
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        class _PartlyReadableSplitter:
+            @staticmethod
+            def getSplitNumber():
+                return 3
+
+            @staticmethod
+            def getInletStream():
+                return _Stream(100.0)
+
+            @staticmethod
+            def getSplitStream(index):
+                if index == 2:
+                    raise RuntimeError("native branch unavailable")
+                return _Stream(50.0)
+
+            @staticmethod
+            def getSplitFactor(index):
+                return (0.5, 0.5, 0.0)[index]
+
+        properties = NeqSimProcessModel._splitter_operating_properties(
+            _PartlyReadableSplitter()
+        )
+
+        self.assertEqual(properties["branchCount"], 3.0)
+        self.assertEqual(properties["solvedBranchCount"], 2.0)
+        self.assertNotIn("flowClosure_pct", properties)
 
 
 class MixerPropertyExtractionTest(unittest.TestCase):
@@ -4463,6 +4501,12 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 splitter_prefix = "three-way product splitter"
                 self.assertEqual(
                     result.kpis[f"{splitter_prefix}.branchCount"].value,
+                    3.0,
+                )
+                self.assertEqual(
+                    result.kpis[
+                        f"{splitter_prefix}.solvedBranchCount"
+                    ].value,
                     3.0,
                 )
                 self.assertAlmostEqual(
