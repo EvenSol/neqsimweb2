@@ -97,6 +97,377 @@ class ExpanderPropertyExtractionTest(unittest.TestCase):
                 self.assertEqual(kpi.unit, unit)
 
 
+class PipelineConstructionTest(unittest.TestCase):
+    """Validate executable native construction for palette pipelines."""
+
+    def test_pipeline_catalog_builds_adiabatic_pipe_with_geometry(self):
+        units, pipeline_id = add_catalog_unit(
+            [],
+            "pipeline",
+            "transport pipeline",
+        )
+        graph_spec = {
+            "name": "Native pipeline construction regression",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-transport-pipeline",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": pipeline_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 80.0,
+                    "total_flow": 10_000.0,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", pipeline_id],
+        )
+        pipeline = model.get_unit("transport pipeline")
+
+        self.assertEqual(
+            str(pipeline.getClass().getSimpleName()),
+            "PipeBeggsAndBrills",
+        )
+        self.assertEqual(str(pipeline.getHeatTransferMode()), "ADIABATIC")
+        self.assertAlmostEqual(float(pipeline.getLength()), 1000.0)
+        self.assertAlmostEqual(float(pipeline.getDiameter()), 0.30)
+        self.assertAlmostEqual(
+            float(pipeline.getPipeWallRoughness()),
+            1.0e-5,
+        )
+        self.assertIn(
+            "Acyclic graph built and converged successfully.",
+            builder.build_log,
+        )
+
+
+class PipelinePropertyExtractionTest(unittest.TestCase):
+    """Validate solved pipeline hydraulic properties and explicit units."""
+
+    def test_reports_pipeline_geometry_state_and_hydraulics(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "AdiabaticPipe"
+
+        class _Pipeline:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getLength():
+                return 1000.0
+
+            @staticmethod
+            def getDiameter():
+                return 0.30
+
+            @staticmethod
+            def getPipeWallRoughness():
+                return 1.0e-5
+
+            @staticmethod
+            def getInletPressure():
+                return 80.0
+
+            @staticmethod
+            def getOutletPressure():
+                return 79.99532
+
+            @staticmethod
+            def getPressureDrop():
+                return 0.00468
+
+            @staticmethod
+            def getInletTemperature():
+                return 293.15
+
+            @staticmethod
+            def getOutletTemperature():
+                return 293.15
+
+            @staticmethod
+            def getVelocity():
+                return 0.57594
+
+            @staticmethod
+            def getReynoldsNumber():
+                return 890_206.0
+
+            @staticmethod
+            def getFrictionFactor():
+                return 0.01240
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"transport pipeline": _Pipeline()}
+        kpis = {}
+
+        model._extract_unit_properties(kpis)
+
+        expected = {
+            "length_m": (1000.0, "m"),
+            "diameter_m": (0.30, "m"),
+            "roughness_m": (1.0e-5, "m"),
+            "inletPressure_bara": (80.0, "bara"),
+            "outletPressure_bara": (79.99532, "bara"),
+            "pressureDrop_bar": (0.00468, "bar"),
+            "inletTemperature_K": (293.15, "K"),
+            "outletTemperature_K": (293.15, "K"),
+            "velocity_m_s": (0.57594, "m/s"),
+            "reynoldsNumber": (890_206.0, "[-]"),
+            "frictionFactor": (0.01240, "[-]"),
+        }
+        for property_name, (value, unit) in expected.items():
+            with self.subTest(property_name=property_name):
+                kpi = kpis[f"transport pipeline.{property_name}"]
+                self.assertAlmostEqual(kpi.value, value, delta=1.0e-10)
+                self.assertEqual(kpi.unit, unit)
+
+    def test_reports_beggs_brill_profile_hydraulics(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "PipeBeggsAndBrills"
+
+        class _Pipeline:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getMixtureVelocity():
+                return 0.57398
+
+            @staticmethod
+            def getMixtureReynoldsNumber():
+                return [889_635.0, 889_652.0]
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"transport pipeline": _Pipeline()}
+        kpis = {}
+
+        model._extract_unit_properties(kpis)
+
+        self.assertEqual(
+            kpis["transport pipeline.velocity_m_s"].unit,
+            "m/s",
+        )
+        self.assertAlmostEqual(
+            kpis["transport pipeline.velocity_m_s"].value,
+            0.57398,
+        )
+        self.assertEqual(
+            kpis["transport pipeline.reynoldsNumber"].unit,
+            "[-]",
+        )
+        self.assertAlmostEqual(
+            kpis["transport pipeline.reynoldsNumber"].value,
+            889_652.0,
+        )
+
+
+class NativePipelineHydraulicsTest(unittest.TestCase):
+    """Benchmark adiabatic native pipeline hydraulics and closure."""
+
+    @staticmethod
+    def _run_case(flow_scale: float, roughness_m: float):
+        units, pipeline_id = add_catalog_unit(
+            [],
+            "pipeline",
+            "transport pipeline",
+        )
+        units[0]["params"]["roughness"] = roughness_m
+        graph_spec = {
+            "name": "Native adiabatic pipeline benchmark",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-transport-pipeline",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": pipeline_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        expected_flow = 10_000.0 * flow_scale
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 80.0,
+                    "total_flow": expected_flow,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", pipeline_id],
+        )
+        result = model.run(timeout_ms=180_000)
+
+        return builder, graph_spec, model, result, expected_flow
+
+    def test_native_pipeline_conserves_and_trends_at_nearby_points(self):
+        pressure_drop = {}
+        velocity = {}
+        reynolds = {}
+
+        for flow_scale in (1.0, 1.05):
+            for roughness_m in (1.0e-5, 1.0e-4):
+                with self.subTest(
+                    flow_scale=flow_scale,
+                    roughness_m=roughness_m,
+                ):
+                    builder, graph_spec, model, result, expected_flow = (
+                        self._run_case(flow_scale, roughness_m)
+                    )
+                    pipeline = model.get_unit("transport pipeline")
+                    drop = result.kpis[
+                        "transport pipeline.pressureDrop_bar"
+                    ]
+                    speed = result.kpis[
+                        "transport pipeline.velocity_m_s"
+                    ]
+                    reynolds_number = result.kpis[
+                        "transport pipeline.reynoldsNumber"
+                    ]
+                    pressure_drop[(flow_scale, roughness_m)] = drop.value
+                    velocity[(flow_scale, roughness_m)] = speed.value
+                    reynolds[(flow_scale, roughness_m)] = (
+                        reynolds_number.value
+                    )
+
+                    self.assertEqual(
+                        str(pipeline.getClass().getSimpleName()),
+                        "PipeBeggsAndBrills",
+                    )
+                    self.assertEqual(
+                        str(pipeline.getHeatTransferMode()),
+                        "ADIABATIC",
+                    )
+                    self.assertEqual(drop.unit, "bar")
+                    self.assertEqual(speed.unit, "m/s")
+                    self.assertEqual(reynolds_number.unit, "[-]")
+                    self.assertGreater(drop.value, 0.0)
+                    self.assertLess(drop.value, 0.02)
+                    self.assertGreater(speed.value, 0.0)
+                    self.assertGreater(reynolds_number.value, 100_000.0)
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "material_product_flow_kg_hr"
+                        ].value,
+                        expected_flow,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                    for balance_name in (
+                        "mass_balance_pct",
+                        "component_balance_max_pct",
+                        "energy_balance_pct",
+                        "unit_mass_balance_max_pct",
+                        "unit_energy_balance_max_pct",
+                    ):
+                        self.assertLess(
+                            result.kpis[balance_name].value,
+                            1.0e-6,
+                        )
+                    self.assertFalse(
+                        [
+                            constraint
+                            for constraint in result.constraints
+                            if constraint.status == "VIOLATION"
+                        ]
+                    )
+                    self.assertIn(
+                        "Acyclic graph built and converged successfully.",
+                        builder.build_log,
+                    )
+                    self.assertEqual(
+                        json.loads(json.dumps(graph_spec, allow_nan=False)),
+                        graph_spec,
+                    )
+                    print(
+                        "native pipeline benchmark:",
+                        f"scale={flow_scale:.2f}",
+                        f"roughness={roughness_m:.1e} m",
+                        f"drop={drop.value:.9f} bar",
+                        f"velocity={speed.value:.9f} m/s",
+                        f"Re={reynolds_number.value:.3f}",
+                        f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                        "components="
+                        f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                        f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                    )
+
+        for roughness_m in (1.0e-5, 1.0e-4):
+            self.assertGreater(
+                pressure_drop[(1.05, roughness_m)],
+                pressure_drop[(1.0, roughness_m)],
+            )
+            self.assertGreater(
+                velocity[(1.05, roughness_m)],
+                velocity[(1.0, roughness_m)],
+            )
+            self.assertGreater(
+                reynolds[(1.05, roughness_m)],
+                reynolds[(1.0, roughness_m)],
+            )
+        for flow_scale in (1.0, 1.05):
+            self.assertGreater(
+                pressure_drop[(flow_scale, 1.0e-4)],
+                pressure_drop[(flow_scale, 1.0e-5)],
+            )
+
+
 class NativeExpanderConservationTest(unittest.TestCase):
     """Benchmark native expander recovery and nearby-point closure."""
 
