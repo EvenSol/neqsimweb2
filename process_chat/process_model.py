@@ -29,6 +29,7 @@ _ENERGY_BALANCE_OK_PCT = 0.01
 _ENERGY_BALANCE_WARN_PCT = 1.0
 _UNIT_BALANCE_SCALE_FLOOR_KG_HR = 1.0e-9
 _UNIT_BALANCE_SCALE_FLOOR_KW = 1.0e-9
+_STANDARD_GRAVITY_M_S2 = 9.80665
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
     "stream",
@@ -2406,6 +2407,79 @@ class NeqSimProcessModel:
                    "MultiStreamHeatExchanger"}
     _HEAT_EXCHANGE_UNITS = _DUTY_UNITS  # units where outlet temperature matters
 
+    @staticmethod
+    def _pump_operating_properties(unit: Any) -> Dict[str, float]:
+        """Return finite solved pump properties using supported native APIs.
+
+        NeqSim pressure-specified pumps do not expose a generic ``getHead``
+        method. Hydraulic head and power are therefore derived from the solved
+        pressure rise, inlet density, and inlet actual volumetric flow.
+        """
+        properties: Dict[str, float] = {}
+        for property_name, getter_name in (
+            ("inletPressure_bara", "getInletPressure"),
+            ("outletPressure_bara", "getOutletPressure"),
+            ("inletTemperature_K", "getInletTemperature"),
+            ("outletTemperature_K", "getOutletTemperature"),
+            ("efficiency", "getIsentropicEfficiency"),
+            ("speed_rpm", "getSpeed"),
+        ):
+            if not hasattr(unit, getter_name):
+                continue
+            try:
+                value = float(getattr(unit, getter_name)())
+            except Exception:
+                continue
+            if math.isfinite(value):
+                properties[property_name] = value
+
+        if hasattr(unit, "getPower"):
+            try:
+                shaft_power_kW = float(unit.getPower()) / 1000.0
+                if math.isfinite(shaft_power_kW):
+                    properties["shaftPower_kW"] = shaft_power_kW
+            except Exception:
+                pass
+
+        try:
+            inlet_stream = unit.getInletStream()
+            density_kg_m3 = float(
+                inlet_stream.getFluid().getDensity("kg/m3")
+            )
+            volumetric_flow_m3_s = float(
+                inlet_stream.getFlowRate("m3/sec")
+            )
+        except Exception:
+            return properties
+
+        if (
+            not math.isfinite(density_kg_m3)
+            or density_kg_m3 <= 0.0
+            or not math.isfinite(volumetric_flow_m3_s)
+            or volumetric_flow_m3_s < 0.0
+        ):
+            return properties
+        properties["inletDensity_kg_m3"] = density_kg_m3
+        properties["inletVolumetricFlow_m3_s"] = volumetric_flow_m3_s
+
+        inlet_pressure = properties.get("inletPressure_bara")
+        outlet_pressure = properties.get("outletPressure_bara")
+        if inlet_pressure is None or outlet_pressure is None:
+            return properties
+        pressure_rise_bar = outlet_pressure - inlet_pressure
+        if not math.isfinite(pressure_rise_bar):
+            return properties
+
+        properties["pressureRise_bar"] = pressure_rise_bar
+        pressure_rise_pa = pressure_rise_bar * 1.0e5
+        properties["head_m"] = (
+            pressure_rise_pa / (density_kg_m3 * _STANDARD_GRAVITY_M_S2)
+        )
+        properties["hydraulicPower_kW"] = (
+            pressure_rise_pa * volumetric_flow_m3_s / 1000.0
+        )
+        return properties
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -2461,6 +2535,9 @@ class NeqSimProcessModel:
                                 break
                         except Exception:
                             pass
+
+            if java_class in ("Pump", "ESPPump"):
+                props.update(self._pump_operating_properties(u))
 
             # Flow rate, T, P for Stream-type units
             if java_class == "Stream":
@@ -3899,18 +3976,26 @@ class NeqSimProcessModel:
 
             # ---------- Pump / ESPPump ----------
             elif java_class in ("Pump", "ESPPump"):
-                for prop, getter, unit in [
-                    ("inletPressure_bara", "getInletPressure", "bara"),
-                    ("outletPressure_bara", "getOutletPressure", "bara"),
-                    ("efficiency", "getIsentropicEfficiency", "[-]"),
-                    ("head_m", "getHead", "m"),
-                ]:
-                    if hasattr(u, getter):
-                        try:
-                            val = float(getattr(u, getter)())
-                            kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
-                        except Exception:
-                            pass
+                pump_property_units = {
+                    "inletPressure_bara": "bara",
+                    "outletPressure_bara": "bara",
+                    "pressureRise_bar": "bar",
+                    "inletTemperature_K": "K",
+                    "outletTemperature_K": "K",
+                    "efficiency": "[-]",
+                    "speed_rpm": "rpm",
+                    "shaftPower_kW": "kW",
+                    "inletDensity_kg_m3": "kg/m3",
+                    "inletVolumetricFlow_m3_s": "m3/s",
+                    "head_m": "m",
+                    "hydraulicPower_kW": "kW",
+                }
+                for prop, val in self._pump_operating_properties(u).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        pump_property_units[prop],
+                    )
 
             # ---------- Valve ----------
             elif "Valve" in java_class:
