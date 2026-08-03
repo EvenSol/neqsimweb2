@@ -2532,6 +2532,14 @@ class NeqSimProcessModel:
         solved_fraction_sum = 0.0
         for index in range(split_count):
             try:
+                configured_fraction = float(unit.getSplitFactor(index))
+            except Exception:
+                configured_fraction = math.nan
+            if math.isfinite(configured_fraction):
+                properties[
+                    f"configuredBranch{index}Fraction"
+                ] = configured_fraction
+            try:
                 split_stream = unit.getSplitStream(index)
                 outlet_flow_kg_hr = float(
                     split_stream.getFlowRate("kg/hr")
@@ -2550,14 +2558,6 @@ class NeqSimProcessModel:
                 solved_fraction = outlet_flow_kg_hr / inlet_flow_kg_hr
                 properties[f"branch{index}Fraction"] = solved_fraction
                 solved_fraction_sum += solved_fraction
-            try:
-                configured_fraction = float(unit.getSplitFactor(index))
-            except Exception:
-                configured_fraction = math.nan
-            if math.isfinite(configured_fraction):
-                properties[
-                    f"configuredBranch{index}Fraction"
-                ] = configured_fraction
 
         properties["branchCount"] = float(split_count)
         properties["solvedBranchCount"] = float(solved_outlet_count)
