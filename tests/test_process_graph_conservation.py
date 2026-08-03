@@ -442,6 +442,27 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(properties["flowClosure_pct"], 0.0)
         self.assertNotIn("splitFractionSum", properties)
 
+        class _NearZeroFlowSplitter(_ZeroFlowSplitter):
+            @staticmethod
+            def getInletStream():
+                class _NearZeroStream:
+                    @staticmethod
+                    def getFlowRate(unit):
+                        if unit != "kg/hr":
+                            raise AssertionError(unit)
+                        return 1.0e-12
+
+                return _NearZeroStream()
+
+        near_zero_properties = (
+            NeqSimProcessModel._splitter_operating_properties(
+                _NearZeroFlowSplitter()
+            )
+        )
+        self.assertNotIn("branch0Fraction", near_zero_properties)
+        self.assertNotIn("branch1Fraction", near_zero_properties)
+        self.assertNotIn("splitFractionSum", near_zero_properties)
+
     def test_legacy_splitter_keeps_flow_kpis_without_claiming_topology(self):
         class _JavaClass:
             @staticmethod
@@ -566,6 +587,64 @@ class MixerPropertyExtractionTest(unittest.TestCase):
                     workbook_properties[property_name],
                     value,
                     delta=1.0e-12,
+                )
+
+    def test_mixer_subclasses_emit_workbook_and_kpi_routing_properties(self):
+        class _JavaClass:
+            def __init__(self, simple_name):
+                self.simple_name = simple_name
+
+            def getSimpleName(self):
+                return self.simple_name
+
+        class _Stream:
+            def __init__(self, flow_kg_hr):
+                self.flow_kg_hr = flow_kg_hr
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        for java_class in (
+            "StaticMixer",
+            "StaticNeqMixer",
+            "StaticPhaseMixer",
+        ):
+            with self.subTest(java_class=java_class):
+                class _MixerSubclass:
+                    @staticmethod
+                    def getClass():
+                        return _JavaClass(java_class)
+
+                    @staticmethod
+                    def getNumberOfInputStreams():
+                        return 2
+
+                    @staticmethod
+                    def getStream(index):
+                        return (_Stream(40.0), _Stream(60.0))[index]
+
+                    @staticmethod
+                    def getOutletStream():
+                        return _Stream(100.0)
+
+                model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+                model._units = {"native mixer": _MixerSubclass()}
+                model._unit_ps_name = {"native mixer": "main"}
+                kpis = {}
+
+                model._extract_unit_properties(kpis)
+
+                self.assertEqual(
+                    kpis["native mixer.inletFlowTotal_kg_hr"].value,
+                    100.0,
+                )
+                self.assertEqual(
+                    model.list_units()[0].properties[
+                        "inletFlowTotal_kg_hr"
+                    ],
+                    100.0,
                 )
 
     def test_withholds_fractions_and_closure_for_partial_inlet_coverage(self):

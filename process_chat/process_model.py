@@ -155,6 +155,11 @@ _ENERGY_BALANCE_DUTY_UNIT_CLASSES = {
 }
 
 
+def _is_native_mixer_class(java_class: str) -> bool:
+    """Return whether a native unit is Mixer or one of its subclasses."""
+    return str(java_class).endswith("Mixer")
+
+
 def _native_split_stream_count(unit: Any) -> Optional[int]:
     """Return a validated native splitter outlet count when available."""
     try:
@@ -746,7 +751,7 @@ class NeqSimProcessModel:
             ) from exc
 
         has_mixer = any(
-            str(unit.getClass().getSimpleName()) == "Mixer"
+            _is_native_mixer_class(unit.getClass().getSimpleName())
             for unit in units
         )
         if not has_mixer:
@@ -761,7 +766,9 @@ class NeqSimProcessModel:
         )
         for unit in units:
             unit.run(run_id)
-            if str(unit.getClass().getSimpleName()) != "Mixer":
+            if not _is_native_mixer_class(
+                unit.getClass().getSimpleName()
+            ):
                 continue
 
             target_enthalpy = float(unit.calcMixStreamEnthalpy())
@@ -2581,7 +2588,8 @@ class NeqSimProcessModel:
             solved_outlet_count += 1
             if (
                 math.isfinite(inlet_flow_kg_hr)
-                and abs(inlet_flow_kg_hr) > 0.0
+                and abs(inlet_flow_kg_hr)
+                > _UNIT_BALANCE_SCALE_FLOOR_KG_HR
             ):
                 solved_fraction = outlet_flow_kg_hr / inlet_flow_kg_hr
                 properties[f"branch{index}Fraction"] = solved_fraction
@@ -2627,7 +2635,10 @@ class NeqSimProcessModel:
             inlet_count = int(unit.getNumberOfInputStreams())
         except Exception:
             return properties
-        if inlet_count < 0 or inlet_count > 256:
+        if (
+            inlet_count < 0
+            or inlet_count > _MAX_NATIVE_SPLIT_STREAM_COUNT
+        ):
             return properties
 
         properties["inletCount"] = float(inlet_count)
@@ -2763,7 +2774,7 @@ class NeqSimProcessModel:
             if "Splitter" in java_class:
                 props.update(self._splitter_operating_properties(u))
 
-            if java_class == "Mixer":
+            if _is_native_mixer_class(java_class):
                 props.update(self._mixer_operating_properties(u))
 
             # Flow rate, T, P for Stream-type units
@@ -4276,7 +4287,7 @@ class NeqSimProcessModel:
                             )
 
             # ---------- Mixer ----------
-            elif java_class == "Mixer":
+            elif _is_native_mixer_class(java_class):
                 for prop, val in self._mixer_operating_properties(u).items():
                     kpis[f"{prefix}.{prop}"] = KPI(
                         f"{prefix}.{prop}",
