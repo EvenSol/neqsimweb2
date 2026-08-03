@@ -295,6 +295,7 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
 
         self.assertEqual(properties["branchCount"], 3.0)
         self.assertEqual(properties["solvedBranchCount"], 2.0)
+        self.assertEqual(properties["configuredBranch2Fraction"], 0.0)
         self.assertNotIn("flowClosure_pct", properties)
 
 
