@@ -2559,7 +2559,8 @@ class NeqSimProcessModel:
                     f"configuredBranch{index}Fraction"
                 ] = configured_fraction
 
-        properties["branchCount"] = float(solved_outlet_count)
+        properties["branchCount"] = float(split_count)
+        properties["solvedBranchCount"] = float(solved_outlet_count)
         properties["outletFlowTotal_kg_hr"] = outlet_flow_total_kg_hr
         if (
             math.isfinite(inlet_flow_kg_hr)
