@@ -259,6 +259,14 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
                     value,
                     delta=1.0e-12,
                 )
+        self.assertEqual(
+            kpis["product split.splitStream0_flow_kg_hr"].value,
+            25.0,
+        )
+        self.assertEqual(
+            kpis["product split.splitStream0_flow_kg_hr"].unit,
+            "kg/hr",
+        )
 
     def test_preserves_native_topology_count_when_one_branch_is_unreadable(self):
         class _Stream:
@@ -297,6 +305,38 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(properties["solvedBranchCount"], 2.0)
         self.assertEqual(properties["configuredBranch2Fraction"], 0.0)
         self.assertNotIn("flowClosure_pct", properties)
+
+    def test_zero_flow_splitter_withholds_undefined_fraction_sum(self):
+        class _Stream:
+            @staticmethod
+            def getFlowRate(unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return 0.0
+
+        class _ZeroFlowSplitter:
+            @staticmethod
+            def getSplitNumber():
+                return 2
+
+            @staticmethod
+            def getInletStream():
+                return _Stream()
+
+            @staticmethod
+            def getSplitStream(_index):
+                return _Stream()
+
+            @staticmethod
+            def getSplitFactor(index):
+                return (0.5, 0.5)[index]
+
+        properties = NeqSimProcessModel._splitter_operating_properties(
+            _ZeroFlowSplitter()
+        )
+
+        self.assertEqual(properties["flowClosure_pct"], 0.0)
+        self.assertNotIn("splitFractionSum", properties)
 
 
 class MixerPropertyExtractionTest(unittest.TestCase):
@@ -369,6 +409,41 @@ class MixerPropertyExtractionTest(unittest.TestCase):
                     value,
                     delta=1.0e-12,
                 )
+
+    def test_withholds_fractions_and_closure_for_partial_inlet_coverage(self):
+        class _Stream:
+            def __init__(self, flow_kg_hr):
+                self.flow_kg_hr = flow_kg_hr
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        class _PartlyReadableMixer:
+            @staticmethod
+            def getNumberOfInputStreams():
+                return 3
+
+            @staticmethod
+            def getStream(index):
+                if index == 2:
+                    raise RuntimeError("native inlet unavailable")
+                return (_Stream(40.0), _Stream(60.0))[index]
+
+            @staticmethod
+            def getOutletStream():
+                return _Stream(200.0)
+
+        properties = NeqSimProcessModel._mixer_operating_properties(
+            _PartlyReadableMixer()
+        )
+
+        self.assertEqual(properties["inletCount"], 3.0)
+        self.assertEqual(properties["solvedInletCount"], 2.0)
+        self.assertNotIn("inlet0Fraction", properties)
+        self.assertNotIn("inlet1Fraction", properties)
+        self.assertNotIn("flowClosure_pct", properties)
 
 
 class PumpPropertyExtractionTest(unittest.TestCase):
