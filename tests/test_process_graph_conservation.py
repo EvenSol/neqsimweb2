@@ -182,6 +182,84 @@ class PumpParameterApplicationTest(unittest.TestCase):
         self.assertNotIn("export_pump.setEfficiency", script)
 
 
+class SplitterPropertyExtractionTest(unittest.TestCase):
+    """Validate solved splitter allocations and explicit flow closure."""
+
+    def test_reports_native_branch_fractions_and_workbook_properties(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Splitter"
+
+        class _Stream:
+            def __init__(self, flow_kg_hr):
+                self.flow_kg_hr = flow_kg_hr
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        class _Splitter:
+            streams = [_Stream(25.0), _Stream(75.0)]
+
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getSplitNumber():
+                return 2
+
+            @staticmethod
+            def getInletStream():
+                return _Stream(100.0)
+
+            @classmethod
+            def getSplitStream(cls, index):
+                return cls.streams[index]
+
+            @staticmethod
+            def getSplitFactor(index):
+                return (0.25, 0.75)[index]
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"product split": _Splitter()}
+        model._unit_ps_name = {"product split": "main"}
+        kpis = {}
+
+        model._extract_unit_properties(kpis)
+
+        expected = {
+            "inletFlow_kg_hr": (100.0, "kg/hr"),
+            "branchCount": (2.0, "[-]"),
+            "branch0Flow_kg_hr": (25.0, "kg/hr"),
+            "branch1Flow_kg_hr": (75.0, "kg/hr"),
+            "branch0Fraction": (0.25, "[-]"),
+            "branch1Fraction": (0.75, "[-]"),
+            "configuredBranch0Fraction": (0.25, "[-]"),
+            "configuredBranch1Fraction": (0.75, "[-]"),
+            "outletFlowTotal_kg_hr": (100.0, "kg/hr"),
+            "flowClosure_kg_hr": (0.0, "kg/hr"),
+            "flowClosure_pct": (0.0, "%"),
+            "splitFractionSum": (1.0, "[-]"),
+        }
+        for property_name, (value, unit) in expected.items():
+            with self.subTest(property_name=property_name):
+                kpi = kpis[f"product split.{property_name}"]
+                self.assertAlmostEqual(kpi.value, value, delta=1.0e-12)
+                self.assertEqual(kpi.unit, unit)
+
+        workbook_properties = model.list_units()[0].properties
+        for property_name, (value, _unit) in expected.items():
+            with self.subTest(workbook_property=property_name):
+                self.assertAlmostEqual(
+                    workbook_properties[property_name],
+                    value,
+                    delta=1.0e-12,
+                )
+
+
 class PumpPropertyExtractionTest(unittest.TestCase):
     """Validate solved pump properties and derived hydraulic quantities."""
 

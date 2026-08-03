@@ -2502,6 +2502,90 @@ class NeqSimProcessModel:
         )
         return properties
 
+    @staticmethod
+    def _splitter_operating_properties(unit: Any) -> Dict[str, float]:
+        """Return solved splitter allocation and flow-closure properties.
+
+        Native ``Splitter`` exposes its exact outlet count and configured
+        factors. Solved outlet flow is used for the reported allocation so
+        fixed-flow and remainder specifications are represented correctly.
+        """
+        properties: Dict[str, float] = {}
+        try:
+            split_count = int(unit.getSplitNumber())
+        except Exception:
+            return properties
+        if split_count < 0 or split_count > 256:
+            return properties
+
+        try:
+            inlet_flow_kg_hr = float(
+                unit.getInletStream().getFlowRate("kg/hr")
+            )
+        except Exception:
+            inlet_flow_kg_hr = math.nan
+        if math.isfinite(inlet_flow_kg_hr):
+            properties["inletFlow_kg_hr"] = inlet_flow_kg_hr
+
+        outlet_flow_total_kg_hr = 0.0
+        solved_outlet_count = 0
+        solved_fraction_sum = 0.0
+        for index in range(split_count):
+            try:
+                split_stream = unit.getSplitStream(index)
+                outlet_flow_kg_hr = float(
+                    split_stream.getFlowRate("kg/hr")
+                )
+            except Exception:
+                continue
+            if not math.isfinite(outlet_flow_kg_hr):
+                continue
+            properties[f"branch{index}Flow_kg_hr"] = outlet_flow_kg_hr
+            outlet_flow_total_kg_hr += outlet_flow_kg_hr
+            solved_outlet_count += 1
+            if (
+                math.isfinite(inlet_flow_kg_hr)
+                and abs(inlet_flow_kg_hr) > 0.0
+            ):
+                solved_fraction = outlet_flow_kg_hr / inlet_flow_kg_hr
+                properties[f"branch{index}Fraction"] = solved_fraction
+                solved_fraction_sum += solved_fraction
+            try:
+                configured_fraction = float(unit.getSplitFactor(index))
+            except Exception:
+                configured_fraction = math.nan
+            if math.isfinite(configured_fraction):
+                properties[
+                    f"configuredBranch{index}Fraction"
+                ] = configured_fraction
+
+        properties["branchCount"] = float(solved_outlet_count)
+        properties["outletFlowTotal_kg_hr"] = outlet_flow_total_kg_hr
+        if (
+            math.isfinite(inlet_flow_kg_hr)
+            and solved_outlet_count == split_count
+        ):
+            flow_closure_kg_hr = (
+                outlet_flow_total_kg_hr - inlet_flow_kg_hr
+            )
+            properties["flowClosure_kg_hr"] = flow_closure_kg_hr
+            properties["flowClosure_pct"] = (
+                abs(flow_closure_kg_hr)
+                / max(abs(inlet_flow_kg_hr), 1.0e-12)
+                * 100.0
+            )
+            properties["splitFractionSum"] = solved_fraction_sum
+        return properties
+
+    @staticmethod
+    def _routing_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for routing properties."""
+        if property_name.endswith("_kg_hr"):
+            return "kg/hr"
+        if property_name.endswith("_pct"):
+            return "%"
+        return "[-]"
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -2565,6 +2649,9 @@ class NeqSimProcessModel:
 
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
+
+            if "Splitter" in java_class:
+                props.update(self._splitter_operating_properties(u))
 
             # Flow rate, T, P for Stream-type units
             if java_class == "Stream":
@@ -4052,17 +4139,12 @@ class NeqSimProcessModel:
 
             # ---------- Splitter ----------
             elif "Splitter" in java_class:
-                if hasattr(u, "getSplitStream"):
-                    for j in range(10):
-                        try:
-                            s = u.getSplitStream(j)
-                            if s is not None:
-                                flow = float(s.getFlowRate("kg/hr"))
-                                kpis[f"{prefix}.splitStream{j}_flow_kg_hr"] = KPI(
-                                    f"{prefix}.splitStream{j}_flow_kg_hr", flow, "kg/hr"
-                                )
-                        except Exception:
-                            break
+                for prop, val in self._splitter_operating_properties(u).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        self._routing_property_unit(prop),
+                    )
 
             # ---------- Recycle ----------
             elif java_class == "Recycle":
