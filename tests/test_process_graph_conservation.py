@@ -441,6 +441,60 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(properties["flowClosure_pct"], 0.0)
         self.assertNotIn("splitFractionSum", properties)
 
+    def test_legacy_splitter_keeps_flow_kpis_without_claiming_topology(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Splitter"
+
+        class _Stream:
+            def __init__(self, flow_kg_hr):
+                self.flow_kg_hr = flow_kg_hr
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        class _LegacySplitter:
+            streams = [_Stream(25.0), _Stream(75.0)]
+
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getInletStream():
+                return _Stream(100.0)
+
+            @classmethod
+            def getSplitStream(cls, index):
+                return cls.streams[index]
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"legacy split": _LegacySplitter()}
+        properties = NeqSimProcessModel._splitter_operating_properties(
+            _LegacySplitter()
+        )
+
+        self.assertNotIn("branchCount", properties)
+        self.assertEqual(properties["solvedBranchCount"], 2.0)
+        self.assertEqual(properties["branch0Flow_kg_hr"], 25.0)
+        self.assertEqual(properties["branch1Flow_kg_hr"], 75.0)
+        self.assertNotIn("outletFlowTotal_kg_hr", properties)
+        self.assertNotIn("flowClosure_kg_hr", properties)
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis["legacy split.splitStream0_flow_kg_hr"].value,
+            25.0,
+        )
+        self.assertEqual(
+            kpis["legacy split.splitStream1_flow_kg_hr"].value,
+            75.0,
+        )
+
 
 class MixerPropertyExtractionTest(unittest.TestCase):
     """Validate solved mixer inlet allocations and explicit flow closure."""
