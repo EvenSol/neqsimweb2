@@ -647,6 +647,42 @@ class MixerPropertyExtractionTest(unittest.TestCase):
                     100.0,
                 )
 
+    def test_specialized_mixers_skip_generic_equilibrium_ph_closure(self):
+        class _JavaClass:
+            def __init__(self, simple_name):
+                self.simple_name = simple_name
+
+            def getSimpleName(self):
+                return self.simple_name
+
+        class _SpecializedMixer:
+            def __init__(self, simple_name):
+                self.simple_name = simple_name
+
+            def getClass(self):
+                return _JavaClass(self.simple_name)
+
+            @staticmethod
+            def run(_run_id):
+                raise AssertionError(
+                    "specialized mixer must not use generic PH closure"
+                )
+
+        for java_class in (
+            "StaticMixer",
+            "StaticNeqMixer",
+            "StaticPhaseMixer",
+        ):
+            with self.subTest(java_class=java_class):
+                class _Process:
+                    @staticmethod
+                    def getUnitOperations():
+                        return [_SpecializedMixer(java_class)]
+
+                NeqSimProcessModel._run_acyclic_mixer_energy_closure(
+                    _Process()
+                )
+
     def test_withholds_fractions_and_closure_for_partial_inlet_coverage(self):
         class _Stream:
             def __init__(self, flow_kg_hr):

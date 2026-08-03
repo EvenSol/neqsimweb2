@@ -751,7 +751,7 @@ class NeqSimProcessModel:
             ) from exc
 
         has_mixer = any(
-            _is_native_mixer_class(unit.getClass().getSimpleName())
+            str(unit.getClass().getSimpleName()) == "Mixer"
             for unit in units
         )
         if not has_mixer:
@@ -766,9 +766,7 @@ class NeqSimProcessModel:
         )
         for unit in units:
             unit.run(run_id)
-            if not _is_native_mixer_class(
-                unit.getClass().getSimpleName()
-            ):
+            if str(unit.getClass().getSimpleName()) != "Mixer":
                 continue
 
             target_enthalpy = float(unit.calcMixStreamEnthalpy())
