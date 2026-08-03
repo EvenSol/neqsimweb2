@@ -1505,6 +1505,21 @@ class NeqSimProcessModel:
                 unit_name = ""
             label = unit_name or unit_class
 
+            if normalized_class == "pipebeggsandbrills":
+                try:
+                    heat_transfer_mode = str(
+                        unit.getHeatTransferMode()
+                    ).strip().upper()
+                except Exception:
+                    heat_transfer_mode = ""
+                if heat_transfer_mode == "ADIABATIC":
+                    continue
+                excluded_units.append(
+                    f"{label} (unaudited {unit_class} "
+                    f"heat-transfer mode {heat_transfer_mode or 'unknown'})"
+                )
+                continue
+
             if normalized_class in _ENERGY_BALANCE_ADIABATIC_UNIT_CLASSES:
                 continue
             if normalized_class in _ENERGY_BALANCE_POWER_UNIT_CLASSES:
@@ -3788,18 +3803,64 @@ class NeqSimProcessModel:
                     ("pressureDrop_bar", "getPressureDrop", "bar"),
                     ("inletTemperature_K", "getInletTemperature", "K"),
                     ("outletTemperature_K", "getOutletTemperature", "K"),
-                    ("velocity_m_s", "getVelocity", "m/s"),
-                    ("reynoldsNumber", "getReynoldsNumber", "[-]"),
-                    ("frictionFactor", "getFrictionFactor", "[-]"),
                 ]:
                     if hasattr(u, getter):
                         try:
                             val = float(getattr(u, getter)())
+                            if not math.isfinite(val):
+                                continue
                             kpis[f"{prefix}.{prop}"] = KPI(
                                 f"{prefix}.{prop}", val, unit
                             )
                         except Exception:
                             pass
+
+                if java_class == "PipeBeggsAndBrills":
+                    hydraulic_values = []
+                    try:
+                        hydraulic_values.append(
+                            (
+                                "velocity_m_s",
+                                float(u.getMixtureVelocity()),
+                                "m/s",
+                            )
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        reynolds_profile = list(
+                            u.getMixtureReynoldsNumber()
+                        )
+                        if reynolds_profile:
+                            hydraulic_values.append(
+                                (
+                                    "reynoldsNumber",
+                                    float(reynolds_profile[-1]),
+                                    "[-]",
+                                )
+                            )
+                    except Exception:
+                        pass
+                else:
+                    hydraulic_values = []
+                    for prop, getter, unit in (
+                        ("velocity_m_s", "getVelocity", "m/s"),
+                        ("reynoldsNumber", "getReynoldsNumber", "[-]"),
+                        ("frictionFactor", "getFrictionFactor", "[-]"),
+                    ):
+                        if not hasattr(u, getter):
+                            continue
+                        try:
+                            hydraulic_values.append(
+                                (prop, float(getattr(u, getter)()), unit)
+                            )
+                        except Exception:
+                            pass
+                for prop, val, unit in hydraulic_values:
+                    if math.isfinite(val):
+                        kpis[f"{prefix}.{prop}"] = KPI(
+                            f"{prefix}.{prop}", val, unit
+                        )
 
             # ---------- Expander ----------
             elif java_class == "Expander":
