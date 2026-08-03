@@ -29,7 +29,7 @@ from process_chat.flowsheet_editor import (
     update_inline_unit_properties,
     update_splitter_allocations,
 )
-from process_chat.process_builder import ProcessBuilder
+from process_chat.process_builder import ProcessBuilder, _apply_param
 from process_chat.process_model import NeqSimProcessModel
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
@@ -95,6 +95,337 @@ class ExpanderPropertyExtractionTest(unittest.TestCase):
                 kpi = kpis[f"turbo expander.{property_name}"]
                 self.assertAlmostEqual(kpi.value, value, delta=1.0e-10)
                 self.assertEqual(kpi.unit, unit)
+
+
+class PumpParameterApplicationTest(unittest.TestCase):
+    """Protect pump efficiency application and replay-script parity."""
+
+    def test_pump_efficiency_uses_native_isentropic_setter(self):
+        class _Pump:
+            efficiency = None
+
+            def setIsentropicEfficiency(self, value):
+                self.efficiency = value
+
+        pump = _Pump()
+
+        _apply_param(pump, "efficiency", 0.75)
+
+        self.assertEqual(pump.efficiency, 0.75)
+
+    def test_generic_efficiency_still_prefers_equipment_setter(self):
+        class _Separator:
+            efficiency = None
+
+            def setEfficiency(self, value):
+                self.efficiency = value
+
+            def setIsentropicEfficiency(self, value):
+                raise AssertionError("generic setter should take precedence")
+
+        separator = _Separator()
+
+        _apply_param(separator, "efficiency", 0.92)
+
+        self.assertEqual(separator.efficiency, 0.92)
+
+    def test_legacy_pump_script_replays_isentropic_efficiency(self):
+        builder = ProcessBuilder()
+        builder._process_name = "Pump replay regression"
+        builder._spec = {
+            "name": "Pump replay regression",
+            "fluid": {
+                "eos_model": "srk",
+                "components": {"water": 1.0},
+            },
+            "process": [
+                {"name": "feed", "type": "stream"},
+                {
+                    "name": "export pump",
+                    "type": "pump",
+                    "params": {
+                        "outlet_pressure_bara": 80.0,
+                        "efficiency": 0.75,
+                    },
+                },
+            ],
+        }
+
+        script = builder.to_python_script()
+
+        self.assertIn(
+            "export_pump.setIsentropicEfficiency(0.75)",
+            script,
+        )
+        self.assertNotIn("export_pump.setEfficiency", script)
+
+
+class PumpPropertyExtractionTest(unittest.TestCase):
+    """Validate solved pump properties and derived hydraulic quantities."""
+
+    def test_reports_pump_state_power_head_and_workbook_properties(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Pump"
+
+        class _Fluid:
+            @staticmethod
+            def getDensity(unit):
+                if unit != "kg/m3":
+                    raise AssertionError(unit)
+                return 800.0
+
+        class _InletStream:
+            @staticmethod
+            def getFluid():
+                return _Fluid()
+
+            @staticmethod
+            def getFlowRate(unit):
+                if unit != "m3/sec":
+                    raise AssertionError(unit)
+                return 0.01
+
+        class _Pump:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getInletPressure():
+                return 10.0
+
+            @staticmethod
+            def getOutletPressure():
+                return 30.0
+
+            @staticmethod
+            def getInletTemperature():
+                return 298.15
+
+            @staticmethod
+            def getOutletTemperature():
+                return 299.25
+
+            @staticmethod
+            def getIsentropicEfficiency():
+                return 0.75
+
+            @staticmethod
+            def getSpeed():
+                return 1_000.0
+
+            @staticmethod
+            def getPower():
+                return 30_000.0
+
+            @staticmethod
+            def getDuty():
+                return 30_000.0
+
+            @staticmethod
+            def getInletStream():
+                return _InletStream()
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"export pump": _Pump()}
+        model._unit_ps_name = {"export pump": "main"}
+        kpis = {}
+
+        model._extract_unit_properties(kpis)
+
+        expected = {
+            "inletPressure_bara": (10.0, "bara"),
+            "outletPressure_bara": (30.0, "bara"),
+            "pressureRise_bar": (20.0, "bar"),
+            "inletTemperature_K": (298.15, "K"),
+            "outletTemperature_K": (299.25, "K"),
+            "efficiency": (0.75, "[-]"),
+            "speed_rpm": (1_000.0, "rpm"),
+            "shaftPower_kW": (30.0, "kW"),
+            "inletDensity_kg_m3": (800.0, "kg/m3"),
+            "inletVolumetricFlow_m3_s": (0.01, "m3/s"),
+            "head_m": (254.92905324448208, "m"),
+            "hydraulicPower_kW": (20.0, "kW"),
+        }
+        for property_name, (value, unit) in expected.items():
+            with self.subTest(property_name=property_name):
+                kpi = kpis[f"export pump.{property_name}"]
+                self.assertAlmostEqual(kpi.value, value, delta=1.0e-10)
+                self.assertEqual(kpi.unit, unit)
+
+        workbook_properties = model.list_units()[0].properties
+        self.assertAlmostEqual(workbook_properties["head_m"], expected["head_m"][0])
+        self.assertAlmostEqual(
+            workbook_properties["hydraulicPower_kW"],
+            expected["hydraulicPower_kW"][0],
+        )
+
+
+class NativePumpPerformanceTest(unittest.TestCase):
+    """Benchmark editable native pump performance at nearby points."""
+
+    @staticmethod
+    def _run_case(flow_scale: float, efficiency: float):
+        units, pump_id = add_catalog_unit([], "pump", "export pump")
+        units[0]["params"].update(
+            {
+                "outlet_pressure_bara": 40.0,
+                "efficiency": efficiency,
+            }
+        )
+        graph_spec = {
+            "name": "Native pump performance benchmark",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-export-pump",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": pump_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        expected_flow = 20_000.0 * flow_scale
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "n-hexane": 0.85,
+                        "n-heptane": 0.15,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 10.0,
+                    "total_flow": expected_flow,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", pump_id],
+        )
+        result = model.run(timeout_ms=180_000)
+        return builder, graph_spec, model, result, expected_flow
+
+    def test_native_pump_conserves_and_trends_with_flow_and_efficiency(self):
+        shaft_power = {}
+        hydraulic_power = {}
+        head = {}
+
+        for flow_scale in (1.0, 1.05):
+            for efficiency in (0.75, 0.85):
+                with self.subTest(
+                    flow_scale=flow_scale,
+                    efficiency=efficiency,
+                ):
+                    builder, graph_spec, model, result, expected_flow = (
+                        self._run_case(flow_scale, efficiency)
+                    )
+                    pump = model.get_unit("export pump")
+                    key = (flow_scale, efficiency)
+                    shaft_power[key] = result.kpis[
+                        "export pump.shaftPower_kW"
+                    ].value
+                    hydraulic_power[key] = result.kpis[
+                        "export pump.hydraulicPower_kW"
+                    ].value
+                    head[key] = result.kpis["export pump.head_m"].value
+
+                    self.assertAlmostEqual(
+                        float(pump.getIsentropicEfficiency()),
+                        efficiency,
+                        delta=1.0e-12,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis["export pump.pressureRise_bar"].value,
+                        30.0,
+                        delta=1.0e-10,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis["material_product_flow_kg_hr"].value,
+                        expected_flow,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                    for balance_name in (
+                        "mass_balance_pct",
+                        "component_balance_max_pct",
+                        "energy_balance_pct",
+                        "unit_mass_balance_max_pct",
+                        "unit_energy_balance_max_pct",
+                    ):
+                        self.assertLess(
+                            result.kpis[balance_name].value,
+                            1.0e-6,
+                        )
+                    workbook_unit = next(
+                        unit
+                        for unit in model.list_units()
+                        if unit.name == "export pump"
+                    )
+                    self.assertAlmostEqual(
+                        workbook_unit.properties["efficiency"],
+                        efficiency,
+                    )
+                    self.assertIn("head_m", workbook_unit.properties)
+                    self.assertEqual(
+                        json.loads(json.dumps(graph_spec, allow_nan=False)),
+                        graph_spec,
+                    )
+                    self.assertIn(
+                        "Acyclic graph built and converged successfully.",
+                        builder.build_log,
+                    )
+                    print(
+                        "native pump benchmark:",
+                        f"scale={flow_scale:.2f}",
+                        f"efficiency={efficiency:.2f}",
+                        f"shaft={shaft_power[key]:.6f} kW",
+                        f"hydraulic={hydraulic_power[key]:.6f} kW",
+                        f"head={head[key]:.6f} m",
+                        f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                    )
+
+        for efficiency in (0.75, 0.85):
+            self.assertGreater(
+                shaft_power[(1.05, efficiency)],
+                shaft_power[(1.0, efficiency)],
+            )
+            self.assertGreater(
+                hydraulic_power[(1.05, efficiency)],
+                hydraulic_power[(1.0, efficiency)],
+            )
+            self.assertAlmostEqual(
+                head[(1.05, efficiency)],
+                head[(1.0, efficiency)],
+                delta=1.0e-8,
+            )
+        for flow_scale in (1.0, 1.05):
+            self.assertLess(
+                shaft_power[(flow_scale, 0.85)],
+                shaft_power[(flow_scale, 0.75)],
+            )
+            self.assertAlmostEqual(
+                hydraulic_power[(flow_scale, 0.85)],
+                hydraulic_power[(flow_scale, 0.75)],
+                delta=1.0e-10,
+            )
 
 
 class PipelineConstructionTest(unittest.TestCase):
