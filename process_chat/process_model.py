@@ -2534,11 +2534,17 @@ class NeqSimProcessModel:
         Native ``Splitter`` exposes its exact outlet count and configured
         factors. Solved outlet flow is used for the reported allocation so
         fixed-flow and remainder specifications are represented correctly.
+        Legacy objects without a readable count retain bounded branch-flow
+        probing, but completeness-dependent totals and closure are withheld.
         """
         properties: Dict[str, float] = {}
         split_count = _native_split_stream_count(unit)
-        if split_count is None:
-            return properties
+        topology_count_known = split_count is not None
+        probe_count = (
+            split_count
+            if topology_count_known
+            else _split_stream_probe_count(unit, 10)
+        )
 
         try:
             inlet_flow_kg_hr = float(
@@ -2552,7 +2558,7 @@ class NeqSimProcessModel:
         outlet_flow_total_kg_hr = 0.0
         solved_outlet_count = 0
         solved_fraction_sum = 0.0
-        for index in range(split_count):
+        for index in range(probe_count):
             try:
                 configured_fraction = float(unit.getSplitFactor(index))
             except Exception:
@@ -2581,11 +2587,15 @@ class NeqSimProcessModel:
                 properties[f"branch{index}Fraction"] = solved_fraction
                 solved_fraction_sum += solved_fraction
 
-        properties["branchCount"] = float(split_count)
+        if topology_count_known:
+            properties["branchCount"] = float(split_count)
         properties["solvedBranchCount"] = float(solved_outlet_count)
-        properties["outletFlowTotal_kg_hr"] = outlet_flow_total_kg_hr
+        if topology_count_known:
+            properties["outletFlowTotal_kg_hr"] = outlet_flow_total_kg_hr
         if (
-            math.isfinite(inlet_flow_kg_hr)
+            topology_count_known
+            and split_count is not None
+            and math.isfinite(inlet_flow_kg_hr)
             and solved_outlet_count == split_count
         ):
             flow_closure_kg_hr = (
