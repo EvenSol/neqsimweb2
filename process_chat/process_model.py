@@ -2572,10 +2572,15 @@ class NeqSimProcessModel:
             properties["flowClosure_kg_hr"] = flow_closure_kg_hr
             properties["flowClosure_pct"] = (
                 abs(flow_closure_kg_hr)
-                / max(abs(inlet_flow_kg_hr), 1.0e-12)
+                / max(
+                    abs(inlet_flow_kg_hr),
+                    abs(outlet_flow_total_kg_hr),
+                    _UNIT_BALANCE_SCALE_FLOOR_KG_HR,
+                )
                 * 100.0
             )
-            properties["splitFractionSum"] = solved_fraction_sum
+            if abs(inlet_flow_kg_hr) > _UNIT_BALANCE_SCALE_FLOOR_KG_HR:
+                properties["splitFractionSum"] = solved_fraction_sum
         return properties
 
     @staticmethod
@@ -2609,7 +2614,11 @@ class NeqSimProcessModel:
 
         properties["solvedInletCount"] = float(solved_inlet_count)
         properties["inletFlowTotal_kg_hr"] = inlet_flow_total_kg_hr
-        if abs(inlet_flow_total_kg_hr) > 0.0:
+        if (
+            solved_inlet_count == inlet_count
+            and abs(inlet_flow_total_kg_hr)
+            > _UNIT_BALANCE_SCALE_FLOOR_KG_HR
+        ):
             for index, inlet_flow_kg_hr in inlet_flows.items():
                 properties[f"inlet{index}Fraction"] = (
                     inlet_flow_kg_hr / inlet_flow_total_kg_hr
@@ -2633,7 +2642,11 @@ class NeqSimProcessModel:
             properties["flowClosure_kg_hr"] = flow_closure_kg_hr
             properties["flowClosure_pct"] = (
                 abs(flow_closure_kg_hr)
-                / max(abs(inlet_flow_total_kg_hr), 1.0e-12)
+                / max(
+                    abs(inlet_flow_total_kg_hr),
+                    abs(outlet_flow_kg_hr),
+                    _UNIT_BALANCE_SCALE_FLOOR_KG_HR,
+                )
                 * 100.0
             )
         return properties
@@ -4203,12 +4216,28 @@ class NeqSimProcessModel:
 
             # ---------- Splitter ----------
             elif "Splitter" in java_class:
-                for prop, val in self._splitter_operating_properties(u).items():
+                splitter_properties = self._splitter_operating_properties(u)
+                for prop, val in splitter_properties.items():
                     kpis[f"{prefix}.{prop}"] = KPI(
                         f"{prefix}.{prop}",
                         val,
                         self._routing_property_unit(prop),
                     )
+                    if prop.startswith("branch") and prop.endswith(
+                        "Flow_kg_hr"
+                    ):
+                        branch_index = prop[
+                            len("branch") : -len("Flow_kg_hr")
+                        ]
+                        if branch_index.isdigit():
+                            legacy_prop = (
+                                f"splitStream{branch_index}_flow_kg_hr"
+                            )
+                            kpis[f"{prefix}.{legacy_prop}"] = KPI(
+                                f"{prefix}.{legacy_prop}",
+                                val,
+                                "kg/hr",
+                            )
 
             # ---------- Mixer ----------
             elif java_class == "Mixer":
