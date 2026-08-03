@@ -4051,6 +4051,51 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     result.kpis["energy_balance_pct"].value,
                     1.0e-6,
                 )
+                mixer_prefix = "three feed mixer"
+                self.assertEqual(
+                    result.kpis[f"{mixer_prefix}.inletCount"].value,
+                    3.0,
+                )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        f"{mixer_prefix}.inletFlowTotal_kg_hr"
+                    ].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        f"{mixer_prefix}.outletFlow_kg_hr"
+                    ].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis[
+                        f"{mixer_prefix}.flowClosure_pct"
+                    ].value,
+                    1.0e-8,
+                )
+                for index, expected_fraction in enumerate(
+                    (1.0 / 3.0, 0.5, 1.0 / 6.0)
+                ):
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            f"{mixer_prefix}.inlet{index}Fraction"
+                        ].value,
+                        expected_fraction,
+                        delta=1.0e-8,
+                    )
+                mixer_properties = next(
+                    unit.properties
+                    for unit in model.list_units()
+                    if unit.name == mixer_prefix
+                )
+                self.assertEqual(mixer_properties["inletCount"], 3.0)
+                self.assertLess(
+                    mixer_properties["flowClosure_pct"],
+                    1.0e-8,
+                )
                 self.assertIn(
                     "Added graph mixer: three-feed-mixer "
                     "(3 material inlets)",
@@ -4414,6 +4459,59 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 self.assertLess(
                     result.kpis["energy_balance_pct"].value,
                     1.0e-6,
+                )
+                splitter_prefix = "three-way product splitter"
+                self.assertEqual(
+                    result.kpis[f"{splitter_prefix}.branchCount"].value,
+                    3.0,
+                )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        f"{splitter_prefix}.inletFlow_kg_hr"
+                    ].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                self.assertLess(
+                    result.kpis[
+                        f"{splitter_prefix}.flowClosure_pct"
+                    ].value,
+                    1.0e-8,
+                )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        f"{splitter_prefix}.splitFractionSum"
+                    ].value,
+                    1.0,
+                    delta=1.0e-8,
+                )
+                for index, expected_fraction in enumerate(
+                    (0.2, 0.3, 0.5)
+                ):
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            f"{splitter_prefix}.branch{index}Fraction"
+                        ].value,
+                        expected_fraction,
+                        delta=1.0e-8,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            f"{splitter_prefix}.configuredBranch"
+                            f"{index}Fraction"
+                        ].value,
+                        expected_fraction,
+                        delta=1.0e-8,
+                    )
+                splitter_properties = next(
+                    unit.properties
+                    for unit in model.list_units()
+                    if unit.name == splitter_prefix
+                )
+                self.assertEqual(splitter_properties["branchCount"], 3.0)
+                self.assertLess(
+                    splitter_properties["flowClosure_pct"],
+                    1.0e-8,
                 )
                 self.assertIn(
                     "Configured graph splitter: three-way-product-splitter "
