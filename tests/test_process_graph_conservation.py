@@ -260,6 +260,78 @@ class SplitterPropertyExtractionTest(unittest.TestCase):
                 )
 
 
+class MixerPropertyExtractionTest(unittest.TestCase):
+    """Validate solved mixer inlet allocations and explicit flow closure."""
+
+    def test_reports_native_inlet_fractions_and_workbook_properties(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Mixer"
+
+        class _Stream:
+            def __init__(self, flow_kg_hr):
+                self.flow_kg_hr = flow_kg_hr
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+        class _Mixer:
+            streams = [_Stream(40.0), _Stream(60.0)]
+
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @classmethod
+            def getNumberOfInputStreams(cls):
+                return len(cls.streams)
+
+            @classmethod
+            def getStream(cls, index):
+                return cls.streams[index]
+
+            @staticmethod
+            def getOutletStream():
+                return _Stream(100.0)
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"feed mixer": _Mixer()}
+        model._unit_ps_name = {"feed mixer": "main"}
+        kpis = {}
+
+        model._extract_unit_properties(kpis)
+
+        expected = {
+            "inletCount": (2.0, "[-]"),
+            "solvedInletCount": (2.0, "[-]"),
+            "inlet0Flow_kg_hr": (40.0, "kg/hr"),
+            "inlet1Flow_kg_hr": (60.0, "kg/hr"),
+            "inlet0Fraction": (0.4, "[-]"),
+            "inlet1Fraction": (0.6, "[-]"),
+            "inletFlowTotal_kg_hr": (100.0, "kg/hr"),
+            "outletFlow_kg_hr": (100.0, "kg/hr"),
+            "flowClosure_kg_hr": (0.0, "kg/hr"),
+            "flowClosure_pct": (0.0, "%"),
+        }
+        for property_name, (value, unit) in expected.items():
+            with self.subTest(property_name=property_name):
+                kpi = kpis[f"feed mixer.{property_name}"]
+                self.assertAlmostEqual(kpi.value, value, delta=1.0e-12)
+                self.assertEqual(kpi.unit, unit)
+
+        workbook_properties = model.list_units()[0].properties
+        for property_name, (value, _unit) in expected.items():
+            with self.subTest(workbook_property=property_name):
+                self.assertAlmostEqual(
+                    workbook_properties[property_name],
+                    value,
+                    delta=1.0e-12,
+                )
+
+
 class PumpPropertyExtractionTest(unittest.TestCase):
     """Validate solved pump properties and derived hydraulic quantities."""
 
