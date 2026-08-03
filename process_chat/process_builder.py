@@ -208,8 +208,20 @@ def _apply_param(unit, key: str, value):
             unit.setEfficiency(float(value))
         elif hasattr(unit, "setIsentropicEfficiency"):
             # Pump exposes isentropic efficiency rather than the generic
-            # separator-style setEfficiency API.
-            unit.setIsentropicEfficiency(float(value))
+            # separator-style setEfficiency API. Native ESPPump currently
+            # stores this inherited property as percent and divides it by 100
+            # during its multiphase calculation, while Studio uses fractions.
+            efficiency = float(value)
+            try:
+                is_esp_pump = (
+                    str(unit.getClass().getSimpleName()).strip().lower()
+                    == "esppump"
+                )
+            except Exception:
+                is_esp_pump = False
+            if is_esp_pump:
+                efficiency *= 100.0
+            unit.setIsentropicEfficiency(efficiency)
     elif k == "head":
         if hasattr(unit, "setHead"):
             unit.setHead(float(value))
