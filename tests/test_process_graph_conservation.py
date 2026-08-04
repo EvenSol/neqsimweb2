@@ -3019,6 +3019,34 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ].value,
             120.0,
         )
+        model._is_process_model = True
+        model._units["train-a"] = model.get_unit("hot side feed")
+        model._unit_ps_name["train-a"] = "train-a"
+        collision_report_kpis = {}
+        model._flatten_json_report(
+            {
+                "train-a": {
+                    "cross exchanger": {
+                        "duty": float(exchanger.getDuty()),
+                        "feedTemperature1": 120.0,
+                    },
+                },
+            },
+            collision_report_kpis,
+        )
+        self.assertNotIn(
+            "report.train-a.cross exchanger.duty",
+            collision_report_kpis,
+        )
+        self.assertEqual(
+            collision_report_kpis[
+                "report.train-a.cross exchanger.feedTemperature1"
+            ].value,
+            120.0,
+        )
+        del model._units["train-a"]
+        del model._unit_ps_name["train-a"]
+        model._is_process_model = False
 
         exchanger.setLockedInactive(False)
         reenabled_properties = next(
