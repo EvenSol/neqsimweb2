@@ -709,11 +709,12 @@ class NeqSimProcessModel:
                     if thread.isAlive():
                         thread.interrupt()
                         thread.join()
+                        return False
                 else:
                     proc.run()
             except Exception:
-                pass
-            return
+                return False
+            return True
 
         # Reset recycles before the very first run
         _reset_recycles(units)
@@ -729,19 +730,20 @@ class NeqSimProcessModel:
                     if thread.isAlive():
                         thread.interrupt()
                         thread.join()
-                        break  # timed out — stop retrying
+                        return False
                 else:
                     proc.run()
             except Exception:
-                pass
+                continue
 
             has_energy, total_energy = _check_energy(units)
 
             if not has_energy or total_energy > 1.0:
-                break  # converged (non-zero energy or no energy units)
+                return True
 
             # Still zero — reset recycles and try again
             _reset_recycles(units)
+        return False
 
     @staticmethod
     def _run_acyclic_mixer_energy_closure(
@@ -2567,6 +2569,12 @@ class NeqSimProcessModel:
         if calculation_identifier is None:
             return {}
         if solved_state_snapshot is not None:
+            if (
+                not solved_state_snapshot
+                or str(calculation_identifier)
+                != solved_state_snapshot[0]
+            ):
+                return {}
             current_snapshot = (
                 NeqSimProcessModel._heat_exchanger_boundary_state_signature(
                     unit
@@ -2787,7 +2795,24 @@ class NeqSimProcessModel:
                 ):
                     return None
                 stream_states.append(state)
-        return (str(calculation_identifier), tuple(stream_states))
+        try:
+            ua_W_K = float(unit.getUAvalue())
+        except Exception:
+            ua_W_K = None
+        if ua_W_K is not None and not math.isfinite(ua_W_K):
+            return None
+        try:
+            flow_arrangement = str(
+                unit.getFlowArrangement()
+            ).strip().casefold()
+        except Exception:
+            flow_arrangement = ""
+        configuration = (ua_W_K, flow_arrangement)
+        return (
+            str(calculation_identifier),
+            tuple(stream_states),
+            configuration,
+        )
 
     @staticmethod
     def _splitter_operating_properties(unit: Any) -> Dict[str, float]:
@@ -3398,19 +3423,30 @@ class NeqSimProcessModel:
         direct_closure_ran = False
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
-            self._run_process_model(self._proc, timeout_ms=timeout_ms)
+            process_run_succeeded = self._run_process_model(
+                self._proc,
+                timeout_ms=timeout_ms,
+            )
         else:
-            self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
-            if self._enforce_acyclic_mixer_energy:
+            process_run_succeeded = self._run_until_converged(
+                self._proc,
+                max_runs=5,
+                timeout_ms=timeout_ms,
+            )
+            if (
+                process_run_succeeded
+                and self._enforce_acyclic_mixer_energy
+            ):
                 direct_closure_ran = (
                     self._run_acyclic_mixer_energy_closure(self._proc)
                 )
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
-        self._capture_heat_exchanger_state_snapshots(
-            allow_direct_runs=direct_closure_ran
-        )
+        if process_run_succeeded:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=direct_closure_ran
+            )
 
         return self._extract_results()
 
@@ -3424,17 +3460,28 @@ class NeqSimProcessModel:
         self._direct_unit_run_provenance.clear()
         direct_closure_ran = False
         if self._is_process_model:
-            self._run_process_model(self._proc, timeout_ms=timeout_ms)
+            process_run_succeeded = self._run_process_model(
+                self._proc,
+                timeout_ms=timeout_ms,
+            )
         else:
-            self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
-            if self._enforce_acyclic_mixer_energy:
+            process_run_succeeded = self._run_until_converged(
+                self._proc,
+                max_runs=5,
+                timeout_ms=timeout_ms,
+            )
+            if (
+                process_run_succeeded
+                and self._enforce_acyclic_mixer_energy
+            ):
                 direct_closure_ran = (
                     self._run_acyclic_mixer_energy_closure(self._proc)
                 )
         self._index_model_objects()
-        self._capture_heat_exchanger_state_snapshots(
-            allow_direct_runs=direct_closure_ran
-        )
+        if process_run_succeeded:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=direct_closure_ran
+            )
 
     @staticmethod
     def _run_process_model(proc_model, timeout_ms: int = 180000):
@@ -3446,18 +3493,22 @@ class NeqSimProcessModel:
                 if thread.isAlive():
                     thread.interrupt()
                     thread.join()
+                    return False
             else:
                 proc_model.run()
+            return True
         except Exception:
             # Fallback: run each ProcessSystem individually
             try:
-                for ps in proc_model.getAllProcesses():
-                    try:
-                        NeqSimProcessModel._run_until_converged(ps)
-                    except Exception:
-                        pass
+                process_systems = list(proc_model.getAllProcesses())
             except Exception:
-                pass
+                return False
+            if not process_systems:
+                return False
+            return all(
+                NeqSimProcessModel._run_until_converged(ps)
+                for ps in process_systems
+            )
 
     @staticmethod
     def _optional_nonnegative_number(unit: Any, getter: str) -> Optional[float]:
