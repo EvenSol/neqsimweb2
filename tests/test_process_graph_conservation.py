@@ -759,6 +759,35 @@ class ProcessRunCompletionTest(unittest.TestCase):
         )
         self.assertEqual(process.run_count, 3)
 
+    def test_native_worker_failure_is_not_successful(self):
+        from neqsim import jneqsim
+
+        fluid = jneqsim.thermo.system.SystemSrkEos(300.15, 50.0)
+        fluid.addComponent("methane", 1.0)
+        feed = jneqsim.process.equipment.stream.Stream("feed", fluid)
+        exchanger = (
+            jneqsim.process.equipment.heatexchanger.HeatExchanger(
+                "incomplete exchanger"
+            )
+        )
+        process = jneqsim.process.processmodel.ProcessSystem(
+            "worker failure regression"
+        )
+        process.add(feed)
+        process.add(exchanger)
+
+        self.assertFalse(
+            NeqSimProcessModel._run_until_converged(
+                process,
+                timeout_ms=30_000,
+            )
+        )
+        self.assertFalse(bool(process.getRunStatus().isSuccess()))
+        self.assertIn(
+            "inStream[0]",
+            str(process.getRunStatus().getFailedUnitError()),
+        )
+
 
 class SplitterPropertyExtractionTest(unittest.TestCase):
     """Validate solved splitter allocations and explicit flow closure."""
@@ -2841,6 +2870,39 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             1.0e-6,
         )
         self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+
+    def test_native_rating_edits_invalidate_exchanger_snapshot(self):
+        from neqsim import jneqsim
+
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        exchanger = model.get_unit("cross exchanger")
+        rating_calculator = (
+            jneqsim.process.mechanicaldesign.heatexchanger
+            .ThermalDesignCalculator()
+        )
+
+        exchanger.setRatingCalculator(rating_calculator)
+        exchanger.setRatingArea(1_000.0)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+
+        model.run(timeout_ms=180_000)
+        rating_calculator.setTubeCount(500)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
 
     def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
         _, model = self._build_two_sided_heat_exchanger_case(1.0)
