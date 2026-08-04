@@ -2975,6 +2975,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         model._heat_exchanger_state_snapshots = {
             "cross exchanger": solved_snapshot,
         }
+        exchanger.setEnergyInput(123_456.0)
         exchanger.setLockedInactive(True)
         self.assertTrue(bool(exchanger.isLockedInactive()))
         inactive_properties = next(
@@ -2994,6 +2995,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertNotIn("heatTransferDuty_kW", rerun_properties)
         self.assertNotIn("duty_kW", rerun_properties)
         self.assertNotIn("cross exchanger.duty_kW", result.kpis)
+        self.assertNotIn("cross exchanger.energyInput_W", result.kpis)
         self.assertNotIn("report.cross exchanger.duty", result.kpis)
         self.assertNotIn(
             "report.cross exchanger.dutyBalance",
@@ -3103,6 +3105,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         unsolved_result = model._extract_results()
         self.assertNotIn("cross exchanger.duty_kW", unsolved_result.kpis)
         self.assertNotIn(
+            "cross exchanger.energyInput_W",
+            unsolved_result.kpis,
+        )
+        self.assertNotIn(
             "report.cross exchanger.duty",
             unsolved_result.kpis,
         )
@@ -3122,6 +3128,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertGreater(
             solved_result.kpis["cross exchanger.duty_kW"].value,
             0.0,
+        )
+        self.assertIn(
+            "cross exchanger.energyInput_W",
+            solved_result.kpis,
         )
         self.assertGreater(
             solved_result.kpis["report.cross exchanger.duty"].value,
