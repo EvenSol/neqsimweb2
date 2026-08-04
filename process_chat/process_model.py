@@ -2566,6 +2566,15 @@ class NeqSimProcessModel:
             side_state: Dict[str, Any] = {"index": index}
             for boundary, stream in streams.items():
                 try:
+                    stream_calculation_identifier = (
+                        stream.getCalculationIdentifier()
+                    )
+                    if (
+                        stream_calculation_identifier is None
+                        or str(stream_calculation_identifier)
+                        != str(calculation_identifier)
+                    ):
+                        return {}
                     temperature_C = float(stream.getTemperature("C"))
                     pressure_bara = float(stream.getPressure("bara"))
                     flow_kg_hr = float(stream.getFlowRate("kg/hr"))
