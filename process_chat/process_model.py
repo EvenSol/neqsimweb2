@@ -3232,13 +3232,19 @@ class NeqSimProcessModel:
             "_heat_exchanger_state_snapshots",
             {},
         )
-        named_snapshot = snapshots.get(unit_name)
-        if named_snapshot == current_snapshot:
-            return True
-        return any(
-            snapshot == current_snapshot
-            for snapshot in snapshots.values()
-        )
+        unit_name_casefold = unit_name.casefold()
+        matching_names = {
+            snapshot_name
+            for snapshot_name in snapshots
+            if snapshot_name.casefold() == unit_name_casefold
+            or snapshot_name.casefold().endswith(
+                f"/{unit_name_casefold}"
+            )
+        }
+        if len(matching_names) != 1:
+            return False
+        matching_name = next(iter(matching_names))
+        return snapshots[matching_name] == current_snapshot
 
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
