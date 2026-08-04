@@ -2455,7 +2455,10 @@ class NeqSimProcessModel:
                     duty_is_trusted = (
                         cls != "HeatExchanger"
                         or self._heat_exchanger_solution_is_trusted(
-                            name,
+                            self._indexed_unit_name_for_native(
+                                _u,
+                                name,
+                            ),
                             _u,
                             cls,
                         )
@@ -2923,6 +2926,7 @@ class NeqSimProcessModel:
             "getThermalEffectiveness",
             "getDeltaT",
             "getDuty",
+            "getEnergyInput",
             "getOutletTemperature",
             "getApproachTemperature",
             "getMinApproachTemperature",
@@ -3232,6 +3236,8 @@ class NeqSimProcessModel:
             "_heat_exchanger_state_snapshots",
             {},
         )
+        if unit_name in snapshots:
+            return snapshots[unit_name] == current_snapshot
         unit_name_casefold = unit_name.casefold()
         matching_names = {
             snapshot_name
@@ -3245,6 +3251,25 @@ class NeqSimProcessModel:
             return False
         matching_name = next(iter(matching_names))
         return snapshots[matching_name] == current_snapshot
+
+    def _indexed_unit_name_for_native(
+        self,
+        unit: Any,
+        preferred_name: str,
+    ) -> str:
+        """Resolve one indexed unit name by exact native object identity."""
+        identity = _NativeObjectIdentitySet()
+        identity.add(unit)
+        matching_names = [
+            indexed_name
+            for indexed_name, indexed_unit in self._units.items()
+            if identity.contains(indexed_unit)
+        ]
+        if preferred_name in matching_names:
+            return preferred_name
+        if len(matching_names) == 1:
+            return matching_names[0]
+        return preferred_name
 
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
@@ -6086,10 +6111,13 @@ class NeqSimProcessModel:
                     prop == "duty_kW"
                     and utype == "HeatExchanger"
                     and not self._heat_exchanger_solution_is_trusted(
-                        (
-                            f"{process_system_name}/{name}"
-                            if process_system_name
-                            else name
+                        self._indexed_unit_name_for_native(
+                            u,
+                            (
+                                f"{process_system_name}/{name}"
+                                if process_system_name
+                                else name
+                            ),
                         ),
                         u,
                         utype,
