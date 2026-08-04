@@ -732,6 +732,7 @@ class NeqSimProcessModel:
         # Reset recycles before the very first run
         _reset_recycles(units)
 
+        completed_run = False
         for attempt in range(max_runs):
             try:
                 if attempt >= 3 and hasattr(proc, "runSequential"):
@@ -748,6 +749,7 @@ class NeqSimProcessModel:
                     proc.run()
             except Exception:
                 continue
+            completed_run = True
 
             has_energy, total_energy = _check_energy(units)
 
@@ -756,7 +758,9 @@ class NeqSimProcessModel:
 
             # Still zero — reset recycles and try again
             _reset_recycles(units)
-        return False
+        # Zero energy is a warm-up heuristic, not proof that execution
+        # failed: idle equipment and equal-temperature exchangers are valid.
+        return completed_run
 
     @staticmethod
     def _run_acyclic_mixer_energy_closure(
@@ -2812,6 +2816,7 @@ class NeqSimProcessModel:
         for getter_name in (
             "getUAvalue",
             "getThermalEffectiveness",
+            "getDeltaT",
             "getDuty",
             "getOutletTemperature",
             "getApproachTemperature",
@@ -2842,6 +2847,31 @@ class NeqSimProcessModel:
                             return None
                         value = numeric_value
             solution_settings.append((getter_name, value))
+        use_delta_T: Optional[bool] = None
+        for getter_name in ("isUseDeltaT", "getUseDeltaT"):
+            try:
+                use_delta_T = bool(getattr(unit, getter_name)())
+                break
+            except Exception:
+                continue
+        if use_delta_T is None:
+            try:
+                declaring_class = unit.getClass()
+                while declaring_class is not None:
+                    try:
+                        field = declaring_class.getDeclaredField(
+                            "useDeltaT"
+                        )
+                        field.setAccessible(True)
+                        use_delta_T = bool(field.getBoolean(unit))
+                        break
+                    except Exception:
+                        declaring_class = (
+                            declaring_class.getSuperclass()
+                        )
+            except Exception:
+                pass
+        solution_settings.append(("useDeltaT", use_delta_T))
         configuration = (
             flow_arrangement,
             tuple(solution_settings),
