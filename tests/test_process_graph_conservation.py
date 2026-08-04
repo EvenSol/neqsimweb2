@@ -207,11 +207,22 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
                 return self.enthalpy_w
 
         class _Stream:
-            def __init__(self, temperature_c, pressure_bara, flow_kg_hr, enthalpy_w):
+            def __init__(
+                self,
+                temperature_c,
+                pressure_bara,
+                flow_kg_hr,
+                enthalpy_w,
+                calculation_identifier="solved-calculation",
+            ):
                 self.temperature_c = temperature_c
                 self.pressure_bara = pressure_bara
                 self.flow_kg_hr = flow_kg_hr
                 self.fluid = _Fluid(enthalpy_w)
+                self.calculation_identifier = calculation_identifier
+
+            def getCalculationIdentifier(self):
+                return self.calculation_identifier
 
             def getTemperature(self, unit):
                 if unit != "C":
@@ -389,6 +400,23 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(
             NeqSimProcessModel._heat_exchanger_operating_properties(
                 _NeverRunHeatExchanger()
+            ),
+            {},
+        )
+
+        class _StaleBoundaryHeatExchanger(_HeatExchanger):
+            inlet_streams = list(_HeatExchanger.inlet_streams)
+            inlet_streams[0] = _Stream(
+                120.0,
+                50.0,
+                50_000.0,
+                3_300_000.0,
+                calculation_identifier="newer-inlet-calculation",
+            )
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _StaleBoundaryHeatExchanger()
             ),
             {},
         )
