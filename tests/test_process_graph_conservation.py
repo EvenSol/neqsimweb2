@@ -3336,6 +3336,32 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertIn("duty_kW=", train_a_exchanger)
         self.assertNotIn("duty_kW=", train_b_exchanger)
 
+        _, replacement_model = (
+            self._build_two_sided_heat_exchanger_case(1.0)
+        )
+        replacement_model.run(timeout_ms=180_000)
+        replacement_exchanger = replacement_model.get_unit(
+            "cross exchanger"
+        )
+        replacement_exchanger.setLockedInactive(True)
+        train_a.removeUnit("cross exchanger")
+        train_a.add(replacement_exchanger)
+
+        replacement_report = model.get_json_report()[
+            "train-a"
+        ]["cross exchanger"]
+        self.assertNotIn("duty", replacement_report)
+        self.assertNotIn("dutyBalance", replacement_report)
+        replacement_result = model._extract_results()
+        self.assertNotIn(
+            "report.train-a.cross exchanger.duty",
+            replacement_result.kpis,
+        )
+        self.assertNotIn(
+            "report.train-a.cross exchanger.dutyBalance",
+            replacement_result.kpis,
+        )
+
     def test_case_distinct_module_exchangers_prefer_exact_identity(self):
         from neqsim import jneqsim
 
