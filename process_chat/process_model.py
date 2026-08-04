@@ -3318,6 +3318,7 @@ class NeqSimProcessModel:
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
+        report_duty_lookup = self._report_unit_duty_lookup()
         for name, u in self._units.items():
             try:
                 java_class = str(u.getClass().getSimpleName())
@@ -3329,11 +3330,11 @@ class NeqSimProcessModel:
             props = {}
             exchanger_solution_is_trusted = (
                 java_class != "HeatExchanger"
-                or self._heat_exchanger_solution_is_trusted(
+                or self._report_unit_duty_suppression(
                     name,
-                    u,
-                    java_class,
+                    report_duty_lookup,
                 )
+                is False
             )
             # Try to extract common properties
             for prop, getter in [
@@ -4055,10 +4056,11 @@ class NeqSimProcessModel:
                     pass
             exchanger_duty_is_trusted = (
                 uclass != "HeatExchanger"
-                or not bool(self._report_unit_duty_suppression(
+                or self._report_unit_duty_suppression(
                     name,
                     report_duty_lookup,
-                ))
+                )
+                is False
             )
             if hasattr(u, "getDuty") and exchanger_duty_is_trusted:
                 try:
@@ -4936,10 +4938,11 @@ class NeqSimProcessModel:
             elif java_class in ("Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"):
                 exchanger_duty_is_trusted = (
                     java_class != "HeatExchanger"
-                    or not bool(self._report_unit_duty_suppression(
+                    or self._report_unit_duty_suppression(
                         name,
                         report_duty_lookup,
-                    ))
+                    )
+                    is False
                 )
                 for prop, getter, unit in [
                     ("pressureDrop_bar", "getPressureDrop", "bar"),
@@ -5619,14 +5622,38 @@ class NeqSimProcessModel:
     def _report_unit_duty_lookup(
         self,
     ) -> Dict[str, List[Tuple[str, bool]]]:
-        """Index report names and their solved-duty trust once per report pass."""
+        """Index current report identities and solved-duty trust once per pass."""
         lookup: Dict[str, List[Tuple[str, bool]]] = {}
+        current_units: List[Tuple[str, Any]] = []
+        current_identities = _NativeObjectIdentitySet()
+        try:
+            process_systems = self.get_process_systems()
+        except Exception:
+            process_systems = []
+        native_inventory_available = bool(process_systems)
+        for process_system in process_systems:
+            try:
+                process_system_name = str(process_system.getName())
+            except Exception:
+                process_system_name = ""
+            try:
+                native_units = list(process_system.getUnitOperations())
+            except Exception:
+                native_units = []
+            for native_unit in native_units:
+                current_units.append((process_system_name, native_unit))
+                current_identities.add(native_unit)
+
+        indexed_suppression: Dict[str, bool] = {}
         for indexed_name, unit in self._units.items():
             try:
-                raw_name = str(unit.getName())
                 java_class = str(unit.getClass().getSimpleName())
             except Exception:
                 continue
+            try:
+                raw_name = str(unit.getName())
+            except Exception:
+                raw_name = indexed_name.rsplit("/", 1)[-1]
             process_system_name = self._unit_ps_name.get(
                 indexed_name,
                 "",
@@ -5638,12 +5665,19 @@ class NeqSimProcessModel:
             )
             suppress_duty = (
                 java_class == "HeatExchanger"
-                and not self._heat_exchanger_solution_is_trusted(
-                    indexed_name,
-                    unit,
-                    java_class,
+                and (
+                    (
+                        native_inventory_available
+                        and not current_identities.contains(unit)
+                    )
+                    or not self._heat_exchanger_solution_is_trusted(
+                        indexed_name,
+                        unit,
+                        java_class,
+                    )
                 )
             )
+            indexed_suppression[indexed_name] = suppress_duty
             for report_name in {
                 indexed_name,
                 raw_name,
@@ -5651,6 +5685,44 @@ class NeqSimProcessModel:
             }:
                 lookup.setdefault(report_name, []).append(
                     (indexed_name, suppress_duty)
+                )
+
+        for process_system_name, unit in current_units:
+            try:
+                raw_name = str(unit.getName())
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            identity = _NativeObjectIdentitySet()
+            identity.add(unit)
+            matching_indexed_names = [
+                indexed_name
+                for indexed_name, indexed_unit in self._units.items()
+                if identity.contains(indexed_unit)
+            ]
+            suppress_duty = (
+                java_class == "HeatExchanger"
+                and (
+                    not matching_indexed_names
+                    or any(
+                        indexed_suppression.get(indexed_name, True)
+                        for indexed_name in matching_indexed_names
+                    )
+                )
+            )
+            lookup_identity = (
+                matching_indexed_names[0]
+                if matching_indexed_names
+                else f"{process_system_name}/{raw_name}#unindexed"
+            )
+            qualified_report_name = (
+                f"{process_system_name}/{raw_name}"
+                if process_system_name
+                else raw_name
+            )
+            for report_name in {raw_name, qualified_report_name}:
+                lookup.setdefault(report_name, []).append(
+                    (lookup_identity, suppress_duty)
                 )
         return lookup
 
