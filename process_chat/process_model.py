@@ -4098,11 +4098,18 @@ class NeqSimProcessModel:
                     combined = {}
                     for ps in self.get_process_systems():
                         try:
-                            ps_name = str(ps.getName()) if ps.getName() else "process"
+                            native_ps_name = str(ps.getName())
+                            ps_name = native_ps_name or "process"
                             report_obj = jneqsim.process.util.report.Report(ps)
                             r_str = str(report_obj.generateJsonReport())
                             r_data = json.loads(r_str)
                             if isinstance(r_data, dict):
+                                r_data = self._filter_json_report_duties(
+                                    r_data,
+                                    report_duty_lookup,
+                                    process_system_name=native_ps_name,
+                                    process_system=ps,
+                                )
                                 # Prefix keys with process system name if multiple
                                 for k, v in r_data.items():
                                     combined[f"{ps_name}/{k}"] = v
@@ -6074,11 +6081,17 @@ class NeqSimProcessModel:
                 combined = {}
                 for ps in self.get_process_systems():
                     try:
-                        ps_name = str(ps.getName()) if ps.getName() else "process"
+                        native_ps_name = str(ps.getName())
+                        ps_name = native_ps_name or "process"
                         report_obj = jneqsim.process.util.report.Report(ps)
                         r_str = str(report_obj.generateJsonReport())
                         r_data = json.loads(r_str)
                         if isinstance(r_data, dict):
+                            r_data = self._filter_json_report_duties(
+                                r_data,
+                                process_system_name=native_ps_name,
+                                process_system=ps,
+                            )
                             for k, v in r_data.items():
                                 combined[f"{ps_name}/{k}"] = v
                     except Exception:
