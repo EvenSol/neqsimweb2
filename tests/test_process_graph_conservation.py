@@ -2976,6 +2976,27 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             if "cross exchanger (HeatExchanger)" in line
         )
         self.assertNotIn("duty_kW=", exchanger_summary)
+        prefixed_report_kpis = {}
+        model._unit_ps_name["cross exchanger"] = "train-a"
+        model._flatten_json_report(
+            {
+                "train-a/cross exchanger": {
+                    "duty": float(exchanger.getDuty()),
+                    "feedTemperature1": 120.0,
+                },
+            },
+            prefixed_report_kpis,
+        )
+        self.assertNotIn(
+            "report.train-a/cross exchanger.duty",
+            prefixed_report_kpis,
+        )
+        self.assertEqual(
+            prefixed_report_kpis[
+                "report.train-a/cross exchanger.feedTemperature1"
+            ].value,
+            120.0,
+        )
 
         exchanger.setLockedInactive(False)
         reenabled_properties = next(
