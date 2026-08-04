@@ -433,12 +433,38 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
                 for index, stream in enumerate(_HeatExchanger.inlet_streams)
             ]
 
+        direct_provenance = (
+            "solved-calculation",
+            ("direct-inlet-0", "direct-inlet-1"),
+            ("solved-calculation", "solved-calculation"),
+        )
         direct_properties = (
             NeqSimProcessModel._heat_exchanger_operating_properties(
-                _DirectRunHeatExchanger()
+                _DirectRunHeatExchanger(),
+                direct_provenance,
             )
         )
         self.assertEqual(direct_properties["heatTransferDuty_kW"], 2_400.0)
+
+        direct_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        direct_model._units = {
+            "direct exchanger": _DirectRunHeatExchanger()
+        }
+        direct_model._unit_ps_name = {"direct exchanger": "main"}
+        direct_model._direct_unit_run_provenance = {}
+        direct_model.record_direct_unit_run("direct exchanger")
+        self.assertEqual(
+            direct_model._direct_unit_run_provenance[
+                "direct exchanger"
+            ],
+            direct_provenance,
+        )
+        self.assertEqual(
+            direct_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
 
         class _StaleDualInletHeatExchanger(_DirectRunHeatExchanger):
             inlet_streams = [
@@ -460,7 +486,8 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
 
         self.assertEqual(
             NeqSimProcessModel._heat_exchanger_operating_properties(
-                _StaleDualInletHeatExchanger()
+                _StaleDualInletHeatExchanger(),
+                direct_provenance,
             ),
             {},
         )
@@ -493,7 +520,27 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
                 _CrossedTemperatureHeatExchanger()
             )
         )
-        self.assertEqual(crossed_properties["approachTemperature_K"], 5.0)
+        self.assertEqual(crossed_properties["approachTemperature_K"], -5.0)
+
+        class _BothSidesLoseHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _HeatExchanger.inlet_streams[0],
+                _Stream(20.0, 49.5, 40_000.0, 2_250_000.0),
+            ]
+            outlet_streams = [
+                _HeatExchanger.outlet_streams[0],
+                _Stream(103.5, 49.5, 40_000.0, -150_000.0),
+            ]
+
+        both_lose_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _BothSidesLoseHeatExchanger()
+            )
+        )
+        self.assertEqual(both_lose_properties["hotSideDuty_kW"], 2_400.0)
+        self.assertEqual(both_lose_properties["coldSideDuty_kW"], 2_400.0)
+        self.assertEqual(both_lose_properties["dutyClosure_kW"], 4_800.0)
+        self.assertEqual(both_lose_properties["dutyClosure_pct"], 200.0)
 
 
 class SplitterPropertyExtractionTest(unittest.TestCase):
