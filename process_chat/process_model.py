@@ -369,6 +369,8 @@ class NeqSimProcessModel:
         process_system,
         source_bytes: Optional[bytes] = None,
         enforce_acyclic_mixer_energy: bool = False,
+        trusted_solved: bool = False,
+        allow_direct_runs: bool = False,
     ):
         """
         Args:
@@ -376,6 +378,10 @@ class NeqSimProcessModel:
             source_bytes: Original file bytes for clone-by-reload.
             enforce_acyclic_mixer_energy: Recheck adiabatic mixer energy
                 closure after each acyclic graph execution.
+            trusted_solved: Capture solved exchanger state only when the
+                adapter observed the successful run that produced it.
+            allow_direct_runs: Accept direct-run exchanger UUID patterns for
+                that observed successful run.
         """
         self._proc = process_system
         self._source_bytes = source_bytes
@@ -391,7 +397,10 @@ class NeqSimProcessModel:
         ] = {}
         self._heat_exchanger_state_snapshots: Dict[str, Tuple[Any, ...]] = {}
         self._index_model_objects()
-        self._capture_heat_exchanger_state_snapshots()
+        if trusted_solved:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=allow_direct_runs
+            )
 
     # ----- ProcessModel detection -----
 
@@ -636,8 +645,12 @@ class NeqSimProcessModel:
         # Run to initialize internal state.
         # Complex processes with recycles/mixers that reference downstream
         # streams may need multiple runs to converge after deserialization.
-        cls._run_until_converged(loaded)
-        return cls(loaded, source_bytes=file_bytes)
+        process_run_succeeded = cls._run_until_converged(loaded)
+        return cls(
+            loaded,
+            source_bytes=file_bytes,
+            trusted_solved=process_run_succeeded,
+        )
 
     @staticmethod
     def _run_until_converged(proc, max_runs: int = 5, timeout_ms: int = 180000):
@@ -835,6 +848,8 @@ class NeqSimProcessModel:
         cls,
         process_system,
         enforce_acyclic_mixer_energy: bool = False,
+        trusted_solved: bool = False,
+        allow_direct_runs: bool = False,
     ) -> "NeqSimProcessModel":
         """Wrap an existing ProcessSystem object (e.g. built in code)."""
         import neqsim
@@ -857,6 +872,8 @@ class NeqSimProcessModel:
             process_system,
             source_bytes=file_bytes,
             enforce_acyclic_mixer_energy=enforce_acyclic_mixer_energy,
+            trusted_solved=trusted_solved,
+            allow_direct_runs=allow_direct_runs,
         )
 
     # ----- Cloning -----
@@ -900,17 +917,7 @@ class NeqSimProcessModel:
         clone._enforce_acyclic_mixer_energy = (
             self._enforce_acyclic_mixer_energy
         )
-        if (
-            clone._enforce_acyclic_mixer_energy
-            and not clone._is_process_model
-        ):
-            direct_closure_ran = (
-                clone._run_acyclic_mixer_energy_closure(clone._proc)
-            )
-            clone._index_model_objects()
-            clone._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=direct_closure_ran
-            )
+        clone.rerun()
         return clone
 
     # ----- Introspection -----
@@ -2796,18 +2803,49 @@ class NeqSimProcessModel:
                     return None
                 stream_states.append(state)
         try:
-            ua_W_K = float(unit.getUAvalue())
-        except Exception:
-            ua_W_K = None
-        if ua_W_K is not None and not math.isfinite(ua_W_K):
-            return None
-        try:
             flow_arrangement = str(
                 unit.getFlowArrangement()
             ).strip().casefold()
         except Exception:
             flow_arrangement = ""
-        configuration = (ua_W_K, flow_arrangement)
+        solution_settings: List[Tuple[str, Any]] = []
+        for getter_name in (
+            "getUAvalue",
+            "getThermalEffectiveness",
+            "getDuty",
+            "getOutletTemperature",
+            "getApproachTemperature",
+            "getMinApproachTemperature",
+            "getHotColdDutyBalance",
+            "getDesignDuty",
+            "getDesignUAValue",
+            "getMaxDesignDuty",
+            "getMinOutletTemperature",
+            "getMaxOutletTemperature",
+            "hasMinOutletTemperatureLimit",
+            "hasMaxOutletTemperatureLimit",
+        ):
+            try:
+                raw_value = getattr(unit, getter_name)()
+            except Exception:
+                value = None
+            else:
+                if isinstance(raw_value, bool):
+                    value = raw_value
+                else:
+                    try:
+                        numeric_value = float(raw_value)
+                    except (TypeError, ValueError):
+                        value = str(raw_value).strip().casefold()
+                    else:
+                        if not math.isfinite(numeric_value):
+                            return None
+                        value = numeric_value
+            solution_settings.append((getter_name, value))
+        configuration = (
+            flow_arrangement,
+            tuple(solution_settings),
+        )
         return (
             str(calculation_identifier),
             tuple(stream_states),
@@ -3083,7 +3121,7 @@ class NeqSimProcessModel:
                             self,
                             "_heat_exchanger_state_snapshots",
                             {},
-                        ).get(name),
+                        ).get(name, ()),
                     )
                 )
 
@@ -3419,7 +3457,6 @@ class NeqSimProcessModel:
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
-        self._direct_unit_run_provenance.clear()
         direct_closure_ran = False
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
@@ -3457,7 +3494,6 @@ class NeqSimProcessModel:
         simulation (e.g. after modifying parameters) and then re-index.
         Handles both ProcessSystem and ProcessModel transparently.
         """
-        self._direct_unit_run_provenance.clear()
         direct_closure_ran = False
         if self._is_process_model:
             process_run_succeeded = self._run_process_model(
@@ -4617,7 +4653,7 @@ class NeqSimProcessModel:
                                 self,
                                 "_heat_exchanger_state_snapshots",
                                 {},
-                            ).get(name),
+                            ).get(name, ()),
                         ).items()
                     ):
                         kpis[f"{prefix}.{prop}"] = KPI(
