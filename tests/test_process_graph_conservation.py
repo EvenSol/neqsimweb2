@@ -3279,6 +3279,12 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "dutyBalance",
             train_b_report["cross exchanger"],
         )
+        full_report = model.get_json_report()
+        renamed_exchanger_report = full_report[
+            "train-b-renamed"
+        ]["cross exchanger"]
+        self.assertNotIn("duty", renamed_exchanger_report)
+        self.assertNotIn("dutyBalance", renamed_exchanger_report)
 
         summary = model.get_model_summary()
         train_a_section = summary.split(
