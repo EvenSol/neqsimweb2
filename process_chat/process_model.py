@@ -5626,6 +5626,11 @@ class NeqSimProcessModel:
         lookup: Dict[str, List[Tuple[str, bool]]] = {}
         current_units: List[Tuple[str, Any]] = []
         current_identities = _NativeObjectIdentitySet()
+        unit_process_system_names = getattr(
+            self,
+            "_unit_ps_name",
+            {},
+        )
         try:
             process_systems = self.get_process_systems()
         except Exception:
@@ -5654,7 +5659,7 @@ class NeqSimProcessModel:
                 raw_name = str(unit.getName())
             except Exception:
                 raw_name = indexed_name.rsplit("/", 1)[-1]
-            process_system_name = self._unit_ps_name.get(
+            process_system_name = unit_process_system_names.get(
                 indexed_name,
                 "",
             )
