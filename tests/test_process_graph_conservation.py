@@ -421,6 +421,55 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             {},
         )
 
+        class _DirectRunHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _Stream(
+                    stream.temperature_c,
+                    stream.pressure_bara,
+                    stream.flow_kg_hr,
+                    stream.fluid.enthalpy_w,
+                    calculation_identifier=f"direct-inlet-{index}",
+                )
+                for index, stream in enumerate(_HeatExchanger.inlet_streams)
+            ]
+
+        direct_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _DirectRunHeatExchanger()
+            )
+        )
+        self.assertEqual(direct_properties["heatTransferDuty_kW"], 2_400.0)
+
+        class _StaleOutletHeatExchanger(_HeatExchanger):
+            outlet_streams = list(_HeatExchanger.outlet_streams)
+            outlet_streams[0] = _Stream(
+                53.0,
+                50.0,
+                50_000.0,
+                900_000.0,
+                calculation_identifier="older-outlet-calculation",
+            )
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _StaleOutletHeatExchanger()
+            ),
+            {},
+        )
+
+        class _CrossedTemperatureHeatExchanger(_HeatExchanger):
+            outlet_streams = [
+                _HeatExchanger.outlet_streams[0],
+                _Stream(125.0, 49.5, 40_000.0, 2_250_000.0),
+            ]
+
+        crossed_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _CrossedTemperatureHeatExchanger()
+            )
+        )
+        self.assertEqual(crossed_properties["approachTemperature_K"], 5.0)
+
 
 class SplitterPropertyExtractionTest(unittest.TestCase):
     """Validate solved splitter allocations and explicit flow closure."""
