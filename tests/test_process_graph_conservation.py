@@ -759,6 +759,45 @@ class ProcessRunCompletionTest(unittest.TestCase):
         )
         self.assertEqual(process.run_count, 3)
 
+    def test_failed_warmups_override_earlier_zero_energy_success(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Heater"
+
+        class _Unit:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getDuty():
+                return 0.0
+
+        class _Process:
+            def __init__(self):
+                self.run_count = 0
+                self.units = [_Unit(), _Unit(), _Unit()]
+
+            def getUnitOperations(self):
+                return self.units
+
+            def run(self):
+                self.run_count += 1
+                if self.run_count > 1:
+                    raise RuntimeError("warm-up failed")
+
+        process = _Process()
+
+        self.assertFalse(
+            NeqSimProcessModel._run_until_converged(
+                process,
+                max_runs=3,
+                timeout_ms=0,
+            )
+        )
+        self.assertEqual(process.run_count, 3)
+
     def test_native_worker_failure_is_not_successful(self):
         from neqsim import jneqsim
 
@@ -2903,6 +2942,34 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 if unit.name == "cross exchanger"
             ),
         )
+
+    def test_native_locked_inactive_invalidates_exchanger_snapshot(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        exchanger = model.get_unit("cross exchanger")
+
+        self.assertFalse(bool(exchanger.isLockedInactive()))
+        exchanger.setLockedInactive(True)
+        self.assertTrue(bool(exchanger.isLockedInactive()))
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+
+        result = model.run(timeout_ms=180_000)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
 
     def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
         _, model = self._build_two_sided_heat_exchanger_case(1.0)
