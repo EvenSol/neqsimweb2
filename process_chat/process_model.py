@@ -2502,6 +2502,96 @@ class NeqSimProcessModel:
     _HEAT_EXCHANGE_UNITS = _DUTY_UNITS  # units where outlet temperature matters
 
     @staticmethod
+    def _thermal_operating_properties(unit: Any) -> Dict[str, float]:
+        """Return finite solved properties for one-sided thermal equipment.
+
+        Heater and cooler duties use NeqSim's signed convention: positive heat
+        enters the material stream and negative heat leaves it. Positive
+        heating and cooling magnitudes are also published so workbook users do
+        not need to infer the equipment role from that sign convention.
+        """
+        properties: Dict[str, float] = {}
+
+        streams: Dict[str, Any] = {}
+        for boundary, getter_name in (
+            ("inlet", "getInletStream"),
+            ("outlet", "getOutletStream"),
+        ):
+            if not hasattr(unit, getter_name):
+                continue
+            try:
+                stream = getattr(unit, getter_name)()
+            except Exception:
+                continue
+            if stream is not None:
+                streams[boundary] = stream
+
+        for boundary, stream in streams.items():
+            for property_suffix, getter_name, getter_unit in (
+                ("Temperature_C", "getTemperature", "C"),
+                ("Pressure_bara", "getPressure", "bara"),
+            ):
+                if not hasattr(stream, getter_name):
+                    continue
+                try:
+                    value = float(getattr(stream, getter_name)(getter_unit))
+                except Exception:
+                    continue
+                if math.isfinite(value):
+                    properties[f"{boundary}{property_suffix}"] = value
+
+        inlet_temperature = properties.get("inletTemperature_C")
+        outlet_temperature = properties.get("outletTemperature_C")
+        if inlet_temperature is not None and outlet_temperature is not None:
+            properties["temperatureChange_C"] = (
+                outlet_temperature - inlet_temperature
+            )
+
+        inlet_pressure = properties.get("inletPressure_bara")
+        outlet_pressure = properties.get("outletPressure_bara")
+        if inlet_pressure is not None and outlet_pressure is not None:
+            properties["pressureDrop_bar"] = inlet_pressure - outlet_pressure
+
+        duty_kW = math.nan
+        if hasattr(unit, "getDuty"):
+            try:
+                duty_kW = float(unit.getDuty()) / 1000.0
+            except Exception:
+                duty_kW = math.nan
+        if (not math.isfinite(duty_kW) or duty_kW == 0.0) and hasattr(
+            unit,
+            "getEnergyInput",
+        ):
+            try:
+                energy_input_kW = float(unit.getEnergyInput()) / 1000.0
+            except Exception:
+                energy_input_kW = math.nan
+            if math.isfinite(energy_input_kW):
+                duty_kW = energy_input_kW
+        if math.isfinite(duty_kW):
+            properties["duty_kW"] = duty_kW
+            properties["heatingDuty_kW"] = max(duty_kW, 0.0)
+            properties["coolingDuty_kW"] = max(-duty_kW, 0.0)
+
+        inlet_stream = streams.get("inlet")
+        if inlet_stream is not None and hasattr(inlet_stream, "getFlowRate"):
+            try:
+                mass_flow_kg_hr = float(inlet_stream.getFlowRate("kg/hr"))
+            except Exception:
+                mass_flow_kg_hr = math.nan
+            if math.isfinite(mass_flow_kg_hr) and mass_flow_kg_hr >= 0.0:
+                properties["massFlow_kg_hr"] = mass_flow_kg_hr
+                if (
+                    math.isfinite(duty_kW)
+                    and mass_flow_kg_hr > _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR
+                ):
+                    properties["specificDuty_kJ_kg"] = (
+                        duty_kW * 3600.0 / mass_flow_kg_hr
+                    )
+
+        return properties
+
+    @staticmethod
     def _pump_operating_properties(unit: Any) -> Dict[str, float]:
         """Return finite solved pump properties using supported native APIs.
 
@@ -3393,6 +3483,14 @@ class NeqSimProcessModel:
 
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
+
+            if java_class in (
+                "Cooler",
+                "Heater",
+                "AirCooler",
+                "WaterCooler",
+            ):
+                props.update(self._thermal_operating_properties(u))
 
             if (
                 java_class == "HeatExchanger"
