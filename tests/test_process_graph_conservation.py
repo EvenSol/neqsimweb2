@@ -2950,9 +2950,11 @@ class MultiInletMixerConservationTest(unittest.TestCase):
 
         self.assertFalse(bool(exchanger.isLockedInactive()))
         with patch.object(
-            model,
+            NeqSimProcessModel,
             "_heat_exchanger_boundary_state_signature",
-            wraps=model._heat_exchanger_boundary_state_signature,
+            wraps=(
+                NeqSimProcessModel._heat_exchanger_boundary_state_signature
+            ),
         ) as signature:
             trusted_result = model._extract_results()
         self.assertIn(
@@ -3260,13 +3262,16 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertIn("2389.2 kW", solved_dot)
         self.assertIn("2480.0 kW", solved_dot)
 
+        train_b.setName("train-b-renamed")
         model.get_unit(
             "train-b/cross exchanger"
         ).setLockedInactive(True)
         model.run(timeout_ms=180_000)
 
         train_a_report = model.get_module_json_report("train-a")
-        train_b_report = model.get_module_json_report("train-b")
+        train_b_report = model.get_module_json_report(
+            "train-b-renamed"
+        )
         self.assertIn("duty", train_a_report["cross exchanger"])
         self.assertIn("dutyBalance", train_a_report["cross exchanger"])
         self.assertNotIn("duty", train_b_report["cross exchanger"])
@@ -3279,9 +3284,12 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         train_a_section = summary.split(
             "== Process System: train-a ==",
             1,
-        )[1].split("== Process System: train-b ==", 1)[0]
+        )[1].split(
+            "== Process System: train-b-renamed ==",
+            1,
+        )[0]
         train_b_section = summary.split(
-            "== Process System: train-b ==",
+            "== Process System: train-b-renamed ==",
             1,
         )[1]
         train_a_exchanger = next(
