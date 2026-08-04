@@ -5521,6 +5521,20 @@ class NeqSimProcessModel:
             for name in self._unit_ps_name.values()
             if name
         }
+        current_process_systems = {}
+        if self._is_process_model:
+            for current_process_system in self.get_process_systems():
+                try:
+                    current_name = str(
+                        current_process_system.getName()
+                    )
+                except Exception:
+                    continue
+                if current_name:
+                    current_process_systems[current_name] = (
+                        current_process_system
+                    )
+        process_system_names.update(current_process_systems)
         if duty_lookup is None:
             duty_lookup = self._report_unit_duty_lookup()
         for report_name, report_data in json_report.items():
@@ -5671,6 +5685,20 @@ class NeqSimProcessModel:
             for name in self._unit_ps_name.values()
             if name
         }
+        current_process_systems = {}
+        if self._is_process_model:
+            for current_process_system in self.get_process_systems():
+                try:
+                    current_name = str(
+                        current_process_system.getName()
+                    )
+                except Exception:
+                    continue
+                if current_name:
+                    current_process_systems[current_name] = (
+                        current_process_system
+                    )
+        process_system_names.update(current_process_systems)
         if duty_lookup is None:
             duty_lookup = self._report_unit_duty_lookup()
         filtered = {}
@@ -5682,9 +5710,21 @@ class NeqSimProcessModel:
             )
             if is_process_system_container:
                 nested_report = {}
+                current_process_system = current_process_systems.get(
+                    report_name
+                )
                 for nested_name, nested_data in report_data.items():
+                    lookup_name = (
+                        self._indexed_unit_name_for_process_system(
+                            current_process_system,
+                            nested_name,
+                            report_name,
+                        )
+                        if current_process_system is not None
+                        else f"{report_name}/{nested_name}"
+                    )
                     suppression = self._report_unit_duty_suppression(
-                        f"{report_name}/{nested_name}",
+                        lookup_name,
                         duty_lookup,
                     )
                     nested_report[nested_name] = self._copy_report_data(
