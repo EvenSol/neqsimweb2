@@ -2951,24 +2951,24 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertFalse(bool(exchanger.isLockedInactive()))
         exchanger.setLockedInactive(True)
         self.assertTrue(bool(exchanger.isLockedInactive()))
-        self.assertNotIn(
-            "heatTransferDuty_kW",
-            next(
-                unit.properties
-                for unit in model.list_units()
-                if unit.name == "cross exchanger"
-            ),
+        inactive_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
         )
+        self.assertNotIn("heatTransferDuty_kW", inactive_properties)
+        self.assertNotIn("duty_kW", inactive_properties)
 
         result = model.run(timeout_ms=180_000)
-        self.assertNotIn(
-            "heatTransferDuty_kW",
-            next(
-                unit.properties
-                for unit in model.list_units()
-                if unit.name == "cross exchanger"
-            ),
+        rerun_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
         )
+        self.assertNotIn("heatTransferDuty_kW", rerun_properties)
+        self.assertNotIn("duty_kW", rerun_properties)
+        self.assertNotIn("cross exchanger.duty_kW", result.kpis)
+        self.assertEqual(result.kpis["total_duty_kW"].value, 0.0)
         self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
 
     def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
