@@ -3511,6 +3511,16 @@ class NeqSimProcessModel:
             try:
                 if str(unit.getClass().getSimpleName()) != "HeatExchanger":
                     continue
+                try:
+                    if bool(unit.isLockedInactive()):
+                        continue
+                except Exception:
+                    pass
+                try:
+                    if not bool(unit.isActive()):
+                        continue
+                except Exception:
+                    pass
                 calculation_identifier = unit.getCalculationIdentifier()
                 if calculation_identifier is None:
                     continue
