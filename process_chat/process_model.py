@@ -5608,6 +5608,7 @@ class NeqSimProcessModel:
         duty_lookup: Optional[
             Dict[str, List[Tuple[str, bool]]]
         ] = None,
+        process_system_name: str = "",
     ) -> dict:
         """Return a public JSON report without untrusted exchanger duties."""
         process_system_names = {
@@ -5637,8 +5638,16 @@ class NeqSimProcessModel:
                     )
                 filtered[report_name] = nested_report
                 continue
+            lookup_report_name = (
+                f"{process_system_name}/{report_name}"
+                if process_system_name
+                and not report_name.startswith(
+                    f"{process_system_name}/"
+                )
+                else report_name
+            )
             suppression = self._report_unit_duty_suppression(
-                report_name,
+                lookup_report_name,
                 duty_lookup,
             )
             filtered[report_name] = self._copy_report_data(
@@ -5914,7 +5923,8 @@ class NeqSimProcessModel:
                     report_obj = jneqsim.process.util.report.Report(ps)
                     r_str = str(report_obj.generateJsonReport())
                     return self._filter_json_report_duties(
-                        json.loads(r_str)
+                        json.loads(r_str),
+                        process_system_name=ps_name,
                     )
             except Exception:
                 continue
@@ -6021,7 +6031,11 @@ class NeqSimProcessModel:
                     ordered_units = list(ps.getUnitOperations())
                 except Exception:
                     ordered_units = []
-                self._append_topology(lines, ordered_units)
+                self._append_topology(
+                    lines,
+                    ordered_units,
+                    process_system_name=ps_name,
+                )
                 lines.append("")
         else:
             lines.append("== Process Topology (units in process order) ==")
@@ -6045,7 +6059,12 @@ class NeqSimProcessModel:
 
         return "\n".join(lines)
 
-    def _append_topology(self, lines: list, ordered_units: list):
+    def _append_topology(
+        self,
+        lines: list,
+        ordered_units: list,
+        process_system_name: str = "",
+    ):
         """Render a list of ordered unit operations into *lines*."""
         for idx, u in enumerate(ordered_units):
             try:
@@ -6067,7 +6086,11 @@ class NeqSimProcessModel:
                     prop == "duty_kW"
                     and utype == "HeatExchanger"
                     and not self._heat_exchanger_solution_is_trusted(
-                        name,
+                        (
+                            f"{process_system_name}/{name}"
+                            if process_system_name
+                            else name
+                        ),
                         u,
                         utype,
                     )
