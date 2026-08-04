@@ -2538,42 +2538,74 @@ class NeqSimProcessModel:
     ) -> Dict[str, float]:
         """Return explicit solved hot/cold-side heat-exchanger properties.
 
-        Native two-sided ``HeatExchanger`` streams are ordered hot side first
-        and cold side second. Side duties use positive magnitudes for heat
-        released by the hot side and heat received by the cold side.
-        Completeness-dependent closure is withheld unless all four stream
-        enthalpy flows are finite.
+        Native stream indices preserve insertion order, so the hot and cold
+        sides are classified from solved inlet temperatures. Side duties are
+        positive heat-transfer magnitudes. Properties are withheld unless both
+        sides have complete, nonzero, finite solved states.
         """
-        properties: Dict[str, float] = {}
-        stream_enthalpy_kW: Dict[str, float] = {}
-        for side, index in (("hot", 0), ("cold", 1)):
+        indexed_sides: List[Dict[str, Any]] = []
+        for index in (0, 1):
+            streams: Dict[str, Any] = {}
             for boundary, getter_name in (
-                ("Inlet", "getInStream"),
-                ("Outlet", "getOutStream"),
+                ("inlet", "getInStream"),
+                ("outlet", "getOutStream"),
             ):
                 try:
-                    stream = getattr(unit, getter_name)(index)
+                    streams[boundary] = getattr(unit, getter_name)(index)
                 except Exception:
-                    continue
-                for suffix, getter in (
-                    ("Temperature_C", lambda: stream.getTemperature("C")),
-                    ("Pressure_bara", lambda: stream.getPressure("bara")),
-                    ("Flow_kg_hr", lambda: stream.getFlowRate("kg/hr")),
-                ):
-                    try:
-                        value = float(getter())
-                    except Exception:
-                        continue
-                    if math.isfinite(value):
-                        properties[f"{side}{boundary}{suffix}"] = value
+                    return {}
+
+            side_state: Dict[str, Any] = {"index": index}
+            for boundary, stream in streams.items():
                 try:
-                    enthalpy_kW = float(
-                        stream.getFluid().getEnthalpy()
-                    ) / 1000.0
+                    temperature_C = float(stream.getTemperature("C"))
+                    pressure_bara = float(stream.getPressure("bara"))
+                    flow_kg_hr = float(stream.getFlowRate("kg/hr"))
+                    fluid = stream.getFluid()
+                    fluid.init(3)
+                    enthalpy_kW = float(fluid.getEnthalpy()) / 1000.0
                 except Exception:
-                    continue
-                if math.isfinite(enthalpy_kW):
-                    stream_enthalpy_kW[f"{side}{boundary}"] = enthalpy_kW
+                    return {}
+                values = (
+                    temperature_C,
+                    pressure_bara,
+                    flow_kg_hr,
+                    enthalpy_kW,
+                )
+                if not all(math.isfinite(value) for value in values):
+                    return {}
+                if abs(flow_kg_hr) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+                    return {}
+                side_state[boundary] = {
+                    "temperature_C": temperature_C,
+                    "pressure_bara": pressure_bara,
+                    "flow_kg_hr": flow_kg_hr,
+                    "enthalpy_kW": enthalpy_kW,
+                }
+            indexed_sides.append(side_state)
+
+        indexed_sides.sort(
+            key=lambda side: side["inlet"]["temperature_C"],
+            reverse=True,
+        )
+        properties: Dict[str, float] = {}
+        named_sides = {
+            "hot": indexed_sides[0],
+            "cold": indexed_sides[1],
+        }
+        for side_name, side_state in named_sides.items():
+            for boundary_name in ("inlet", "outlet"):
+                state = side_state[boundary_name]
+                property_boundary = boundary_name.capitalize()
+                properties[
+                    f"{side_name}{property_boundary}Temperature_C"
+                ] = state["temperature_C"]
+                properties[
+                    f"{side_name}{property_boundary}Pressure_bara"
+                ] = state["pressure_bara"]
+                properties[
+                    f"{side_name}{property_boundary}Flow_kg_hr"
+                ] = state["flow_kg_hr"]
 
         for property_name, getter_name, scale in (
             ("UA_W_K", "getUAvalue", 1.0),
@@ -2585,37 +2617,32 @@ class NeqSimProcessModel:
                 value = float(getattr(unit, getter_name)()) * scale
             except Exception:
                 continue
-            if math.isfinite(value):
+            if math.isfinite(value) and abs(value) < 1.0e300:
+                if property_name == "heatTransferDuty_kW":
+                    value = abs(value)
                 properties[property_name] = value
 
-        required_enthalpies = {
-            "hotInlet",
-            "hotOutlet",
-            "coldInlet",
-            "coldOutlet",
-        }
-        if required_enthalpies.issubset(stream_enthalpy_kW):
-            hot_side_duty_kW = (
-                stream_enthalpy_kW["hotInlet"]
-                - stream_enthalpy_kW["hotOutlet"]
+        hot_side_duty_kW = abs(
+            named_sides["hot"]["inlet"]["enthalpy_kW"]
+            - named_sides["hot"]["outlet"]["enthalpy_kW"]
+        )
+        cold_side_duty_kW = abs(
+            named_sides["cold"]["outlet"]["enthalpy_kW"]
+            - named_sides["cold"]["inlet"]["enthalpy_kW"]
+        )
+        duty_closure_kW = hot_side_duty_kW - cold_side_duty_kW
+        properties["hotSideDuty_kW"] = hot_side_duty_kW
+        properties["coldSideDuty_kW"] = cold_side_duty_kW
+        properties["dutyClosure_kW"] = duty_closure_kW
+        properties["dutyClosure_pct"] = (
+            abs(duty_closure_kW)
+            / max(
+                hot_side_duty_kW,
+                cold_side_duty_kW,
+                _UNIT_BALANCE_SCALE_FLOOR_KW,
             )
-            cold_side_duty_kW = (
-                stream_enthalpy_kW["coldOutlet"]
-                - stream_enthalpy_kW["coldInlet"]
-            )
-            duty_closure_kW = hot_side_duty_kW - cold_side_duty_kW
-            properties["hotSideDuty_kW"] = hot_side_duty_kW
-            properties["coldSideDuty_kW"] = cold_side_duty_kW
-            properties["dutyClosure_kW"] = duty_closure_kW
-            properties["dutyClosure_pct"] = (
-                abs(duty_closure_kW)
-                / max(
-                    abs(hot_side_duty_kW),
-                    abs(cold_side_duty_kW),
-                    _UNIT_BALANCE_SCALE_FLOOR_KW,
-                )
-                * 100.0
-            )
+            * 100.0
+        )
         return properties
 
     @staticmethod
