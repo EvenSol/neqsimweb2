@@ -3309,6 +3309,32 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "dutyBalance",
             empty_named_exchanger_report,
         )
+
+        class _FailingAggregateReport:
+            @staticmethod
+            def getReport_json():
+                raise RuntimeError("force child-report fallback")
+
+            @staticmethod
+            def getAllProcesses():
+                return process_model.getAllProcesses()
+
+        model._proc = _FailingAggregateReport()
+        fallback_report = model.get_json_report()[
+            "process/cross exchanger"
+        ]
+        self.assertNotIn("duty", fallback_report)
+        self.assertNotIn("dutyBalance", fallback_report)
+        fallback_result = model._extract_results()
+        self.assertNotIn(
+            "report.process/cross exchanger.duty",
+            fallback_result.kpis,
+        )
+        self.assertNotIn(
+            "report.process/cross exchanger.dutyBalance",
+            fallback_result.kpis,
+        )
+        model._proc = process_model
         train_b.setName("train-b-renamed")
 
         summary = model.get_model_summary()
