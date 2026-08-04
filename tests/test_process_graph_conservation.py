@@ -574,6 +574,8 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             ua_W_K = 100_000.0
             flow_arrangement = "concentric tube counterflow"
             thermal_effectiveness = 0.83
+            delta_T_K = 5.0
+            use_delta_T = False
 
             @classmethod
             def getUAvalue(cls):
@@ -587,6 +589,14 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             def getThermalEffectiveness(cls):
                 return cls.thermal_effectiveness
 
+            @classmethod
+            def getDeltaT(cls):
+                return cls.delta_T_K
+
+            @classmethod
+            def isUseDeltaT(cls):
+                return cls.use_delta_T
+
         settings_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         settings_model._units = {
             "settings exchanger": _MutableSettingsHeatExchanger()
@@ -596,6 +606,13 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         settings_model._heat_exchanger_state_snapshots = {}
         settings_model._capture_heat_exchanger_state_snapshots()
         _MutableSettingsHeatExchanger.ua_W_K = 200_000.0
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            settings_model.list_units()[0].properties,
+        )
+        _MutableSettingsHeatExchanger.thermal_effectiveness = 0.83
+        settings_model._capture_heat_exchanger_state_snapshots()
+        _MutableSettingsHeatExchanger.use_delta_T = True
         self.assertNotIn(
             "heatTransferDuty_kW",
             settings_model.list_units()[0].properties,
@@ -692,6 +709,55 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(both_lose_properties["coldSideDuty_kW"], 2_400.0)
         self.assertEqual(both_lose_properties["dutyClosure_kW"], 4_800.0)
         self.assertEqual(both_lose_properties["dutyClosure_pct"], 200.0)
+
+
+class ProcessRunCompletionTest(unittest.TestCase):
+    """Distinguish completed idle calculations from execution failures."""
+
+    def test_completed_zero_energy_process_is_successful(self):
+        class _JavaClass:
+            def __init__(self, simple_name):
+                self.simple_name = simple_name
+
+            def getSimpleName(self):
+                return self.simple_name
+
+        class _Unit:
+            def __init__(self, simple_name):
+                self.java_class = _JavaClass(simple_name)
+
+            def getClass(self):
+                return self.java_class
+
+            @staticmethod
+            def getDuty():
+                return 0.0
+
+        class _Process:
+            def __init__(self):
+                self.run_count = 0
+                self.units = [
+                    _Unit("Stream"),
+                    _Unit("Heater"),
+                    _Unit("Stream"),
+                ]
+
+            def getUnitOperations(self):
+                return self.units
+
+            def run(self):
+                self.run_count += 1
+
+        process = _Process()
+
+        self.assertTrue(
+            NeqSimProcessModel._run_until_converged(
+                process,
+                max_runs=3,
+                timeout_ms=0,
+            )
+        )
+        self.assertEqual(process.run_count, 3)
 
 
 class SplitterPropertyExtractionTest(unittest.TestCase):
@@ -2749,6 +2815,18 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         model.run(timeout_ms=180_000)
         exchanger.setThermalEffectiveness(0.25)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+        exchanger.setDeltaT(5.0)
+        exchanger.setUseDeltaT(False)
+        model.run(timeout_ms=180_000)
+        exchanger.setUseDeltaT(True)
         self.assertNotIn(
             "heatTransferDuty_kW",
             next(
