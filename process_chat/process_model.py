@@ -3314,6 +3314,14 @@ class NeqSimProcessModel:
             ps_name = self._unit_ps_name.get(name, "")
 
             props = {}
+            exchanger_solution_is_trusted = (
+                java_class != "HeatExchanger"
+                or self._heat_exchanger_solution_is_trusted(
+                    name,
+                    u,
+                    java_class,
+                )
+            )
             # Try to extract common properties
             for prop, getter in [
                 ("power_kW", "getPower"),
@@ -3325,11 +3333,7 @@ class NeqSimProcessModel:
                 if (
                     prop == "duty_kW"
                     and java_class == "HeatExchanger"
-                    and not self._heat_exchanger_solution_is_trusted(
-                        name,
-                        u,
-                        java_class,
-                    )
+                    and not exchanger_solution_is_trusted
                 ):
                     continue
                 if hasattr(u, getter):
@@ -3376,7 +3380,10 @@ class NeqSimProcessModel:
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
 
-            if java_class == "HeatExchanger":
+            if (
+                java_class == "HeatExchanger"
+                and exchanger_solution_is_trusted
+            ):
                 props.update(
                     self._heat_exchanger_operating_properties(
                         u,
@@ -3385,11 +3392,6 @@ class NeqSimProcessModel:
                             "_direct_unit_run_provenance",
                             {},
                         ).get(name),
-                        getattr(
-                            self,
-                            "_heat_exchanger_state_snapshots",
-                            {},
-                        ).get(name, ()),
                     )
                 )
 
@@ -5530,10 +5532,9 @@ class NeqSimProcessModel:
                     )
                 except Exception:
                     continue
-                if current_name:
-                    current_process_systems[current_name] = (
-                        current_process_system
-                    )
+                current_process_systems[current_name] = (
+                    current_process_system
+                )
         process_system_names.update(current_process_systems)
         if duty_lookup is None:
             duty_lookup = self._report_unit_duty_lookup()
@@ -5694,10 +5695,9 @@ class NeqSimProcessModel:
                     )
                 except Exception:
                     continue
-                if current_name:
-                    current_process_systems[current_name] = (
-                        current_process_system
-                    )
+                current_process_systems[current_name] = (
+                    current_process_system
+                )
         process_system_names.update(current_process_systems)
         if duty_lookup is None:
             duty_lookup = self._report_unit_duty_lookup()
