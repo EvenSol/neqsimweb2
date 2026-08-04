@@ -245,6 +245,10 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             def getClass():
                 return _JavaClass()
 
+            @staticmethod
+            def getCalculationIdentifier():
+                return "solved-calculation"
+
             @classmethod
             def getInStream(cls, index):
                 return cls.inlet_streams[index]
@@ -347,6 +351,10 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             def getDuty():
                 return -2_400_000.0
 
+            @staticmethod
+            def getApproachTemperature():
+                return -33.0
+
         reversed_properties = (
             NeqSimProcessModel._heat_exchanger_operating_properties(
                 _ReversedHeatExchanger()
@@ -357,6 +365,7 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(reversed_properties["hotSideDuty_kW"], 2_400.0)
         self.assertEqual(reversed_properties["coldSideDuty_kW"], 2_400.0)
         self.assertEqual(reversed_properties["heatTransferDuty_kW"], 2_400.0)
+        self.assertEqual(reversed_properties["approachTemperature_K"], 16.5)
 
         class _IncompleteHeatExchanger(_HeatExchanger):
             @classmethod
@@ -372,18 +381,17 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             {},
         )
 
-        class _SentinelHeatExchanger(_HeatExchanger):
+        class _NeverRunHeatExchanger(_HeatExchanger):
             @staticmethod
-            def getApproachTemperature():
-                return float.fromhex("0x1.fffffffffffffp+1023")
+            def getCalculationIdentifier():
+                return None
 
-        sentinel_properties = (
+        self.assertEqual(
             NeqSimProcessModel._heat_exchanger_operating_properties(
-                _SentinelHeatExchanger()
-            )
+                _NeverRunHeatExchanger()
+            ),
+            {},
         )
-        self.assertNotIn("approachTemperature_K", sentinel_properties)
-        self.assertEqual(sentinel_properties["UA_W_K"], 100_000.0)
 
 
 class SplitterPropertyExtractionTest(unittest.TestCase):
