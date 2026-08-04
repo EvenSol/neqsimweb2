@@ -3276,8 +3276,13 @@ class NeqSimProcessModel:
         process_system: Any,
         report_name: str,
         process_system_name: str,
-    ) -> str:
-        """Resolve a module report entry through its native unit identity."""
+    ) -> Optional[str]:
+        """Resolve a module report entry through its native unit identity.
+
+        ``None`` identifies a current native unit that is not indexed by this
+        wrapper.  Callers must treat that identity as untrusted rather than
+        transferring solved provenance from a removed, same-named unit.
+        """
         try:
             units = list(process_system.getUnitOperations())
         except Exception:
@@ -3292,10 +3297,18 @@ class NeqSimProcessModel:
                 f"{process_system_name}/{raw_name}",
             ):
                 continue
-            return self._indexed_unit_name_for_native(
+            indexed_name = self._indexed_unit_name_for_native(
                 unit,
                 f"{process_system_name}/{raw_name}",
             )
+            identity = _NativeObjectIdentitySet()
+            identity.add(unit)
+            if not any(
+                identity.contains(indexed_unit)
+                for indexed_unit in self._units.values()
+            ):
+                return None
+            return indexed_name
         return (
             f"{process_system_name}/{report_name}"
             if process_system_name
@@ -5567,10 +5580,23 @@ class NeqSimProcessModel:
             matched_nested_unit = False
             for nested_name, nested_data in report_data.items():
                 if isinstance(nested_data, dict):
-                    qualified_name = f"{report_name}/{nested_name}"
+                    current_process_system = (
+                        current_process_systems.get(report_name)
+                    )
+                    lookup_name = (
+                        self._indexed_unit_name_for_process_system(
+                            current_process_system,
+                            nested_name,
+                            report_name,
+                        )
+                        if current_process_system is not None
+                        else f"{report_name}/{nested_name}"
+                    )
                     nested_suppression = (
-                        self._report_unit_duty_suppression(
-                            qualified_name,
+                        True
+                        if lookup_name is None
+                        else self._report_unit_duty_suppression(
+                            lookup_name,
                             duty_lookup,
                         )
                     )
@@ -5723,9 +5749,13 @@ class NeqSimProcessModel:
                         if current_process_system is not None
                         else f"{report_name}/{nested_name}"
                     )
-                    suppression = self._report_unit_duty_suppression(
-                        lookup_name,
-                        duty_lookup,
+                    suppression = (
+                        True
+                        if lookup_name is None
+                        else self._report_unit_duty_suppression(
+                            lookup_name,
+                            duty_lookup,
+                        )
                     )
                     nested_report[nested_name] = self._copy_report_data(
                         nested_data,
@@ -5750,9 +5780,13 @@ class NeqSimProcessModel:
                     )
                     else report_name
                 )
-            suppression = self._report_unit_duty_suppression(
-                lookup_report_name,
-                duty_lookup,
+            suppression = (
+                True
+                if lookup_report_name is None
+                else self._report_unit_duty_suppression(
+                    lookup_report_name,
+                    duty_lookup,
+                )
             )
             filtered[report_name] = self._copy_report_data(
                 report_data,
