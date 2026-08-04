@@ -1996,6 +1996,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
 
     def test_native_two_sided_heat_exchanger_conserves_nearby_points(self):
         outlet_temperatures = []
+        solved_duties = []
+        solved_effectiveness = []
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
                 builder, model = (
@@ -2027,6 +2029,81 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     float(exchanger.getApproachTemperature()),
                     0.0,
                 )
+
+                exchanger_properties = next(
+                    unit.properties
+                    for unit in model.list_units()
+                    if unit.name == "cross exchanger"
+                )
+                solved_duties.append(
+                    exchanger_properties["heatTransferDuty_kW"]
+                )
+                solved_effectiveness.append(
+                    exchanger_properties["thermalEffectiveness"]
+                )
+                for side, expected_flow in (
+                    ("hot", 50_000.0 * flow_scale),
+                    ("cold", 40_000.0 * flow_scale),
+                ):
+                    self.assertAlmostEqual(
+                        exchanger_properties[f"{side}InletFlow_kg_hr"],
+                        expected_flow,
+                        delta=1.0e-6 * expected_flow,
+                    )
+                    self.assertAlmostEqual(
+                        exchanger_properties[f"{side}OutletFlow_kg_hr"],
+                        expected_flow,
+                        delta=1.0e-6 * expected_flow,
+                    )
+                self.assertAlmostEqual(
+                    exchanger_properties["hotOutletTemperature_C"],
+                    hot_out_C,
+                    delta=1.0e-10,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["coldOutletTemperature_C"],
+                    cold_out_C,
+                    delta=1.0e-10,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["UA_W_K"],
+                    100_000.0,
+                    delta=1.0e-10,
+                )
+                self.assertGreater(
+                    exchanger_properties["heatTransferDuty_kW"],
+                    0.0,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["hotSideDuty_kW"],
+                    exchanger_properties["heatTransferDuty_kW"],
+                    delta=1.0e-5,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["coldSideDuty_kW"],
+                    exchanger_properties["heatTransferDuty_kW"],
+                    delta=1.0e-5,
+                )
+                self.assertLess(
+                    exchanger_properties["dutyClosure_pct"],
+                    1.0e-6,
+                )
+                for property_name, unit in (
+                    ("UA_W_K", "W/K"),
+                    ("heatTransferDuty_kW", "kW"),
+                    ("hotSideDuty_kW", "kW"),
+                    ("coldSideDuty_kW", "kW"),
+                    ("dutyClosure_pct", "%"),
+                ):
+                    kpi = result.kpis[
+                        f"cross exchanger.{property_name}"
+                    ]
+                    self.assertAlmostEqual(
+                        kpi.value,
+                        exchanger_properties[property_name],
+                        delta=1.0e-10,
+                    )
+                    self.assertEqual(kpi.unit, unit)
 
                 self.assertEqual(
                     result.kpis["material_feed_count"].value,
@@ -2074,6 +2151,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     unit_summary["max_energy_imbalance_pct"],
                     1.0e-6,
                 )
+                print(
+                    "native heat-exchanger benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    "duty="
+                    f"{exchanger_properties['heatTransferDuty_kW']:.6f} kW",
+                    f"effectiveness={exchanger_properties['thermalEffectiveness']:.6f}",
+                    "side-closure="
+                    f"{exchanger_properties['dutyClosure_pct']:.3e}%",
+                    "system-energy="
+                    f"{result.kpis['energy_balance_pct'].value:.3e}%",
+                )
 
         self.assertGreater(
             outlet_temperatures[1][0],
@@ -2083,6 +2171,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             outlet_temperatures[1][1],
             outlet_temperatures[0][1],
         )
+        self.assertGreater(solved_duties[1], solved_duties[0])
+        self.assertLess(solved_effectiveness[1], solved_effectiveness[0])
 
     def test_build_from_spec_dispatches_generic_graph_schema(self):
         builder = ProcessBuilder()
