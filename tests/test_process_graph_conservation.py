@@ -2956,6 +2956,20 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 NeqSimProcessModel._heat_exchanger_boundary_state_signature
             ),
         ) as signature:
+            listed_properties = next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            )
+        self.assertIn("heatTransferDuty_kW", listed_properties)
+        self.assertEqual(signature.call_count, 1)
+        with patch.object(
+            NeqSimProcessModel,
+            "_heat_exchanger_boundary_state_signature",
+            wraps=(
+                NeqSimProcessModel._heat_exchanger_boundary_state_signature
+            ),
+        ) as signature:
             trusted_result = model._extract_results()
         self.assertIn(
             "cross exchanger.duty_kW",
@@ -3152,7 +3166,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                         "dutyBalance": 1.0,
                         "feedTemperature1": 120.0,
                     },
-                }
+                },
             }
         )
         self.assertEqual(
@@ -3285,6 +3299,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         ]["cross exchanger"]
         self.assertNotIn("duty", renamed_exchanger_report)
         self.assertNotIn("dutyBalance", renamed_exchanger_report)
+
+        train_b.setName("")
+        empty_named_exchanger_report = model.get_json_report()[
+            ""
+        ]["cross exchanger"]
+        self.assertNotIn("duty", empty_named_exchanger_report)
+        self.assertNotIn(
+            "dutyBalance",
+            empty_named_exchanger_report,
+        )
+        train_b.setName("train-b-renamed")
 
         summary = model.get_model_summary()
         train_a_section = summary.split(
