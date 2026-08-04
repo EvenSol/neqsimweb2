@@ -5421,7 +5421,20 @@ class NeqSimProcessModel:
             if not isinstance(report_data, dict):
                 continue
             prefix = f"report.{report_name}"
-            suppress_duty = self._report_unit_duty_suppression(report_name)
+            process_system_names = {
+                name
+                for name in self._unit_ps_name.values()
+                if name
+            }
+            is_process_system_container = (
+                self._is_process_model
+                and report_name in process_system_names
+            )
+            suppress_duty = (
+                None
+                if is_process_system_container
+                else self._report_unit_duty_suppression(report_name)
+            )
             if suppress_duty is not None:
                 self._flatten_dict(
                     report_data,
