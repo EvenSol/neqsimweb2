@@ -2949,6 +2949,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         exchanger = model.get_unit("cross exchanger")
 
         self.assertFalse(bool(exchanger.isLockedInactive()))
+        with patch.object(
+            model,
+            "_heat_exchanger_boundary_state_signature",
+            wraps=model._heat_exchanger_boundary_state_signature,
+        ) as signature:
+            trusted_result = model._extract_results()
+        self.assertIn(
+            "cross exchanger.duty_kW",
+            trusted_result.kpis,
+        )
+        self.assertEqual(signature.call_count, 1)
         solved_snapshot = model._heat_exchanger_state_snapshots[
             "cross exchanger"
         ]
