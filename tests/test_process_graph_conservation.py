@@ -378,6 +378,21 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         self.assertEqual(reversed_properties["heatTransferDuty_kW"], 2_400.0)
         self.assertEqual(reversed_properties["approachTemperature_K"], 16.5)
 
+        class _CoCurrentHeatExchanger(_HeatExchanger):
+            @staticmethod
+            def getFlowArrangement():
+                return "co-current"
+
+        co_current_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _CoCurrentHeatExchanger()
+            )
+        )
+        self.assertEqual(
+            co_current_properties["approachTemperature_K"],
+            -50.5,
+        )
+
         class _IncompleteHeatExchanger(_HeatExchanger):
             @classmethod
             def getOutStream(cls, index):
@@ -2241,6 +2256,150 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         return builder, model
 
+    @staticmethod
+    def _build_mixer_heat_exchanger_case():
+        inlet_specs = [
+            {
+                "inlet_id": inlet_id,
+                "name": name,
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": components,
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": temperature_C,
+                    "pressure_bara": 50.0,
+                    "total_flow": flow_kg_hr,
+                    "flow_unit": "kg/hr",
+                },
+            }
+            for (
+                inlet_id,
+                name,
+                temperature_C,
+                flow_kg_hr,
+                components,
+            ) in (
+                (
+                    "hot-feed-a",
+                    "hot feed a",
+                    100.0,
+                    25_000.0,
+                    {"methane": 0.90, "ethane": 0.10},
+                ),
+                (
+                    "hot-feed-b",
+                    "hot feed b",
+                    140.0,
+                    25_000.0,
+                    {"methane": 0.90, "ethane": 0.10},
+                ),
+                (
+                    "cold-feed",
+                    "cold feed",
+                    20.0,
+                    40_000.0,
+                    {"methane": 0.95, "ethane": 0.05},
+                ),
+            )
+        ]
+        graph_spec = {
+            "name": "Mixer and heat-exchanger clone benchmark",
+            "units": [
+                {
+                    "id": "hot-mixer",
+                    "name": "hot mixer",
+                    "type": "mixer",
+                    "ports": {
+                        "material_in": ["in_0", "in_1"],
+                        "material_out": ["out"],
+                    },
+                    "params": {},
+                },
+                {
+                    "id": "cross-exchanger",
+                    "name": "cross exchanger",
+                    "type": "heat_exchanger",
+                    "ports": {
+                        "material_in": ["hot_in", "cold_in"],
+                        "material_out": ["hot_out", "cold_out"],
+                    },
+                    "params": {"ua_w_per_k": 100_000.0},
+                },
+            ],
+            "connections": [
+                {
+                    "id": "hot-a-to-mixer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "hot-feed-a",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "hot-mixer",
+                        "port": "in_0",
+                    },
+                },
+                {
+                    "id": "hot-b-to-mixer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "hot-feed-b",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "hot-mixer",
+                        "port": "in_1",
+                    },
+                },
+                {
+                    "id": "mixer-to-exchanger",
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "hot-mixer",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "hot_in",
+                    },
+                },
+                {
+                    "id": "cold-to-exchanger",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "cold-feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "cold_in",
+                    },
+                },
+            ],
+        }
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            [
+                "hot-feed-a",
+                "hot-feed-b",
+                "cold-feed",
+                "hot-mixer",
+                "cross-exchanger",
+            ],
+        )
+        return builder, model
+
     def test_rejects_noncanonical_heat_exchanger_inlet_contract(self):
         for declared_ports in (
             ("cold_in", "hot_in"),
@@ -2469,6 +2628,65 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         self.assertGreater(solved_duties[1], solved_duties[0])
         self.assertLess(solved_effectiveness[1], solved_effectiveness[0])
+
+    def test_native_co_current_approach_uses_parallel_terminals(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        exchanger = model.get_unit("cross exchanger")
+        exchanger.setFlowArrangement("co-current")
+
+        result = model.run(timeout_ms=180_000)
+        properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        hot_in_C = float(exchanger.getInStream(0).getTemperature("C"))
+        cold_in_C = float(exchanger.getInStream(1).getTemperature("C"))
+        hot_out_C = float(exchanger.getOutStream(0).getTemperature("C"))
+        cold_out_C = float(exchanger.getOutStream(1).getTemperature("C"))
+        expected_approach_K = min(
+            hot_in_C - cold_in_C,
+            hot_out_C - cold_out_C,
+        )
+
+        self.assertEqual(str(exchanger.getFlowArrangement()), "co-current")
+        self.assertLess(expected_approach_K, 0.0)
+        self.assertAlmostEqual(
+            properties["approachTemperature_K"],
+            expected_approach_K,
+            delta=1.0e-10,
+        )
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+
+    def test_clone_recaptures_mixer_heat_exchanger_provenance(self):
+        _, model = self._build_mixer_heat_exchanger_case()
+        model.run(timeout_ms=180_000)
+
+        cloned_model = model.clone()
+        properties = next(
+            unit.properties
+            for unit in cloned_model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        result = cloned_model._extract_results()
+
+        self.assertGreater(properties["heatTransferDuty_kW"], 0.0)
+        self.assertIn(
+            "cross exchanger",
+            cloned_model._direct_unit_run_provenance,
+        )
+        self.assertLess(properties["dutyClosure_pct"], 1.0e-6)
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
 
     def test_build_from_spec_dispatches_generic_graph_schema(self):
         builder = ProcessBuilder()
