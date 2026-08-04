@@ -3671,6 +3671,8 @@ class NeqSimProcessModel:
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
+        self._direct_unit_run_provenance.clear()
+        self._heat_exchanger_state_snapshots.clear()
         direct_closure_ran = False
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
@@ -3708,6 +3710,8 @@ class NeqSimProcessModel:
         simulation (e.g. after modifying parameters) and then re-index.
         Handles both ProcessSystem and ProcessModel transparently.
         """
+        self._direct_unit_run_provenance.clear()
+        self._heat_exchanger_state_snapshots.clear()
         direct_closure_ran = False
         if self._is_process_model:
             process_run_succeeded = self._run_process_model(
@@ -5423,15 +5427,15 @@ class NeqSimProcessModel:
           "report.inlet separator.gas.conditions.gas.temperature"
           "report.inlet separator.gas.composition.gas.methane"
         """
+        process_system_names = {
+            name
+            for name in self._unit_ps_name.values()
+            if name
+        }
         for report_name, report_data in json_report.items():
             if not isinstance(report_data, dict):
                 continue
             prefix = f"report.{report_name}"
-            process_system_names = {
-                name
-                for name in self._unit_ps_name.values()
-                if name
-            }
             is_process_system_container = (
                 self._is_process_model
                 and report_name in process_system_names
@@ -5519,7 +5523,9 @@ class NeqSimProcessModel:
     ):
         """Recursively flatten a nested dict into KPIs."""
         for key, val in data.items():
-            if suppress_duty and str(key).strip().casefold() == "duty":
+            if suppress_duty and str(key).strip().casefold().startswith(
+                "duty"
+            ):
                 continue
             full_key = f"{prefix}.{key}"
             if isinstance(val, dict):
