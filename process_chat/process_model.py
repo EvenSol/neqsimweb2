@@ -747,8 +747,8 @@ class NeqSimProcessModel:
     def _run_acyclic_mixer_energy_closure(
         proc,
         relative_tolerance: float = 1.0e-7,
-    ) -> None:
-        """Run an ordered graph pass and enforce adiabatic mixer closure."""
+    ) -> bool:
+        """Run an ordered graph pass and report whether it completed."""
         try:
             units = list(proc.getUnitOperations())
         except Exception as exc:
@@ -761,7 +761,7 @@ class NeqSimProcessModel:
             for unit in units
         )
         if not has_mixer:
-            return
+            return False
 
         from jpype import JClass
         from neqsim import jneqsim
@@ -806,6 +806,7 @@ class NeqSimProcessModel:
                     f"Mixer '{unit.getName()}' energy balance did not "
                     f"converge (relative residual {relative_error:.3e})."
                 )
+        return True
 
     @classmethod
     def from_bytes(cls, file_bytes: bytes, filename: str = "process.neqsim") -> "NeqSimProcessModel":
@@ -901,10 +902,12 @@ class NeqSimProcessModel:
             clone._enforce_acyclic_mixer_energy
             and not clone._is_process_model
         ):
-            clone._run_acyclic_mixer_energy_closure(clone._proc)
+            direct_closure_ran = (
+                clone._run_acyclic_mixer_energy_closure(clone._proc)
+            )
             clone._index_model_objects()
             clone._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=True
+                allow_direct_runs=direct_closure_ran
             )
         return clone
 
@@ -3297,6 +3300,7 @@ class NeqSimProcessModel:
         allow_direct_runs: bool = False,
     ) -> None:
         """Capture solved exchanger boundaries owned by the wrapper run."""
+        self._direct_unit_run_provenance.clear()
         self._heat_exchanger_state_snapshots.clear()
         for name, unit in self._units.items():
             try:
@@ -3391,18 +3395,21 @@ class NeqSimProcessModel:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
         self._direct_unit_run_provenance.clear()
+        direct_closure_ran = False
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
             self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
             if self._enforce_acyclic_mixer_energy:
-                self._run_acyclic_mixer_energy_closure(self._proc)
+                direct_closure_ran = (
+                    self._run_acyclic_mixer_energy_closure(self._proc)
+                )
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
         self._capture_heat_exchanger_state_snapshots(
-            allow_direct_runs=self._enforce_acyclic_mixer_energy
+            allow_direct_runs=direct_closure_ran
         )
 
         return self._extract_results()
@@ -3415,15 +3422,18 @@ class NeqSimProcessModel:
         Handles both ProcessSystem and ProcessModel transparently.
         """
         self._direct_unit_run_provenance.clear()
+        direct_closure_ran = False
         if self._is_process_model:
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
             self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
             if self._enforce_acyclic_mixer_energy:
-                self._run_acyclic_mixer_energy_closure(self._proc)
+                direct_closure_ran = (
+                    self._run_acyclic_mixer_energy_closure(self._proc)
+                )
         self._index_model_objects()
         self._capture_heat_exchanger_state_snapshots(
-            allow_direct_runs=self._enforce_acyclic_mixer_energy
+            allow_direct_runs=direct_closure_ran
         )
 
     @staticmethod
