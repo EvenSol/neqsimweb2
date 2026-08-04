@@ -6803,6 +6803,229 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                 )
 
+    def test_native_heater_cooler_performance_closes_nearby_points(self):
+        duties_by_scale = {}
+        specific_duties_by_scale = {}
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                units, heater_id = add_catalog_unit(
+                    [],
+                    "heater",
+                    "feed heater",
+                )
+                units, cooler_id = add_catalog_unit(
+                    units,
+                    "cooler",
+                    "product cooler",
+                )
+                units[0]["params"] = {
+                    "outlet_temperature_C": 80.0,
+                    "pressure_drop_bar": 1.5,
+                }
+                units[1]["params"] = {
+                    "outlet_temperature_C": 40.0,
+                    "pressure_drop_bar": 0.5,
+                }
+                graph_spec = {
+                    "name": "Native heater and cooler benchmark",
+                    "units": units,
+                    "connections": [
+                        {
+                            "id": "feed-to-heater",
+                            "type": "material",
+                            "source": {
+                                "kind": "inlet",
+                                "id": "feed",
+                                "port": "out",
+                            },
+                            "target": {
+                                "kind": "unit",
+                                "id": heater_id,
+                                "port": "in",
+                            },
+                        },
+                        {
+                            "id": "heater-to-cooler",
+                            "type": "material",
+                            "source": {
+                                "kind": "unit",
+                                "id": heater_id,
+                                "port": "out",
+                            },
+                            "target": {
+                                "kind": "unit",
+                                "id": cooler_id,
+                                "port": "in",
+                            },
+                        },
+                    ],
+                }
+                expected_flow = 10_000.0 * flow_scale
+                inlet_specs = [
+                    {
+                        "inlet_id": "feed",
+                        "name": "feed",
+                        "fluid_spec": {
+                            "eos_model": "srk",
+                            "mixing_rule": 2,
+                            "components": {
+                                "methane": 0.90,
+                                "ethane": 0.10,
+                            },
+                            "composition_basis": "mole_fraction",
+                            "temperature_C": 25.0,
+                            "pressure_bara": 60.0,
+                            "total_flow": expected_flow,
+                            "flow_unit": "kg/hr",
+                        },
+                    }
+                ]
+                builder = ProcessBuilder()
+                model = builder.build_acyclic_graph(
+                    graph_spec,
+                    inlet_specs,
+                    ["feed", heater_id, cooler_id],
+                )
+                result = model.run(timeout_ms=180_000)
+                properties_by_name = {
+                    unit.name: unit.properties
+                    for unit in model.list_units()
+                }
+                heater = properties_by_name["feed heater"]
+                cooler = properties_by_name["product cooler"]
+
+                for properties, expected in (
+                    (
+                        heater,
+                        {
+                            "inletTemperature_C": 25.0,
+                            "outletTemperature_C": 80.0,
+                            "temperatureChange_C": 55.0,
+                            "inletPressure_bara": 60.0,
+                            "outletPressure_bara": 58.5,
+                            "pressureDrop_bar": 1.5,
+                        },
+                    ),
+                    (
+                        cooler,
+                        {
+                            "inletTemperature_C": 80.0,
+                            "outletTemperature_C": 40.0,
+                            "temperatureChange_C": -40.0,
+                            "inletPressure_bara": 58.5,
+                            "outletPressure_bara": 58.0,
+                            "pressureDrop_bar": 0.5,
+                        },
+                    ),
+                ):
+                    for property_name, expected_value in expected.items():
+                        self.assertAlmostEqual(
+                            properties[property_name],
+                            expected_value,
+                            delta=0.05,
+                        )
+
+                self.assertGreater(heater["heatingDuty_kW"], 0.0)
+                self.assertEqual(heater["coolingDuty_kW"], 0.0)
+                self.assertEqual(cooler["heatingDuty_kW"], 0.0)
+                self.assertGreater(cooler["coolingDuty_kW"], 0.0)
+                self.assertGreater(heater["specificDuty_kJ_kg"], 0.0)
+                self.assertLess(cooler["specificDuty_kJ_kg"], 0.0)
+
+                for equipment_name, properties in (
+                    ("feed heater", heater),
+                    ("product cooler", cooler),
+                ):
+                    for property_name in (
+                        "inletTemperature_C",
+                        "outletTemperature_C",
+                        "temperatureChange_C",
+                        "inletPressure_bara",
+                        "outletPressure_bara",
+                        "pressureDrop_bar",
+                        "heatingDuty_kW",
+                        "coolingDuty_kW",
+                        "massFlow_kg_hr",
+                        "specificDuty_kJ_kg",
+                    ):
+                        kpi = result.kpis[
+                            f"{equipment_name}.{property_name}"
+                        ]
+                        self.assertAlmostEqual(
+                            kpi.value,
+                            properties[property_name],
+                            delta=1.0e-9,
+                        )
+
+                transfers = result.raw["energy_transfers"]
+                self.assertEqual(
+                    [row["unit_type"] for row in transfers],
+                    ["Heater", "Cooler"],
+                )
+                self.assertGreater(transfers[0]["energy_transfer_kW"], 0.0)
+                self.assertLess(transfers[1]["energy_transfer_kW"], 0.0)
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(expected_flow * 1.0e-6, 1.0e-3),
+                )
+                self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertFalse(
+                    [
+                        constraint
+                        for constraint in result.constraints
+                        if constraint.status == "VIOLATION"
+                    ]
+                )
+                self.assertIn(
+                    "Acyclic graph built and converged successfully.",
+                    builder.build_log,
+                )
+                self.assertEqual(
+                    json.loads(json.dumps(graph_spec, allow_nan=False)),
+                    graph_spec,
+                )
+
+                duties_by_scale[flow_scale] = (
+                    heater["heatingDuty_kW"],
+                    cooler["coolingDuty_kW"],
+                )
+                specific_duties_by_scale[flow_scale] = (
+                    heater["specificDuty_kJ_kg"],
+                    cooler["specificDuty_kJ_kg"],
+                )
+                print(
+                    "native thermal-equipment benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"heating={heater['heatingDuty_kW']:.3f} kW",
+                    f"cooling={cooler['coolingDuty_kW']:.3f} kW",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+
+        for duty_index in range(2):
+            self.assertAlmostEqual(
+                duties_by_scale[1.05][duty_index]
+                / duties_by_scale[1.0][duty_index],
+                1.05,
+                delta=1.0e-8,
+            )
+            self.assertAlmostEqual(
+                specific_duties_by_scale[1.05][duty_index],
+                specific_duties_by_scale[1.0][duty_index],
+                delta=1.0e-8,
+            )
+
     def test_native_signed_work_heat_and_nearby_point(self):
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
