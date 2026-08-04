@@ -2960,6 +2960,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ),
         )
 
+        result = model.run(timeout_ms=180_000)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+
     def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
         _, model = self._build_two_sided_heat_exchanger_case(1.0)
         model.run(timeout_ms=180_000)
