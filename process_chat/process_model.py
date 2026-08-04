@@ -389,7 +389,9 @@ class NeqSimProcessModel:
             str,
             Tuple[str, Tuple[str, str], Tuple[str, str]],
         ] = {}
+        self._heat_exchanger_state_snapshots: Dict[str, Tuple[Any, ...]] = {}
         self._index_model_objects()
+        self._capture_heat_exchanger_state_snapshots()
 
     # ----- ProcessModel detection -----
 
@@ -2542,6 +2544,7 @@ class NeqSimProcessModel:
         direct_run_provenance: Optional[
             Tuple[str, Tuple[str, str], Tuple[str, str]]
         ] = None,
+        solved_state_snapshot: Optional[Tuple[Any, ...]] = None,
     ) -> Dict[str, float]:
         """Return explicit solved hot/cold-side heat-exchanger properties.
 
@@ -2557,6 +2560,14 @@ class NeqSimProcessModel:
             return {}
         if calculation_identifier is None:
             return {}
+        if solved_state_snapshot is not None:
+            current_snapshot = (
+                NeqSimProcessModel._heat_exchanger_boundary_state_signature(
+                    unit
+                )
+            )
+            if current_snapshot != solved_state_snapshot:
+                return {}
 
         indexed_sides: List[Dict[str, Any]] = []
         inlet_identifiers_match_exchanger: List[bool] = []
@@ -2707,6 +2718,44 @@ class NeqSimProcessModel:
         properties["dutyClosure_kW"] = duty_closure_kW
         properties["dutyClosure_pct"] = duty_closure_pct
         return properties
+
+    @staticmethod
+    def _heat_exchanger_boundary_state_signature(
+        unit: Any,
+    ) -> Optional[Tuple[Any, ...]]:
+        """Return a deterministic native boundary-state signature."""
+        try:
+            calculation_identifier = unit.getCalculationIdentifier()
+        except Exception:
+            return None
+        if calculation_identifier is None:
+            return None
+        stream_states: List[Tuple[Any, ...]] = []
+        for index in (0, 1):
+            for getter_name in ("getInStream", "getOutStream"):
+                try:
+                    stream = getattr(unit, getter_name)(index)
+                    stream_identifier = stream.getCalculationIdentifier()
+                    if stream_identifier is None:
+                        return None
+                    fluid = stream.getFluid()
+                    fluid.init(3)
+                    state = (
+                        str(stream_identifier),
+                        float(stream.getTemperature("C")),
+                        float(stream.getPressure("bara")),
+                        float(stream.getFlowRate("kg/hr")),
+                        float(fluid.getEnthalpy()) / 1000.0,
+                    )
+                except Exception:
+                    return None
+                if not all(
+                    math.isfinite(value)
+                    for value in state[1:]
+                ):
+                    return None
+                stream_states.append(state)
+        return (str(calculation_identifier), tuple(stream_states))
 
     @staticmethod
     def _splitter_operating_properties(unit: Any) -> Dict[str, float]:
@@ -2973,6 +3022,11 @@ class NeqSimProcessModel:
                             "_direct_unit_run_provenance",
                             {},
                         ).get(name),
+                        getattr(
+                            self,
+                            "_heat_exchanger_state_snapshots",
+                            {},
+                        ).get(name),
                     )
                 )
 
@@ -3133,6 +3187,8 @@ class NeqSimProcessModel:
         for candidate_name in self._units:
             if candidate_name == unit_name or (
                 candidate_name.lower() == name_lower
+            ) or candidate_name.lower().endswith(
+                f"/{name_lower}"
             ):
                 canonical_name = candidate_name
                 break
@@ -3196,6 +3252,71 @@ class NeqSimProcessModel:
             inlet_identifiers,
             outlet_identifiers,
         )
+        state_snapshot = self._heat_exchanger_boundary_state_signature(
+            unit
+        )
+        if state_snapshot is None:
+            raise ValueError(
+                f"Direct-run state for '{unit_name}' is incomplete."
+            )
+        self._heat_exchanger_state_snapshots[
+            canonical_name
+        ] = state_snapshot
+
+    def _capture_heat_exchanger_state_snapshots(
+        self,
+        allow_direct_runs: bool = False,
+    ) -> None:
+        """Capture solved exchanger boundaries owned by the wrapper run."""
+        self._heat_exchanger_state_snapshots.clear()
+        for name, unit in self._units.items():
+            try:
+                if str(unit.getClass().getSimpleName()) != "HeatExchanger":
+                    continue
+                calculation_identifier = unit.getCalculationIdentifier()
+                if calculation_identifier is None:
+                    continue
+                inlet_identifiers = tuple(
+                    unit.getInStream(index).getCalculationIdentifier()
+                    for index in (0, 1)
+                )
+                outlet_identifiers = tuple(
+                    unit.getOutStream(index).getCalculationIdentifier()
+                    for index in (0, 1)
+                )
+            except Exception:
+                continue
+            if any(identifier is None for identifier in inlet_identifiers):
+                continue
+            if any(identifier is None for identifier in outlet_identifiers):
+                continue
+            calculation_identifier_str = str(calculation_identifier)
+            inlet_identifier_strings = tuple(
+                str(identifier) for identifier in inlet_identifiers
+            )
+            outlet_identifier_strings = tuple(
+                str(identifier) for identifier in outlet_identifiers
+            )
+            if outlet_identifier_strings != (
+                calculation_identifier_str,
+                calculation_identifier_str,
+            ):
+                continue
+            inlet_matches = tuple(
+                identifier == calculation_identifier_str
+                for identifier in inlet_identifier_strings
+            )
+            if not all(inlet_matches):
+                if not allow_direct_runs or any(inlet_matches):
+                    continue
+                self._direct_unit_run_provenance[name] = (
+                    calculation_identifier_str,
+                    inlet_identifier_strings,
+                    outlet_identifier_strings,
+                )
+            snapshot = self._heat_exchanger_boundary_state_signature(unit)
+            if snapshot is not None:
+                self._heat_exchanger_state_snapshots[name] = snapshot
 
     def get_stream(self, name: str):
         """Get a stream by name (supports qualified, unqualified, and case-insensitive names)."""
@@ -3251,6 +3372,9 @@ class NeqSimProcessModel:
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
+        self._capture_heat_exchanger_state_snapshots(
+            allow_direct_runs=self._enforce_acyclic_mixer_energy
+        )
 
         return self._extract_results()
 
@@ -3269,6 +3393,9 @@ class NeqSimProcessModel:
             if self._enforce_acyclic_mixer_energy:
                 self._run_acyclic_mixer_energy_closure(self._proc)
         self._index_model_objects()
+        self._capture_heat_exchanger_state_snapshots(
+            allow_direct_runs=self._enforce_acyclic_mixer_energy
+        )
 
     @staticmethod
     def _run_process_model(proc_model, timeout_ms: int = 180000):
@@ -4394,6 +4521,11 @@ class NeqSimProcessModel:
                             getattr(
                                 self,
                                 "_direct_unit_run_provenance",
+                                {},
+                            ).get(name),
+                            getattr(
+                                self,
+                                "_heat_exchanger_state_snapshots",
                                 {},
                             ).get(name),
                         ).items()
