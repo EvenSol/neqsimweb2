@@ -2452,12 +2452,21 @@ class NeqSimProcessModel:
                     except Exception:
                         pass
                 elif cls in self._DUTY_UNITS:
-                    try:
-                        duty = float(_u.getDuty()) / 1000.0
-                        if abs(duty) > 0.01:
-                            label += f"\\n{duty:.1f} kW"
-                    except Exception:
-                        pass
+                    duty_is_trusted = (
+                        cls != "HeatExchanger"
+                        or self._heat_exchanger_solution_is_trusted(
+                            name,
+                            _u,
+                            cls,
+                        )
+                    )
+                    if duty_is_trusted:
+                        try:
+                            duty = float(_u.getDuty()) / 1000.0
+                            if abs(duty) > 0.01:
+                                label += f"\\n{duty:.1f} kW"
+                        except Exception:
+                            pass
 
             lines.append(
                 f'  {nid} [label="{label}" shape={shape} fillcolor="{fill}"];'
@@ -3203,6 +3212,34 @@ class NeqSimProcessModel:
             pass
         return False
 
+    def _heat_exchanger_solution_is_trusted(
+        self,
+        unit_name: str,
+        unit: Any,
+        java_class: str,
+    ) -> bool:
+        """Return whether current exchanger outputs match an observed solve."""
+        if java_class != "HeatExchanger" or self._is_inactive_heat_exchanger(
+            unit,
+            java_class,
+        ):
+            return False
+        current_snapshot = self._heat_exchanger_boundary_state_signature(unit)
+        if current_snapshot is None:
+            return False
+        snapshots = getattr(
+            self,
+            "_heat_exchanger_state_snapshots",
+            {},
+        )
+        named_snapshot = snapshots.get(unit_name)
+        if named_snapshot == current_snapshot:
+            return True
+        return any(
+            snapshot == current_snapshot
+            for snapshot in snapshots.values()
+        )
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -3223,9 +3260,14 @@ class NeqSimProcessModel:
                 ("polytropicEfficiency", "getPolytropicEfficiency"),
                 ("outletPressure_bara", "getOutletPressure"),
             ]:
-                if prop == "duty_kW" and self._is_inactive_heat_exchanger(
-                    u,
-                    java_class,
+                if (
+                    prop == "duty_kW"
+                    and java_class == "HeatExchanger"
+                    and not self._heat_exchanger_solution_is_trusted(
+                        name,
+                        u,
+                        java_class,
+                    )
                 ):
                     continue
                 if hasattr(u, getter):
@@ -3929,10 +3971,15 @@ class NeqSimProcessModel:
                         total_power_kW += power_kW
                 except Exception:
                     pass
-            if hasattr(u, "getDuty") and not self._is_inactive_heat_exchanger(
-                u,
-                uclass,
-            ):
+            exchanger_duty_is_trusted = (
+                uclass != "HeatExchanger"
+                or self._heat_exchanger_solution_is_trusted(
+                    name,
+                    u,
+                    uclass,
+                )
+            )
+            if hasattr(u, "getDuty") and exchanger_duty_is_trusted:
                 try:
                     duty_kW = float(u.getDuty()) / 1000.0
                     # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
@@ -5374,11 +5421,42 @@ class NeqSimProcessModel:
             if not isinstance(unit_data, dict):
                 continue
             prefix = f"report.{unit_name}"
-            self._flatten_dict(unit_data, prefix, kpis)
+            suppress_duty = False
+            for indexed_name, unit in self._units.items():
+                try:
+                    raw_name = str(unit.getName())
+                    java_class = str(unit.getClass().getSimpleName())
+                except Exception:
+                    continue
+                if indexed_name != unit_name and raw_name != unit_name:
+                    continue
+                suppress_duty = (
+                    java_class == "HeatExchanger"
+                    and not self._heat_exchanger_solution_is_trusted(
+                        indexed_name,
+                        unit,
+                        java_class,
+                    )
+                )
+                break
+            self._flatten_dict(
+                unit_data,
+                prefix,
+                kpis,
+                suppress_duty=suppress_duty,
+            )
 
-    def _flatten_dict(self, data: dict, prefix: str, kpis: Dict[str, KPI]):
+    def _flatten_dict(
+        self,
+        data: dict,
+        prefix: str,
+        kpis: Dict[str, KPI],
+        suppress_duty: bool = False,
+    ):
         """Recursively flatten a nested dict into KPIs."""
         for key, val in data.items():
+            if suppress_duty and str(key).strip().casefold() == "duty":
+                continue
             full_key = f"{prefix}.{key}"
             if isinstance(val, dict):
                 # Check if it's a {value, unit} leaf
@@ -5390,7 +5468,12 @@ class NeqSimProcessModel:
                     except (ValueError, TypeError):
                         pass  # skip non-numeric values
                 else:
-                    self._flatten_dict(val, full_key, kpis)
+                    self._flatten_dict(
+                        val,
+                        full_key,
+                        kpis,
+                        suppress_duty=suppress_duty,
+                    )
             elif isinstance(val, (int, float)):
                 kpis[full_key] = KPI(full_key, float(val), "")
             # Skip strings/lists that aren't value/unit pairs
@@ -5765,6 +5848,16 @@ class NeqSimProcessModel:
                 ("polytropicEfficiency", "getPolytropicEfficiency"),
                 ("outletPressure_bara", "getOutletPressure"),
             ]:
+                if (
+                    prop == "duty_kW"
+                    and utype == "HeatExchanger"
+                    and not self._heat_exchanger_solution_is_trusted(
+                        name,
+                        u,
+                        utype,
+                    )
+                ):
+                    continue
                 if hasattr(u, getter):
                     try:
                         val = getattr(u, getter)()
