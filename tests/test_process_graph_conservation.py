@@ -182,6 +182,148 @@ class PumpParameterApplicationTest(unittest.TestCase):
         self.assertNotIn("export_pump.setEfficiency", script)
 
 
+class HeatExchangerPropertyExtractionTest(unittest.TestCase):
+    """Validate explicit solved-property mapping for two-sided exchangers."""
+
+    def test_workbook_reports_hot_cold_conditions_and_duty_closure(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "HeatExchanger"
+
+        class _Fluid:
+            def __init__(self, enthalpy_w):
+                self.enthalpy_w = enthalpy_w
+
+            def getEnthalpy(self):
+                return self.enthalpy_w
+
+        class _Stream:
+            def __init__(self, temperature_c, pressure_bara, flow_kg_hr, enthalpy_w):
+                self.temperature_c = temperature_c
+                self.pressure_bara = pressure_bara
+                self.flow_kg_hr = flow_kg_hr
+                self.fluid = _Fluid(enthalpy_w)
+
+            def getTemperature(self, unit):
+                if unit != "C":
+                    raise AssertionError(unit)
+                return self.temperature_c
+
+            def getPressure(self, unit):
+                if unit != "bara":
+                    raise AssertionError(unit)
+                return self.pressure_bara
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+            def getFluid(self):
+                return self.fluid
+
+        class _HeatExchanger:
+            inlet_streams = [
+                _Stream(120.0, 50.0, 50_000.0, 3_300_000.0),
+                _Stream(20.0, 49.5, 40_000.0, -150_000.0),
+            ]
+            outlet_streams = [
+                _Stream(53.0, 50.0, 50_000.0, 900_000.0),
+                _Stream(103.5, 49.5, 40_000.0, 2_250_000.0),
+            ]
+
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @classmethod
+            def getInStream(cls, index):
+                return cls.inlet_streams[index]
+
+            @classmethod
+            def getOutStream(cls, index):
+                return cls.outlet_streams[index]
+
+            @staticmethod
+            def getUAvalue():
+                return 100_000.0
+
+            @staticmethod
+            def getDuty():
+                return 2_400_000.0
+
+            @staticmethod
+            def getApproachTemperature():
+                return 16.5
+
+            @staticmethod
+            def getThermalEffectiveness():
+                return 0.83
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"cross exchanger": _HeatExchanger()}
+        model._unit_ps_name = {"cross exchanger": "main"}
+
+        properties = model.list_units()[0].properties
+
+        expected = {
+            "hotInletTemperature_C": 120.0,
+            "hotOutletTemperature_C": 53.0,
+            "coldInletTemperature_C": 20.0,
+            "coldOutletTemperature_C": 103.5,
+            "hotInletPressure_bara": 50.0,
+            "coldOutletPressure_bara": 49.5,
+            "hotInletFlow_kg_hr": 50_000.0,
+            "coldOutletFlow_kg_hr": 40_000.0,
+            "UA_W_K": 100_000.0,
+            "heatTransferDuty_kW": 2_400.0,
+            "approachTemperature_K": 16.5,
+            "thermalEffectiveness": 0.83,
+            "hotSideDuty_kW": 2_400.0,
+            "coldSideDuty_kW": 2_400.0,
+            "dutyClosure_kW": 0.0,
+            "dutyClosure_pct": 0.0,
+        }
+        for property_name, value in expected.items():
+            with self.subTest(property_name=property_name):
+                self.assertAlmostEqual(
+                    properties[property_name],
+                    value,
+                    delta=1.0e-12,
+                )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        expected_units = {
+            "hotInletTemperature_C": "°C",
+            "hotOutletTemperature_C": "°C",
+            "coldInletTemperature_C": "°C",
+            "coldOutletTemperature_C": "°C",
+            "hotInletPressure_bara": "bara",
+            "coldOutletPressure_bara": "bara",
+            "hotInletFlow_kg_hr": "kg/hr",
+            "coldOutletFlow_kg_hr": "kg/hr",
+            "UA_W_K": "W/K",
+            "heatTransferDuty_kW": "kW",
+            "approachTemperature_K": "K",
+            "thermalEffectiveness": "[-]",
+            "hotSideDuty_kW": "kW",
+            "coldSideDuty_kW": "kW",
+            "dutyClosure_kW": "kW",
+            "dutyClosure_pct": "%",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(kpi_property=property_name):
+                kpi = kpis[f"cross exchanger.{property_name}"]
+                self.assertAlmostEqual(
+                    kpi.value,
+                    expected[property_name],
+                    delta=1.0e-12,
+                )
+                self.assertEqual(kpi.unit, unit)
+
+
 class SplitterPropertyExtractionTest(unittest.TestCase):
     """Validate solved splitter allocations and explicit flow closure."""
 
