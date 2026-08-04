@@ -2673,10 +2673,7 @@ class NeqSimProcessModel:
             - named_sides["cold"]["inlet"]["enthalpy_flow_kW"]
         )
         duty_closure_kW = hot_side_duty_kW - cold_side_duty_kW
-        properties["hotSideDuty_kW"] = hot_side_duty_kW
-        properties["coldSideDuty_kW"] = cold_side_duty_kW
-        properties["dutyClosure_kW"] = duty_closure_kW
-        properties["dutyClosure_pct"] = (
+        duty_closure_pct = (
             abs(duty_closure_kW)
             / max(
                 hot_side_duty_kW,
@@ -2685,6 +2682,33 @@ class NeqSimProcessModel:
             )
             * 100.0
         )
+        if not any(inlet_identifiers_match_exchanger):
+            native_duty_kW = properties.get("heatTransferDuty_kW")
+            if native_duty_kW is None:
+                return {}
+            direct_run_residual_pct = max(
+                duty_closure_pct,
+                abs(hot_side_duty_kW - native_duty_kW)
+                / max(
+                    hot_side_duty_kW,
+                    native_duty_kW,
+                    _UNIT_BALANCE_SCALE_FLOOR_KW,
+                )
+                * 100.0,
+                abs(cold_side_duty_kW - native_duty_kW)
+                / max(
+                    cold_side_duty_kW,
+                    native_duty_kW,
+                    _UNIT_BALANCE_SCALE_FLOOR_KW,
+                )
+                * 100.0,
+            )
+            if direct_run_residual_pct > 1.0e-3:
+                return {}
+        properties["hotSideDuty_kW"] = hot_side_duty_kW
+        properties["coldSideDuty_kW"] = cold_side_duty_kW
+        properties["dutyClosure_kW"] = duty_closure_kW
+        properties["dutyClosure_pct"] = duty_closure_pct
         return properties
 
     @staticmethod
