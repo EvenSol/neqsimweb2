@@ -3271,6 +3271,37 @@ class NeqSimProcessModel:
             return matching_names[0]
         return preferred_name
 
+    def _indexed_unit_name_for_process_system(
+        self,
+        process_system: Any,
+        report_name: str,
+        process_system_name: str,
+    ) -> str:
+        """Resolve a module report entry through its native unit identity."""
+        try:
+            units = list(process_system.getUnitOperations())
+        except Exception:
+            units = []
+        for unit in units:
+            try:
+                raw_name = str(unit.getName())
+            except Exception:
+                continue
+            if report_name not in (
+                raw_name,
+                f"{process_system_name}/{raw_name}",
+            ):
+                continue
+            return self._indexed_unit_name_for_native(
+                unit,
+                f"{process_system_name}/{raw_name}",
+            )
+        return (
+            f"{process_system_name}/{report_name}"
+            if process_system_name
+            else report_name
+        )
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -4923,7 +4954,10 @@ class NeqSimProcessModel:
                         )
                     except Exception:
                         pass
-                if java_class == "HeatExchanger":
+                if (
+                    java_class == "HeatExchanger"
+                    and exchanger_duty_is_trusted
+                ):
                     for prop, val in (
                         self._heat_exchanger_operating_properties(
                             u,
@@ -4932,11 +4966,6 @@ class NeqSimProcessModel:
                                 "_direct_unit_run_provenance",
                                 {},
                             ).get(name),
-                            getattr(
-                                self,
-                                "_heat_exchanger_state_snapshots",
-                                {},
-                            ).get(name, ()),
                         ).items()
                     ):
                         kpis[f"{prefix}.{prop}"] = KPI(
@@ -5634,6 +5663,7 @@ class NeqSimProcessModel:
             Dict[str, List[Tuple[str, bool]]]
         ] = None,
         process_system_name: str = "",
+        process_system: Any = None,
     ) -> dict:
         """Return a public JSON report without untrusted exchanger duties."""
         process_system_names = {
@@ -5663,14 +5693,23 @@ class NeqSimProcessModel:
                     )
                 filtered[report_name] = nested_report
                 continue
-            lookup_report_name = (
-                f"{process_system_name}/{report_name}"
-                if process_system_name
-                and not report_name.startswith(
-                    f"{process_system_name}/"
+            if process_system is not None:
+                lookup_report_name = (
+                    self._indexed_unit_name_for_process_system(
+                        process_system,
+                        report_name,
+                        process_system_name,
+                    )
                 )
-                else report_name
-            )
+            else:
+                lookup_report_name = (
+                    f"{process_system_name}/{report_name}"
+                    if process_system_name
+                    and not report_name.startswith(
+                        f"{process_system_name}/"
+                    )
+                    else report_name
+                )
             suppression = self._report_unit_duty_suppression(
                 lookup_report_name,
                 duty_lookup,
@@ -5950,6 +5989,7 @@ class NeqSimProcessModel:
                     return self._filter_json_report_duties(
                         json.loads(r_str),
                         process_system_name=ps_name,
+                        process_system=ps,
                     )
             except Exception:
                 continue
