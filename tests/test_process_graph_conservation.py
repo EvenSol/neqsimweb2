@@ -97,6 +97,110 @@ class ExpanderPropertyExtractionTest(unittest.TestCase):
                 self.assertEqual(kpi.unit, unit)
 
 
+class ThermalPropertyExtractionTest(unittest.TestCase):
+    """Validate solved heater and cooler workbook property mapping."""
+
+    class _Stream:
+        def __init__(self, temperature_c, pressure_bara, flow_kg_hr):
+            self.temperature_c = temperature_c
+            self.pressure_bara = pressure_bara
+            self.flow_kg_hr = flow_kg_hr
+
+        def getTemperature(self, unit):
+            if unit != "C":
+                raise AssertionError(unit)
+            return self.temperature_c
+
+        def getPressure(self, unit):
+            if unit != "bara":
+                raise AssertionError(unit)
+            return self.pressure_bara
+
+        def getFlowRate(self, unit):
+            if unit != "kg/hr":
+                raise AssertionError(unit)
+            return self.flow_kg_hr
+
+    class _ThermalUnit:
+        def __init__(self, inlet, outlet, duty_w, energy_input_w=None):
+            self.inlet = inlet
+            self.outlet = outlet
+            self.duty_w = duty_w
+            self.energy_input_w = (
+                duty_w if energy_input_w is None else energy_input_w
+            )
+
+        def getInletStream(self):
+            return self.inlet
+
+        def getOutletStream(self):
+            return self.outlet
+
+        def getDuty(self):
+            return self.duty_w
+
+        def getEnergyInput(self):
+            return self.energy_input_w
+
+    def test_maps_signed_duty_state_changes_and_specific_duty(self):
+        cases = (
+            ("heater", 25.0, 80.0, 60.0, 58.5, 402_793.338),
+            ("cooler", 80.0, 40.0, 58.5, 58.0, -286_937.691),
+        )
+        for name, inlet_c, outlet_c, inlet_bar, outlet_bar, duty_w in cases:
+            with self.subTest(name=name):
+                unit = self._ThermalUnit(
+                    self._Stream(inlet_c, inlet_bar, 10_000.0),
+                    self._Stream(outlet_c, outlet_bar, 10_000.0),
+                    duty_w,
+                )
+
+                properties = NeqSimProcessModel._thermal_operating_properties(
+                    unit
+                )
+
+                self.assertEqual(properties["inletTemperature_C"], inlet_c)
+                self.assertEqual(properties["outletTemperature_C"], outlet_c)
+                self.assertEqual(
+                    properties["temperatureChange_C"],
+                    outlet_c - inlet_c,
+                )
+                self.assertEqual(properties["inletPressure_bara"], inlet_bar)
+                self.assertEqual(properties["outletPressure_bara"], outlet_bar)
+                self.assertEqual(
+                    properties["pressureDrop_bar"],
+                    inlet_bar - outlet_bar,
+                )
+                duty_kW = duty_w / 1000.0
+                self.assertAlmostEqual(properties["duty_kW"], duty_kW)
+                self.assertEqual(
+                    properties["heatingDuty_kW"],
+                    max(duty_kW, 0.0),
+                )
+                self.assertEqual(
+                    properties["coolingDuty_kW"],
+                    max(-duty_kW, 0.0),
+                )
+                self.assertAlmostEqual(
+                    properties["specificDuty_kJ_kg"],
+                    duty_kW * 3600.0 / 10_000.0,
+                )
+
+    def test_uses_energy_input_when_native_duty_is_zero(self):
+        unit = self._ThermalUnit(
+            self._Stream(30.0, 50.0, 5_000.0),
+            self._Stream(20.0, 49.0, 5_000.0),
+            0.0,
+            -50_000.0,
+        )
+
+        properties = NeqSimProcessModel._thermal_operating_properties(unit)
+
+        self.assertEqual(properties["duty_kW"], -50.0)
+        self.assertEqual(properties["heatingDuty_kW"], 0.0)
+        self.assertEqual(properties["coolingDuty_kW"], 50.0)
+
+
 class PumpParameterApplicationTest(unittest.TestCase):
     """Protect pump efficiency application and replay-script parity."""
 
