@@ -3963,6 +3963,7 @@ class NeqSimProcessModel:
         # Collect power and duty from all units
         total_power_kW = 0.0
         total_duty_kW = 0.0
+        report_duty_lookup = self._report_unit_duty_lookup()
 
         for name, u in self._units.items():
             try:
@@ -3983,11 +3984,10 @@ class NeqSimProcessModel:
                     pass
             exchanger_duty_is_trusted = (
                 uclass != "HeatExchanger"
-                or self._heat_exchanger_solution_is_trusted(
+                or not bool(self._report_unit_duty_suppression(
                     name,
-                    u,
-                    uclass,
-                )
+                    report_duty_lookup,
+                ))
             )
             if hasattr(u, "getDuty") and exchanger_duty_is_trusted:
                 try:
@@ -4054,11 +4054,18 @@ class NeqSimProcessModel:
 
         # Extract all properties from JSON report into flat KPIs
         if json_report:
-            json_report = self._filter_json_report_duties(json_report)
-            self._flatten_json_report(json_report, kpis)
+            json_report = self._filter_json_report_duties(
+                json_report,
+                report_duty_lookup,
+            )
+            self._flatten_json_report(
+                json_report,
+                kpis,
+                report_duty_lookup,
+            )
 
         # Extract detailed unit operation properties (utilization, sizing, performance)
-        self._extract_unit_properties(kpis)
+        self._extract_unit_properties(kpis, report_duty_lookup)
 
         # Extract mechanical design data (wall thickness, weights, dimensions, cost)
         self._extract_mechanical_design(kpis)
@@ -4766,13 +4773,21 @@ class NeqSimProcessModel:
             }
         )
 
-    def _extract_unit_properties(self, kpis: Dict[str, KPI]):
+    def _extract_unit_properties(
+        self,
+        kpis: Dict[str, KPI],
+        report_duty_lookup: Optional[
+            Dict[str, List[Tuple[str, bool]]]
+        ] = None,
+    ):
         """
         Extract detailed equipment-level properties from each unit operation.
 
         Covers compressor performance, separator capacity, cooler/heater sizing,
         pump/valve characteristics, and general utilization metrics.
         """
+        if report_duty_lookup is None:
+            report_duty_lookup = self._report_unit_duty_lookup()
         for name, u in self._units.items():
             try:
                 java_class = str(u.getClass().getSimpleName())
@@ -4850,11 +4865,10 @@ class NeqSimProcessModel:
             elif java_class in ("Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"):
                 exchanger_duty_is_trusted = (
                     java_class != "HeatExchanger"
-                    or self._heat_exchanger_solution_is_trusted(
+                    or not bool(self._report_unit_duty_suppression(
                         name,
-                        u,
-                        java_class,
-                    )
+                        report_duty_lookup,
+                    ))
                 )
                 for prop, getter, unit in [
                     ("pressureDrop_bar", "getPressureDrop", "bar"),
@@ -5431,7 +5445,14 @@ class NeqSimProcessModel:
         except Exception:
             pass
 
-    def _flatten_json_report(self, json_report: dict, kpis: Dict[str, KPI]):
+    def _flatten_json_report(
+        self,
+        json_report: dict,
+        kpis: Dict[str, KPI],
+        duty_lookup: Optional[
+            Dict[str, List[Tuple[str, bool]]]
+        ] = None,
+    ):
         """
         Flatten the nested JSON report into queryable KPI entries.
         
@@ -5446,7 +5467,8 @@ class NeqSimProcessModel:
             for name in self._unit_ps_name.values()
             if name
         }
-        duty_lookup = self._report_unit_duty_lookup()
+        if duty_lookup is None:
+            duty_lookup = self._report_unit_duty_lookup()
         for report_name, report_data in json_report.items():
             if not isinstance(report_data, dict):
                 continue
@@ -5580,14 +5602,21 @@ class NeqSimProcessModel:
             ]
         return data
 
-    def _filter_json_report_duties(self, json_report: dict) -> dict:
+    def _filter_json_report_duties(
+        self,
+        json_report: dict,
+        duty_lookup: Optional[
+            Dict[str, List[Tuple[str, bool]]]
+        ] = None,
+    ) -> dict:
         """Return a public JSON report without untrusted exchanger duties."""
         process_system_names = {
             name
             for name in self._unit_ps_name.values()
             if name
         }
-        duty_lookup = self._report_unit_duty_lookup()
+        if duty_lookup is None:
+            duty_lookup = self._report_unit_duty_lookup()
         filtered = {}
         for report_name, report_data in json_report.items():
             is_process_system_container = (
