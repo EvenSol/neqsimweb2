@@ -369,6 +369,8 @@ class NeqSimProcessModel:
         process_system,
         source_bytes: Optional[bytes] = None,
         enforce_acyclic_mixer_energy: bool = False,
+        trusted_solved: bool = False,
+        allow_direct_runs: bool = False,
     ):
         """
         Args:
@@ -376,6 +378,10 @@ class NeqSimProcessModel:
             source_bytes: Original file bytes for clone-by-reload.
             enforce_acyclic_mixer_energy: Recheck adiabatic mixer energy
                 closure after each acyclic graph execution.
+            trusted_solved: Capture solved exchanger state only when the
+                adapter observed the successful run that produced it.
+            allow_direct_runs: Accept direct-run exchanger UUID patterns for
+                that observed successful run.
         """
         self._proc = process_system
         self._source_bytes = source_bytes
@@ -385,7 +391,16 @@ class NeqSimProcessModel:
         self._enforce_acyclic_mixer_energy = bool(
             enforce_acyclic_mixer_energy
         )
+        self._direct_unit_run_provenance: Dict[
+            str,
+            Tuple[str, Tuple[str, str], Tuple[str, str]],
+        ] = {}
+        self._heat_exchanger_state_snapshots: Dict[str, Tuple[Any, ...]] = {}
         self._index_model_objects()
+        if trusted_solved:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=allow_direct_runs
+            )
 
     # ----- ProcessModel detection -----
 
@@ -630,8 +645,26 @@ class NeqSimProcessModel:
         # Run to initialize internal state.
         # Complex processes with recycles/mixers that reference downstream
         # streams may need multiple runs to converge after deserialization.
-        cls._run_until_converged(loaded)
-        return cls(loaded, source_bytes=file_bytes)
+        process_run_succeeded = cls._run_until_converged(loaded)
+        return cls(
+            loaded,
+            source_bytes=file_bytes,
+            trusted_solved=process_run_succeeded,
+        )
+
+    @staticmethod
+    def _async_run_status_succeeded(proc: Any) -> bool:
+        """Return native worker status when the process exposes it."""
+        try:
+            run_status = proc.getRunStatus()
+        except Exception:
+            return True
+        if run_status is None:
+            return True
+        try:
+            return bool(run_status.isSuccess())
+        except Exception:
+            return True
 
     @staticmethod
     def _run_until_converged(proc, max_runs: int = 5, timeout_ms: int = 180000):
@@ -703,15 +736,21 @@ class NeqSimProcessModel:
                     if thread.isAlive():
                         thread.interrupt()
                         thread.join()
+                        return False
+                    if not NeqSimProcessModel._async_run_status_succeeded(
+                        proc
+                    ):
+                        return False
                 else:
                     proc.run()
             except Exception:
-                pass
-            return
+                return False
+            return True
 
         # Reset recycles before the very first run
         _reset_recycles(units)
 
+        completed_run = False
         for attempt in range(max_runs):
             try:
                 if attempt >= 3 and hasattr(proc, "runSequential"):
@@ -723,26 +762,34 @@ class NeqSimProcessModel:
                     if thread.isAlive():
                         thread.interrupt()
                         thread.join()
-                        break  # timed out — stop retrying
+                        return False
+                    if not NeqSimProcessModel._async_run_status_succeeded(
+                        proc
+                    ):
+                        continue
                 else:
                     proc.run()
             except Exception:
-                pass
+                continue
+            completed_run = True
 
             has_energy, total_energy = _check_energy(units)
 
             if not has_energy or total_energy > 1.0:
-                break  # converged (non-zero energy or no energy units)
+                return True
 
             # Still zero — reset recycles and try again
             _reset_recycles(units)
+        # Zero energy is a warm-up heuristic, not proof that execution
+        # failed: idle equipment and equal-temperature exchangers are valid.
+        return completed_run
 
     @staticmethod
     def _run_acyclic_mixer_energy_closure(
         proc,
         relative_tolerance: float = 1.0e-7,
-    ) -> None:
-        """Run an ordered graph pass and enforce adiabatic mixer closure."""
+    ) -> bool:
+        """Run an ordered graph pass and report whether it completed."""
         try:
             units = list(proc.getUnitOperations())
         except Exception as exc:
@@ -755,7 +802,7 @@ class NeqSimProcessModel:
             for unit in units
         )
         if not has_mixer:
-            return
+            return False
 
         from jpype import JClass
         from neqsim import jneqsim
@@ -800,6 +847,7 @@ class NeqSimProcessModel:
                     f"Mixer '{unit.getName()}' energy balance did not "
                     f"converge (relative residual {relative_error:.3e})."
                 )
+        return True
 
     @classmethod
     def from_bytes(cls, file_bytes: bytes, filename: str = "process.neqsim") -> "NeqSimProcessModel":
@@ -826,6 +874,8 @@ class NeqSimProcessModel:
         cls,
         process_system,
         enforce_acyclic_mixer_energy: bool = False,
+        trusted_solved: bool = False,
+        allow_direct_runs: bool = False,
     ) -> "NeqSimProcessModel":
         """Wrap an existing ProcessSystem object (e.g. built in code)."""
         import neqsim
@@ -848,6 +898,8 @@ class NeqSimProcessModel:
             process_system,
             source_bytes=file_bytes,
             enforce_acyclic_mixer_energy=enforce_acyclic_mixer_energy,
+            trusted_solved=trusted_solved,
+            allow_direct_runs=allow_direct_runs,
         )
 
     # ----- Cloning -----
@@ -891,12 +943,7 @@ class NeqSimProcessModel:
         clone._enforce_acyclic_mixer_energy = (
             self._enforce_acyclic_mixer_energy
         )
-        if (
-            clone._enforce_acyclic_mixer_energy
-            and not clone._is_process_model
-        ):
-            clone._run_acyclic_mixer_energy_closure(clone._proc)
-            clone._index_model_objects()
+        clone.rerun()
         return clone
 
     # ----- Introspection -----
@@ -2533,6 +2580,414 @@ class NeqSimProcessModel:
         return properties
 
     @staticmethod
+    def _heat_exchanger_operating_properties(
+        unit: Any,
+        direct_run_provenance: Optional[
+            Tuple[str, Tuple[str, str], Tuple[str, str]]
+        ] = None,
+        solved_state_snapshot: Optional[Tuple[Any, ...]] = None,
+    ) -> Dict[str, float]:
+        """Return explicit solved hot/cold-side heat-exchanger properties.
+
+        Native stream indices preserve insertion order, so the hot and cold
+        sides are classified from solved inlet temperatures. Side duties are
+        positive heat-transfer magnitudes. Properties are withheld unless both
+        sides have complete, nonzero, finite solved states and the native unit
+        records a completed calculation.
+        """
+        try:
+            calculation_identifier = unit.getCalculationIdentifier()
+        except Exception:
+            return {}
+        if calculation_identifier is None:
+            return {}
+        if solved_state_snapshot is not None:
+            if (
+                not solved_state_snapshot
+                or str(calculation_identifier)
+                != solved_state_snapshot[0]
+            ):
+                return {}
+            current_snapshot = (
+                NeqSimProcessModel._heat_exchanger_boundary_state_signature(
+                    unit
+                )
+            )
+            if current_snapshot != solved_state_snapshot:
+                return {}
+
+        indexed_sides: List[Dict[str, Any]] = []
+        inlet_identifiers_match_exchanger: List[bool] = []
+        inlet_calculation_identifiers: List[str] = []
+        outlet_calculation_identifiers: List[str] = []
+        for index in (0, 1):
+            streams: Dict[str, Any] = {}
+            for boundary, getter_name in (
+                ("inlet", "getInStream"),
+                ("outlet", "getOutStream"),
+            ):
+                try:
+                    streams[boundary] = getattr(unit, getter_name)(index)
+                except Exception:
+                    return {}
+
+            side_state: Dict[str, Any] = {"index": index}
+            for boundary, stream in streams.items():
+                try:
+                    stream_calculation_identifier = (
+                        stream.getCalculationIdentifier()
+                    )
+                    if stream_calculation_identifier is None:
+                        return {}
+                    if (
+                        boundary == "outlet"
+                        and str(stream_calculation_identifier)
+                        != str(calculation_identifier)
+                    ):
+                        return {}
+                    if boundary == "inlet":
+                        inlet_calculation_identifiers.append(
+                            str(stream_calculation_identifier)
+                        )
+                        inlet_identifiers_match_exchanger.append(
+                            str(stream_calculation_identifier)
+                            == str(calculation_identifier)
+                        )
+                    else:
+                        outlet_calculation_identifiers.append(
+                            str(stream_calculation_identifier)
+                        )
+                    temperature_C = float(stream.getTemperature("C"))
+                    pressure_bara = float(stream.getPressure("bara"))
+                    flow_kg_hr = float(stream.getFlowRate("kg/hr"))
+                    fluid = stream.getFluid()
+                    fluid.init(3)
+                    enthalpy_flow_kW = (
+                        float(fluid.getEnthalpy()) / 1000.0
+                    )
+                except Exception:
+                    return {}
+                values = (
+                    temperature_C,
+                    pressure_bara,
+                    flow_kg_hr,
+                    enthalpy_flow_kW,
+                )
+                if not all(math.isfinite(value) for value in values):
+                    return {}
+                if abs(flow_kg_hr) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+                    return {}
+                side_state[boundary] = {
+                    "temperature_C": temperature_C,
+                    "pressure_bara": pressure_bara,
+                    "flow_kg_hr": flow_kg_hr,
+                    "enthalpy_flow_kW": enthalpy_flow_kW,
+                }
+            indexed_sides.append(side_state)
+
+        if not all(inlet_identifiers_match_exchanger):
+            current_provenance = (
+                str(calculation_identifier),
+                tuple(inlet_calculation_identifiers),
+                tuple(outlet_calculation_identifiers),
+            )
+            if direct_run_provenance != current_provenance:
+                return {}
+
+        indexed_sides.sort(
+            key=lambda side: side["inlet"]["temperature_C"],
+            reverse=True,
+        )
+        properties: Dict[str, float] = {}
+        named_sides = {
+            "hot": indexed_sides[0],
+            "cold": indexed_sides[1],
+        }
+        for side_name, side_state in named_sides.items():
+            for boundary_name in ("inlet", "outlet"):
+                state = side_state[boundary_name]
+                property_boundary = boundary_name.capitalize()
+                properties[
+                    f"{side_name}{property_boundary}Temperature_C"
+                ] = state["temperature_C"]
+                properties[
+                    f"{side_name}{property_boundary}Pressure_bara"
+                ] = state["pressure_bara"]
+                properties[
+                    f"{side_name}{property_boundary}Flow_kg_hr"
+                ] = state["flow_kg_hr"]
+
+        try:
+            flow_arrangement = str(
+                unit.getFlowArrangement()
+            ).strip().casefold()
+        except Exception:
+            flow_arrangement = ""
+        is_co_current = any(
+            marker in flow_arrangement
+            for marker in (
+                "co-current",
+                "co current",
+                "cocurrent",
+                "parallel",
+            )
+        )
+        if is_co_current:
+            terminal_differences_K = (
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"],
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"],
+            )
+        else:
+            terminal_differences_K = (
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"],
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"],
+            )
+        properties["approachTemperature_K"] = min(
+            terminal_differences_K
+        )
+
+        for property_name, getter_name, scale in (
+            ("UA_W_K", "getUAvalue", 1.0),
+            ("heatTransferDuty_kW", "getDuty", 1.0 / 1000.0),
+            ("thermalEffectiveness", "getThermalEffectiveness", 1.0),
+        ):
+            try:
+                value = float(getattr(unit, getter_name)()) * scale
+            except Exception:
+                continue
+            if math.isfinite(value) and abs(value) < 1.0e300:
+                if property_name == "heatTransferDuty_kW":
+                    value = abs(value)
+                properties[property_name] = value
+
+        hot_side_transfer_kW = (
+            named_sides["hot"]["inlet"]["enthalpy_flow_kW"]
+            - named_sides["hot"]["outlet"]["enthalpy_flow_kW"]
+        )
+        cold_side_transfer_kW = (
+            named_sides["cold"]["outlet"]["enthalpy_flow_kW"]
+            - named_sides["cold"]["inlet"]["enthalpy_flow_kW"]
+        )
+        hot_side_duty_kW = abs(hot_side_transfer_kW)
+        cold_side_duty_kW = abs(cold_side_transfer_kW)
+        duty_closure_kW = (
+            hot_side_transfer_kW - cold_side_transfer_kW
+        )
+        duty_closure_pct = (
+            abs(duty_closure_kW)
+            / max(
+                hot_side_duty_kW,
+                cold_side_duty_kW,
+                _UNIT_BALANCE_SCALE_FLOOR_KW,
+            )
+            * 100.0
+        )
+        properties["hotSideDuty_kW"] = hot_side_duty_kW
+        properties["coldSideDuty_kW"] = cold_side_duty_kW
+        properties["dutyClosure_kW"] = duty_closure_kW
+        properties["dutyClosure_pct"] = duty_closure_pct
+        return properties
+
+    @staticmethod
+    def _native_scalar_field_signature(
+        native_object: Any,
+    ) -> Optional[Tuple[Any, ...]]:
+        """Capture deterministic primitive/string/enum native fields."""
+        if native_object is None:
+            return None
+        try:
+            object_class = native_object.getClass()
+            class_name = str(object_class.getName())
+        except Exception:
+            return None
+        field_values: List[Tuple[str, Any]] = []
+        declaring_class = object_class
+        while declaring_class is not None:
+            try:
+                declared_fields = list(
+                    declaring_class.getDeclaredFields()
+                )
+            except Exception:
+                break
+            for field in declared_fields:
+                try:
+                    if int(field.getModifiers()) & 8:
+                        continue
+                    field.setAccessible(True)
+                    field_name = str(field.getName())
+                    field_type = field.getType()
+                    type_name = str(field_type.getName())
+                    if type_name == "boolean":
+                        value = bool(
+                            field.getBoolean(native_object)
+                        )
+                    elif type_name in (
+                        "byte",
+                        "short",
+                        "int",
+                        "long",
+                    ):
+                        value = int(field.get(native_object))
+                    elif type_name in ("float", "double"):
+                        value = float(field.get(native_object))
+                        if not math.isfinite(value):
+                            return None
+                    elif type_name == "java.lang.String" or bool(
+                        field_type.isEnum()
+                    ):
+                        raw_value = field.get(native_object)
+                        value = (
+                            None
+                            if raw_value is None
+                            else str(raw_value).strip().casefold()
+                        )
+                    else:
+                        continue
+                except Exception:
+                    continue
+                field_values.append((field_name, value))
+            try:
+                declaring_class = declaring_class.getSuperclass()
+            except Exception:
+                break
+        return (
+            class_name,
+            tuple(sorted(field_values)),
+        )
+
+    @staticmethod
+    def _heat_exchanger_boundary_state_signature(
+        unit: Any,
+    ) -> Optional[Tuple[Any, ...]]:
+        """Return a deterministic native boundary-state signature."""
+        try:
+            calculation_identifier = unit.getCalculationIdentifier()
+        except Exception:
+            return None
+        if calculation_identifier is None:
+            return None
+        stream_states: List[Tuple[Any, ...]] = []
+        for index in (0, 1):
+            for getter_name in ("getInStream", "getOutStream"):
+                try:
+                    stream = getattr(unit, getter_name)(index)
+                    stream_identifier = stream.getCalculationIdentifier()
+                    if stream_identifier is None:
+                        return None
+                    fluid = stream.getFluid()
+                    fluid.init(3)
+                    state = (
+                        str(stream_identifier),
+                        float(stream.getTemperature("C")),
+                        float(stream.getPressure("bara")),
+                        float(stream.getFlowRate("kg/hr")),
+                        float(fluid.getEnthalpy()) / 1000.0,
+                    )
+                except Exception:
+                    return None
+                if not all(
+                    math.isfinite(value)
+                    for value in state[1:]
+                ):
+                    return None
+                stream_states.append(state)
+        try:
+            flow_arrangement = str(
+                unit.getFlowArrangement()
+            ).strip().casefold()
+        except Exception:
+            flow_arrangement = ""
+        solution_settings: List[Tuple[str, Any]] = []
+        for getter_name in (
+            "getUAvalue",
+            "getThermalEffectiveness",
+            "getDeltaT",
+            "getDuty",
+            "getOutletTemperature",
+            "getApproachTemperature",
+            "getMinApproachTemperature",
+            "getHotColdDutyBalance",
+            "getDesignDuty",
+            "getDesignUAValue",
+            "getMaxDesignDuty",
+            "getDesignMode",
+            "getRatingArea",
+            "getRatingU",
+            "getShellPasses",
+            "getMinOutletTemperature",
+            "getMaxOutletTemperature",
+            "hasMinOutletTemperatureLimit",
+            "hasMaxOutletTemperatureLimit",
+        ):
+            try:
+                raw_value = getattr(unit, getter_name)()
+            except Exception:
+                value = None
+            else:
+                if isinstance(raw_value, bool):
+                    value = raw_value
+                else:
+                    try:
+                        numeric_value = float(raw_value)
+                    except (TypeError, ValueError):
+                        value = str(raw_value).strip().casefold()
+                    else:
+                        if not math.isfinite(numeric_value):
+                            return None
+                        value = numeric_value
+            solution_settings.append((getter_name, value))
+        use_delta_T: Optional[bool] = None
+        for getter_name in ("isUseDeltaT", "getUseDeltaT"):
+            try:
+                use_delta_T = bool(getattr(unit, getter_name)())
+                break
+            except Exception:
+                continue
+        if use_delta_T is None:
+            try:
+                declaring_class = unit.getClass()
+                while declaring_class is not None:
+                    try:
+                        field = declaring_class.getDeclaredField(
+                            "useDeltaT"
+                        )
+                        field.setAccessible(True)
+                        use_delta_T = bool(field.getBoolean(unit))
+                        break
+                    except Exception:
+                        declaring_class = (
+                            declaring_class.getSuperclass()
+                        )
+            except Exception:
+                pass
+        solution_settings.append(("useDeltaT", use_delta_T))
+        try:
+            rating_calculator = unit.getRatingCalculator()
+        except Exception:
+            rating_calculator = None
+        solution_settings.append(
+            (
+                "ratingCalculator",
+                NeqSimProcessModel._native_scalar_field_signature(
+                    rating_calculator
+                ),
+            )
+        )
+        configuration = (
+            flow_arrangement,
+            tuple(solution_settings),
+        )
+        return (
+            str(calculation_identifier),
+            tuple(stream_states),
+            configuration,
+        )
+
+    @staticmethod
     def _splitter_operating_properties(unit: Any) -> Dict[str, float]:
         """Return solved splitter allocation and flow-closure properties.
 
@@ -2703,6 +3158,27 @@ class NeqSimProcessModel:
             return "%"
         return "[-]"
 
+    @staticmethod
+    def _heat_exchanger_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for exchanger properties."""
+        if property_name.endswith("Temperature_C"):
+            return "°C"
+        if property_name.endswith("Temperature_K"):
+            return "K"
+        if property_name.endswith("Pressure_bara"):
+            return "bara"
+        if property_name.endswith("Flow_kg_hr"):
+            return "kg/hr"
+        if property_name.endswith("Duty_kW") or property_name.endswith(
+            "Closure_kW"
+        ):
+            return "kW"
+        if property_name.endswith("Closure_pct"):
+            return "%"
+        if property_name == "UA_W_K":
+            return "W/K"
+        return "[-]"
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -2766,6 +3242,23 @@ class NeqSimProcessModel:
 
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
+
+            if java_class == "HeatExchanger":
+                props.update(
+                    self._heat_exchanger_operating_properties(
+                        u,
+                        getattr(
+                            self,
+                            "_direct_unit_run_provenance",
+                            {},
+                        ).get(name),
+                        getattr(
+                            self,
+                            "_heat_exchanger_state_snapshots",
+                            {},
+                        ).get(name, ()),
+                    )
+                )
 
             if "Splitter" in java_class:
                 props.update(self._splitter_operating_properties(u))
@@ -2909,6 +3402,153 @@ class NeqSimProcessModel:
                     pass
         raise KeyError(f"Unit not found: {name}")
 
+    def record_direct_unit_run(self, unit_name: str) -> None:
+        """Record explicit provenance for a completed direct exchanger run.
+
+        NeqSim 3.16 assigns separate UUIDs to exchanger inlets during
+        ``HeatExchanger.run(UUID)``. Call this immediately after that direct
+        run so solved workbook and Process Chat properties can distinguish it
+        from inlet streams recalculated after an older ProcessSystem solve.
+        ProcessSystem runs do not need this marker because every boundary uses
+        the process calculation UUID.
+        """
+        canonical_name = None
+        name_lower = unit_name.lower()
+        for candidate_name in self._units:
+            if candidate_name == unit_name or (
+                candidate_name.lower() == name_lower
+            ) or candidate_name.lower().endswith(
+                f"/{name_lower}"
+            ):
+                canonical_name = candidate_name
+                break
+        if canonical_name is None:
+            raise KeyError(f"Unit not found: {unit_name}")
+        unit = self._units[canonical_name]
+        try:
+            java_class = str(unit.getClass().getSimpleName())
+        except Exception as exc:
+            raise ValueError(
+                f"Cannot inspect direct-run unit '{unit_name}'."
+            ) from exc
+        if java_class != "HeatExchanger":
+            raise ValueError(
+                "Direct-run provenance is currently supported only for "
+                "native HeatExchanger units."
+            )
+        try:
+            calculation_identifier = str(
+                unit.getCalculationIdentifier()
+            )
+            inlet_identifiers = tuple(
+                str(unit.getInStream(index).getCalculationIdentifier())
+                for index in (0, 1)
+            )
+            outlet_identifiers = tuple(
+                str(unit.getOutStream(index).getCalculationIdentifier())
+                for index in (0, 1)
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Direct-run provenance for '{unit_name}' is incomplete."
+            ) from exc
+        if (
+            calculation_identifier == "None"
+            or "None" in inlet_identifiers
+            or "None" in outlet_identifiers
+        ):
+            raise ValueError(
+                f"Direct-run provenance for '{unit_name}' is incomplete."
+            )
+        if outlet_identifiers != (
+            calculation_identifier,
+            calculation_identifier,
+        ):
+            raise ValueError(
+                f"Direct-run outlets for '{unit_name}' do not share the "
+                "exchanger calculation identifier."
+            )
+        inlet_matches = tuple(
+            identifier == calculation_identifier
+            for identifier in inlet_identifiers
+        )
+        if any(inlet_matches):
+            raise ValueError(
+                f"'{unit_name}' does not have the direct-run identifier "
+                "pattern; use the normal ProcessSystem result path."
+            )
+        self._direct_unit_run_provenance[canonical_name] = (
+            calculation_identifier,
+            inlet_identifiers,
+            outlet_identifiers,
+        )
+        state_snapshot = self._heat_exchanger_boundary_state_signature(
+            unit
+        )
+        if state_snapshot is None:
+            raise ValueError(
+                f"Direct-run state for '{unit_name}' is incomplete."
+            )
+        self._heat_exchanger_state_snapshots[
+            canonical_name
+        ] = state_snapshot
+
+    def _capture_heat_exchanger_state_snapshots(
+        self,
+        allow_direct_runs: bool = False,
+    ) -> None:
+        """Capture solved exchanger boundaries owned by the wrapper run."""
+        self._direct_unit_run_provenance.clear()
+        self._heat_exchanger_state_snapshots.clear()
+        for name, unit in self._units.items():
+            try:
+                if str(unit.getClass().getSimpleName()) != "HeatExchanger":
+                    continue
+                calculation_identifier = unit.getCalculationIdentifier()
+                if calculation_identifier is None:
+                    continue
+                inlet_identifiers = tuple(
+                    unit.getInStream(index).getCalculationIdentifier()
+                    for index in (0, 1)
+                )
+                outlet_identifiers = tuple(
+                    unit.getOutStream(index).getCalculationIdentifier()
+                    for index in (0, 1)
+                )
+            except Exception:
+                continue
+            if any(identifier is None for identifier in inlet_identifiers):
+                continue
+            if any(identifier is None for identifier in outlet_identifiers):
+                continue
+            calculation_identifier_str = str(calculation_identifier)
+            inlet_identifier_strings = tuple(
+                str(identifier) for identifier in inlet_identifiers
+            )
+            outlet_identifier_strings = tuple(
+                str(identifier) for identifier in outlet_identifiers
+            )
+            if outlet_identifier_strings != (
+                calculation_identifier_str,
+                calculation_identifier_str,
+            ):
+                continue
+            inlet_matches = tuple(
+                identifier == calculation_identifier_str
+                for identifier in inlet_identifier_strings
+            )
+            if not all(inlet_matches):
+                if not allow_direct_runs or any(inlet_matches):
+                    continue
+                self._direct_unit_run_provenance[name] = (
+                    calculation_identifier_str,
+                    inlet_identifier_strings,
+                    outlet_identifier_strings,
+                )
+            snapshot = self._heat_exchanger_boundary_state_signature(unit)
+            if snapshot is not None:
+                self._heat_exchanger_state_snapshots[name] = snapshot
+
     def get_stream(self, name: str):
         """Get a stream by name (supports qualified, unqualified, and case-insensitive names)."""
         # Exact match
@@ -2952,16 +3592,33 @@ class NeqSimProcessModel:
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
+        direct_closure_ran = False
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
-            self._run_process_model(self._proc, timeout_ms=timeout_ms)
+            process_run_succeeded = self._run_process_model(
+                self._proc,
+                timeout_ms=timeout_ms,
+            )
         else:
-            self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
-            if self._enforce_acyclic_mixer_energy:
-                self._run_acyclic_mixer_energy_closure(self._proc)
+            process_run_succeeded = self._run_until_converged(
+                self._proc,
+                max_runs=5,
+                timeout_ms=timeout_ms,
+            )
+            if (
+                process_run_succeeded
+                and self._enforce_acyclic_mixer_energy
+            ):
+                direct_closure_ran = (
+                    self._run_acyclic_mixer_energy_closure(self._proc)
+                )
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
+        if process_run_succeeded:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=direct_closure_ran
+            )
 
         return self._extract_results()
 
@@ -2972,13 +3629,30 @@ class NeqSimProcessModel:
         simulation (e.g. after modifying parameters) and then re-index.
         Handles both ProcessSystem and ProcessModel transparently.
         """
+        direct_closure_ran = False
         if self._is_process_model:
-            self._run_process_model(self._proc, timeout_ms=timeout_ms)
+            process_run_succeeded = self._run_process_model(
+                self._proc,
+                timeout_ms=timeout_ms,
+            )
         else:
-            self._run_until_converged(self._proc, max_runs=5, timeout_ms=timeout_ms)
-            if self._enforce_acyclic_mixer_energy:
-                self._run_acyclic_mixer_energy_closure(self._proc)
+            process_run_succeeded = self._run_until_converged(
+                self._proc,
+                max_runs=5,
+                timeout_ms=timeout_ms,
+            )
+            if (
+                process_run_succeeded
+                and self._enforce_acyclic_mixer_energy
+            ):
+                direct_closure_ran = (
+                    self._run_acyclic_mixer_energy_closure(self._proc)
+                )
         self._index_model_objects()
+        if process_run_succeeded:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=direct_closure_ran
+            )
 
     @staticmethod
     def _run_process_model(proc_model, timeout_ms: int = 180000):
@@ -2990,18 +3664,26 @@ class NeqSimProcessModel:
                 if thread.isAlive():
                     thread.interrupt()
                     thread.join()
+                    return False
+                if not NeqSimProcessModel._async_run_status_succeeded(
+                    proc_model
+                ):
+                    return False
             else:
                 proc_model.run()
+            return True
         except Exception:
             # Fallback: run each ProcessSystem individually
             try:
-                for ps in proc_model.getAllProcesses():
-                    try:
-                        NeqSimProcessModel._run_until_converged(ps)
-                    except Exception:
-                        pass
+                process_systems = list(proc_model.getAllProcesses())
             except Exception:
-                pass
+                return False
+            if not process_systems:
+                return False
+            return all(
+                NeqSimProcessModel._run_until_converged(ps)
+                for ps in process_systems
+            )
 
     @staticmethod
     def _optional_nonnegative_number(unit: Any, getter: str) -> Optional[float]:
@@ -4097,6 +4779,27 @@ class NeqSimProcessModel:
                         )
                     except Exception:
                         pass
+                if java_class == "HeatExchanger":
+                    for prop, val in (
+                        self._heat_exchanger_operating_properties(
+                            u,
+                            getattr(
+                                self,
+                                "_direct_unit_run_provenance",
+                                {},
+                            ).get(name),
+                            getattr(
+                                self,
+                                "_heat_exchanger_state_snapshots",
+                                {},
+                            ).get(name, ()),
+                        ).items()
+                    ):
+                        kpis[f"{prefix}.{prop}"] = KPI(
+                            f"{prefix}.{prop}",
+                            val,
+                            self._heat_exchanger_property_unit(prop),
+                        )
 
             # ---------- Pipeline hydraulics ----------
             elif java_class in (

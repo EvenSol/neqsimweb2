@@ -182,6 +182,613 @@ class PumpParameterApplicationTest(unittest.TestCase):
         self.assertNotIn("export_pump.setEfficiency", script)
 
 
+class HeatExchangerPropertyExtractionTest(unittest.TestCase):
+    """Validate explicit solved-property mapping for two-sided exchangers."""
+
+    def test_workbook_reports_hot_cold_conditions_and_duty_closure(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "HeatExchanger"
+
+        class _Fluid:
+            def __init__(self, enthalpy_w):
+                self.enthalpy_w = enthalpy_w
+                self.initialized = False
+
+            def init(self, level):
+                if level != 3:
+                    raise AssertionError(level)
+                self.initialized = True
+
+            def getEnthalpy(self):
+                if not self.initialized:
+                    raise AssertionError("enthalpy requires level-3 init")
+                return self.enthalpy_w
+
+        class _Stream:
+            def __init__(
+                self,
+                temperature_c,
+                pressure_bara,
+                flow_kg_hr,
+                enthalpy_w,
+                calculation_identifier="solved-calculation",
+            ):
+                self.temperature_c = temperature_c
+                self.pressure_bara = pressure_bara
+                self.flow_kg_hr = flow_kg_hr
+                self.fluid = _Fluid(enthalpy_w)
+                self.calculation_identifier = calculation_identifier
+
+            def getCalculationIdentifier(self):
+                return self.calculation_identifier
+
+            def getTemperature(self, unit):
+                if unit != "C":
+                    raise AssertionError(unit)
+                return self.temperature_c
+
+            def getPressure(self, unit):
+                if unit != "bara":
+                    raise AssertionError(unit)
+                return self.pressure_bara
+
+            def getFlowRate(self, unit):
+                if unit != "kg/hr":
+                    raise AssertionError(unit)
+                return self.flow_kg_hr
+
+            def getFluid(self):
+                return self.fluid
+
+        class _HeatExchanger:
+            inlet_streams = [
+                _Stream(120.0, 50.0, 50_000.0, 3_300_000.0),
+                _Stream(20.0, 49.5, 40_000.0, -150_000.0),
+            ]
+            outlet_streams = [
+                _Stream(53.0, 50.0, 50_000.0, 900_000.0),
+                _Stream(103.5, 49.5, 40_000.0, 2_250_000.0),
+            ]
+
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getCalculationIdentifier():
+                return "solved-calculation"
+
+            @classmethod
+            def getInStream(cls, index):
+                return cls.inlet_streams[index]
+
+            @classmethod
+            def getOutStream(cls, index):
+                return cls.outlet_streams[index]
+
+            @staticmethod
+            def getUAvalue():
+                return 100_000.0
+
+            @staticmethod
+            def getDuty():
+                return 2_400_000.0
+
+            @staticmethod
+            def getApproachTemperature():
+                return 16.5
+
+            @staticmethod
+            def getThermalEffectiveness():
+                return 0.83
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"cross exchanger": _HeatExchanger()}
+        model._unit_ps_name = {"cross exchanger": "main"}
+        model._direct_unit_run_provenance = {}
+        model._heat_exchanger_state_snapshots = {}
+        model._capture_heat_exchanger_state_snapshots()
+
+        properties = model.list_units()[0].properties
+
+        expected = {
+            "hotInletTemperature_C": 120.0,
+            "hotOutletTemperature_C": 53.0,
+            "coldInletTemperature_C": 20.0,
+            "coldOutletTemperature_C": 103.5,
+            "hotInletPressure_bara": 50.0,
+            "hotOutletPressure_bara": 50.0,
+            "coldInletPressure_bara": 49.5,
+            "coldOutletPressure_bara": 49.5,
+            "hotInletFlow_kg_hr": 50_000.0,
+            "hotOutletFlow_kg_hr": 50_000.0,
+            "coldInletFlow_kg_hr": 40_000.0,
+            "coldOutletFlow_kg_hr": 40_000.0,
+            "UA_W_K": 100_000.0,
+            "heatTransferDuty_kW": 2_400.0,
+            "approachTemperature_K": 16.5,
+            "thermalEffectiveness": 0.83,
+            "hotSideDuty_kW": 2_400.0,
+            "coldSideDuty_kW": 2_400.0,
+            "dutyClosure_kW": 0.0,
+            "dutyClosure_pct": 0.0,
+        }
+        for property_name, value in expected.items():
+            with self.subTest(property_name=property_name):
+                self.assertAlmostEqual(
+                    properties[property_name],
+                    value,
+                    delta=1.0e-12,
+                )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        expected_units = {
+            "hotInletTemperature_C": "°C",
+            "hotOutletTemperature_C": "°C",
+            "coldInletTemperature_C": "°C",
+            "coldOutletTemperature_C": "°C",
+            "hotInletPressure_bara": "bara",
+            "hotOutletPressure_bara": "bara",
+            "coldInletPressure_bara": "bara",
+            "coldOutletPressure_bara": "bara",
+            "hotInletFlow_kg_hr": "kg/hr",
+            "hotOutletFlow_kg_hr": "kg/hr",
+            "coldInletFlow_kg_hr": "kg/hr",
+            "coldOutletFlow_kg_hr": "kg/hr",
+            "UA_W_K": "W/K",
+            "heatTransferDuty_kW": "kW",
+            "approachTemperature_K": "K",
+            "thermalEffectiveness": "[-]",
+            "hotSideDuty_kW": "kW",
+            "coldSideDuty_kW": "kW",
+            "dutyClosure_kW": "kW",
+            "dutyClosure_pct": "%",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(kpi_property=property_name):
+                kpi = kpis[f"cross exchanger.{property_name}"]
+                self.assertAlmostEqual(
+                    kpi.value,
+                    expected[property_name],
+                    delta=1.0e-12,
+                )
+                self.assertEqual(kpi.unit, unit)
+
+        class _ReversedHeatExchanger(_HeatExchanger):
+            inlet_streams = list(reversed(_HeatExchanger.inlet_streams))
+            outlet_streams = list(reversed(_HeatExchanger.outlet_streams))
+
+            @staticmethod
+            def getDuty():
+                return -2_400_000.0
+
+            @staticmethod
+            def getApproachTemperature():
+                return -33.0
+
+        reversed_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _ReversedHeatExchanger()
+            )
+        )
+        self.assertEqual(reversed_properties["hotInletTemperature_C"], 120.0)
+        self.assertEqual(reversed_properties["coldInletTemperature_C"], 20.0)
+        self.assertEqual(reversed_properties["hotSideDuty_kW"], 2_400.0)
+        self.assertEqual(reversed_properties["coldSideDuty_kW"], 2_400.0)
+        self.assertEqual(reversed_properties["heatTransferDuty_kW"], 2_400.0)
+        self.assertEqual(reversed_properties["approachTemperature_K"], 16.5)
+
+        class _CoCurrentHeatExchanger(_HeatExchanger):
+            @staticmethod
+            def getFlowArrangement():
+                return "co-current"
+
+        co_current_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _CoCurrentHeatExchanger()
+            )
+        )
+        self.assertEqual(
+            co_current_properties["approachTemperature_K"],
+            -50.5,
+        )
+
+        class _IncompleteHeatExchanger(_HeatExchanger):
+            @classmethod
+            def getOutStream(cls, index):
+                if index == 1:
+                    raise RuntimeError("cold outlet is not solved")
+                return super().getOutStream(index)
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _IncompleteHeatExchanger()
+            ),
+            {},
+        )
+
+        class _NeverRunHeatExchanger(_HeatExchanger):
+            @staticmethod
+            def getCalculationIdentifier():
+                return None
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _NeverRunHeatExchanger()
+            ),
+            {},
+        )
+
+        class _StaleBoundaryHeatExchanger(_HeatExchanger):
+            inlet_streams = list(_HeatExchanger.inlet_streams)
+            inlet_streams[0] = _Stream(
+                120.0,
+                50.0,
+                50_000.0,
+                3_300_000.0,
+                calculation_identifier="newer-inlet-calculation",
+            )
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _StaleBoundaryHeatExchanger()
+            ),
+            {},
+        )
+
+        class _DirectRunHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _Stream(
+                    stream.temperature_c,
+                    stream.pressure_bara,
+                    stream.flow_kg_hr,
+                    stream.fluid.enthalpy_w,
+                    calculation_identifier=f"direct-inlet-{index}",
+                )
+                for index, stream in enumerate(_HeatExchanger.inlet_streams)
+            ]
+
+        direct_provenance = (
+            "solved-calculation",
+            ("direct-inlet-0", "direct-inlet-1"),
+            ("solved-calculation", "solved-calculation"),
+        )
+        direct_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _DirectRunHeatExchanger(),
+                direct_provenance,
+            )
+        )
+        self.assertEqual(direct_properties["heatTransferDuty_kW"], 2_400.0)
+
+        direct_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        direct_model._units = {
+            "direct exchanger": _DirectRunHeatExchanger()
+        }
+        direct_model._unit_ps_name = {"direct exchanger": "main"}
+        direct_model._direct_unit_run_provenance = {}
+        direct_model._heat_exchanger_state_snapshots = {}
+        direct_model.record_direct_unit_run("direct exchanger")
+        self.assertEqual(
+            direct_model._direct_unit_run_provenance[
+                "direct exchanger"
+            ],
+            direct_provenance,
+        )
+        self.assertEqual(
+            direct_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
+
+        qualified_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        qualified_model._units = {
+            "main/direct exchanger": _DirectRunHeatExchanger()
+        }
+        qualified_model._unit_ps_name = {
+            "main/direct exchanger": "main"
+        }
+        qualified_model._direct_unit_run_provenance = {}
+        qualified_model._heat_exchanger_state_snapshots = {}
+        qualified_model.record_direct_unit_run("direct exchanger")
+        self.assertEqual(
+            qualified_model._direct_unit_run_provenance[
+                "main/direct exchanger"
+            ],
+            direct_provenance,
+        )
+
+        auto_capture_model = NeqSimProcessModel.__new__(
+            NeqSimProcessModel
+        )
+        auto_capture_model._units = {
+            "direct exchanger": _DirectRunHeatExchanger()
+        }
+        auto_capture_model._unit_ps_name = {
+            "direct exchanger": "main"
+        }
+        auto_capture_model._direct_unit_run_provenance = {}
+        auto_capture_model._heat_exchanger_state_snapshots = {}
+        auto_capture_model._capture_heat_exchanger_state_snapshots(
+            allow_direct_runs=True
+        )
+        self.assertEqual(
+            auto_capture_model._direct_unit_run_provenance[
+                "direct exchanger"
+            ],
+            direct_provenance,
+        )
+        self.assertEqual(
+            auto_capture_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
+        auto_capture_model._capture_heat_exchanger_state_snapshots()
+        self.assertNotIn(
+            "direct exchanger",
+            auto_capture_model._direct_unit_run_provenance,
+        )
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            auto_capture_model.list_units()[0].properties,
+        )
+
+        class _MutableSolvedHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _Stream(120.0, 50.0, 50_000.0, 3_300_000.0),
+                _Stream(20.0, 49.5, 40_000.0, -150_000.0),
+            ]
+            outlet_streams = [
+                _Stream(53.0, 50.0, 50_000.0, 900_000.0),
+                _Stream(103.5, 49.5, 40_000.0, 2_250_000.0),
+            ]
+
+        mutable_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        mutable_model._units = {
+            "mutable exchanger": _MutableSolvedHeatExchanger()
+        }
+        mutable_model._unit_ps_name = {"mutable exchanger": "main"}
+        mutable_model._direct_unit_run_provenance = {}
+        mutable_model._heat_exchanger_state_snapshots = {}
+        mutable_model._capture_heat_exchanger_state_snapshots()
+        self.assertEqual(
+            mutable_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
+        _MutableSolvedHeatExchanger.inlet_streams[
+            0
+        ].temperature_c = 110.0
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            mutable_model.list_units()[0].properties,
+        )
+
+        class _MutableSettingsHeatExchanger(_HeatExchanger):
+            ua_W_K = 100_000.0
+            flow_arrangement = "concentric tube counterflow"
+            thermal_effectiveness = 0.83
+            delta_T_K = 5.0
+            use_delta_T = False
+
+            @classmethod
+            def getUAvalue(cls):
+                return cls.ua_W_K
+
+            @classmethod
+            def getFlowArrangement(cls):
+                return cls.flow_arrangement
+
+            @classmethod
+            def getThermalEffectiveness(cls):
+                return cls.thermal_effectiveness
+
+            @classmethod
+            def getDeltaT(cls):
+                return cls.delta_T_K
+
+            @classmethod
+            def isUseDeltaT(cls):
+                return cls.use_delta_T
+
+        settings_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        settings_model._units = {
+            "settings exchanger": _MutableSettingsHeatExchanger()
+        }
+        settings_model._unit_ps_name = {"settings exchanger": "main"}
+        settings_model._direct_unit_run_provenance = {}
+        settings_model._heat_exchanger_state_snapshots = {}
+        settings_model._capture_heat_exchanger_state_snapshots()
+        _MutableSettingsHeatExchanger.ua_W_K = 200_000.0
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            settings_model.list_units()[0].properties,
+        )
+        _MutableSettingsHeatExchanger.thermal_effectiveness = 0.83
+        settings_model._capture_heat_exchanger_state_snapshots()
+        _MutableSettingsHeatExchanger.use_delta_T = True
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            settings_model.list_units()[0].properties,
+        )
+        _MutableSettingsHeatExchanger.ua_W_K = 100_000.0
+        settings_model._capture_heat_exchanger_state_snapshots()
+        _MutableSettingsHeatExchanger.flow_arrangement = "co-current"
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            settings_model.list_units()[0].properties,
+        )
+        _MutableSettingsHeatExchanger.flow_arrangement = (
+            "concentric tube counterflow"
+        )
+        settings_model._capture_heat_exchanger_state_snapshots()
+        _MutableSettingsHeatExchanger.thermal_effectiveness = 0.25
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            settings_model.list_units()[0].properties,
+        )
+
+        class _StaleDualInletHeatExchanger(_DirectRunHeatExchanger):
+            inlet_streams = [
+                _Stream(
+                    120.0,
+                    50.0,
+                    50_000.0,
+                    4_000_000.0,
+                    calculation_identifier="new-hot-calculation",
+                ),
+                _Stream(
+                    20.0,
+                    49.5,
+                    40_000.0,
+                    -900_000.0,
+                    calculation_identifier="new-cold-calculation",
+                ),
+            ]
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _StaleDualInletHeatExchanger(),
+                direct_provenance,
+            ),
+            {},
+        )
+
+        class _StaleOutletHeatExchanger(_HeatExchanger):
+            outlet_streams = list(_HeatExchanger.outlet_streams)
+            outlet_streams[0] = _Stream(
+                53.0,
+                50.0,
+                50_000.0,
+                900_000.0,
+                calculation_identifier="older-outlet-calculation",
+            )
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _StaleOutletHeatExchanger()
+            ),
+            {},
+        )
+
+        class _CrossedTemperatureHeatExchanger(_HeatExchanger):
+            outlet_streams = [
+                _HeatExchanger.outlet_streams[0],
+                _Stream(125.0, 49.5, 40_000.0, 2_250_000.0),
+            ]
+
+        crossed_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _CrossedTemperatureHeatExchanger()
+            )
+        )
+        self.assertEqual(crossed_properties["approachTemperature_K"], -5.0)
+
+        class _BothSidesLoseHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _HeatExchanger.inlet_streams[0],
+                _Stream(20.0, 49.5, 40_000.0, 2_250_000.0),
+            ]
+            outlet_streams = [
+                _HeatExchanger.outlet_streams[0],
+                _Stream(103.5, 49.5, 40_000.0, -150_000.0),
+            ]
+
+        both_lose_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _BothSidesLoseHeatExchanger()
+            )
+        )
+        self.assertEqual(both_lose_properties["hotSideDuty_kW"], 2_400.0)
+        self.assertEqual(both_lose_properties["coldSideDuty_kW"], 2_400.0)
+        self.assertEqual(both_lose_properties["dutyClosure_kW"], 4_800.0)
+        self.assertEqual(both_lose_properties["dutyClosure_pct"], 200.0)
+
+
+class ProcessRunCompletionTest(unittest.TestCase):
+    """Distinguish completed idle calculations from execution failures."""
+
+    def test_completed_zero_energy_process_is_successful(self):
+        class _JavaClass:
+            def __init__(self, simple_name):
+                self.simple_name = simple_name
+
+            def getSimpleName(self):
+                return self.simple_name
+
+        class _Unit:
+            def __init__(self, simple_name):
+                self.java_class = _JavaClass(simple_name)
+
+            def getClass(self):
+                return self.java_class
+
+            @staticmethod
+            def getDuty():
+                return 0.0
+
+        class _Process:
+            def __init__(self):
+                self.run_count = 0
+                self.units = [
+                    _Unit("Stream"),
+                    _Unit("Heater"),
+                    _Unit("Stream"),
+                ]
+
+            def getUnitOperations(self):
+                return self.units
+
+            def run(self):
+                self.run_count += 1
+
+        process = _Process()
+
+        self.assertTrue(
+            NeqSimProcessModel._run_until_converged(
+                process,
+                max_runs=3,
+                timeout_ms=0,
+            )
+        )
+        self.assertEqual(process.run_count, 3)
+
+    def test_native_worker_failure_is_not_successful(self):
+        from neqsim import jneqsim
+
+        fluid = jneqsim.thermo.system.SystemSrkEos(300.15, 50.0)
+        fluid.addComponent("methane", 1.0)
+        feed = jneqsim.process.equipment.stream.Stream("feed", fluid)
+        exchanger = (
+            jneqsim.process.equipment.heatexchanger.HeatExchanger(
+                "incomplete exchanger"
+            )
+        )
+        process = jneqsim.process.processmodel.ProcessSystem(
+            "worker failure regression"
+        )
+        process.add(feed)
+        process.add(exchanger)
+
+        self.assertFalse(
+            NeqSimProcessModel._run_until_converged(
+                process,
+                timeout_ms=30_000,
+            )
+        )
+        self.assertFalse(bool(process.getRunStatus().isSuccess()))
+        self.assertIn(
+            "inStream[0]",
+            str(process.getRunStatus().getFailedUnitError()),
+        )
+
+
 class SplitterPropertyExtractionTest(unittest.TestCase):
     """Validate solved splitter allocations and explicit flow closure."""
 
@@ -1803,6 +2410,150 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         return builder, model
 
+    @staticmethod
+    def _build_mixer_heat_exchanger_case():
+        inlet_specs = [
+            {
+                "inlet_id": inlet_id,
+                "name": name,
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": components,
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": temperature_C,
+                    "pressure_bara": 50.0,
+                    "total_flow": flow_kg_hr,
+                    "flow_unit": "kg/hr",
+                },
+            }
+            for (
+                inlet_id,
+                name,
+                temperature_C,
+                flow_kg_hr,
+                components,
+            ) in (
+                (
+                    "hot-feed-a",
+                    "hot feed a",
+                    100.0,
+                    25_000.0,
+                    {"methane": 0.90, "ethane": 0.10},
+                ),
+                (
+                    "hot-feed-b",
+                    "hot feed b",
+                    140.0,
+                    25_000.0,
+                    {"methane": 0.90, "ethane": 0.10},
+                ),
+                (
+                    "cold-feed",
+                    "cold feed",
+                    20.0,
+                    40_000.0,
+                    {"methane": 0.95, "ethane": 0.05},
+                ),
+            )
+        ]
+        graph_spec = {
+            "name": "Mixer and heat-exchanger clone benchmark",
+            "units": [
+                {
+                    "id": "hot-mixer",
+                    "name": "hot mixer",
+                    "type": "mixer",
+                    "ports": {
+                        "material_in": ["in_0", "in_1"],
+                        "material_out": ["out"],
+                    },
+                    "params": {},
+                },
+                {
+                    "id": "cross-exchanger",
+                    "name": "cross exchanger",
+                    "type": "heat_exchanger",
+                    "ports": {
+                        "material_in": ["hot_in", "cold_in"],
+                        "material_out": ["hot_out", "cold_out"],
+                    },
+                    "params": {"ua_w_per_k": 100_000.0},
+                },
+            ],
+            "connections": [
+                {
+                    "id": "hot-a-to-mixer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "hot-feed-a",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "hot-mixer",
+                        "port": "in_0",
+                    },
+                },
+                {
+                    "id": "hot-b-to-mixer",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "hot-feed-b",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "hot-mixer",
+                        "port": "in_1",
+                    },
+                },
+                {
+                    "id": "mixer-to-exchanger",
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "hot-mixer",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "hot_in",
+                    },
+                },
+                {
+                    "id": "cold-to-exchanger",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "cold-feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "cold_in",
+                    },
+                },
+            ],
+        }
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            [
+                "hot-feed-a",
+                "hot-feed-b",
+                "cold-feed",
+                "hot-mixer",
+                "cross-exchanger",
+            ],
+        )
+        return builder, model
+
     def test_rejects_noncanonical_heat_exchanger_inlet_contract(self):
         for declared_ports in (
             ("cold_in", "hot_in"),
@@ -1854,6 +2605,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
 
     def test_native_two_sided_heat_exchanger_conserves_nearby_points(self):
         outlet_temperatures = []
+        solved_duties = []
+        solved_effectiveness = []
         for flow_scale in (1.0, 1.05):
             with self.subTest(flow_scale=flow_scale):
                 builder, model = (
@@ -1885,6 +2638,81 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     float(exchanger.getApproachTemperature()),
                     0.0,
                 )
+
+                exchanger_properties = next(
+                    unit.properties
+                    for unit in model.list_units()
+                    if unit.name == "cross exchanger"
+                )
+                solved_duties.append(
+                    exchanger_properties["heatTransferDuty_kW"]
+                )
+                solved_effectiveness.append(
+                    exchanger_properties["thermalEffectiveness"]
+                )
+                for side, expected_flow in (
+                    ("hot", 50_000.0 * flow_scale),
+                    ("cold", 40_000.0 * flow_scale),
+                ):
+                    self.assertAlmostEqual(
+                        exchanger_properties[f"{side}InletFlow_kg_hr"],
+                        expected_flow,
+                        delta=1.0e-6 * expected_flow,
+                    )
+                    self.assertAlmostEqual(
+                        exchanger_properties[f"{side}OutletFlow_kg_hr"],
+                        expected_flow,
+                        delta=1.0e-6 * expected_flow,
+                    )
+                self.assertAlmostEqual(
+                    exchanger_properties["hotOutletTemperature_C"],
+                    hot_out_C,
+                    delta=1.0e-10,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["coldOutletTemperature_C"],
+                    cold_out_C,
+                    delta=1.0e-10,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["UA_W_K"],
+                    100_000.0,
+                    delta=1.0e-10,
+                )
+                self.assertGreater(
+                    exchanger_properties["heatTransferDuty_kW"],
+                    0.0,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["hotSideDuty_kW"],
+                    exchanger_properties["heatTransferDuty_kW"],
+                    delta=1.0e-5,
+                )
+                self.assertAlmostEqual(
+                    exchanger_properties["coldSideDuty_kW"],
+                    exchanger_properties["heatTransferDuty_kW"],
+                    delta=1.0e-5,
+                )
+                self.assertLess(
+                    exchanger_properties["dutyClosure_pct"],
+                    1.0e-6,
+                )
+                for property_name, unit in (
+                    ("UA_W_K", "W/K"),
+                    ("heatTransferDuty_kW", "kW"),
+                    ("hotSideDuty_kW", "kW"),
+                    ("coldSideDuty_kW", "kW"),
+                    ("dutyClosure_pct", "%"),
+                ):
+                    kpi = result.kpis[
+                        f"cross exchanger.{property_name}"
+                    ]
+                    self.assertAlmostEqual(
+                        kpi.value,
+                        exchanger_properties[property_name],
+                        delta=1.0e-10,
+                    )
+                    self.assertEqual(kpi.unit, unit)
 
                 self.assertEqual(
                     result.kpis["material_feed_count"].value,
@@ -1932,6 +2760,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     unit_summary["max_energy_imbalance_pct"],
                     1.0e-6,
                 )
+                print(
+                    "native heat-exchanger benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    "duty="
+                    f"{exchanger_properties['heatTransferDuty_kW']:.6f} kW",
+                    f"effectiveness={exchanger_properties['thermalEffectiveness']:.6f}",
+                    "side-closure="
+                    f"{exchanger_properties['dutyClosure_pct']:.3e}%",
+                    "system-energy="
+                    f"{result.kpis['energy_balance_pct'].value:.3e}%",
+                )
 
         self.assertGreater(
             outlet_temperatures[1][0],
@@ -1941,6 +2780,245 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             outlet_temperatures[1][1],
             outlet_temperatures[0][1],
         )
+        self.assertGreater(solved_duties[1], solved_duties[0])
+        self.assertLess(solved_effectiveness[1], solved_effectiveness[0])
+
+    def test_native_co_current_approach_uses_parallel_terminals(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        exchanger = model.get_unit("cross exchanger")
+        exchanger.setFlowArrangement("co-current")
+
+        result = model.run(timeout_ms=180_000)
+        properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        hot_in_C = float(exchanger.getInStream(0).getTemperature("C"))
+        cold_in_C = float(exchanger.getInStream(1).getTemperature("C"))
+        hot_out_C = float(exchanger.getOutStream(0).getTemperature("C"))
+        cold_out_C = float(exchanger.getOutStream(1).getTemperature("C"))
+        expected_approach_K = min(
+            hot_in_C - cold_in_C,
+            hot_out_C - cold_out_C,
+        )
+
+        self.assertEqual(str(exchanger.getFlowArrangement()), "co-current")
+        self.assertLess(expected_approach_K, 0.0)
+        self.assertAlmostEqual(
+            properties["approachTemperature_K"],
+            expected_approach_K,
+            delta=1.0e-10,
+        )
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+
+    def test_native_setting_edits_invalidate_exchanger_snapshot(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        exchanger = model.get_unit("cross exchanger")
+
+        exchanger.setUAvalue(110_000.0)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+
+        result = model.run(timeout_ms=180_000)
+        exchanger.setFlowArrangement("co-current")
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+        model.run(timeout_ms=180_000)
+        exchanger.setThermalEffectiveness(0.25)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+        exchanger.setDeltaT(5.0)
+        exchanger.setUseDeltaT(False)
+        model.run(timeout_ms=180_000)
+        exchanger.setUseDeltaT(True)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+
+    def test_native_rating_edits_invalidate_exchanger_snapshot(self):
+        from neqsim import jneqsim
+
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        exchanger = model.get_unit("cross exchanger")
+        rating_calculator = (
+            jneqsim.process.mechanicaldesign.heatexchanger
+            .ThermalDesignCalculator()
+        )
+
+        exchanger.setRatingCalculator(rating_calculator)
+        exchanger.setRatingArea(1_000.0)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+
+        model.run(timeout_ms=180_000)
+        rating_calculator.setTubeCount(500)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
+
+    def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        process_system = model.get_process()
+        model.get_unit("cross exchanger").getInStream(0).setTemperature(
+            110.0,
+            "C",
+        )
+
+        wrapped_model = NeqSimProcessModel.from_process_system(
+            process_system
+        )
+        properties = next(
+            unit.properties
+            for unit in wrapped_model.list_units()
+            if unit.name == "cross exchanger"
+        )
+
+        self.assertNotIn("heatTransferDuty_kW", properties)
+
+    def test_failed_rerun_preserves_unchanged_direct_run_provenance(self):
+        _, model = self._build_mixer_heat_exchanger_case()
+        model.run(timeout_ms=180_000)
+        self.assertIn(
+            "cross exchanger",
+            model._direct_unit_run_provenance,
+        )
+
+        with patch.object(
+            model,
+            "_run_until_converged",
+            return_value=False,
+        ), patch.object(
+            model,
+            "_run_acyclic_mixer_energy_closure",
+            side_effect=AssertionError(
+                "failed process run must not start direct closure"
+            ),
+        ):
+            model.rerun(timeout_ms=180_000)
+
+        self.assertIn(
+            "cross exchanger",
+            model._direct_unit_run_provenance,
+        )
+        properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        self.assertGreater(properties["heatTransferDuty_kW"], 0.0)
+
+    def test_non_mixer_closure_does_not_authorize_direct_runs(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+
+        self.assertFalse(
+            model._run_acyclic_mixer_energy_closure(
+                model.get_process()
+            )
+        )
+
+    def test_failed_run_does_not_replace_trusted_exchanger_snapshot(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        exchanger = model.get_unit("cross exchanger")
+        exchanger.getInStream(0).setTemperature(110.0, "C")
+
+        with patch.object(
+            model,
+            "_run_until_converged",
+            return_value=False,
+        ), patch.object(
+            model,
+            "_run_acyclic_mixer_energy_closure",
+            side_effect=AssertionError(
+                "failed process run must not start direct closure"
+            ),
+        ):
+            result = model.run(timeout_ms=180_000)
+
+        properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        self.assertNotIn("heatTransferDuty_kW", properties)
+        self.assertNotIn(
+            "cross exchanger.heatTransferDuty_kW",
+            result.kpis,
+        )
+
+    def test_clone_recaptures_mixer_heat_exchanger_provenance(self):
+        _, model = self._build_mixer_heat_exchanger_case()
+        model.run(timeout_ms=180_000)
+
+        cloned_model = model.clone()
+        properties = next(
+            unit.properties
+            for unit in cloned_model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        result = cloned_model._extract_results()
+
+        self.assertGreater(properties["heatTransferDuty_kW"], 0.0)
+        self.assertIn(
+            "cross exchanger",
+            cloned_model._direct_unit_run_provenance,
+        )
+        self.assertLess(properties["dutyClosure_pct"], 1.0e-6)
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            result.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
 
     def test_build_from_spec_dispatches_generic_graph_schema(self):
         builder = ProcessBuilder()

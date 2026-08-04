@@ -1307,11 +1307,23 @@ class ProcessBuilder:
             inlet_names.union(unit_names).union(connection_names),
         )
         self._build_log.append("Running acyclic graph simulation...")
-        NeqSimProcessModel._run_until_converged(process_system)
-        NeqSimProcessModel._run_acyclic_mixer_energy_closure(process_system)
+        process_run_succeeded = NeqSimProcessModel._run_until_converged(
+            process_system
+        )
+        if not process_run_succeeded:
+            raise RuntimeError(
+                "Acyclic graph simulation did not complete successfully."
+            )
+        direct_closure_ran = (
+            NeqSimProcessModel._run_acyclic_mixer_energy_closure(
+                process_system
+            )
+        )
         self._model = NeqSimProcessModel.from_process_system(
             process_system,
             enforce_acyclic_mixer_energy=True,
+            trusted_solved=True,
+            allow_direct_runs=direct_closure_ran,
         )
         self._build_log.append("Acyclic graph built and converged successfully.")
         return self._model
@@ -1428,10 +1440,19 @@ class ProcessBuilder:
 
         # 3. Run the process
         self._build_log.append("Running simulation...")
-        NeqSimProcessModel._run_until_converged(proc)
+        process_run_succeeded = NeqSimProcessModel._run_until_converged(
+            proc
+        )
+        if not process_run_succeeded:
+            raise RuntimeError(
+                "Process simulation did not complete successfully."
+            )
 
         # 4. Wrap in NeqSimProcessModel
-        self._model = NeqSimProcessModel.from_process_system(proc)
+        self._model = NeqSimProcessModel.from_process_system(
+            proc,
+            trusted_solved=True,
+        )
         self._build_log.append("Process built and converged successfully.")
         return self._model
 
