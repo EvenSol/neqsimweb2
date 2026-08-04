@@ -5069,6 +5069,28 @@ class NeqSimProcessModel:
                             kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
                         except Exception:
                             pass
+                if java_class != "HeatExchanger":
+                    thermal_property_units = {
+                        "inletTemperature_C": "C",
+                        "outletTemperature_C": "C",
+                        "temperatureChange_C": "C",
+                        "inletPressure_bara": "bara",
+                        "outletPressure_bara": "bara",
+                        "pressureDrop_bar": "bar",
+                        "duty_kW": "kW",
+                        "heatingDuty_kW": "kW",
+                        "coolingDuty_kW": "kW",
+                        "massFlow_kg_hr": "kg/hr",
+                        "specificDuty_kJ_kg": "kJ/kg",
+                    }
+                    for prop, val in self._thermal_operating_properties(
+                        u
+                    ).items():
+                        kpis[f"{prefix}.{prop}"] = KPI(
+                            f"{prefix}.{prop}",
+                            val,
+                            thermal_property_units[prop],
+                        )
                 # UA value for HeatExchanger
                 if java_class == "HeatExchanger" and hasattr(u, "getUAvalue"):
                     try:
