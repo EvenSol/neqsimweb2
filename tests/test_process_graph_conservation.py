@@ -440,6 +440,31 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         )
         self.assertEqual(direct_properties["heatTransferDuty_kW"], 2_400.0)
 
+        class _StaleDualInletHeatExchanger(_DirectRunHeatExchanger):
+            inlet_streams = [
+                _Stream(
+                    120.0,
+                    50.0,
+                    50_000.0,
+                    4_000_000.0,
+                    calculation_identifier="new-hot-calculation",
+                ),
+                _Stream(
+                    20.0,
+                    49.5,
+                    40_000.0,
+                    -900_000.0,
+                    calculation_identifier="new-cold-calculation",
+                ),
+            ]
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _StaleDualInletHeatExchanger()
+            ),
+            {},
+        )
+
         class _StaleOutletHeatExchanger(_HeatExchanger):
             outlet_streams = list(_HeatExchanger.outlet_streams)
             outlet_streams[0] = _Stream(
