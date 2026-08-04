@@ -3001,6 +3001,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "report.cross exchanger.dutyBalance",
             result.kpis,
         )
+        module_name = str(model.get_process().getName())
+        for public_report in (
+            result.json_report,
+            model.get_json_report(),
+            model.get_unit_json_report("cross exchanger"),
+            model.get_module_json_report(module_name),
+        ):
+            self.assertIsNotNone(public_report)
+            exchanger_report = public_report["cross exchanger"]
+            self.assertNotIn("duty", exchanger_report)
+            self.assertNotIn("dutyBalance", exchanger_report)
         self.assertEqual(result.kpis["total_duty_kW"].value, 0.0)
         exchanger_summary = next(
             line
@@ -3033,6 +3044,19 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 "report.train-a/cross exchanger.feedTemperature1"
             ].value,
             120.0,
+        )
+        filtered_prefixed_report = model._filter_json_report_duties(
+            {
+                "train-a/cross exchanger": {
+                    "duty": float(exchanger.getDuty()),
+                    "dutyBalance": 1.0,
+                    "feedTemperature1": 120.0,
+                },
+            }
+        )
+        self.assertEqual(
+            filtered_prefixed_report["train-a/cross exchanger"],
+            {"feedTemperature1": 120.0},
         )
         nested_report_kpis = {}
         model._flatten_json_report(
@@ -3090,6 +3114,21 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 "report.train-a.cross exchanger.feedTemperature1"
             ].value,
             120.0,
+        )
+        filtered_nested_report = model._filter_json_report_duties(
+            {
+                "train-a": {
+                    "cross exchanger": {
+                        "duty": float(exchanger.getDuty()),
+                        "dutyBalance": 1.0,
+                        "feedTemperature1": 120.0,
+                    },
+                }
+            }
+        )
+        self.assertEqual(
+            filtered_nested_report["train-a"]["cross exchanger"],
+            {"feedTemperature1": 120.0},
         )
         del model._units["train-a"]
         del model._unit_ps_name["train-a"]
