@@ -2995,6 +2995,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertNotIn("duty_kW", rerun_properties)
         self.assertNotIn("cross exchanger.duty_kW", result.kpis)
         self.assertNotIn("report.cross exchanger.duty", result.kpis)
+        self.assertNotIn(
+            "report.cross exchanger.dutyBalance",
+            result.kpis,
+        )
         self.assertEqual(result.kpis["total_duty_kW"].value, 0.0)
         exchanger_summary = next(
             line
@@ -3008,6 +3012,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             {
                 "train-a/cross exchanger": {
                     "duty": float(exchanger.getDuty()),
+                    "dutyBalance": 1.0,
                     "feedTemperature1": 120.0,
                 },
             },
@@ -3015,6 +3020,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         self.assertNotIn(
             "report.train-a/cross exchanger.duty",
+            prefixed_report_kpis,
+        )
+        self.assertNotIn(
+            "report.train-a/cross exchanger.dutyBalance",
             prefixed_report_kpis,
         )
         self.assertEqual(
@@ -3029,6 +3038,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 "train-a": {
                     "cross exchanger": {
                         "duty": float(exchanger.getDuty()),
+                        "dutyBalance": 1.0,
                         "feedTemperature1": 120.0,
                     },
                 },
@@ -3037,6 +3047,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         self.assertNotIn(
             "report.train-a.cross exchanger.duty",
+            nested_report_kpis,
+        )
+        self.assertNotIn(
+            "report.train-a.cross exchanger.dutyBalance",
             nested_report_kpis,
         )
         self.assertEqual(
@@ -3054,6 +3068,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 "train-a": {
                     "cross exchanger": {
                         "duty": float(exchanger.getDuty()),
+                        "dutyBalance": 1.0,
                         "feedTemperature1": 120.0,
                     },
                 },
@@ -3062,6 +3077,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         self.assertNotIn(
             "report.train-a.cross exchanger.duty",
+            collision_report_kpis,
+        )
+        self.assertNotIn(
+            "report.train-a.cross exchanger.dutyBalance",
             collision_report_kpis,
         )
         self.assertEqual(
@@ -3087,6 +3106,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "report.cross exchanger.duty",
             unsolved_result.kpis,
         )
+        self.assertNotIn(
+            "report.cross exchanger.dutyBalance",
+            unsolved_result.kpis,
+        )
         self.assertEqual(unsolved_result.kpis["total_duty_kW"].value, 0.0)
 
         solved_result = model.run(timeout_ms=180_000)
@@ -3103,6 +3126,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertGreater(
             solved_result.kpis["report.cross exchanger.duty"].value,
             0.0,
+        )
+        self.assertIn(
+            "report.cross exchanger.dutyBalance",
+            solved_result.kpis,
         )
         self.assertLess(
             solved_result.kpis["mass_balance_pct"].value,
@@ -3129,7 +3156,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
 
         self.assertNotIn("heatTransferDuty_kW", properties)
 
-    def test_failed_rerun_preserves_unchanged_direct_run_provenance(self):
+    def test_failed_rerun_clears_unchanged_direct_run_provenance(self):
         _, model = self._build_mixer_heat_exchanger_case()
         model.run(timeout_ms=180_000)
         self.assertIn(
@@ -3150,7 +3177,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         ):
             model.rerun(timeout_ms=180_000)
 
-        self.assertIn(
+        self.assertNotIn(
             "cross exchanger",
             model._direct_unit_run_provenance,
         )
@@ -3159,7 +3186,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             for unit in model.list_units()
             if unit.name == "cross exchanger"
         )
-        self.assertGreater(properties["heatTransferDuty_kW"], 0.0)
+        self.assertNotIn("heatTransferDuty_kW", properties)
+        self.assertNotIn("duty_kW", properties)
 
     def test_non_mixer_closure_does_not_authorize_direct_runs(self):
         _, model = self._build_two_sided_heat_exchanger_case(1.0)
