@@ -2968,7 +2968,45 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertNotIn("heatTransferDuty_kW", rerun_properties)
         self.assertNotIn("duty_kW", rerun_properties)
         self.assertNotIn("cross exchanger.duty_kW", result.kpis)
+        self.assertNotIn("report.cross exchanger.duty", result.kpis)
         self.assertEqual(result.kpis["total_duty_kW"].value, 0.0)
+        exchanger_summary = next(
+            line
+            for line in model.get_model_summary().splitlines()
+            if "cross exchanger (HeatExchanger)" in line
+        )
+        self.assertNotIn("duty_kW=", exchanger_summary)
+
+        exchanger.setLockedInactive(False)
+        reenabled_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        self.assertNotIn("duty_kW", reenabled_properties)
+        unsolved_result = model._extract_results()
+        self.assertNotIn("cross exchanger.duty_kW", unsolved_result.kpis)
+        self.assertNotIn(
+            "report.cross exchanger.duty",
+            unsolved_result.kpis,
+        )
+        self.assertEqual(unsolved_result.kpis["total_duty_kW"].value, 0.0)
+
+        solved_result = model.run(timeout_ms=180_000)
+        solved_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        self.assertGreater(solved_properties["duty_kW"], 0.0)
+        self.assertGreater(
+            solved_result.kpis["cross exchanger.duty_kW"].value,
+            0.0,
+        )
+        self.assertGreater(
+            solved_result.kpis["report.cross exchanger.duty"].value,
+            0.0,
+        )
         self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
 
     def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
