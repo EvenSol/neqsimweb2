@@ -525,6 +525,15 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             ],
             2_400.0,
         )
+        auto_capture_model._capture_heat_exchanger_state_snapshots()
+        self.assertNotIn(
+            "direct exchanger",
+            auto_capture_model._direct_unit_run_provenance,
+        )
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            auto_capture_model.list_units()[0].properties,
+        )
 
         class _MutableSolvedHeatExchanger(_HeatExchanger):
             inlet_streams = [
@@ -2662,6 +2671,15 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             1.0e-6,
         )
         self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+
+    def test_non_mixer_closure_does_not_authorize_direct_runs(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+
+        self.assertFalse(
+            model._run_acyclic_mixer_energy_closure(
+                model.get_process()
+            )
+        )
 
     def test_clone_recaptures_mixer_heat_exchanger_provenance(self):
         _, model = self._build_mixer_heat_exchanger_case()
