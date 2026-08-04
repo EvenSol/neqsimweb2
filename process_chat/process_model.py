@@ -4847,6 +4847,14 @@ class NeqSimProcessModel:
 
             # ---------- Cooler / Heater / HeatExchanger ----------
             elif java_class in ("Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"):
+                exchanger_duty_is_trusted = (
+                    java_class != "HeatExchanger"
+                    or self._heat_exchanger_solution_is_trusted(
+                        name,
+                        u,
+                        java_class,
+                    )
+                )
                 for prop, getter, unit in [
                     ("pressureDrop_bar", "getPressureDrop", "bar"),
                     ("inletTemperature_K", "getInletTemperature", "K"),
@@ -4856,6 +4864,11 @@ class NeqSimProcessModel:
                     ("maxDesignDuty_W", "getMaxDesignDuty", "W"),
                     ("energyInput_W", "getEnergyInput", "W"),
                 ]:
+                    if (
+                        getter == "getEnergyInput"
+                        and not exchanger_duty_is_trusted
+                    ):
+                        continue
                     if hasattr(u, getter):
                         try:
                             val = float(getattr(u, getter)())
