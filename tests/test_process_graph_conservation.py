@@ -194,8 +194,16 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         class _Fluid:
             def __init__(self, enthalpy_w):
                 self.enthalpy_w = enthalpy_w
+                self.initialized = False
+
+            def init(self, level):
+                if level != 3:
+                    raise AssertionError(level)
+                self.initialized = True
 
             def getEnthalpy(self):
+                if not self.initialized:
+                    raise AssertionError("enthalpy requires level-3 init")
                 return self.enthalpy_w
 
         class _Stream:
@@ -273,8 +281,12 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             "coldInletTemperature_C": 20.0,
             "coldOutletTemperature_C": 103.5,
             "hotInletPressure_bara": 50.0,
+            "hotOutletPressure_bara": 50.0,
+            "coldInletPressure_bara": 49.5,
             "coldOutletPressure_bara": 49.5,
             "hotInletFlow_kg_hr": 50_000.0,
+            "hotOutletFlow_kg_hr": 50_000.0,
+            "coldInletFlow_kg_hr": 40_000.0,
             "coldOutletFlow_kg_hr": 40_000.0,
             "UA_W_K": 100_000.0,
             "heatTransferDuty_kW": 2_400.0,
@@ -301,8 +313,12 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             "coldInletTemperature_C": "°C",
             "coldOutletTemperature_C": "°C",
             "hotInletPressure_bara": "bara",
+            "hotOutletPressure_bara": "bara",
+            "coldInletPressure_bara": "bara",
             "coldOutletPressure_bara": "bara",
             "hotInletFlow_kg_hr": "kg/hr",
+            "hotOutletFlow_kg_hr": "kg/hr",
+            "coldInletFlow_kg_hr": "kg/hr",
             "coldOutletFlow_kg_hr": "kg/hr",
             "UA_W_K": "W/K",
             "heatTransferDuty_kW": "kW",
@@ -322,6 +338,52 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
                     delta=1.0e-12,
                 )
                 self.assertEqual(kpi.unit, unit)
+
+        class _ReversedHeatExchanger(_HeatExchanger):
+            inlet_streams = list(reversed(_HeatExchanger.inlet_streams))
+            outlet_streams = list(reversed(_HeatExchanger.outlet_streams))
+
+            @staticmethod
+            def getDuty():
+                return -2_400_000.0
+
+        reversed_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _ReversedHeatExchanger()
+            )
+        )
+        self.assertEqual(reversed_properties["hotInletTemperature_C"], 120.0)
+        self.assertEqual(reversed_properties["coldInletTemperature_C"], 20.0)
+        self.assertEqual(reversed_properties["hotSideDuty_kW"], 2_400.0)
+        self.assertEqual(reversed_properties["coldSideDuty_kW"], 2_400.0)
+        self.assertEqual(reversed_properties["heatTransferDuty_kW"], 2_400.0)
+
+        class _IncompleteHeatExchanger(_HeatExchanger):
+            @classmethod
+            def getOutStream(cls, index):
+                if index == 1:
+                    raise RuntimeError("cold outlet is not solved")
+                return super().getOutStream(index)
+
+        self.assertEqual(
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _IncompleteHeatExchanger()
+            ),
+            {},
+        )
+
+        class _SentinelHeatExchanger(_HeatExchanger):
+            @staticmethod
+            def getApproachTemperature():
+                return float.fromhex("0x1.fffffffffffffp+1023")
+
+        sentinel_properties = (
+            NeqSimProcessModel._heat_exchanger_operating_properties(
+                _SentinelHeatExchanger()
+            )
+        )
+        self.assertNotIn("approachTemperature_K", sentinel_properties)
+        self.assertEqual(sentinel_properties["UA_W_K"], 100_000.0)
 
 
 class SplitterPropertyExtractionTest(unittest.TestCase):
