@@ -653,6 +653,20 @@ class NeqSimProcessModel:
         )
 
     @staticmethod
+    def _async_run_status_succeeded(proc: Any) -> bool:
+        """Return native worker status when the process exposes it."""
+        try:
+            run_status = proc.getRunStatus()
+        except Exception:
+            return True
+        if run_status is None:
+            return True
+        try:
+            return bool(run_status.isSuccess())
+        except Exception:
+            return True
+
+    @staticmethod
     def _run_until_converged(proc, max_runs: int = 5, timeout_ms: int = 180000):
         """
         Run the process repeatedly until convergence or *max_runs*.
@@ -723,6 +737,10 @@ class NeqSimProcessModel:
                         thread.interrupt()
                         thread.join()
                         return False
+                    if not NeqSimProcessModel._async_run_status_succeeded(
+                        proc
+                    ):
+                        return False
                 else:
                     proc.run()
             except Exception:
@@ -745,6 +763,10 @@ class NeqSimProcessModel:
                         thread.interrupt()
                         thread.join()
                         return False
+                    if not NeqSimProcessModel._async_run_status_succeeded(
+                        proc
+                    ):
+                        continue
                 else:
                     proc.run()
             except Exception:
@@ -2771,6 +2793,73 @@ class NeqSimProcessModel:
         return properties
 
     @staticmethod
+    def _native_scalar_field_signature(
+        native_object: Any,
+    ) -> Optional[Tuple[Any, ...]]:
+        """Capture deterministic primitive/string/enum native fields."""
+        if native_object is None:
+            return None
+        try:
+            object_class = native_object.getClass()
+            class_name = str(object_class.getName())
+        except Exception:
+            return None
+        field_values: List[Tuple[str, Any]] = []
+        declaring_class = object_class
+        while declaring_class is not None:
+            try:
+                declared_fields = list(
+                    declaring_class.getDeclaredFields()
+                )
+            except Exception:
+                break
+            for field in declared_fields:
+                try:
+                    if int(field.getModifiers()) & 8:
+                        continue
+                    field.setAccessible(True)
+                    field_name = str(field.getName())
+                    field_type = field.getType()
+                    type_name = str(field_type.getName())
+                    if type_name == "boolean":
+                        value = bool(
+                            field.getBoolean(native_object)
+                        )
+                    elif type_name in (
+                        "byte",
+                        "short",
+                        "int",
+                        "long",
+                    ):
+                        value = int(field.get(native_object))
+                    elif type_name in ("float", "double"):
+                        value = float(field.get(native_object))
+                        if not math.isfinite(value):
+                            return None
+                    elif type_name == "java.lang.String" or bool(
+                        field_type.isEnum()
+                    ):
+                        raw_value = field.get(native_object)
+                        value = (
+                            None
+                            if raw_value is None
+                            else str(raw_value).strip().casefold()
+                        )
+                    else:
+                        continue
+                except Exception:
+                    continue
+                field_values.append((field_name, value))
+            try:
+                declaring_class = declaring_class.getSuperclass()
+            except Exception:
+                break
+        return (
+            class_name,
+            tuple(sorted(field_values)),
+        )
+
+    @staticmethod
     def _heat_exchanger_boundary_state_signature(
         unit: Any,
     ) -> Optional[Tuple[Any, ...]]:
@@ -2825,6 +2914,10 @@ class NeqSimProcessModel:
             "getDesignDuty",
             "getDesignUAValue",
             "getMaxDesignDuty",
+            "getDesignMode",
+            "getRatingArea",
+            "getRatingU",
+            "getShellPasses",
             "getMinOutletTemperature",
             "getMaxOutletTemperature",
             "hasMinOutletTemperatureLimit",
@@ -2872,6 +2965,18 @@ class NeqSimProcessModel:
             except Exception:
                 pass
         solution_settings.append(("useDeltaT", use_delta_T))
+        try:
+            rating_calculator = unit.getRatingCalculator()
+        except Exception:
+            rating_calculator = None
+        solution_settings.append(
+            (
+                "ratingCalculator",
+                NeqSimProcessModel._native_scalar_field_signature(
+                    rating_calculator
+                ),
+            )
+        )
         configuration = (
             flow_arrangement,
             tuple(solution_settings),
@@ -3559,6 +3664,10 @@ class NeqSimProcessModel:
                 if thread.isAlive():
                     thread.interrupt()
                     thread.join()
+                    return False
+                if not NeqSimProcessModel._async_run_status_succeeded(
+                    proc_model
+                ):
                     return False
             else:
                 proc_model.run()
