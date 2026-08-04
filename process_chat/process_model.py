@@ -5428,7 +5428,20 @@ class NeqSimProcessModel:
                     java_class = str(unit.getClass().getSimpleName())
                 except Exception:
                     continue
-                if indexed_name != unit_name and raw_name != unit_name:
+                process_system_name = self._unit_ps_name.get(
+                    indexed_name,
+                    "",
+                )
+                qualified_report_name = (
+                    f"{process_system_name}/{raw_name}"
+                    if process_system_name
+                    else raw_name
+                )
+                if unit_name not in (
+                    indexed_name,
+                    raw_name,
+                    qualified_report_name,
+                ):
                     continue
                 suppress_duty = (
                     java_class == "HeatExchanger"
