@@ -287,6 +287,9 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         model._units = {"cross exchanger": _HeatExchanger()}
         model._unit_ps_name = {"cross exchanger": "main"}
+        model._direct_unit_run_provenance = {}
+        model._heat_exchanger_state_snapshots = {}
+        model._capture_heat_exchanger_state_snapshots()
 
         properties = model.list_units()[0].properties
 
@@ -570,6 +573,7 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         class _MutableSettingsHeatExchanger(_HeatExchanger):
             ua_W_K = 100_000.0
             flow_arrangement = "concentric tube counterflow"
+            thermal_effectiveness = 0.83
 
             @classmethod
             def getUAvalue(cls):
@@ -578,6 +582,10 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             @classmethod
             def getFlowArrangement(cls):
                 return cls.flow_arrangement
+
+            @classmethod
+            def getThermalEffectiveness(cls):
+                return cls.thermal_effectiveness
 
         settings_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         settings_model._units = {
@@ -595,6 +603,15 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         _MutableSettingsHeatExchanger.ua_W_K = 100_000.0
         settings_model._capture_heat_exchanger_state_snapshots()
         _MutableSettingsHeatExchanger.flow_arrangement = "co-current"
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            settings_model.list_units()[0].properties,
+        )
+        _MutableSettingsHeatExchanger.flow_arrangement = (
+            "concentric tube counterflow"
+        )
+        settings_model._capture_heat_exchanger_state_snapshots()
+        _MutableSettingsHeatExchanger.thermal_effectiveness = 0.25
         self.assertNotIn(
             "heatTransferDuty_kW",
             settings_model.list_units()[0].properties,
@@ -2730,12 +2747,74 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 if unit.name == "cross exchanger"
             ),
         )
+        model.run(timeout_ms=180_000)
+        exchanger.setThermalEffectiveness(0.25)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            next(
+                unit.properties
+                for unit in model.list_units()
+                if unit.name == "cross exchanger"
+            ),
+        )
         self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
         self.assertLess(
             result.kpis["component_balance_max_pct"].value,
             1.0e-6,
         )
         self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+
+    def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        process_system = model.get_process()
+        model.get_unit("cross exchanger").getInStream(0).setTemperature(
+            110.0,
+            "C",
+        )
+
+        wrapped_model = NeqSimProcessModel.from_process_system(
+            process_system
+        )
+        properties = next(
+            unit.properties
+            for unit in wrapped_model.list_units()
+            if unit.name == "cross exchanger"
+        )
+
+        self.assertNotIn("heatTransferDuty_kW", properties)
+
+    def test_failed_rerun_preserves_unchanged_direct_run_provenance(self):
+        _, model = self._build_mixer_heat_exchanger_case()
+        model.run(timeout_ms=180_000)
+        self.assertIn(
+            "cross exchanger",
+            model._direct_unit_run_provenance,
+        )
+
+        with patch.object(
+            model,
+            "_run_until_converged",
+            return_value=False,
+        ), patch.object(
+            model,
+            "_run_acyclic_mixer_energy_closure",
+            side_effect=AssertionError(
+                "failed process run must not start direct closure"
+            ),
+        ):
+            model.rerun(timeout_ms=180_000)
+
+        self.assertIn(
+            "cross exchanger",
+            model._direct_unit_run_provenance,
+        )
+        properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        self.assertGreater(properties["heatTransferDuty_kW"], 0.0)
 
     def test_non_mixer_closure_does_not_authorize_direct_runs(self):
         _, model = self._build_two_sided_heat_exchanger_case(1.0)
