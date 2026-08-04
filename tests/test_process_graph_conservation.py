@@ -2949,6 +2949,32 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         exchanger = model.get_unit("cross exchanger")
 
         self.assertFalse(bool(exchanger.isLockedInactive()))
+        solved_snapshot = model._heat_exchanger_state_snapshots[
+            "cross exchanger"
+        ]
+        model._heat_exchanger_state_snapshots = {
+            "train-a/cross exchanger": solved_snapshot,
+        }
+        self.assertTrue(
+            model._heat_exchanger_solution_is_trusted(
+                "cross exchanger",
+                exchanger,
+                "HeatExchanger",
+            )
+        )
+        model._heat_exchanger_state_snapshots[
+            "train-b/cross exchanger"
+        ] = solved_snapshot
+        self.assertFalse(
+            model._heat_exchanger_solution_is_trusted(
+                "cross exchanger",
+                exchanger,
+                "HeatExchanger",
+            )
+        )
+        model._heat_exchanger_state_snapshots = {
+            "cross exchanger": solved_snapshot,
+        }
         exchanger.setLockedInactive(True)
         self.assertTrue(bool(exchanger.isLockedInactive()))
         inactive_properties = next(
