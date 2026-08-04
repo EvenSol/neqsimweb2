@@ -5417,47 +5417,79 @@ class NeqSimProcessModel:
           "report.inlet separator.gas.conditions.gas.temperature"
           "report.inlet separator.gas.composition.gas.methane"
         """
-        for unit_name, unit_data in json_report.items():
-            if not isinstance(unit_data, dict):
+        for report_name, report_data in json_report.items():
+            if not isinstance(report_data, dict):
                 continue
-            prefix = f"report.{unit_name}"
-            suppress_duty = False
-            for indexed_name, unit in self._units.items():
-                try:
-                    raw_name = str(unit.getName())
-                    java_class = str(unit.getClass().getSimpleName())
-                except Exception:
-                    continue
-                process_system_name = self._unit_ps_name.get(
-                    indexed_name,
-                    "",
+            prefix = f"report.{report_name}"
+            suppress_duty = self._report_unit_duty_suppression(report_name)
+            if suppress_duty is not None:
+                self._flatten_dict(
+                    report_data,
+                    prefix,
+                    kpis,
+                    suppress_duty=suppress_duty,
                 )
-                qualified_report_name = (
-                    f"{process_system_name}/{raw_name}"
-                    if process_system_name
-                    else raw_name
-                )
-                if unit_name not in (
-                    indexed_name,
-                    raw_name,
-                    qualified_report_name,
-                ):
-                    continue
-                suppress_duty = (
-                    java_class == "HeatExchanger"
-                    and not self._heat_exchanger_solution_is_trusted(
-                        indexed_name,
-                        unit,
-                        java_class,
+                continue
+
+            unmatched_data = {}
+            matched_nested_unit = False
+            for nested_name, nested_data in report_data.items():
+                if isinstance(nested_data, dict):
+                    qualified_name = f"{report_name}/{nested_name}"
+                    nested_suppression = (
+                        self._report_unit_duty_suppression(qualified_name)
                     )
-                )
-                break
+                    if nested_suppression is not None:
+                        self._flatten_dict(
+                            nested_data,
+                            f"{prefix}.{nested_name}",
+                            kpis,
+                            suppress_duty=nested_suppression,
+                        )
+                        matched_nested_unit = True
+                        continue
+                unmatched_data[nested_name] = nested_data
             self._flatten_dict(
-                unit_data,
+                unmatched_data if matched_nested_unit else report_data,
                 prefix,
                 kpis,
-                suppress_duty=suppress_duty,
             )
+
+    def _report_unit_duty_suppression(
+        self,
+        report_name: str,
+    ) -> Optional[bool]:
+        """Return an indexed report unit's duty suppression, if matched."""
+        for indexed_name, unit in self._units.items():
+            try:
+                raw_name = str(unit.getName())
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            process_system_name = self._unit_ps_name.get(
+                indexed_name,
+                "",
+            )
+            qualified_report_name = (
+                f"{process_system_name}/{raw_name}"
+                if process_system_name
+                else raw_name
+            )
+            if report_name not in (
+                indexed_name,
+                raw_name,
+                qualified_report_name,
+            ):
+                continue
+            return (
+                java_class == "HeatExchanger"
+                and not self._heat_exchanger_solution_is_trusted(
+                    indexed_name,
+                    unit,
+                    java_class,
+                )
+            )
+        return None
 
     def _flatten_dict(
         self,
