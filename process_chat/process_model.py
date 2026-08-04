@@ -903,6 +903,9 @@ class NeqSimProcessModel:
         ):
             clone._run_acyclic_mixer_energy_closure(clone._proc)
             clone._index_model_objects()
+            clone._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=True
+            )
         return clone
 
     # ----- Introspection -----
@@ -2670,11 +2673,37 @@ class NeqSimProcessModel:
                     f"{side_name}{property_boundary}Flow_kg_hr"
                 ] = state["flow_kg_hr"]
 
+        try:
+            flow_arrangement = str(
+                unit.getFlowArrangement()
+            ).strip().casefold()
+        except Exception:
+            flow_arrangement = ""
+        is_co_current = any(
+            marker in flow_arrangement
+            for marker in (
+                "co-current",
+                "co current",
+                "cocurrent",
+                "parallel",
+            )
+        )
+        if is_co_current:
+            terminal_differences_K = (
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"],
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"],
+            )
+        else:
+            terminal_differences_K = (
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"],
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"],
+            )
         properties["approachTemperature_K"] = min(
-            named_sides["hot"]["inlet"]["temperature_C"]
-            - named_sides["cold"]["outlet"]["temperature_C"],
-            named_sides["hot"]["outlet"]["temperature_C"]
-            - named_sides["cold"]["inlet"]["temperature_C"],
+            terminal_differences_K
         )
 
         for property_name, getter_name, scale in (
