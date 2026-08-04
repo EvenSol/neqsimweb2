@@ -2552,6 +2552,7 @@ class NeqSimProcessModel:
             return {}
 
         indexed_sides: List[Dict[str, Any]] = []
+        inlet_identifiers_match_exchanger: List[bool] = []
         for index in (0, 1):
             streams: Dict[str, Any] = {}
             for boundary, getter_name in (
@@ -2569,25 +2570,34 @@ class NeqSimProcessModel:
                     stream_calculation_identifier = (
                         stream.getCalculationIdentifier()
                     )
+                    if stream_calculation_identifier is None:
+                        return {}
                     if (
-                        stream_calculation_identifier is None
-                        or str(stream_calculation_identifier)
+                        boundary == "outlet"
+                        and str(stream_calculation_identifier)
                         != str(calculation_identifier)
                     ):
                         return {}
+                    if boundary == "inlet":
+                        inlet_identifiers_match_exchanger.append(
+                            str(stream_calculation_identifier)
+                            == str(calculation_identifier)
+                        )
                     temperature_C = float(stream.getTemperature("C"))
                     pressure_bara = float(stream.getPressure("bara"))
                     flow_kg_hr = float(stream.getFlowRate("kg/hr"))
                     fluid = stream.getFluid()
                     fluid.init(3)
-                    enthalpy_kW = float(fluid.getEnthalpy()) / 1000.0
+                    enthalpy_flow_kW = (
+                        float(fluid.getEnthalpy()) / 1000.0
+                    )
                 except Exception:
                     return {}
                 values = (
                     temperature_C,
                     pressure_bara,
                     flow_kg_hr,
-                    enthalpy_kW,
+                    enthalpy_flow_kW,
                 )
                 if not all(math.isfinite(value) for value in values):
                     return {}
@@ -2597,9 +2607,14 @@ class NeqSimProcessModel:
                     "temperature_C": temperature_C,
                     "pressure_bara": pressure_bara,
                     "flow_kg_hr": flow_kg_hr,
-                    "enthalpy_kW": enthalpy_kW,
+                    "enthalpy_flow_kW": enthalpy_flow_kW,
                 }
             indexed_sides.append(side_state)
+
+        if any(inlet_identifiers_match_exchanger) and not all(
+            inlet_identifiers_match_exchanger
+        ):
+            return {}
 
         indexed_sides.sort(
             key=lambda side: side["inlet"]["temperature_C"],
@@ -2625,10 +2640,14 @@ class NeqSimProcessModel:
                 ] = state["flow_kg_hr"]
 
         properties["approachTemperature_K"] = min(
-            named_sides["hot"]["inlet"]["temperature_C"]
-            - named_sides["cold"]["outlet"]["temperature_C"],
-            named_sides["hot"]["outlet"]["temperature_C"]
-            - named_sides["cold"]["inlet"]["temperature_C"],
+            abs(
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"]
+            ),
+            abs(
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"]
+            ),
         )
 
         for property_name, getter_name, scale in (
@@ -2646,12 +2665,12 @@ class NeqSimProcessModel:
                 properties[property_name] = value
 
         hot_side_duty_kW = abs(
-            named_sides["hot"]["inlet"]["enthalpy_kW"]
-            - named_sides["hot"]["outlet"]["enthalpy_kW"]
+            named_sides["hot"]["inlet"]["enthalpy_flow_kW"]
+            - named_sides["hot"]["outlet"]["enthalpy_flow_kW"]
         )
         cold_side_duty_kW = abs(
-            named_sides["cold"]["outlet"]["enthalpy_kW"]
-            - named_sides["cold"]["inlet"]["enthalpy_kW"]
+            named_sides["cold"]["outlet"]["enthalpy_flow_kW"]
+            - named_sides["cold"]["inlet"]["enthalpy_flow_kW"]
         )
         duty_closure_kW = hot_side_duty_kW - cold_side_duty_kW
         properties["hotSideDuty_kW"] = hot_side_duty_kW
