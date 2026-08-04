@@ -4054,6 +4054,7 @@ class NeqSimProcessModel:
 
         # Extract all properties from JSON report into flat KPIs
         if json_report:
+            json_report = self._filter_json_report_duties(json_report)
             self._flatten_json_report(json_report, kpis)
 
         # Extract detailed unit operation properties (utilization, sizing, performance)
@@ -5445,6 +5446,7 @@ class NeqSimProcessModel:
             for name in self._unit_ps_name.values()
             if name
         }
+        duty_lookup = self._report_unit_duty_lookup()
         for report_name, report_data in json_report.items():
             if not isinstance(report_data, dict):
                 continue
@@ -5456,7 +5458,10 @@ class NeqSimProcessModel:
             suppress_duty = (
                 None
                 if is_process_system_container
-                else self._report_unit_duty_suppression(report_name)
+                else self._report_unit_duty_suppression(
+                    report_name,
+                    duty_lookup,
+                )
             )
             if suppress_duty is not None:
                 self._flatten_dict(
@@ -5473,7 +5478,10 @@ class NeqSimProcessModel:
                 if isinstance(nested_data, dict):
                     qualified_name = f"{report_name}/{nested_name}"
                     nested_suppression = (
-                        self._report_unit_duty_suppression(qualified_name)
+                        self._report_unit_duty_suppression(
+                            qualified_name,
+                            duty_lookup,
+                        )
                     )
                     if nested_suppression is not None:
                         self._flatten_dict(
@@ -5491,11 +5499,11 @@ class NeqSimProcessModel:
                 kpis,
             )
 
-    def _report_unit_duty_suppression(
+    def _report_unit_duty_lookup(
         self,
-        report_name: str,
-    ) -> Optional[bool]:
-        """Return an indexed report unit's duty suppression, if matched."""
+    ) -> Dict[str, List[Tuple[str, bool]]]:
+        """Index report names and their solved-duty trust once per report pass."""
+        lookup: Dict[str, List[Tuple[str, bool]]] = {}
         for indexed_name, unit in self._units.items():
             try:
                 raw_name = str(unit.getName())
@@ -5511,13 +5519,7 @@ class NeqSimProcessModel:
                 if process_system_name
                 else raw_name
             )
-            if report_name not in (
-                indexed_name,
-                raw_name,
-                qualified_report_name,
-            ):
-                continue
-            return (
+            suppress_duty = (
                 java_class == "HeatExchanger"
                 and not self._heat_exchanger_solution_is_trusted(
                     indexed_name,
@@ -5525,7 +5527,96 @@ class NeqSimProcessModel:
                     java_class,
                 )
             )
-        return None
+            for report_name in {
+                indexed_name,
+                raw_name,
+                qualified_report_name,
+            }:
+                lookup.setdefault(report_name, []).append(
+                    (indexed_name, suppress_duty)
+                )
+        return lookup
+
+    def _report_unit_duty_suppression(
+        self,
+        report_name: str,
+        duty_lookup: Optional[
+            Dict[str, List[Tuple[str, bool]]]
+        ] = None,
+    ) -> Optional[bool]:
+        """Return an indexed report unit's duty suppression, if matched."""
+        matches = (duty_lookup or self._report_unit_duty_lookup()).get(
+            report_name
+        )
+        if not matches:
+            return None
+        return any(suppress_duty for _, suppress_duty in matches)
+
+    def _copy_report_data(
+        self,
+        data: Any,
+        suppress_duty: bool = False,
+    ) -> Any:
+        """Copy JSON report data while removing untrusted duty-derived fields."""
+        if isinstance(data, dict):
+            return {
+                key: self._copy_report_data(
+                    value,
+                    suppress_duty=suppress_duty,
+                )
+                for key, value in data.items()
+                if not (
+                    suppress_duty
+                    and str(key).strip().casefold().startswith("duty")
+                )
+            }
+        if isinstance(data, list):
+            return [
+                self._copy_report_data(
+                    value,
+                    suppress_duty=suppress_duty,
+                )
+                for value in data
+            ]
+        return data
+
+    def _filter_json_report_duties(self, json_report: dict) -> dict:
+        """Return a public JSON report without untrusted exchanger duties."""
+        process_system_names = {
+            name
+            for name in self._unit_ps_name.values()
+            if name
+        }
+        duty_lookup = self._report_unit_duty_lookup()
+        filtered = {}
+        for report_name, report_data in json_report.items():
+            is_process_system_container = (
+                self._is_process_model
+                and report_name in process_system_names
+                and isinstance(report_data, dict)
+            )
+            if is_process_system_container:
+                nested_report = {}
+                for nested_name, nested_data in report_data.items():
+                    suppression = self._report_unit_duty_suppression(
+                        f"{report_name}/{nested_name}",
+                        duty_lookup,
+                    )
+                    nested_report[nested_name] = self._copy_report_data(
+                        nested_data,
+                        suppress_duty=bool(suppression),
+                    )
+                filtered[report_name] = nested_report
+                continue
+            suppression = self._report_unit_duty_suppression(
+                report_name,
+                duty_lookup,
+            )
+            filtered[report_name] = self._copy_report_data(
+                report_data,
+                suppress_duty=bool(suppression),
+            )
+        return filtered
 
     def _flatten_dict(
         self,
@@ -5721,7 +5812,9 @@ class NeqSimProcessModel:
         if self._is_process_model:
             try:
                 json_str = str(self._proc.getReport_json())
-                return json.loads(json_str)
+                return self._filter_json_report_duties(
+                    json.loads(json_str)
+                )
             except Exception:
                 # Fallback: collect from children
                 from neqsim import jneqsim
@@ -5737,16 +5830,24 @@ class NeqSimProcessModel:
                                 combined[f"{ps_name}/{k}"] = v
                     except Exception:
                         pass
-                return combined if combined else None
+                return (
+                    self._filter_json_report_duties(combined)
+                    if combined
+                    else None
+                )
         try:
             from neqsim import jneqsim
             report_obj = jneqsim.process.util.report.Report(self._proc)
             json_str = str(report_obj.generateJsonReport())
-            return json.loads(json_str)
+            return self._filter_json_report_duties(
+                json.loads(json_str)
+            )
         except Exception:
             try:
                 json_str = str(self._proc.getReport_json())
-                return json.loads(json_str)
+                return self._filter_json_report_duties(
+                    json.loads(json_str)
+                )
             except Exception:
                 return None
 
@@ -5783,7 +5884,9 @@ class NeqSimProcessModel:
                     from neqsim import jneqsim
                     report_obj = jneqsim.process.util.report.Report(ps)
                     r_str = str(report_obj.generateJsonReport())
-                    return json.loads(r_str)
+                    return self._filter_json_report_duties(
+                        json.loads(r_str)
+                    )
             except Exception:
                 continue
         return None
