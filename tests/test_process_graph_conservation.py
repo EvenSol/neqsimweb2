@@ -3361,6 +3361,68 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "report.train-a.cross exchanger.dutyBalance",
             replacement_result.kpis,
         )
+        self.assertNotIn(
+            "train-a/cross exchanger.duty_kW",
+            replacement_result.kpis,
+        )
+        self.assertNotIn(
+            "train-a/cross exchanger.energyInput_W",
+            replacement_result.kpis,
+        )
+        self.assertEqual(
+            replacement_result.kpis["total_duty_kW"].value,
+            0.0,
+        )
+
+    def test_replaced_native_exchanger_invalidates_all_solved_outputs(self):
+        _, model = self._build_two_sided_heat_exchanger_case(1.0)
+        model.run(timeout_ms=180_000)
+        process_system = model.get_process()
+
+        _, replacement_model = (
+            self._build_two_sided_heat_exchanger_case(1.05)
+        )
+        replacement_model.run(timeout_ms=180_000)
+        replacement_exchanger = replacement_model.get_unit(
+            "cross exchanger"
+        )
+        replacement_exchanger.setLockedInactive(True)
+        process_system.removeUnit("cross exchanger")
+        process_system.add(replacement_exchanger)
+
+        workbook_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "cross exchanger"
+        )
+        self.assertNotIn("duty_kW", workbook_properties)
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            workbook_properties,
+        )
+        public_report = model.get_json_report()["cross exchanger"]
+        self.assertNotIn("duty", public_report)
+        self.assertNotIn("dutyBalance", public_report)
+
+        result = model._extract_results()
+        self.assertNotIn("cross exchanger.duty_kW", result.kpis)
+        self.assertNotIn(
+            "cross exchanger.energyInput_W",
+            result.kpis,
+        )
+        self.assertNotIn(
+            "cross exchanger.heatTransferDuty_kW",
+            result.kpis,
+        )
+        self.assertNotIn(
+            "report.cross exchanger.duty",
+            result.kpis,
+        )
+        self.assertNotIn(
+            "report.cross exchanger.dutyBalance",
+            result.kpis,
+        )
+        self.assertEqual(result.kpis["total_duty_kW"].value, 0.0)
 
     def test_case_distinct_module_exchangers_prefer_exact_identity(self):
         from neqsim import jneqsim
