@@ -752,6 +752,11 @@ class NeqSimProcessModel:
 
         completed_run = False
         for attempt in range(max_runs):
+            # The zero-energy warm-up heuristic may keep trying after a
+            # completed pass.  Success must describe the most recent attempt,
+            # not any earlier one whose state a later failed run may have
+            # partially overwritten.
+            completed_run = False
             try:
                 if attempt >= 3 and hasattr(proc, "runSequential"):
                     # Fallback: strict sequential execution
@@ -2903,6 +2908,8 @@ class NeqSimProcessModel:
             flow_arrangement = ""
         solution_settings: List[Tuple[str, Any]] = []
         for getter_name in (
+            "isActive",
+            "isLockedInactive",
             "getUAvalue",
             "getThermalEffectiveness",
             "getDeltaT",
