@@ -3216,6 +3216,68 @@ class MultiInletMixerConservationTest(unittest.TestCase):
 
         self.assertNotIn("heatTransferDuty_kW", properties)
 
+    def test_same_named_module_exchangers_keep_qualified_trust(self):
+        from neqsim import jneqsim
+
+        _, train_a_model = self._build_two_sided_heat_exchanger_case(1.0)
+        _, train_b_model = self._build_two_sided_heat_exchanger_case(1.05)
+        train_a = train_a_model.get_process()
+        train_b = train_b_model.get_process()
+        train_a.setName("train-a")
+        train_b.setName("train-b")
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+
+        model.run(timeout_ms=180_000)
+        solved_summary_lines = [
+            line
+            for line in model.get_model_summary().splitlines()
+            if "cross exchanger (HeatExchanger)" in line
+        ]
+        self.assertEqual(len(solved_summary_lines), 2)
+        self.assertTrue(
+            all("duty_kW=" in line for line in solved_summary_lines)
+        )
+
+        model.get_unit(
+            "train-b/cross exchanger"
+        ).setLockedInactive(True)
+        model.run(timeout_ms=180_000)
+
+        train_a_report = model.get_module_json_report("train-a")
+        train_b_report = model.get_module_json_report("train-b")
+        self.assertIn("duty", train_a_report["cross exchanger"])
+        self.assertIn("dutyBalance", train_a_report["cross exchanger"])
+        self.assertNotIn("duty", train_b_report["cross exchanger"])
+        self.assertNotIn(
+            "dutyBalance",
+            train_b_report["cross exchanger"],
+        )
+
+        summary = model.get_model_summary()
+        train_a_section = summary.split(
+            "== Process System: train-a ==",
+            1,
+        )[1].split("== Process System: train-b ==", 1)[0]
+        train_b_section = summary.split(
+            "== Process System: train-b ==",
+            1,
+        )[1]
+        train_a_exchanger = next(
+            line
+            for line in train_a_section.splitlines()
+            if "cross exchanger (HeatExchanger)" in line
+        )
+        train_b_exchanger = next(
+            line
+            for line in train_b_section.splitlines()
+            if "cross exchanger (HeatExchanger)" in line
+        )
+        self.assertIn("duty_kW=", train_a_exchanger)
+        self.assertNotIn("duty_kW=", train_b_exchanger)
+
     def test_failed_rerun_clears_unchanged_direct_run_provenance(self):
         _, model = self._build_mixer_heat_exchanger_case()
         model.run(timeout_ms=180_000)
