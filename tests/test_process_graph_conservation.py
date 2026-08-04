@@ -2997,6 +2997,28 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             ].value,
             120.0,
         )
+        nested_report_kpis = {}
+        model._flatten_json_report(
+            {
+                "train-a": {
+                    "cross exchanger": {
+                        "duty": float(exchanger.getDuty()),
+                        "feedTemperature1": 120.0,
+                    },
+                },
+            },
+            nested_report_kpis,
+        )
+        self.assertNotIn(
+            "report.train-a.cross exchanger.duty",
+            nested_report_kpis,
+        )
+        self.assertEqual(
+            nested_report_kpis[
+                "report.train-a.cross exchanger.feedTemperature1"
+            ].value,
+            120.0,
+        )
 
         exchanger.setLockedInactive(False)
         reenabled_properties = next(
@@ -3028,7 +3050,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             solved_result.kpis["report.cross exchanger.duty"].value,
             0.0,
         )
-        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            solved_result.kpis["mass_balance_pct"].value,
+            1.0e-6,
+        )
 
     def test_rewrapping_edited_process_does_not_trust_stale_snapshot(self):
         _, model = self._build_two_sided_heat_exchanger_case(1.0)
