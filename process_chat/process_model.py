@@ -385,6 +385,10 @@ class NeqSimProcessModel:
         self._enforce_acyclic_mixer_energy = bool(
             enforce_acyclic_mixer_energy
         )
+        self._direct_unit_run_provenance: Dict[
+            str,
+            Tuple[str, Tuple[str, str], Tuple[str, str]],
+        ] = {}
         self._index_model_objects()
 
     # ----- ProcessModel detection -----
@@ -2535,6 +2539,9 @@ class NeqSimProcessModel:
     @staticmethod
     def _heat_exchanger_operating_properties(
         unit: Any,
+        direct_run_provenance: Optional[
+            Tuple[str, Tuple[str, str], Tuple[str, str]]
+        ] = None,
     ) -> Dict[str, float]:
         """Return explicit solved hot/cold-side heat-exchanger properties.
 
@@ -2553,6 +2560,8 @@ class NeqSimProcessModel:
 
         indexed_sides: List[Dict[str, Any]] = []
         inlet_identifiers_match_exchanger: List[bool] = []
+        inlet_calculation_identifiers: List[str] = []
+        outlet_calculation_identifiers: List[str] = []
         for index in (0, 1):
             streams: Dict[str, Any] = {}
             for boundary, getter_name in (
@@ -2579,9 +2588,16 @@ class NeqSimProcessModel:
                     ):
                         return {}
                     if boundary == "inlet":
+                        inlet_calculation_identifiers.append(
+                            str(stream_calculation_identifier)
+                        )
                         inlet_identifiers_match_exchanger.append(
                             str(stream_calculation_identifier)
                             == str(calculation_identifier)
+                        )
+                    else:
+                        outlet_calculation_identifiers.append(
+                            str(stream_calculation_identifier)
                         )
                     temperature_C = float(stream.getTemperature("C"))
                     pressure_bara = float(stream.getPressure("bara"))
@@ -2611,10 +2627,14 @@ class NeqSimProcessModel:
                 }
             indexed_sides.append(side_state)
 
-        if any(inlet_identifiers_match_exchanger) and not all(
-            inlet_identifiers_match_exchanger
-        ):
-            return {}
+        if not all(inlet_identifiers_match_exchanger):
+            current_provenance = (
+                str(calculation_identifier),
+                tuple(inlet_calculation_identifiers),
+                tuple(outlet_calculation_identifiers),
+            )
+            if direct_run_provenance != current_provenance:
+                return {}
 
         indexed_sides.sort(
             key=lambda side: side["inlet"]["temperature_C"],
@@ -2640,14 +2660,10 @@ class NeqSimProcessModel:
                 ] = state["flow_kg_hr"]
 
         properties["approachTemperature_K"] = min(
-            abs(
-                named_sides["hot"]["inlet"]["temperature_C"]
-                - named_sides["cold"]["outlet"]["temperature_C"]
-            ),
-            abs(
-                named_sides["hot"]["outlet"]["temperature_C"]
-                - named_sides["cold"]["inlet"]["temperature_C"]
-            ),
+            named_sides["hot"]["inlet"]["temperature_C"]
+            - named_sides["cold"]["outlet"]["temperature_C"],
+            named_sides["hot"]["outlet"]["temperature_C"]
+            - named_sides["cold"]["inlet"]["temperature_C"],
         )
 
         for property_name, getter_name, scale in (
@@ -2664,15 +2680,19 @@ class NeqSimProcessModel:
                     value = abs(value)
                 properties[property_name] = value
 
-        hot_side_duty_kW = abs(
+        hot_side_transfer_kW = (
             named_sides["hot"]["inlet"]["enthalpy_flow_kW"]
             - named_sides["hot"]["outlet"]["enthalpy_flow_kW"]
         )
-        cold_side_duty_kW = abs(
+        cold_side_transfer_kW = (
             named_sides["cold"]["outlet"]["enthalpy_flow_kW"]
             - named_sides["cold"]["inlet"]["enthalpy_flow_kW"]
         )
-        duty_closure_kW = hot_side_duty_kW - cold_side_duty_kW
+        hot_side_duty_kW = abs(hot_side_transfer_kW)
+        cold_side_duty_kW = abs(cold_side_transfer_kW)
+        duty_closure_kW = (
+            hot_side_transfer_kW - cold_side_transfer_kW
+        )
         duty_closure_pct = (
             abs(duty_closure_kW)
             / max(
@@ -2682,29 +2702,6 @@ class NeqSimProcessModel:
             )
             * 100.0
         )
-        if not any(inlet_identifiers_match_exchanger):
-            native_duty_kW = properties.get("heatTransferDuty_kW")
-            if native_duty_kW is None:
-                return {}
-            direct_run_residual_pct = max(
-                duty_closure_pct,
-                abs(hot_side_duty_kW - native_duty_kW)
-                / max(
-                    hot_side_duty_kW,
-                    native_duty_kW,
-                    _UNIT_BALANCE_SCALE_FLOOR_KW,
-                )
-                * 100.0,
-                abs(cold_side_duty_kW - native_duty_kW)
-                / max(
-                    cold_side_duty_kW,
-                    native_duty_kW,
-                    _UNIT_BALANCE_SCALE_FLOOR_KW,
-                )
-                * 100.0,
-            )
-            if direct_run_residual_pct > 1.0e-3:
-                return {}
         properties["hotSideDuty_kW"] = hot_side_duty_kW
         properties["coldSideDuty_kW"] = cold_side_duty_kW
         properties["dutyClosure_kW"] = duty_closure_kW
@@ -2968,7 +2965,16 @@ class NeqSimProcessModel:
                 props.update(self._pump_operating_properties(u))
 
             if java_class == "HeatExchanger":
-                props.update(self._heat_exchanger_operating_properties(u))
+                props.update(
+                    self._heat_exchanger_operating_properties(
+                        u,
+                        getattr(
+                            self,
+                            "_direct_unit_run_provenance",
+                            {},
+                        ).get(name),
+                    )
+                )
 
             if "Splitter" in java_class:
                 props.update(self._splitter_operating_properties(u))
@@ -3112,6 +3118,85 @@ class NeqSimProcessModel:
                     pass
         raise KeyError(f"Unit not found: {name}")
 
+    def record_direct_unit_run(self, unit_name: str) -> None:
+        """Record explicit provenance for a completed direct exchanger run.
+
+        NeqSim 3.16 assigns separate UUIDs to exchanger inlets during
+        ``HeatExchanger.run(UUID)``. Call this immediately after that direct
+        run so solved workbook and Process Chat properties can distinguish it
+        from inlet streams recalculated after an older ProcessSystem solve.
+        ProcessSystem runs do not need this marker because every boundary uses
+        the process calculation UUID.
+        """
+        canonical_name = None
+        name_lower = unit_name.lower()
+        for candidate_name in self._units:
+            if candidate_name == unit_name or (
+                candidate_name.lower() == name_lower
+            ):
+                canonical_name = candidate_name
+                break
+        if canonical_name is None:
+            raise KeyError(f"Unit not found: {unit_name}")
+        unit = self._units[canonical_name]
+        try:
+            java_class = str(unit.getClass().getSimpleName())
+        except Exception as exc:
+            raise ValueError(
+                f"Cannot inspect direct-run unit '{unit_name}'."
+            ) from exc
+        if java_class != "HeatExchanger":
+            raise ValueError(
+                "Direct-run provenance is currently supported only for "
+                "native HeatExchanger units."
+            )
+        try:
+            calculation_identifier = str(
+                unit.getCalculationIdentifier()
+            )
+            inlet_identifiers = tuple(
+                str(unit.getInStream(index).getCalculationIdentifier())
+                for index in (0, 1)
+            )
+            outlet_identifiers = tuple(
+                str(unit.getOutStream(index).getCalculationIdentifier())
+                for index in (0, 1)
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Direct-run provenance for '{unit_name}' is incomplete."
+            ) from exc
+        if (
+            calculation_identifier == "None"
+            or "None" in inlet_identifiers
+            or "None" in outlet_identifiers
+        ):
+            raise ValueError(
+                f"Direct-run provenance for '{unit_name}' is incomplete."
+            )
+        if outlet_identifiers != (
+            calculation_identifier,
+            calculation_identifier,
+        ):
+            raise ValueError(
+                f"Direct-run outlets for '{unit_name}' do not share the "
+                "exchanger calculation identifier."
+            )
+        inlet_matches = tuple(
+            identifier == calculation_identifier
+            for identifier in inlet_identifiers
+        )
+        if any(inlet_matches):
+            raise ValueError(
+                f"'{unit_name}' does not have the direct-run identifier "
+                "pattern; use the normal ProcessSystem result path."
+            )
+        self._direct_unit_run_provenance[canonical_name] = (
+            calculation_identifier,
+            inlet_identifiers,
+            outlet_identifiers,
+        )
+
     def get_stream(self, name: str):
         """Get a stream by name (supports qualified, unqualified, and case-insensitive names)."""
         # Exact match
@@ -3155,6 +3240,7 @@ class NeqSimProcessModel:
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
+        self._direct_unit_run_provenance.clear()
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
@@ -3175,6 +3261,7 @@ class NeqSimProcessModel:
         simulation (e.g. after modifying parameters) and then re-index.
         Handles both ProcessSystem and ProcessModel transparently.
         """
+        self._direct_unit_run_provenance.clear()
         if self._is_process_model:
             self._run_process_model(self._proc, timeout_ms=timeout_ms)
         else:
@@ -4302,7 +4389,14 @@ class NeqSimProcessModel:
                         pass
                 if java_class == "HeatExchanger":
                     for prop, val in (
-                        self._heat_exchanger_operating_properties(u).items()
+                        self._heat_exchanger_operating_properties(
+                            u,
+                            getattr(
+                                self,
+                                "_direct_unit_run_provenance",
+                                {},
+                            ).get(name),
+                        ).items()
                     ):
                         kpis[f"{prefix}.{prop}"] = KPI(
                             f"{prefix}.{prop}",
