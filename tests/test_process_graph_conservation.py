@@ -452,6 +452,7 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
         }
         direct_model._unit_ps_name = {"direct exchanger": "main"}
         direct_model._direct_unit_run_provenance = {}
+        direct_model._heat_exchanger_state_snapshots = {}
         direct_model.record_direct_unit_run("direct exchanger")
         self.assertEqual(
             direct_model._direct_unit_run_provenance[
@@ -464,6 +465,82 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
                 "heatTransferDuty_kW"
             ],
             2_400.0,
+        )
+
+        qualified_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        qualified_model._units = {
+            "main/direct exchanger": _DirectRunHeatExchanger()
+        }
+        qualified_model._unit_ps_name = {
+            "main/direct exchanger": "main"
+        }
+        qualified_model._direct_unit_run_provenance = {}
+        qualified_model._heat_exchanger_state_snapshots = {}
+        qualified_model.record_direct_unit_run("direct exchanger")
+        self.assertEqual(
+            qualified_model._direct_unit_run_provenance[
+                "main/direct exchanger"
+            ],
+            direct_provenance,
+        )
+
+        auto_capture_model = NeqSimProcessModel.__new__(
+            NeqSimProcessModel
+        )
+        auto_capture_model._units = {
+            "direct exchanger": _DirectRunHeatExchanger()
+        }
+        auto_capture_model._unit_ps_name = {
+            "direct exchanger": "main"
+        }
+        auto_capture_model._direct_unit_run_provenance = {}
+        auto_capture_model._heat_exchanger_state_snapshots = {}
+        auto_capture_model._capture_heat_exchanger_state_snapshots(
+            allow_direct_runs=True
+        )
+        self.assertEqual(
+            auto_capture_model._direct_unit_run_provenance[
+                "direct exchanger"
+            ],
+            direct_provenance,
+        )
+        self.assertEqual(
+            auto_capture_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
+
+        class _MutableSolvedHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _Stream(120.0, 50.0, 50_000.0, 3_300_000.0),
+                _Stream(20.0, 49.5, 40_000.0, -150_000.0),
+            ]
+            outlet_streams = [
+                _Stream(53.0, 50.0, 50_000.0, 900_000.0),
+                _Stream(103.5, 49.5, 40_000.0, 2_250_000.0),
+            ]
+
+        mutable_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        mutable_model._units = {
+            "mutable exchanger": _MutableSolvedHeatExchanger()
+        }
+        mutable_model._unit_ps_name = {"mutable exchanger": "main"}
+        mutable_model._direct_unit_run_provenance = {}
+        mutable_model._heat_exchanger_state_snapshots = {}
+        mutable_model._capture_heat_exchanger_state_snapshots()
+        self.assertEqual(
+            mutable_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
+        _MutableSolvedHeatExchanger.inlet_streams[
+            0
+        ].temperature_c = 110.0
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            mutable_model.list_units()[0].properties,
         )
 
         class _StaleDualInletHeatExchanger(_DirectRunHeatExchanger):
