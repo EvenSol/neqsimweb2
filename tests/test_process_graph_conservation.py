@@ -2987,6 +2987,22 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "cross exchanger": solved_snapshot,
         }
         exchanger.setEnergyInput(123_456.0)
+        self.assertFalse(
+            model._heat_exchanger_solution_is_trusted(
+                "cross exchanger",
+                exchanger,
+                "HeatExchanger",
+            )
+        )
+        active_unsolved_result = model._extract_results()
+        self.assertNotIn(
+            "cross exchanger.energyInput_W",
+            active_unsolved_result.kpis,
+        )
+        self.assertNotIn(
+            "cross exchanger.duty_kW",
+            active_unsolved_result.kpis,
+        )
         exchanger.setLockedInactive(True)
         self.assertTrue(bool(exchanger.isLockedInactive()))
         inactive_properties = next(
@@ -3240,6 +3256,9 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertTrue(
             all("duty_kW=" in line for line in solved_summary_lines)
         )
+        solved_dot = model._generate_dot_fallback()
+        self.assertIn("2389.2 kW", solved_dot)
+        self.assertIn("2480.0 kW", solved_dot)
 
         model.get_unit(
             "train-b/cross exchanger"
@@ -3277,6 +3296,45 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         )
         self.assertIn("duty_kW=", train_a_exchanger)
         self.assertNotIn("duty_kW=", train_b_exchanger)
+
+    def test_case_distinct_module_exchangers_prefer_exact_identity(self):
+        from neqsim import jneqsim
+
+        _, train_a_model = self._build_two_sided_heat_exchanger_case(1.0)
+        _, train_b_model = self._build_two_sided_heat_exchanger_case(1.05)
+        train_b_model.get_unit("cross exchanger").setName(
+            "Cross Exchanger"
+        )
+        train_a = train_a_model.get_process()
+        train_b = train_b_model.get_process()
+        train_a.setName("train-a")
+        train_b.setName("train-b")
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+
+        result = model.run(timeout_ms=180_000)
+        self.assertIn("cross exchanger.duty_kW", result.kpis)
+        self.assertIn("Cross Exchanger.duty_kW", result.kpis)
+        self.assertIn(
+            "cross exchanger",
+            model._heat_exchanger_state_snapshots,
+        )
+        self.assertIn(
+            "Cross Exchanger",
+            model._heat_exchanger_state_snapshots,
+        )
+        summary_lines = [
+            line
+            for line in model.get_model_summary().splitlines()
+            if "exchanger (heatexchanger)" in line.casefold()
+        ]
+        self.assertEqual(len(summary_lines), 2)
+        self.assertTrue(all("duty_kW=" in line for line in summary_lines))
+        dot = model._generate_dot_fallback()
+        self.assertIn("2389.2 kW", dot)
+        self.assertIn("2480.0 kW", dot)
 
     def test_failed_rerun_clears_unchanged_direct_run_provenance(self):
         _, model = self._build_mixer_heat_exchanger_case()
