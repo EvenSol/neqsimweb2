@@ -2533,6 +2533,92 @@ class NeqSimProcessModel:
         return properties
 
     @staticmethod
+    def _heat_exchanger_operating_properties(
+        unit: Any,
+    ) -> Dict[str, float]:
+        """Return explicit solved hot/cold-side heat-exchanger properties.
+
+        Native two-sided ``HeatExchanger`` streams are ordered hot side first
+        and cold side second. Side duties use positive magnitudes for heat
+        released by the hot side and heat received by the cold side.
+        Completeness-dependent closure is withheld unless all four stream
+        enthalpy flows are finite.
+        """
+        properties: Dict[str, float] = {}
+        stream_enthalpy_kW: Dict[str, float] = {}
+        for side, index in (("hot", 0), ("cold", 1)):
+            for boundary, getter_name in (
+                ("Inlet", "getInStream"),
+                ("Outlet", "getOutStream"),
+            ):
+                try:
+                    stream = getattr(unit, getter_name)(index)
+                except Exception:
+                    continue
+                for suffix, getter in (
+                    ("Temperature_C", lambda: stream.getTemperature("C")),
+                    ("Pressure_bara", lambda: stream.getPressure("bara")),
+                    ("Flow_kg_hr", lambda: stream.getFlowRate("kg/hr")),
+                ):
+                    try:
+                        value = float(getter())
+                    except Exception:
+                        continue
+                    if math.isfinite(value):
+                        properties[f"{side}{boundary}{suffix}"] = value
+                try:
+                    enthalpy_kW = float(
+                        stream.getFluid().getEnthalpy()
+                    ) / 1000.0
+                except Exception:
+                    continue
+                if math.isfinite(enthalpy_kW):
+                    stream_enthalpy_kW[f"{side}{boundary}"] = enthalpy_kW
+
+        for property_name, getter_name, scale in (
+            ("UA_W_K", "getUAvalue", 1.0),
+            ("heatTransferDuty_kW", "getDuty", 1.0 / 1000.0),
+            ("approachTemperature_K", "getApproachTemperature", 1.0),
+            ("thermalEffectiveness", "getThermalEffectiveness", 1.0),
+        ):
+            try:
+                value = float(getattr(unit, getter_name)()) * scale
+            except Exception:
+                continue
+            if math.isfinite(value):
+                properties[property_name] = value
+
+        required_enthalpies = {
+            "hotInlet",
+            "hotOutlet",
+            "coldInlet",
+            "coldOutlet",
+        }
+        if required_enthalpies.issubset(stream_enthalpy_kW):
+            hot_side_duty_kW = (
+                stream_enthalpy_kW["hotInlet"]
+                - stream_enthalpy_kW["hotOutlet"]
+            )
+            cold_side_duty_kW = (
+                stream_enthalpy_kW["coldOutlet"]
+                - stream_enthalpy_kW["coldInlet"]
+            )
+            duty_closure_kW = hot_side_duty_kW - cold_side_duty_kW
+            properties["hotSideDuty_kW"] = hot_side_duty_kW
+            properties["coldSideDuty_kW"] = cold_side_duty_kW
+            properties["dutyClosure_kW"] = duty_closure_kW
+            properties["dutyClosure_pct"] = (
+                abs(duty_closure_kW)
+                / max(
+                    abs(hot_side_duty_kW),
+                    abs(cold_side_duty_kW),
+                    _UNIT_BALANCE_SCALE_FLOOR_KW,
+                )
+                * 100.0
+            )
+        return properties
+
+    @staticmethod
     def _splitter_operating_properties(unit: Any) -> Dict[str, float]:
         """Return solved splitter allocation and flow-closure properties.
 
@@ -2703,6 +2789,27 @@ class NeqSimProcessModel:
             return "%"
         return "[-]"
 
+    @staticmethod
+    def _heat_exchanger_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for exchanger properties."""
+        if property_name.endswith("Temperature_C"):
+            return "°C"
+        if property_name.endswith("Temperature_K"):
+            return "K"
+        if property_name.endswith("Pressure_bara"):
+            return "bara"
+        if property_name.endswith("Flow_kg_hr"):
+            return "kg/hr"
+        if property_name.endswith("Duty_kW") or property_name.endswith(
+            "Closure_kW"
+        ):
+            return "kW"
+        if property_name.endswith("Closure_pct"):
+            return "%"
+        if property_name == "UA_W_K":
+            return "W/K"
+        return "[-]"
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -2766,6 +2873,9 @@ class NeqSimProcessModel:
 
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
+
+            if java_class == "HeatExchanger":
+                props.update(self._heat_exchanger_operating_properties(u))
 
             if "Splitter" in java_class:
                 props.update(self._splitter_operating_properties(u))
@@ -4097,6 +4207,15 @@ class NeqSimProcessModel:
                         )
                     except Exception:
                         pass
+                if java_class == "HeatExchanger":
+                    for prop, val in (
+                        self._heat_exchanger_operating_properties(u).items()
+                    ):
+                        kpis[f"{prefix}.{prop}"] = KPI(
+                            f"{prefix}.{prop}",
+                            val,
+                            self._heat_exchanger_property_unit(prop),
+                        )
 
             # ---------- Pipeline hydraulics ----------
             elif java_class in (
