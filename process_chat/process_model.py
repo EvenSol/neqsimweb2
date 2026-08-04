@@ -3186,6 +3186,23 @@ class NeqSimProcessModel:
             return "W/K"
         return "[-]"
 
+    @staticmethod
+    def _is_inactive_heat_exchanger(unit: Any, java_class: str) -> bool:
+        """Return whether a native exchanger must suppress solved outputs."""
+        if java_class != "HeatExchanger":
+            return False
+        try:
+            if bool(unit.isLockedInactive()):
+                return True
+        except Exception:
+            pass
+        try:
+            if not bool(unit.isActive()):
+                return True
+        except Exception:
+            pass
+        return False
+
     def list_units(self) -> List[UnitInfo]:
         """List all unit operations with type info and key properties."""
         result = []
@@ -3206,6 +3223,11 @@ class NeqSimProcessModel:
                 ("polytropicEfficiency", "getPolytropicEfficiency"),
                 ("outletPressure_bara", "getOutletPressure"),
             ]:
+                if prop == "duty_kW" and self._is_inactive_heat_exchanger(
+                    u,
+                    java_class,
+                ):
+                    continue
                 if hasattr(u, getter):
                     try:
                         val = getattr(u, getter)()
@@ -3511,16 +3533,8 @@ class NeqSimProcessModel:
             try:
                 if str(unit.getClass().getSimpleName()) != "HeatExchanger":
                     continue
-                try:
-                    if bool(unit.isLockedInactive()):
-                        continue
-                except Exception:
-                    pass
-                try:
-                    if not bool(unit.isActive()):
-                        continue
-                except Exception:
-                    pass
+                if self._is_inactive_heat_exchanger(unit, "HeatExchanger"):
+                    continue
                 calculation_identifier = unit.getCalculationIdentifier()
                 if calculation_identifier is None:
                     continue
@@ -3915,7 +3929,10 @@ class NeqSimProcessModel:
                         total_power_kW += power_kW
                 except Exception:
                     pass
-            if hasattr(u, "getDuty"):
+            if hasattr(u, "getDuty") and not self._is_inactive_heat_exchanger(
+                u,
+                uclass,
+            ):
                 try:
                     duty_kW = float(u.getDuty()) / 1000.0
                     # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
