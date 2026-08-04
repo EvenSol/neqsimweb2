@@ -2541,8 +2541,16 @@ class NeqSimProcessModel:
         Native stream indices preserve insertion order, so the hot and cold
         sides are classified from solved inlet temperatures. Side duties are
         positive heat-transfer magnitudes. Properties are withheld unless both
-        sides have complete, nonzero, finite solved states.
+        sides have complete, nonzero, finite solved states and the native unit
+        records a completed calculation.
         """
+        try:
+            calculation_identifier = unit.getCalculationIdentifier()
+        except Exception:
+            return {}
+        if calculation_identifier is None:
+            return {}
+
         indexed_sides: List[Dict[str, Any]] = []
         for index in (0, 1):
             streams: Dict[str, Any] = {}
@@ -2607,10 +2615,16 @@ class NeqSimProcessModel:
                     f"{side_name}{property_boundary}Flow_kg_hr"
                 ] = state["flow_kg_hr"]
 
+        properties["approachTemperature_K"] = min(
+            named_sides["hot"]["inlet"]["temperature_C"]
+            - named_sides["cold"]["outlet"]["temperature_C"],
+            named_sides["hot"]["outlet"]["temperature_C"]
+            - named_sides["cold"]["inlet"]["temperature_C"],
+        )
+
         for property_name, getter_name, scale in (
             ("UA_W_K", "getUAvalue", 1.0),
             ("heatTransferDuty_kW", "getDuty", 1.0 / 1000.0),
-            ("approachTemperature_K", "getApproachTemperature", 1.0),
             ("thermalEffectiveness", "getThermalEffectiveness", 1.0),
         ):
             try:
