@@ -266,6 +266,10 @@ def _apply_param(unit, key: str, value):
     elif k in ("chart_template", "chart_num_speeds"):
         # Handled after unit creation in _create_unit
         pass
+    elif k in ("auto_size", "design_gas_load_factor_m_per_s"):
+        # Applied as one post-solve mechanical-design request so sizing uses
+        # the converged native feed state.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1318,23 @@ class ProcessBuilder:
             raise RuntimeError(
                 "Acyclic graph simulation did not complete successfully."
             )
+        designed_units = self._apply_requested_mechanical_designs(
+            unit_specs,
+            unit_objects,
+        )
+        if designed_units:
+            self._build_log.append(
+                "Running closed design rerun for: "
+                + ", ".join(designed_units)
+            )
+            process_run_succeeded = NeqSimProcessModel._run_until_converged(
+                process_system
+            )
+            if not process_run_succeeded:
+                raise RuntimeError(
+                    "Acyclic graph design rerun did not complete "
+                    "successfully."
+                )
         direct_closure_ran = (
             NeqSimProcessModel._run_acyclic_mixer_energy_closure(
                 process_system
@@ -1327,6 +1348,90 @@ class ProcessBuilder:
         )
         self._build_log.append("Acyclic graph built and converged successfully.")
         return self._model
+
+    @staticmethod
+    def _separator_design_settings(
+        params: dict,
+    ) -> tuple[bool, Optional[float]]:
+        """Validate one explicit native separator-design request."""
+        raw_enabled = params.get("auto_size", False)
+        if type(raw_enabled) is not bool:
+            raise ValueError("Separator auto_size must be boolean.")
+
+        raw_gas_load = params.get("design_gas_load_factor_m_per_s")
+        if raw_gas_load is None:
+            return raw_enabled, None
+        if isinstance(raw_gas_load, bool):
+            raise ValueError(
+                "Separator design gas-load factor must be numeric."
+            )
+        try:
+            gas_load = float(raw_gas_load)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Separator design gas-load factor must be numeric."
+            ) from exc
+        if not math.isfinite(gas_load) or not 0.01 <= gas_load <= 1.0:
+            raise ValueError(
+                "Separator design gas-load factor must be between 0.01 "
+                "and 1.0 m/s."
+            )
+        return raw_enabled, gas_load
+
+    @classmethod
+    def _apply_requested_mechanical_designs(
+        cls,
+        unit_specs: List[dict],
+        unit_objects: Dict[str, Any],
+    ) -> List[str]:
+        """Auto-size requested separators from their converged feed states."""
+        designed_units: List[str] = []
+        for unit_spec in unit_specs:
+            if not isinstance(unit_spec, dict):
+                continue
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                continue
+            has_design_request = any(
+                key in params
+                for key in (
+                    "auto_size",
+                    "design_gas_load_factor_m_per_s",
+                )
+            )
+            if not has_design_request:
+                continue
+            if unit_type != "separator":
+                raise ValueError(
+                    "Native mechanical sizing is currently supported only "
+                    "for separator units."
+                )
+            enabled, gas_load = cls._separator_design_settings(params)
+            if not enabled:
+                continue
+            unit_id = str(
+                unit_spec.get("id", unit_spec.get("name", ""))
+            ).strip()
+            unit = unit_objects.get(unit_id)
+            if unit is None:
+                raise ValueError(
+                    f"Separator design target '{unit_id}' was not built."
+                )
+            if gas_load is not None:
+                if not hasattr(unit, "setDesignGasLoadFactor"):
+                    raise ValueError(
+                        f"Separator '{unit_id}' does not expose a native "
+                        "design gas-load factor."
+                    )
+                unit.setDesignGasLoadFactor(gas_load)
+            if not hasattr(unit, "autoSize"):
+                raise ValueError(
+                    f"Separator '{unit_id}' does not expose native autoSize."
+                )
+            unit.autoSize()
+            designed_units.append(unit_id)
+        return designed_units
 
     # -- Build from spec ----------------------------------------------------
 
@@ -1447,6 +1552,22 @@ class ProcessBuilder:
             raise RuntimeError(
                 "Process simulation did not complete successfully."
             )
+        designed_units = self._apply_requested_mechanical_designs(
+            process_steps,
+            built_units,
+        )
+        if designed_units:
+            self._build_log.append(
+                "Running closed design rerun for: "
+                + ", ".join(designed_units)
+            )
+            process_run_succeeded = NeqSimProcessModel._run_until_converged(
+                proc
+            )
+            if not process_run_succeeded:
+                raise RuntimeError(
+                    "Process design rerun did not complete successfully."
+                )
 
         # 4. Wrap in NeqSimProcessModel
         self._model = NeqSimProcessModel.from_process_system(

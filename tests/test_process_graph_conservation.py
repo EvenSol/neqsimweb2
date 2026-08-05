@@ -113,6 +113,7 @@ class PumpParameterApplicationTest(unittest.TestCase):
 
         self.assertEqual(pump.efficiency, 0.75)
 
+
     def test_native_esp_efficiency_converts_fraction_to_percent(self):
         class _JavaClass:
             @staticmethod
@@ -180,6 +181,83 @@ class PumpParameterApplicationTest(unittest.TestCase):
             script,
         )
         self.assertNotIn("export_pump.setEfficiency", script)
+
+
+class SeparatorDesignApplicationTest(unittest.TestCase):
+    """Protect opt-in native separator sizing and its strict design basis."""
+
+    def test_applies_design_basis_only_to_opted_in_separator(self):
+        class _Separator:
+            gas_load = None
+            size_calls = 0
+
+            def setDesignGasLoadFactor(self, value):
+                self.gas_load = value
+
+            def autoSize(self):
+                self.size_calls += 1
+
+        separator = _Separator()
+        designed = ProcessBuilder._apply_requested_mechanical_designs(
+            [
+                {
+                    "id": "inlet-separator",
+                    "type": "separator",
+                    "params": {
+                        "auto_size": True,
+                        "design_gas_load_factor_m_per_s": 0.08,
+                    },
+                }
+            ],
+            {"inlet-separator": separator},
+        )
+
+        self.assertEqual(designed, ["inlet-separator"])
+        self.assertEqual(separator.gas_load, 0.08)
+        self.assertEqual(separator.size_calls, 1)
+
+        separator.size_calls = 0
+        self.assertEqual(
+            ProcessBuilder._apply_requested_mechanical_designs(
+                [
+                    {
+                        "id": "inlet-separator",
+                        "type": "separator",
+                        "params": {
+                            "auto_size": False,
+                            "design_gas_load_factor_m_per_s": 0.11,
+                        },
+                    }
+                ],
+                {"inlet-separator": separator},
+            ),
+            [],
+        )
+        self.assertEqual(separator.size_calls, 0)
+
+    def test_rejects_invalid_or_nonseparator_design_requests(self):
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            ProcessBuilder._separator_design_settings(
+                {"auto_size": 1}
+            )
+        with self.assertRaisesRegex(ValueError, "between 0.01 and 1.0"):
+            ProcessBuilder._separator_design_settings(
+                {
+                    "auto_size": True,
+                    "design_gas_load_factor_m_per_s": 0.0,
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "only for separator"):
+            ProcessBuilder._apply_requested_mechanical_designs(
+                [
+                    {
+                        "id": "compressor",
+                        "type": "compressor",
+                        "params": {"auto_size": True},
+                    }
+                ],
+                {"compressor": object()},
+            )
 
 
 class HeatExchangerPropertyExtractionTest(unittest.TestCase):
