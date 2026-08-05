@@ -2597,6 +2597,95 @@ class NeqSimProcessModel:
         return properties
 
     @staticmethod
+    def _compressor_map_properties(unit: Any) -> Dict[str, Any]:
+        """Return finite native map state and operating-limit margins.
+
+        Properties are exposed only when the compressor is actively solving
+        speed against a chart with at least three corrected-speed curves.
+        Positive surge and stonewall distances indicate an operating point
+        inside the respective map boundary.
+        """
+        try:
+            if not bool(unit.isSolveSpeed()):
+                return {}
+            chart = unit.getCompressorChart()
+            corrected_speeds = [float(value) for value in chart.getSpeeds()]
+        except Exception:
+            return {}
+        if (
+            len(corrected_speeds) < 3
+            or any(
+                not math.isfinite(value) or value <= 0.0
+                for value in corrected_speeds
+            )
+        ):
+            return {}
+
+        properties: Dict[str, Any] = {
+            "mapEnabled": True,
+            "mapSpeedCurveCount": len(corrected_speeds),
+            "mapMinimumSpeed_rpm": min(corrected_speeds),
+            "mapMaximumSpeed_rpm": max(corrected_speeds),
+        }
+        numeric_getters = (
+            ("mapOperatingSpeed_rpm", "getSpeed"),
+            ("mapSpeedRatioToMinimum", "getRatioToMinSpeed"),
+            ("mapSpeedRatioToMaximum", "getRatioToMaxSpeed"),
+            ("mapDistanceToSurgeFraction", "getDistanceToSurge"),
+            (
+                "mapDistanceToStoneWallFraction",
+                "getDistanceToStoneWall",
+            ),
+            ("mapSurgeFlowRate_m3_per_hr", "getSurgeFlowRate"),
+            (
+                "mapSurgeFlowMargin_m3_per_hr",
+                "getSurgeFlowRateMargin",
+            ),
+        )
+        for property_name, getter_name in numeric_getters:
+            if not hasattr(unit, getter_name):
+                continue
+            try:
+                value = float(getattr(unit, getter_name)())
+            except Exception:
+                continue
+            if math.isfinite(value):
+                properties[property_name] = value
+
+        try:
+            below_minimum = bool(unit.isLowerThanMinSpeed())
+            above_maximum = bool(unit.isHigherThanMaxSpeed())
+            properties["mapWithinSpeedRange"] = not (
+                below_minimum or above_maximum
+            )
+        except Exception:
+            pass
+        for property_name, getter_name in (
+            ("mapInSurge", "isSurge"),
+            ("mapInStoneWall", "isStoneWall"),
+        ):
+            try:
+                properties[property_name] = bool(
+                    getattr(unit, getter_name)()
+                )
+            except Exception:
+                pass
+        return properties
+
+    @staticmethod
+    def _compressor_map_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for compressor-map data."""
+        if property_name.endswith("_rpm"):
+            return "rpm"
+        if property_name.endswith("_m3_per_hr"):
+            return "m3/hr"
+        if property_name.endswith("Fraction"):
+            return "-"
+        if property_name == "mapSpeedCurveCount":
+            return "curves"
+        return "-"
+
+    @staticmethod
     def _heat_exchanger_operating_properties(
         unit: Any,
         direct_run_provenance: Optional[
@@ -3453,6 +3542,9 @@ class NeqSimProcessModel:
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
 
+            if java_class == "Compressor":
+                props.update(self._compressor_map_properties(u))
+
             if (
                 java_class == "HeatExchanger"
                 and exchanger_solution_is_trusted
@@ -4209,6 +4301,72 @@ class NeqSimProcessModel:
         # Extract detailed unit operation properties (utilization, sizing, performance)
         self._extract_unit_properties(kpis, report_duty_lookup)
 
+        for unit_name, unit in self._units.items():
+            try:
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if java_class != "Compressor":
+                continue
+            map_properties = self._compressor_map_properties(unit)
+            if not map_properties:
+                continue
+            required_states = (
+                "mapWithinSpeedRange",
+                "mapInSurge",
+                "mapInStoneWall",
+            )
+            if any(
+                state not in map_properties for state in required_states
+            ):
+                constraints.append(
+                    ConstraintStatus(
+                        f"compressor_map.{unit_name}",
+                        "UNKNOWN",
+                        "Native compressor map is active, but complete "
+                        "speed/surge/stonewall state is unavailable.",
+                    )
+                )
+                continue
+            violations = []
+            if not map_properties["mapWithinSpeedRange"]:
+                violations.append("speed outside corrected-speed curves")
+            if map_properties["mapInSurge"]:
+                violations.append("operating point in surge region")
+            if map_properties["mapInStoneWall"]:
+                violations.append("operating point in stonewall region")
+            status = "VIOLATION" if violations else "OK"
+            speed = map_properties.get("mapOperatingSpeed_rpm")
+            surge_distance = map_properties.get(
+                "mapDistanceToSurgeFraction"
+            )
+            stonewall_distance = map_properties.get(
+                "mapDistanceToStoneWallFraction"
+            )
+            operating_summary = (
+                f"speed={speed:.6g} rpm, "
+                f"surge distance={surge_distance:.6g}, "
+                f"stonewall distance={stonewall_distance:.6g}"
+                if all(
+                    isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                    for value in (speed, surge_distance, stonewall_distance)
+                )
+                else "native map state available"
+            )
+            detail = (
+                "; ".join(violations) + f"; {operating_summary}."
+                if violations
+                else f"Operating point is inside map limits; {operating_summary}."
+            )
+            constraints.append(
+                ConstraintStatus(
+                    f"compressor_map.{unit_name}",
+                    status,
+                    detail,
+                )
+            )
+
         # Extract mechanical design data (wall thickness, weights, dimensions, cost)
         self._extract_mechanical_design(kpis)
 
@@ -4963,6 +5121,12 @@ class NeqSimProcessModel:
                             kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
                         except Exception:
                             pass
+                for prop, val in self._compressor_map_properties(u).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        self._compressor_map_property_unit(prop),
+                    )
                 # Entropy production & exergy
                 try:
                     kpis[f"{prefix}.entropyProduction_JK"] = KPI(

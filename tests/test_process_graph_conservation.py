@@ -385,6 +385,278 @@ class CompressorChartApplicationTest(unittest.TestCase):
         self.assertEqual(script.count("process.run()"), 2)
 
 
+class CompressorMapReportingTest(unittest.TestCase):
+    """Validate workbook and KPI mapping for native compressor limits."""
+
+    class _JavaClass:
+        @staticmethod
+        def getSimpleName():
+            return "Compressor"
+
+    class _Chart:
+        @staticmethod
+        def getSpeeds():
+            return [2000.0, 2500.0, 3000.0]
+
+    class _Compressor:
+        @staticmethod
+        def getClass():
+            return CompressorMapReportingTest._JavaClass()
+
+        @staticmethod
+        def isSolveSpeed():
+            return True
+
+        @staticmethod
+        def getCompressorChart():
+            return CompressorMapReportingTest._Chart()
+
+        @staticmethod
+        def getSpeed():
+            return 2700.0
+
+        @staticmethod
+        def getRatioToMinSpeed():
+            return 1.35
+
+        @staticmethod
+        def getRatioToMaxSpeed():
+            return 0.90
+
+        @staticmethod
+        def getDistanceToSurge():
+            return 0.25
+
+        @staticmethod
+        def getDistanceToStoneWall():
+            return 0.40
+
+        @staticmethod
+        def getSurgeFlowRate():
+            return 300.0
+
+        @staticmethod
+        def getSurgeFlowRateMargin():
+            return 75.0
+
+        @staticmethod
+        def isLowerThanMinSpeed():
+            return False
+
+        @staticmethod
+        def isHigherThanMaxSpeed():
+            return False
+
+        @staticmethod
+        def isSurge():
+            return False
+
+        @staticmethod
+        def isStoneWall():
+            return False
+
+    def test_reports_explicit_map_units_to_workbook_and_kpis(self):
+        compressor = self._Compressor()
+        properties = NeqSimProcessModel._compressor_map_properties(
+            compressor
+        )
+        self.assertEqual(properties["mapSpeedCurveCount"], 3)
+        self.assertEqual(properties["mapMaximumSpeed_rpm"], 3000.0)
+        self.assertTrue(properties["mapWithinSpeedRange"])
+        self.assertFalse(properties["mapInSurge"])
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._units = {"export compressor": compressor}
+        model._unit_ps_name = {"export compressor": "main"}
+        model._report_unit_duty_lookup = lambda: {}
+        workbook_unit = model.list_units()[0]
+        self.assertEqual(workbook_unit.properties, properties)
+
+        kpis = {}
+        model._extract_unit_properties(kpis, {})
+        expected_units = {
+            "mapEnabled": "-",
+            "mapSpeedCurveCount": "curves",
+            "mapMinimumSpeed_rpm": "rpm",
+            "mapMaximumSpeed_rpm": "rpm",
+            "mapOperatingSpeed_rpm": "rpm",
+            "mapSpeedRatioToMinimum": "-",
+            "mapSpeedRatioToMaximum": "-",
+            "mapDistanceToSurgeFraction": "-",
+            "mapDistanceToStoneWallFraction": "-",
+            "mapSurgeFlowRate_m3_per_hr": "m3/hr",
+            "mapSurgeFlowMargin_m3_per_hr": "m3/hr",
+            "mapWithinSpeedRange": "-",
+            "mapInSurge": "-",
+            "mapInStoneWall": "-",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(property_name=property_name):
+                self.assertEqual(
+                    kpis[f"export compressor.{property_name}"].unit,
+                    unit,
+                )
+
+
+class NativeCompressorMapBenchmarkTest(unittest.TestCase):
+    """Benchmark a fixed native compressor map at nearby flow points."""
+
+    @staticmethod
+    def _build_case():
+        units, compressor_id = add_catalog_unit(
+            [],
+            "compressor",
+            "map compressor",
+        )
+        units = update_inline_unit_properties(
+            units,
+            compressor_id,
+            {
+                "outlet_pressure_bara": 60.0,
+                "isentropic_efficiency": 0.78,
+                "use_compressor_chart": True,
+                "chart_template": "PIPELINE",
+                "chart_num_speeds": 7,
+            },
+        )
+        graph_spec = {
+            "name": "Native compressor map benchmark",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-map-compressor",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": compressor_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.06,
+                        "propane": 0.03,
+                        "n-butane": 0.01,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 25.0,
+                    "pressure_bara": 30.0,
+                    "total_flow": 10_000.0,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", compressor_id],
+        )
+        return builder, model, graph_spec
+
+    def test_native_map_closes_and_stays_inside_limits_nearby(self):
+        builder, model, graph_spec = self._build_case()
+        compressor = model.get_unit("map compressor")
+        feed = model.get_unit("feed")
+
+        baseline = model.run()
+        baseline_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "map compressor"
+        )
+        baseline_speed = baseline_properties["mapOperatingSpeed_rpm"]
+
+        feed.setFlowRate(9_500.0, "kg/hr")
+        nearby = model.run()
+        nearby_properties = next(
+            unit.properties
+            for unit in model.list_units()
+            if unit.name == "map compressor"
+        )
+
+        for label, result, properties in (
+            ("baseline", baseline, baseline_properties),
+            ("nearby", nearby, nearby_properties),
+        ):
+            with self.subTest(label=label):
+                self.assertTrue(properties["mapEnabled"])
+                self.assertEqual(properties["mapSpeedCurveCount"], 7)
+                self.assertTrue(properties["mapWithinSpeedRange"])
+                self.assertFalse(properties["mapInSurge"])
+                self.assertFalse(properties["mapInStoneWall"])
+                self.assertGreater(
+                    properties["mapDistanceToSurgeFraction"],
+                    0.0,
+                )
+                self.assertGreater(
+                    properties["mapDistanceToStoneWallFraction"],
+                    0.0,
+                )
+                for balance_name in (
+                    "mass_balance_pct",
+                    "component_balance_max_pct",
+                    "energy_balance_pct",
+                    "unit_mass_balance_max_pct",
+                    "unit_energy_balance_max_pct",
+                ):
+                    self.assertLess(result.kpis[balance_name].value, 1.0e-6)
+                map_constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name == "compressor_map.map compressor"
+                )
+                self.assertEqual(map_constraint.status, "OK")
+
+        self.assertLess(
+            nearby_properties["mapOperatingSpeed_rpm"],
+            baseline_speed,
+        )
+        self.assertAlmostEqual(
+            float(compressor.getOutletPressure()),
+            60.0,
+            delta=1.0e-9,
+        )
+        self.assertEqual(
+            json.loads(json.dumps(graph_spec, allow_nan=False)),
+            graph_spec,
+        )
+        self.assertIn(
+            "Running closed compressor-map rerun for: map-compressor",
+            builder.build_log,
+        )
+        print(
+            "native compressor map benchmark:",
+            f"baseline_speed={baseline_speed:.6f} rpm",
+            (
+                "baseline_surge_distance="
+                f"{baseline_properties['mapDistanceToSurgeFraction']:.6f}"
+            ),
+            (
+                "nearby_speed="
+                f"{nearby_properties['mapOperatingSpeed_rpm']:.6f} rpm"
+            ),
+            (
+                "nearby_stonewall_distance="
+                f"{nearby_properties['mapDistanceToStoneWallFraction']:.6f}"
+            ),
+        )
+
+
 class HeatExchangerPropertyExtractionTest(unittest.TestCase):
     """Validate explicit solved-property mapping for two-sided exchangers."""
 
