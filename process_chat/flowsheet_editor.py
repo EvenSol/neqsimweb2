@@ -51,6 +51,59 @@ def _boolean_property(label: str, description: str) -> dict[str, Any]:
     }
 
 
+def _integer_property(
+    label: str,
+    unit: str,
+    minimum: int,
+    maximum: int,
+    step: int,
+    description: str,
+) -> dict[str, Any]:
+    """Define one bounded integer property for editor presentation."""
+    return {
+        "kind": "integer",
+        "label": label,
+        "unit": unit,
+        "minimum": minimum,
+        "maximum": maximum,
+        "step": step,
+        "format": "%d",
+        "description": description,
+    }
+
+
+def _choice_property(
+    label: str,
+    choices: tuple[str, ...],
+    description: str,
+) -> dict[str, Any]:
+    """Define one closed-set string property for editor presentation."""
+    return {
+        "kind": "choice",
+        "label": label,
+        "unit": "",
+        "choices": choices,
+        "description": description,
+    }
+
+
+_COMPRESSOR_CHART_TEMPLATES = (
+    "CENTRIFUGAL_STANDARD",
+    "CENTRIFUGAL_HIGH_FLOW",
+    "CENTRIFUGAL_HIGH_HEAD",
+    "PIPELINE",
+    "EXPORT",
+    "INJECTION",
+    "GAS_LIFT",
+    "REFRIGERATION",
+    "BOOSTER",
+    "SINGLE_STAGE",
+    "MULTISTAGE_INLINE",
+    "INTEGRALLY_GEARED",
+    "OVERHUNG",
+)
+
+
 _GRAPH_NODE_STYLES = {
     "compressor": ("#dbeafe", "#2563eb"),
     "cooler": ("#cffafe", "#0891b2"),
@@ -78,6 +131,9 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "default_params": {
             "outlet_pressure_bara": 80.0,
             "isentropic_efficiency": 0.78,
+            "use_compressor_chart": False,
+            "chart_template": "CENTRIFUGAL_STANDARD",
+            "chart_num_speeds": 5,
         },
         "properties": {
             "outlet_pressure_bara": _number_property(
@@ -95,6 +151,29 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
                 1.0,
                 0.01,
                 "%.3f",
+            ),
+            "use_compressor_chart": _boolean_property(
+                "Use native compressor map",
+                (
+                    "Generate a NeqSim screening map from the solved design "
+                    "point and solve the compressor against that map."
+                ),
+            ),
+            "chart_template": _choice_property(
+                "Compressor map template",
+                _COMPRESSOR_CHART_TEMPLATES,
+                (
+                    "Select a supported native NeqSim map family. The map is "
+                    "synthetic screening data, not a vendor guarantee."
+                ),
+            ),
+            "chart_num_speeds": _integer_property(
+                "Map speed curves",
+                "curves",
+                3,
+                12,
+                1,
+                "Number of corrected-speed curves in the generated map.",
             ),
         },
     },
@@ -476,6 +555,19 @@ def process_unit_property_rows(
         for key, value in definition["default_params"].items():
             selected_params.setdefault(key, copy.deepcopy(value))
 
+    if cleaned_type == "compressor":
+        # Earlier graph schemas stored only pressure and efficiency. Preserve
+        # that operating behavior while making native maps explicitly opt-in.
+        for key in (
+            "use_compressor_chart",
+            "chart_template",
+            "chart_num_speeds",
+        ):
+            selected_params.setdefault(
+                key,
+                copy.deepcopy(definition["default_params"][key]),
+            )
+
     if cleaned_type == "splitter" and "split_factors" in selected_params:
         if "split_factor" in selected_params:
             raise ValueError(
@@ -555,6 +647,64 @@ def process_unit_property_rows(
                     "description": metadata["description"],
                     "unit": "",
                     "value": raw_value,
+                }
+            )
+            continue
+        if metadata["kind"] == "choice":
+            if not isinstance(raw_value, str) or raw_value not in metadata[
+                "choices"
+            ]:
+                raise ValueError(
+                    f"Process unit property '{key}' must be one of: "
+                    + ", ".join(metadata["choices"])
+                    + "."
+                )
+            rows.append(
+                {
+                    "key": key,
+                    "kind": "choice",
+                    "label": metadata["label"],
+                    "description": metadata["description"],
+                    "unit": metadata["unit"],
+                    "value": raw_value,
+                    "choices": list(metadata["choices"]),
+                }
+            )
+            continue
+        if metadata["kind"] == "integer":
+            if isinstance(raw_value, bool):
+                raise ValueError(
+                    f"Process unit property '{key}' must be an integer."
+                )
+            try:
+                numeric_value = float(raw_value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"Process unit property '{key}' must be an integer."
+                ) from error
+            if not math.isfinite(numeric_value) or not numeric_value.is_integer():
+                raise ValueError(
+                    f"Process unit property '{key}' must be an integer."
+                )
+            value = int(numeric_value)
+            if value < metadata["minimum"] or value > metadata["maximum"]:
+                raise ValueError(
+                    f"Process unit property '{key}' must be between "
+                    f"{metadata['minimum']} and {metadata['maximum']} "
+                    f"{metadata['unit']}."
+                )
+            rows.append(
+                {
+                    "key": key,
+                    "kind": "integer",
+                    "label": metadata["label"],
+                    "description": metadata["description"],
+                    "unit": metadata["unit"],
+                    "value": value,
+                    "minimum": metadata["minimum"],
+                    "maximum": metadata["maximum"],
+                    "step": metadata["step"],
+                    "format": metadata["format"],
                 }
             )
             continue
