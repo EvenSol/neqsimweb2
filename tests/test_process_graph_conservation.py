@@ -295,6 +295,96 @@ class SeparatorDesignApplicationTest(unittest.TestCase):
         self.assertEqual(script.count("process.run()"), 2)
 
 
+class CompressorChartApplicationTest(unittest.TestCase):
+    """Protect strict native compressor-map setup and replay parity."""
+
+    def test_validates_supported_map_settings_and_legacy_boolean_strings(self):
+        self.assertEqual(
+            ProcessBuilder._compressor_chart_settings(
+                {
+                    "use_compressor_chart": True,
+                    "chart_template": "EXPORT",
+                    "chart_num_speeds": 7,
+                }
+            ),
+            (True, "EXPORT", 7),
+        )
+        self.assertEqual(
+            ProcessBuilder._compressor_chart_settings(
+                {
+                    "use_compressor_chart": "false",
+                    "chart_template": "pipeline",
+                    "chart_num_speeds": "5",
+                }
+            ),
+            (False, "PIPELINE", 5),
+        )
+
+        invalid_cases = (
+            (
+                {"use_compressor_chart": 1},
+                "use_compressor_chart must be boolean",
+            ),
+            (
+                {"chart_template": "NOT_A_NATIVE_TEMPLATE"},
+                "chart_template must be one of",
+            ),
+            (
+                {"chart_num_speeds": 5.5},
+                "chart_num_speeds must be an integer",
+            ),
+            (
+                {"chart_num_speeds": 2},
+                "chart_num_speeds must be between 3 and 12",
+            ),
+        )
+        for params, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._compressor_chart_settings(params)
+
+    def test_legacy_script_replays_map_after_solved_design_point(self):
+        builder = ProcessBuilder()
+        builder._process_name = "Legacy compressor map replay"
+        builder._spec = {
+            "name": "Legacy compressor map replay",
+            "fluid": {
+                "eos_model": "srk",
+                "components": {"methane": 1.0},
+                "temperature_C": 25.0,
+                "pressure_bara": 30.0,
+                "total_flow": 10_000.0,
+                "flow_unit": "kg/hr",
+            },
+            "process": [
+                {"name": "feed", "type": "stream"},
+                {
+                    "name": "export compressor",
+                    "type": "compressor",
+                    "params": {
+                        "outlet_pressure_bara": 60.0,
+                        "isentropic_efficiency": 0.78,
+                        "use_compressor_chart": True,
+                        "chart_template": "EXPORT",
+                        "chart_num_speeds": 7,
+                    },
+                },
+            ],
+        }
+
+        script = builder.to_python_script()
+
+        first_run = script.index("process.run()")
+        generator = script.index("CompressorChartGenerator")
+        second_run = script.index("process.run()", first_run + 1)
+        self.assertLess(first_run, generator)
+        self.assertLess(generator, second_run)
+        self.assertIn("generateFromTemplate('EXPORT', 7)", script)
+        self.assertIn("setSolveSpeed(True)", script)
+        self.assertIn("setUsePolytropicCalc(True)", script)
+        self.assertEqual(script.count("process.run()"), 2)
+
+
 class HeatExchangerPropertyExtractionTest(unittest.TestCase):
     """Validate explicit solved-property mapping for two-sided exchangers."""
 

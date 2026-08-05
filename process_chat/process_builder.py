@@ -40,6 +40,22 @@ _EOS_CLASSES = {
     "ideal": "SystemIdealGas",
 }
 
+_COMPRESSOR_CHART_TEMPLATES = (
+    "CENTRIFUGAL_STANDARD",
+    "CENTRIFUGAL_HIGH_FLOW",
+    "CENTRIFUGAL_HIGH_HEAD",
+    "PIPELINE",
+    "EXPORT",
+    "INJECTION",
+    "GAS_LIFT",
+    "REFRIGERATION",
+    "BOOSTER",
+    "SINGLE_STAGE",
+    "MULTISTAGE_INLINE",
+    "INTEGRALLY_GEARED",
+    "OVERHUNG",
+)
+
 # Equipment type → (Java sub-package.ClassName, default outlet getter)
 _EQUIP_INFO: Dict[str, tuple] = {
     "stream":                 ("stream.Stream",                       None),
@@ -1323,6 +1339,29 @@ class ProcessBuilder:
                 process_system
             )
         )
+        mapped_units = self._apply_requested_compressor_charts(
+            unit_specs,
+            unit_objects,
+        )
+        if mapped_units:
+            self._build_log.append(
+                "Running closed compressor-map rerun for: "
+                + ", ".join(mapped_units)
+            )
+            process_run_succeeded = NeqSimProcessModel._run_until_converged(
+                process_system
+            )
+            if not process_run_succeeded:
+                raise RuntimeError(
+                    "Acyclic graph compressor-map rerun did not complete "
+                    "successfully."
+                )
+            post_map_closure_ran = (
+                NeqSimProcessModel._run_acyclic_mixer_energy_closure(
+                    process_system
+                )
+            )
+            direct_closure_ran = direct_closure_ran or post_map_closure_ran
         designed_units = self._apply_requested_mechanical_designs(
             unit_specs,
             unit_objects,
@@ -1366,6 +1405,129 @@ class ProcessBuilder:
         )
         self._build_log.append("Acyclic graph built and converged successfully.")
         return self._model
+
+    @staticmethod
+    def _compressor_chart_settings(
+        params: dict,
+    ) -> tuple[bool, str, int]:
+        """Validate one backward-compatible native compressor-map request."""
+        raw_enabled = params.get("use_compressor_chart", False)
+        if type(raw_enabled) is bool:
+            enabled = raw_enabled
+        elif isinstance(raw_enabled, str) and raw_enabled.strip().lower() in {
+            "true",
+            "yes",
+            "1",
+            "false",
+            "no",
+            "0",
+        }:
+            enabled = _is_truthy(raw_enabled)
+        else:
+            raise ValueError(
+                "Compressor use_compressor_chart must be boolean."
+            )
+
+        raw_template = params.get(
+            "chart_template",
+            "CENTRIFUGAL_STANDARD",
+        )
+        if not isinstance(raw_template, str):
+            raise ValueError("Compressor chart_template must be a string.")
+        template = raw_template.strip().upper()
+        if template not in _COMPRESSOR_CHART_TEMPLATES:
+            raise ValueError(
+                "Compressor chart_template must be one of: "
+                + ", ".join(_COMPRESSOR_CHART_TEMPLATES)
+                + "."
+            )
+
+        raw_num_speeds = params.get("chart_num_speeds", 5)
+        if isinstance(raw_num_speeds, bool):
+            raise ValueError("Compressor chart_num_speeds must be an integer.")
+        try:
+            numeric_num_speeds = float(raw_num_speeds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Compressor chart_num_speeds must be an integer."
+            ) from exc
+        if (
+            not math.isfinite(numeric_num_speeds)
+            or not numeric_num_speeds.is_integer()
+        ):
+            raise ValueError("Compressor chart_num_speeds must be an integer.")
+        num_speeds = int(numeric_num_speeds)
+        if not 3 <= num_speeds <= 12:
+            raise ValueError(
+                "Compressor chart_num_speeds must be between 3 and 12."
+            )
+        return enabled, template, num_speeds
+
+    @classmethod
+    def _apply_requested_compressor_charts(
+        cls,
+        unit_specs: List[dict],
+        unit_objects: Dict[str, Any],
+    ) -> List[str]:
+        """Generate requested native maps from converged design points."""
+        from neqsim import jneqsim
+
+        mapped_units: List[str] = []
+        for unit_spec in unit_specs:
+            if not isinstance(unit_spec, dict):
+                continue
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                continue
+            has_map_request = any(
+                key in params
+                for key in (
+                    "use_compressor_chart",
+                    "chart_template",
+                    "chart_num_speeds",
+                )
+            )
+            if not has_map_request:
+                continue
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if unit_type != "compressor":
+                raise ValueError(
+                    "Native compressor maps are supported only for "
+                    "compressor units."
+                )
+            enabled, template, num_speeds = cls._compressor_chart_settings(
+                params
+            )
+            if not enabled:
+                continue
+            unit_id = str(
+                unit_spec.get("id", unit_spec.get("name", ""))
+            ).strip()
+            unit = unit_objects.get(unit_id)
+            if unit is None:
+                raise ValueError(
+                    f"Compressor map target '{unit_id}' was not built."
+                )
+            try:
+                generator = (
+                    jneqsim.process.equipment.compressor
+                    .CompressorChartGenerator(unit)
+                )
+                chart = generator.generateFromTemplate(
+                    template,
+                    num_speeds,
+                )
+                unit.setCompressorChartType("interpolate and extrapolate")
+                unit.setCompressorChart(chart)
+                unit.getCompressorChart().setHeadUnit("kJ/kg")
+                unit.setSolveSpeed(True)
+                unit.setUsePolytropicCalc(True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Compressor '{unit_id}' native map construction failed."
+                ) from exc
+            mapped_units.append(unit_id)
+        return mapped_units
 
     @staticmethod
     def _separator_design_settings(
@@ -1570,6 +1732,23 @@ class ProcessBuilder:
             raise RuntimeError(
                 "Process simulation did not complete successfully."
             )
+        mapped_units = self._apply_requested_compressor_charts(
+            process_steps,
+            built_units,
+        )
+        if mapped_units:
+            self._build_log.append(
+                "Running closed compressor-map rerun for: "
+                + ", ".join(mapped_units)
+            )
+            process_run_succeeded = NeqSimProcessModel._run_until_converged(
+                proc
+            )
+            if not process_run_succeeded:
+                raise RuntimeError(
+                    "Process compressor-map rerun did not complete "
+                    "successfully."
+                )
         designed_units = self._apply_requested_mechanical_designs(
             process_steps,
             built_units,
@@ -1660,6 +1839,7 @@ class ProcessBuilder:
 
         var_names: Dict[str, str] = {}      # unit name → Python variable
         separator_designs: List[tuple[str, Optional[float]]] = []
+        compressor_charts: List[tuple[str, str, int]] = []
         prev_var: Optional[str] = None
         prev_type: Optional[str] = None
         prev_outlet: str = "gas"
@@ -1730,6 +1910,14 @@ class ProcessBuilder:
                 auto_size, gas_load = self._separator_design_settings(params)
                 if auto_size:
                     separator_designs.append((var, gas_load))
+            if eq_type == "compressor":
+                use_chart, chart_template, chart_num_speeds = (
+                    self._compressor_chart_settings(params)
+                )
+                if use_chart:
+                    compressor_charts.append(
+                        (var, chart_template, chart_num_speeds)
+                    )
 
             lines.append(f"process.add({var})")
             prev_var = var
@@ -1740,6 +1928,33 @@ class ProcessBuilder:
         # --- Run & save ---
         lines.append("# ── Run process ──")
         lines.append("process.run()")
+        if compressor_charts:
+            lines.append("")
+            lines.append(
+                "# ── Generate native compressor maps and close process ──"
+            )
+            for var, chart_template, chart_num_speeds in compressor_charts:
+                generator_var = f"{var}_chart_generator"
+                chart_var = f"{var}_chart"
+                lines.append(
+                    f"{generator_var} = jneqsim.process.equipment.compressor."
+                    f"CompressorChartGenerator({var})"
+                )
+                lines.append(
+                    f"{chart_var} = {generator_var}.generateFromTemplate("
+                    f"{chart_template!r}, {chart_num_speeds})"
+                )
+                lines.append(
+                    f"{var}.setCompressorChartType("
+                    "'interpolate and extrapolate')"
+                )
+                lines.append(f"{var}.setCompressorChart({chart_var})")
+                lines.append(
+                    f"{var}.getCompressorChart().setHeadUnit('kJ/kg')"
+                )
+                lines.append(f"{var}.setSolveSpeed(True)")
+                lines.append(f"{var}.setUsePolytropicCalc(True)")
+            lines.append("process.run()")
         if separator_designs:
             lines.append("")
             lines.append(
@@ -2119,27 +2334,6 @@ class ProcessBuilder:
         # Apply parameters
         for k, v in params.items():
             _apply_param(unit, k, v)
-
-        # If use_compressor_chart is requested, generate and apply a chart
-        if eq_type == "compressor" and _is_truthy(params.get("use_compressor_chart")):
-            try:
-                CompressorChartGenerator = (
-                    jneqsim.process.equipment.compressor.CompressorChartGenerator
-                )
-                chart_template = str(params.get("chart_template", "CENTRIFUGAL_STANDARD"))
-                chart_num_speeds = int(params.get("chart_num_speeds", 5))
-
-                unit.run()  # need a run before chart generation
-                generator = CompressorChartGenerator(unit)
-                chart = generator.generateFromTemplate(chart_template, chart_num_speeds)
-                unit.setCompressorChartType('interpolate and extrapolate')
-                unit.setCompressorChart(chart)
-                unit.getCompressorChart().setHeadUnit('kJ/kg')
-                unit.setSolveSpeed(True)
-                unit.setUsePolytropicCalc(True)
-                unit.run()
-            except Exception:
-                pass  # fall back to outlet-pressure mode
 
         return unit
 
