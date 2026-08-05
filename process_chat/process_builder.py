@@ -1659,6 +1659,7 @@ class ProcessBuilder:
         lines.append("")
 
         var_names: Dict[str, str] = {}      # unit name → Python variable
+        separator_designs: List[tuple[str, Optional[float]]] = []
         prev_var: Optional[str] = None
         prev_type: Optional[str] = None
         prev_outlet: str = "gas"
@@ -1725,6 +1726,11 @@ class ProcessBuilder:
                     if setter_call is not None:
                         lines.append(f"{var}.{setter_call}")
 
+            if eq_type == "separator":
+                auto_size, gas_load = self._separator_design_settings(params)
+                if auto_size:
+                    separator_designs.append((var, gas_load))
+
             lines.append(f"process.add({var})")
             prev_var = var
             prev_type = eq_type
@@ -1734,6 +1740,18 @@ class ProcessBuilder:
         # --- Run & save ---
         lines.append("# ── Run process ──")
         lines.append("process.run()")
+        if separator_designs:
+            lines.append("")
+            lines.append(
+                "# ── Apply native mechanical design and close process ──"
+            )
+            for var, gas_load in separator_designs:
+                if gas_load is not None:
+                    lines.append(
+                        f"{var}.setDesignGasLoadFactor({gas_load!r})"
+                    )
+                lines.append(f"{var}.autoSize()")
+            lines.append("process.run()")
         lines.append("")
         safe = _safe_filename(self._process_name)
         lines.append("# ── Save to file ──")

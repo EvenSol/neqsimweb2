@@ -3567,34 +3567,35 @@ def _render_object_property_editor() -> str:
             {},
         )
         unit_type = object_type.casefold()
-        params = {
-            property_name: st.session_state[definition["state_key"]]
-            for property_name, definition in property_controls.items()
-        }
-        property_rows = process_unit_property_rows(unit_type, params)
-        if not property_rows:
+        if unit_type == "separator" and not property_controls:
             st.info(
                 "This separator performs an equilibrium split at its inlet "
                 "conditions. The native unit has no independent steady-state "
                 "property in the current schema."
             )
-        for row in property_rows:
-            control = property_controls.get(row["key"])
-            if control is None:
-                raise ValueError(
-                    f"Template object '{selected_object}' is missing the "
-                    f"'{row['key']}' control binding."
+        else:
+            params = {
+                property_name: st.session_state[definition["state_key"]]
+                for property_name, definition in property_controls.items()
+            }
+            property_rows = process_unit_property_rows(unit_type, params)
+            for row in property_rows:
+                control = property_controls.get(row["key"])
+                if control is None:
+                    raise ValueError(
+                        f"Template object '{selected_object}' is missing the "
+                        f"'{row['key']}' control binding."
+                    )
+                minimum = max(float(row["minimum"]), control["minimum"])
+                maximum = min(float(row["maximum"]), control["maximum"])
+                st.number_input(
+                    f"{row['label']} [{row['unit']}]",
+                    min_value=minimum,
+                    max_value=maximum,
+                    step=float(row["step"]),
+                    format=row["format"],
+                    key=control["state_key"],
                 )
-            minimum = max(float(row["minimum"]), control["minimum"])
-            maximum = min(float(row["maximum"]), control["maximum"])
-            st.number_input(
-                f"{row['label']} [{row['unit']}]",
-                min_value=minimum,
-                max_value=maximum,
-                step=float(row["step"]),
-                format=row["format"],
-                key=control["state_key"],
-            )
 
     st.caption(
         "Property edits update the structured case specification. Run NeqSim to "

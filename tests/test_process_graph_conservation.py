@@ -259,6 +259,41 @@ class SeparatorDesignApplicationTest(unittest.TestCase):
                 {"compressor": object()},
             )
 
+    def test_legacy_separator_script_replays_design_and_closed_rerun(self):
+        builder = ProcessBuilder()
+        builder._process_name = "Legacy separator design replay"
+        builder._spec = {
+            "name": "Legacy separator design replay",
+            "fluid": {
+                "eos_model": "srk",
+                "components": {"methane": 1.0},
+            },
+            "process": [
+                {"name": "feed", "type": "stream"},
+                {
+                    "name": "inlet separator",
+                    "type": "separator",
+                    "params": {
+                        "auto_size": True,
+                        "design_gas_load_factor_m_per_s": 0.08,
+                    },
+                },
+            ],
+        }
+
+        script = builder.to_python_script()
+
+        first_run = script.index("process.run()")
+        gas_load = script.index(
+            "inlet_separator.setDesignGasLoadFactor(0.08)"
+        )
+        auto_size = script.index("inlet_separator.autoSize()")
+        second_run = script.index("process.run()", first_run + 1)
+        self.assertLess(first_run, gas_load)
+        self.assertLess(gas_load, auto_size)
+        self.assertLess(auto_size, second_run)
+        self.assertEqual(script.count("process.run()"), 2)
+
 
 class HeatExchangerPropertyExtractionTest(unittest.TestCase):
     """Validate explicit solved-property mapping for two-sided exchangers."""
