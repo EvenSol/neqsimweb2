@@ -1903,6 +1903,11 @@ class ProcessBuilder:
         lines.append('"""')
         lines.append("from neqsim import jneqsim")
         lines.append("import neqsim")
+        if pump_design_bases:
+            lines.append("import json")
+            lines.append(
+                "from process_chat.process_model import NeqSimProcessModel"
+            )
         lines.append("")
 
         # --- Fluid ---
@@ -2090,10 +2095,52 @@ class ProcessBuilder:
                     sort_keys=True,
                 )
             )
+            lines.extend(
+                [
+                    "model = NeqSimProcessModel.from_process_system(",
+                    "    process,",
+                    "    trusted_solved=True,",
+                    "    equipment_design_bases=pump_design_bases,",
+                    ")",
+                    "result = model.run(timeout_ms=180_000)",
+                ]
+            )
         lines.append("")
         safe = _safe_filename(self._process_name)
         lines.append("# ── Save to file ──")
         lines.append(f"neqsim.save_neqsim(process, '{safe}.neqsim')")
+        if pump_design_bases:
+            try:
+                serialized_case = json.dumps(
+                    self._spec,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Pump design replay requires finite JSON-compatible "
+                    "case data."
+                ) from exc
+            lines.extend(
+                [
+                    "# Native .neqsim files do not store Studio metadata.",
+                    "# Keep this case sidecar with the native process file.",
+                    f"case_data = json.loads({serialized_case!r})",
+                    (
+                        f"with open('{safe}.case.json', 'w', "
+                        "encoding='utf-8') as case_file:"
+                    ),
+                    "    json.dump(",
+                    "        case_data,",
+                    "        case_file,",
+                    "        allow_nan=False,",
+                    "        ensure_ascii=False,",
+                    "        indent=2,",
+                    "        sort_keys=True,",
+                    "    )",
+                ]
+            )
         lines.append("")
         lines.append('print("Process simulation complete!")')
         lines.append("")
