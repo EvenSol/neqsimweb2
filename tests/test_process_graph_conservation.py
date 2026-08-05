@@ -6153,6 +6153,11 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     "Added graph unit: product-separator (separator)",
                     builder.build_log,
                 )
+                self.assertNotIn(
+                    "Closed acyclic mixer energy balance before mechanical "
+                    "design.",
+                    builder.build_log,
+                )
 
                 persisted = json.loads(
                     json.dumps(graph_spec, allow_nan=False)

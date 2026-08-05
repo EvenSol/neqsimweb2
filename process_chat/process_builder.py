@@ -1323,16 +1323,16 @@ class ProcessBuilder:
                 process_system
             )
         )
-        if direct_closure_ran:
-            self._build_log.append(
-                "Closed acyclic mixer energy balance before mechanical "
-                "design."
-            )
         designed_units = self._apply_requested_mechanical_designs(
             unit_specs,
             unit_objects,
         )
         if designed_units:
+            if direct_closure_ran:
+                self._build_log.append(
+                    "Closed acyclic mixer energy balance before mechanical "
+                    "design."
+                )
             self._build_log.append(
                 "Running closed design rerun for: "
                 + ", ".join(designed_units)
