@@ -545,6 +545,31 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertNotIn("Mixer", extend_options)
         self.assertIn("Separator", extend_options)
 
+    def test_palette_property_tables_use_arrow_safe_text_values(self):
+        app = self._run_studio()
+        property_tables = [
+            dataframe.value
+            for dataframe in app.dataframe
+            if set(dataframe.value.columns) == {"Property", "Value", "Unit"}
+        ]
+
+        self.assertTrue(property_tables)
+        for table in property_tables:
+            with self.subTest(rows=len(table)):
+                self.assertTrue(
+                    all(isinstance(value, str) for value in table["Value"])
+                )
+        compressor_table = next(
+            table
+            for table in property_tables
+            if "Compressor map template" in set(table["Property"])
+        )
+        template_value = compressor_table.loc[
+            compressor_table["Property"] == "Compressor map template",
+            "Value",
+        ].iloc[0]
+        self.assertEqual(template_value, "CENTRIFUGAL_STANDARD")
+
     def test_page_clears_stale_multi_inlet_extend_selection(self):
         app = self._run_studio()
         extend_selectbox = next(

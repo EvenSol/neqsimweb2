@@ -3538,6 +3538,15 @@ def _template_object_label(object_name: str) -> str:
     return f"{display_name} · {object_type}"
 
 
+def _property_row_display_value(row: dict[str, Any]) -> str:
+    """Format one heterogeneous property value for a stable text table."""
+    if row["kind"] in ("number", "integer"):
+        return str(row["format"] % row["value"])
+    if row["kind"] == "boolean":
+        return "Yes" if row["value"] else "No"
+    return str(row["value"])
+
+
 def _render_object_property_editor() -> str:
     """Render supported properties and return the selected template object."""
     st.markdown("#### Selected-object properties")
@@ -4391,7 +4400,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         [
                             {
                                 "Property": row["label"],
-                                "Value": row["value"],
+                                "Value": _property_row_display_value(row),
                                 "Unit": row["unit"],
                             }
                             for row in default_property_rows
@@ -5453,7 +5462,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 [
                     {
                         "Property": row["label"],
-                        "Value": row["value"],
+                        "Value": _property_row_display_value(row),
                         "Unit": row["unit"],
                     }
                     for row in default_property_rows
@@ -5808,7 +5817,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         [
                             {
                                 "Property": row["label"],
-                                "Value": row["value"],
+                                    "Value": _property_row_display_value(row),
                                 "Unit": row["unit"],
                             }
                             for row in replacement_rows
@@ -7166,7 +7175,7 @@ if results_are_current and has_stored_result:
             st.dataframe(
                 pd.DataFrame(
                     [
-                        {"Property": key, "Value": value}
+                        {"Property": key, "Value": str(value)}
                         for key, value in run_record.items()
                     ]
                 ),
