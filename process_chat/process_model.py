@@ -4436,7 +4436,7 @@ class NeqSimProcessModel:
         # Extract detailed unit operation properties (utilization, sizing, performance)
         self._extract_unit_properties(kpis, report_duty_lookup)
 
-        for unit_name in self._equipment_design_bases:
+        for unit_name in getattr(self, "_equipment_design_bases", {}):
             unit = self._units.get(unit_name)
             if unit is None:
                 constraints.append(
