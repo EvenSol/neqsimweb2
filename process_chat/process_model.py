@@ -3170,6 +3170,65 @@ class NeqSimProcessModel:
         return properties
 
     @staticmethod
+    def _separator_design_properties(unit: Any) -> Dict[str, Any]:
+        """Return explicit native sizing results only after opt-in auto-size."""
+        try:
+            if not bool(unit.isAutoSized()):
+                return {}
+        except Exception:
+            return {}
+
+        properties: Dict[str, Any] = {"designAutoSized": True}
+        for key, getter in (
+            ("designGasLoadFactor_m_per_s", "getDesignGasLoadFactor"),
+            ("designLiquidLevelFraction", "getDesignLiquidLevelFraction"),
+            ("designInternalDiameter_m", "getInternalDiameter"),
+            ("designSeparatorLength_m", "getSeparatorLength"),
+        ):
+            if not hasattr(unit, getter):
+                continue
+            try:
+                value = float(getattr(unit, getter)())
+            except Exception:
+                continue
+            if math.isfinite(value) and value > 0.0:
+                properties[key] = value
+
+        try:
+            mechanical_design = unit.getMechanicalDesign()
+        except Exception:
+            mechanical_design = None
+        if mechanical_design is not None:
+            for key, getter in (
+                ("designRetentionTime_s", "getRetentionTime"),
+                ("designVolume_m3", "getVolumeTotal"),
+            ):
+                if not hasattr(mechanical_design, getter):
+                    continue
+                try:
+                    value = float(getattr(mechanical_design, getter)())
+                except Exception:
+                    continue
+                if math.isfinite(value) and value > 0.0:
+                    properties[key] = value
+        return properties
+
+    @staticmethod
+    def _separator_design_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for separator design data."""
+        if property_name.endswith("_m_per_s"):
+            return "m/s"
+        if property_name.endswith("_m3"):
+            return "m3"
+        if property_name.endswith("_m"):
+            return "m"
+        if property_name.endswith("_s"):
+            return "s"
+        if property_name == "designAutoSized":
+            return "boolean"
+        return "[-]"
+
+    @staticmethod
     def _routing_property_unit(property_name: str) -> str:
         """Return the explicit engineering unit for routing properties."""
         if property_name.endswith("_kg_hr"):
@@ -3414,6 +3473,9 @@ class NeqSimProcessModel:
 
             if _is_native_mixer_class(java_class):
                 props.update(self._mixer_operating_properties(u))
+
+            if "Separator" in java_class or "Scrubber" in java_class:
+                props.update(self._separator_design_properties(u))
 
             # Flow rate, T, P for Stream-type units
             if java_class == "Stream":
@@ -4940,6 +5002,13 @@ class NeqSimProcessModel:
                             kpis[f"{prefix}.{prop}"] = KPI(f"{prefix}.{prop}", val, unit)
                         except Exception:
                             pass
+                for prop, val in self._separator_design_properties(u).items():
+                    numeric_value = 1.0 if val is True else float(val)
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        numeric_value,
+                        self._separator_design_property_unit(prop),
+                    )
 
             # ---------- Cooler / Heater / HeatExchanger ----------
             elif java_class in ("Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler"):

@@ -4663,7 +4663,11 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         return builder, model
 
     @staticmethod
-    def _build_palette_three_feed_separator_case(flow_scale: float):
+    def _build_palette_three_feed_separator_case(
+        flow_scale: float,
+        auto_size: bool = False,
+        design_gas_load_factor_m_per_s: float = 0.11,
+    ):
         compositions = (
             {"methane": 0.90, "n-hexane": 0.10},
             {"methane": 0.20, "n-hexane": 0.80},
@@ -4700,6 +4704,16 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             "three feed separator",
             {inlet["inlet_id"] for inlet in inlet_specs},
             {inlet["name"] for inlet in inlet_specs},
+        )
+        units = update_inline_unit_properties(
+            units,
+            separator_id,
+            {
+                "auto_size": auto_size,
+                "design_gas_load_factor_m_per_s": (
+                    design_gas_load_factor_m_per_s
+                ),
+            },
         )
         units = resize_separator_inlet_ports(
             units,
@@ -6428,6 +6442,75 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     f"{result.kpis['component_balance_max_pct'].value:.3e}%",
                     f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
                 )
+
+    def test_native_separator_design_closes_at_nearby_points(self):
+        design_points = []
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model = self._build_palette_three_feed_separator_case(
+                    flow_scale,
+                    auto_size=True,
+                    design_gas_load_factor_m_per_s=0.11,
+                )
+                result = model.run(timeout_ms=180_000)
+                separator_info = next(
+                    unit
+                    for unit in model.list_units()
+                    if unit.name == "three feed separator"
+                )
+                properties = separator_info.properties
+
+                self.assertIs(properties["designAutoSized"], True)
+                self.assertAlmostEqual(
+                    properties["designGasLoadFactor_m_per_s"],
+                    0.107,
+                    delta=1.0e-12,
+                )
+                self.assertGreater(properties["designInternalDiameter_m"], 0.0)
+                self.assertGreater(properties["designSeparatorLength_m"], 0.0)
+                self.assertEqual(properties["designRetentionTime_s"], 120.0)
+                self.assertGreater(properties["designVolume_m3"], 0.0)
+                self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+                self.assertEqual(
+                    result.kpis[
+                        "three feed separator.designAutoSized"
+                    ].unit,
+                    "boolean",
+                )
+                self.assertIn(
+                    "Running closed design rerun for: three-feed-separator",
+                    builder.build_log,
+                )
+                self.assertIn('"auto_size": true', builder.to_python_script())
+                design_points.append(properties)
+                print(
+                    "native separator design benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    "diameter="
+                    f"{properties['designInternalDiameter_m']:.6f} m",
+                    "length="
+                    f"{properties['designSeparatorLength_m']:.6f} m",
+                    "retention="
+                    f"{properties['designRetentionTime_s']:.1f} s",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+
+        self.assertGreaterEqual(
+            design_points[1]["designInternalDiameter_m"],
+            design_points[0]["designInternalDiameter_m"],
+        )
+        self.assertGreaterEqual(
+            design_points[1]["designVolume_m3"],
+            design_points[0]["designVolume_m3"],
+        )
 
     def test_palette_built_equal_splitter_branches_round_trip_and_close(self):
         for flow_scale in (1.0, 1.05):
