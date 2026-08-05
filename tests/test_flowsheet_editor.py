@@ -528,6 +528,79 @@ class UnitCatalogTest(unittest.TestCase):
                         {**base, **updates},
                     )
 
+    def test_pump_design_basis_properties_are_strict_and_opt_in(self):
+        legacy_params = {
+            "outlet_pressure_bara": 80.0,
+            "efficiency": 0.75,
+        }
+        legacy_rows = process_unit_property_rows("pump", legacy_params)
+        self.assertEqual(
+            [row["key"] for row in legacy_rows],
+            [
+                "outlet_pressure_bara",
+                "efficiency",
+                "use_design_basis",
+                "design_flow_capacity_m3_per_hr",
+                "design_head_capacity_m",
+                "motor_rating_kw",
+            ],
+        )
+        self.assertFalse(legacy_rows[2]["value"])
+        self.assertEqual(
+            legacy_rows[3]["unit"],
+            "m3/hr (actual at pump inlet)",
+        )
+        self.assertEqual(legacy_rows[4]["unit"], "m liquid")
+        self.assertEqual(legacy_rows[5]["unit"], "kW")
+        self.assertEqual(
+            legacy_params,
+            {"outlet_pressure_bara": 80.0, "efficiency": 0.75},
+        )
+
+        enabled_rows = process_unit_property_rows(
+            "pump",
+            {
+                **legacy_params,
+                "use_design_basis": True,
+                "design_flow_capacity_m3_per_hr": 45.0,
+                "design_head_capacity_m": 500.0,
+                "motor_rating_kw": 60.0,
+            },
+        )
+        self.assertTrue(enabled_rows[2]["value"])
+        self.assertEqual(enabled_rows[3]["value"], 45.0)
+        self.assertEqual(enabled_rows[4]["value"], 500.0)
+        self.assertEqual(enabled_rows[5]["value"], 60.0)
+
+        invalid_cases = (
+            ({"use_design_basis": 1}, "use_design_basis' must be boolean"),
+            (
+                {"design_flow_capacity_m3_per_hr": 0.0},
+                "design_flow_capacity_m3_per_hr' must be between",
+            ),
+            (
+                {"design_head_capacity_m": float("nan")},
+                "design_head_capacity_m' must be finite",
+            ),
+            (
+                {"motor_rating_kw": True},
+                "motor_rating_kw' must be numeric",
+            ),
+        )
+        defaults = {
+            "use_design_basis": False,
+            "design_flow_capacity_m3_per_hr": 100.0,
+            "design_head_capacity_m": 600.0,
+            "motor_rating_kw": 100.0,
+        }
+        for updates, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    process_unit_property_rows(
+                        "pump",
+                        {**legacy_params, **defaults, **updates},
+                    )
+
     def test_separator_design_properties_are_strict_and_opt_in(self):
         rows = process_unit_property_rows(
             "separator",
