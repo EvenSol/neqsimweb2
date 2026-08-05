@@ -198,6 +198,55 @@ class StudioWarmDeploymentTest(unittest.TestCase):
 
         self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
 
+    def test_template_separator_keeps_read_only_property_message(self):
+        render_editor = self._load_studio_function(
+            "_render_object_property_editor"
+        )
+
+        class _FakeStreamlit:
+            session_state = {}
+
+            def __init__(self):
+                self.info_messages = []
+
+            def markdown(self, *_args, **_kwargs):
+                return None
+
+            def caption(self, *_args, **_kwargs):
+                return None
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def selectbox(self, *_args, **_kwargs):
+                return "inlet scrubber"
+
+            def info(self, message, **_kwargs):
+                self.info_messages.append(message)
+
+            def number_input(self, *_args, **_kwargs):
+                raise AssertionError(
+                    "read-only template separator must not render controls"
+                )
+
+        fake_st = _FakeStreamlit()
+        render_editor.__globals__.update(
+            {
+                "st": fake_st,
+                "TEMPLATE_OBJECTS": {
+                    "inlet scrubber": ("Inlet scrubber", "Separator"),
+                },
+                "TEMPLATE_PROPERTY_CONTROLS": {},
+                "_template_object_label": lambda name: name,
+                "process_unit_property_rows": (
+                    flowsheet_editor.process_unit_property_rows
+                ),
+            }
+        )
+
+        self.assertEqual(render_editor(), "inlet scrubber")
+        self.assertEqual(len(fake_st.info_messages), 1)
+
     def test_page_recovers_stale_solver_diagnostics_module(self):
         del solver_diagnostics.aggregate_energy_balance
         del solver_diagnostics.aggregate_unit_balances
