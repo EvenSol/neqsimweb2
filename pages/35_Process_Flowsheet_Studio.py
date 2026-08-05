@@ -3579,7 +3579,15 @@ def _render_object_property_editor() -> str:
                 for property_name, definition in property_controls.items()
             }
             property_rows = process_unit_property_rows(unit_type, params)
-            for row in property_rows:
+            bound_property_rows = [
+                row for row in property_rows if row["key"] in property_controls
+            ]
+            if len(bound_property_rows) != len(property_controls):
+                raise ValueError(
+                    f"Template object '{selected_object}' has an unsupported "
+                    "property control binding."
+                )
+            for row in bound_property_rows:
                 control = property_controls.get(row["key"])
                 if control is None:
                     raise ValueError(
@@ -5581,6 +5589,25 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     property_updates[row["key"]] = st.checkbox(
                         row["label"],
                         value=bool(row["value"]),
+                        help=row["description"],
+                        key=property_key,
+                    )
+                elif row["kind"] == "choice":
+                    property_updates[row["key"]] = st.selectbox(
+                        row["label"],
+                        options=row["choices"],
+                        index=row["choices"].index(row["value"]),
+                        help=row["description"],
+                        key=property_key,
+                    )
+                elif row["kind"] == "integer":
+                    property_updates[row["key"]] = st.number_input(
+                        f"{row['label']} [{row['unit']}]",
+                        min_value=int(row["minimum"]),
+                        max_value=int(row["maximum"]),
+                        value=int(row["value"]),
+                        step=int(row["step"]),
+                        format=row["format"],
                         help=row["description"],
                         key=property_key,
                     )

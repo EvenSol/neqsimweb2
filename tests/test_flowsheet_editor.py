@@ -290,7 +290,7 @@ class UnitCatalogTest(unittest.TestCase):
                 self.assertTrue(all(row["label"] for row in rows))
                 self.assertTrue(
                     all(
-                        row["kind"] == "boolean"
+                        row["kind"] in ("boolean", "choice")
                         or (
                             row["unit"]
                             and row["minimum"]
@@ -431,6 +431,27 @@ class UnitCatalogTest(unittest.TestCase):
             process_unit_property_rows("compressor", compressor_params),
             inline_unit_property_rows("compressor", compressor_params),
         )
+        compressor_rows = process_unit_property_rows(
+            "compressor",
+            compressor_params,
+        )
+        self.assertEqual(
+            [row["key"] for row in compressor_rows],
+            [
+                "outlet_pressure_bara",
+                "isentropic_efficiency",
+                "use_compressor_chart",
+                "chart_template",
+                "chart_num_speeds",
+            ],
+        )
+        self.assertEqual(
+            [row["kind"] for row in compressor_rows[-3:]],
+            ["boolean", "choice", "integer"],
+        )
+        self.assertFalse(compressor_rows[2]["value"])
+        self.assertIn("EXPORT", compressor_rows[3]["choices"])
+        self.assertEqual(compressor_rows[4]["value"], 5)
         separator_rows = process_unit_property_rows("separator")
         self.assertEqual(
             [row["key"] for row in separator_rows],
@@ -445,6 +466,67 @@ class UnitCatalogTest(unittest.TestCase):
             process_unit_property_rows("separator", {}),
             separator_rows,
         )
+
+    def test_compressor_chart_properties_are_strict_and_opt_in(self):
+        rows = process_unit_property_rows(
+            "compressor",
+            {
+                "outlet_pressure_bara": 125.0,
+                "isentropic_efficiency": 0.82,
+                "use_compressor_chart": True,
+                "chart_template": "EXPORT",
+                "chart_num_speeds": 7,
+            },
+        )
+        self.assertTrue(rows[2]["value"])
+        self.assertEqual(rows[3]["value"], "EXPORT")
+        self.assertEqual(rows[4]["value"], 7)
+
+        invalid_cases = (
+            (
+                {
+                    "use_compressor_chart": 1,
+                    "chart_template": "EXPORT",
+                    "chart_num_speeds": 7,
+                },
+                "use_compressor_chart' must be boolean",
+            ),
+            (
+                {
+                    "use_compressor_chart": True,
+                    "chart_template": "NOT_A_NATIVE_TEMPLATE",
+                    "chart_num_speeds": 7,
+                },
+                "chart_template' must be one of",
+            ),
+            (
+                {
+                    "use_compressor_chart": True,
+                    "chart_template": "EXPORT",
+                    "chart_num_speeds": 5.5,
+                },
+                "chart_num_speeds' must be an integer",
+            ),
+            (
+                {
+                    "use_compressor_chart": True,
+                    "chart_template": "EXPORT",
+                    "chart_num_speeds": 2,
+                },
+                "chart_num_speeds' must be between 3 and 12 curves",
+            ),
+        )
+        base = {
+            "outlet_pressure_bara": 125.0,
+            "isentropic_efficiency": 0.82,
+        }
+        for updates, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    process_unit_property_rows(
+                        "compressor",
+                        {**base, **updates},
+                    )
 
     def test_separator_design_properties_are_strict_and_opt_in(self):
         rows = process_unit_property_rows(
@@ -2420,6 +2502,9 @@ class ProcessUnitPropertyUpdateTest(unittest.TestCase):
             {
                 "outlet_pressure_bara": 90.0,
                 "isentropic_efficiency": 0.8,
+                "use_compressor_chart": False,
+                "chart_template": "CENTRIFUGAL_STANDARD",
+                "chart_num_speeds": 5,
             },
         )
         self.assertEqual(
