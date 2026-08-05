@@ -1318,6 +1318,16 @@ class ProcessBuilder:
             raise RuntimeError(
                 "Acyclic graph simulation did not complete successfully."
             )
+        direct_closure_ran = (
+            NeqSimProcessModel._run_acyclic_mixer_energy_closure(
+                process_system
+            )
+        )
+        if direct_closure_ran:
+            self._build_log.append(
+                "Closed acyclic mixer energy balance before mechanical "
+                "design."
+            )
         designed_units = self._apply_requested_mechanical_designs(
             unit_specs,
             unit_objects,
@@ -1335,11 +1345,19 @@ class ProcessBuilder:
                     "Acyclic graph design rerun did not complete "
                     "successfully."
                 )
-        direct_closure_ran = (
-            NeqSimProcessModel._run_acyclic_mixer_energy_closure(
-                process_system
+            post_design_closure_ran = (
+                NeqSimProcessModel._run_acyclic_mixer_energy_closure(
+                    process_system
+                )
             )
-        )
+            direct_closure_ran = (
+                direct_closure_ran or post_design_closure_ran
+            )
+            if post_design_closure_ran:
+                self._build_log.append(
+                    "Closed acyclic mixer energy balance after mechanical "
+                    "design rerun."
+                )
         self._model = NeqSimProcessModel.from_process_system(
             process_system,
             enforce_acyclic_mixer_energy=True,

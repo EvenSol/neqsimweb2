@@ -4449,7 +4449,10 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         return builder, model, history
 
     @staticmethod
-    def _build_palette_mixer_separator_case(flow_scale: float):
+    def _build_palette_mixer_separator_case(
+        flow_scale: float,
+        auto_size: bool = False,
+    ):
         inlet_specs = [
             {
                 "inlet_id": "gas-rich-feed",
@@ -4552,6 +4555,14 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             },
             "separator",
             "product separator",
+        )
+        units = update_inline_unit_properties(
+            units,
+            separator_id,
+            {
+                "auto_size": auto_size,
+                "design_gas_load_factor_m_per_s": 0.11,
+            },
         )
         history = record_graph_history(
             history,
@@ -6510,6 +6521,39 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertGreaterEqual(
             design_points[1]["designVolume_m3"],
             design_points[0]["designVolume_m3"],
+        )
+
+    def test_native_mixer_separator_design_uses_closed_feed_state(self):
+        builder, model, _, _ = self._build_palette_mixer_separator_case(
+            1.0,
+            auto_size=True,
+        )
+        result = model.run(timeout_ms=180_000)
+        separator = next(
+            unit
+            for unit in model.get_process().getUnitOperations()
+            if str(unit.getName()) == "product separator"
+        )
+        designed_diameter = float(separator.getInternalDiameter())
+
+        separator.autoSize()
+        closed_basis_diameter = float(separator.getInternalDiameter())
+
+        self.assertAlmostEqual(
+            designed_diameter,
+            closed_basis_diameter,
+            delta=1.0e-9,
+        )
+        self.assertLess(result.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(result.kpis["energy_balance_pct"].value, 1.0e-6)
+        self.assertIn(
+            "Closed acyclic mixer energy balance before mechanical design.",
+            builder.build_log,
+        )
+        self.assertIn(
+            "Closed acyclic mixer energy balance after mechanical design "
+            "rerun.",
+            builder.build_log,
         )
 
     def test_palette_built_equal_splitter_branches_round_trip_and_close(self):
