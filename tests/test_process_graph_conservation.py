@@ -2026,6 +2026,180 @@ class PumpPropertyExtractionTest(unittest.TestCase):
         )
 
 
+class PumpDesignBasisApplicationTest(unittest.TestCase):
+    """Protect strict opt-in pump capacities and solved-model propagation."""
+
+    def test_validates_and_collects_only_enabled_pump_design_bases(self):
+        self.assertEqual(
+            ProcessBuilder._pump_design_settings(
+                {
+                    "use_design_basis": True,
+                    "design_flow_capacity_m3_per_hr": 40.0,
+                    "design_head_capacity_m": 400.0,
+                    "motor_rating_kw": 35.0,
+                }
+            ),
+            (True, 40.0, 400.0, 35.0),
+        )
+        units = [
+            {
+                "name": "export pump",
+                "type": "pump",
+                "params": {
+                    "use_design_basis": True,
+                    "design_flow_capacity_m3_per_hr": 40.0,
+                    "design_head_capacity_m": 400.0,
+                    "motor_rating_kw": 35.0,
+                },
+            },
+            {
+                "name": "spare pump",
+                "type": "pump",
+                "params": {"use_design_basis": False},
+            },
+        ]
+        self.assertEqual(
+            ProcessBuilder._requested_pump_design_bases(units),
+            {
+                "export pump": {
+                    "design_flow_capacity_m3_per_hr": 40.0,
+                    "design_head_capacity_m": 400.0,
+                    "motor_rating_kw": 35.0,
+                }
+            },
+        )
+
+        invalid_cases = (
+            ({"use_design_basis": 1}, "use_design_basis must be boolean"),
+            (
+                {"design_flow_capacity_m3_per_hr": math.nan},
+                "must be finite",
+            ),
+            ({"design_head_capacity_m": 0.0}, "must be between"),
+            ({"motor_rating_kw": True}, "must be numeric"),
+        )
+        for params, message in invalid_cases:
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._pump_design_settings(params)
+
+        with self.assertRaisesRegex(ValueError, "only for pump units"):
+            ProcessBuilder._requested_pump_design_bases(
+                [
+                    {
+                        "name": "not a pump",
+                        "type": "compressor",
+                        "params": {"use_design_basis": False},
+                    }
+                ]
+            )
+
+    def test_reports_design_margins_with_explicit_units_and_status(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Pump"
+
+        class _Fluid:
+            @staticmethod
+            def getDensity(unit):
+                if unit != "kg/m3":
+                    raise AssertionError(unit)
+                return 800.0
+
+        class _InletStream:
+            @staticmethod
+            def getFluid():
+                return _Fluid()
+
+            @staticmethod
+            def getFlowRate(unit):
+                if unit != "m3/sec":
+                    raise AssertionError(unit)
+                return 0.01
+
+        class _Pump:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getInletPressure():
+                return 10.0
+
+            @staticmethod
+            def getOutletPressure():
+                return 30.0
+
+            @staticmethod
+            def getPower():
+                return 30_000.0
+
+            @staticmethod
+            def getInletStream():
+                return _InletStream()
+
+        pump = _Pump()
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "export pump": {
+                "design_flow_capacity_m3_per_hr": 40.0,
+                "design_head_capacity_m": 300.0,
+                "motor_rating_kw": 35.0,
+            }
+        }
+        model._units = {"export pump": pump}
+        model._unit_ps_name = {"export pump": "main"}
+        properties = model._pump_design_properties("export pump", pump)
+
+        self.assertAlmostEqual(properties["flowUtilization_pct"], 90.0)
+        self.assertAlmostEqual(properties["flowMargin_m3_per_hr"], 4.0)
+        self.assertAlmostEqual(
+            properties["headUtilization_pct"],
+            84.97635108149402,
+        )
+        self.assertAlmostEqual(properties["motorMargin_kW"], 5.0)
+        self.assertEqual(
+            model._pump_design_constraint("export pump", pump).status,
+            "OK",
+        )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        expected_units = {
+            "designFlowCapacity_m3_per_hr": "m3/hr",
+            "designHeadCapacity_m": "m",
+            "motorRating_kW": "kW",
+            "flowUtilization_pct": "%",
+            "headUtilization_pct": "%",
+            "motorUtilization_pct": "%",
+            "flowMargin_m3_per_hr": "m3/hr",
+            "headMargin_m": "m",
+            "motorMargin_kW": "kW",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(property_name=property_name):
+                self.assertEqual(
+                    kpis[f"export pump.{property_name}"].unit,
+                    unit,
+                )
+        workbook = model.list_units()[0].properties
+        self.assertEqual(workbook["designHeadCapacity_m"], 300.0)
+        self.assertAlmostEqual(workbook["motorMargin_kW"], 5.0)
+
+        model._equipment_design_bases["export pump"]["motor_rating_kw"] = 25.0
+        violation = model._pump_design_constraint("export pump", pump)
+        self.assertEqual(violation.status, "VIOLATION")
+        self.assertIn("motor", violation.detail)
+
+        class _IncompletePump(_Pump):
+            getPower = None
+
+        incomplete = _IncompletePump()
+        unknown = model._pump_design_constraint("export pump", incomplete)
+        self.assertEqual(unknown.status, "UNKNOWN")
+
+
 class NativePumpPerformanceTest(unittest.TestCase):
     """Benchmark editable native pump performance at nearby points."""
 

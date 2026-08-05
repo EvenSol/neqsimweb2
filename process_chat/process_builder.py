@@ -926,6 +926,8 @@ class ProcessBuilder:
                         "same native outlet."
                     )
 
+        pump_design_bases = self._requested_pump_design_bases(unit_specs)
+
         expected_ids = [*inlet_ids, *indexed_units]
         ordered_ids = [str(node_id).strip() for node_id in execution_order]
         if any(not node_id for node_id in ordered_ids):
@@ -1402,7 +1404,13 @@ class ProcessBuilder:
             enforce_acyclic_mixer_energy=True,
             trusted_solved=True,
             allow_direct_runs=direct_closure_ran,
+            equipment_design_bases=pump_design_bases,
         )
+        if pump_design_bases:
+            self._build_log.append(
+                "Registered pump design basis for: "
+                + ", ".join(pump_design_bases)
+            )
         self._build_log.append("Acyclic graph built and converged successfully.")
         return self._model
 
@@ -1528,6 +1536,97 @@ class ProcessBuilder:
                 ) from exc
             mapped_units.append(unit_id)
         return mapped_units
+
+    @staticmethod
+    def _pump_design_settings(
+        params: dict,
+    ) -> tuple[bool, float, float, float]:
+        """Validate one backward-compatible pump design-limit request."""
+        raw_enabled = params.get("use_design_basis", False)
+        if type(raw_enabled) is not bool:
+            raise ValueError("Pump use_design_basis must be boolean.")
+
+        definitions = (
+            (
+                "design_flow_capacity_m3_per_hr",
+                100.0,
+                0.001,
+                1_000_000.0,
+                "m3/hr",
+            ),
+            (
+                "design_head_capacity_m",
+                600.0,
+                0.1,
+                20_000.0,
+                "m",
+            ),
+            (
+                "motor_rating_kw",
+                100.0,
+                0.001,
+                1_000_000.0,
+                "kW",
+            ),
+        )
+        values: list[float] = []
+        for key, default, minimum, maximum, unit in definitions:
+            raw_value = params.get(key, default)
+            if isinstance(raw_value, bool):
+                raise ValueError(f"Pump {key} must be numeric.")
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Pump {key} must be numeric.") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"Pump {key} must be finite.")
+            if not minimum <= value <= maximum:
+                raise ValueError(
+                    f"Pump {key} must be between {minimum} and {maximum} "
+                    f"{unit}."
+                )
+            values.append(value)
+        return raw_enabled, values[0], values[1], values[2]
+
+    @classmethod
+    def _requested_pump_design_bases(
+        cls,
+        unit_specs: List[dict],
+    ) -> Dict[str, Dict[str, float]]:
+        """Return validated opt-in pump design capacities by unit name."""
+        design_bases: Dict[str, Dict[str, float]] = {}
+        design_keys = (
+            "use_design_basis",
+            "design_flow_capacity_m3_per_hr",
+            "design_head_capacity_m",
+            "motor_rating_kw",
+        )
+        for unit_spec in unit_specs:
+            if not isinstance(unit_spec, dict):
+                continue
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict) or not any(
+                key in params for key in design_keys
+            ):
+                continue
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if unit_type != "pump":
+                raise ValueError(
+                    "Pump design-basis properties are supported only for "
+                    "pump units."
+                )
+            enabled, flow, head, motor = cls._pump_design_settings(params)
+            if not enabled:
+                continue
+            unit_name = str(unit_spec.get("name", "")).strip()
+            if not unit_name:
+                raise ValueError("Pump design basis requires a unit name.")
+            design_bases[unit_name] = {
+                "design_flow_capacity_m3_per_hr": flow,
+                "design_head_capacity_m": head,
+                "motor_rating_kw": motor,
+            }
+        return design_bases
 
     @staticmethod
     def _separator_design_settings(
@@ -1656,6 +1755,7 @@ class ProcessBuilder:
 
         if not process_steps:
             raise ValueError("Process spec must contain at least one step in 'process'.")
+        pump_design_bases = self._requested_pump_design_bases(process_steps)
 
         # 1. Create the thermodynamic fluid
         fluid = self.create_fluid_from_spec(fluid_spec)
@@ -1770,7 +1870,13 @@ class ProcessBuilder:
         self._model = NeqSimProcessModel.from_process_system(
             proc,
             trusted_solved=True,
+            equipment_design_bases=pump_design_bases,
         )
+        if pump_design_bases:
+            self._build_log.append(
+                "Registered pump design basis for: "
+                + ", ".join(pump_design_bases)
+            )
         self._build_log.append("Process built and converged successfully.")
         return self._model
 
