@@ -309,6 +309,10 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "default_params": {
             "outlet_pressure_bara": 80.0,
             "efficiency": 0.75,
+            "use_design_basis": False,
+            "design_flow_capacity_m3_per_hr": 100.0,
+            "design_head_capacity_m": 600.0,
+            "motor_rating_kw": 100.0,
         },
         "properties": {
             "outlet_pressure_bara": _number_property(
@@ -325,6 +329,37 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
                 0.01,
                 1.0,
                 0.01,
+                "%.3f",
+            ),
+            "use_design_basis": _boolean_property(
+                "Evaluate pump design limits",
+                (
+                    "Compare the solved native operating point with explicit "
+                    "flow, head, and motor capacities."
+                ),
+            ),
+            "design_flow_capacity_m3_per_hr": _number_property(
+                "Design flow capacity",
+                "m3/hr (actual at pump inlet)",
+                0.001,
+                1_000_000.0,
+                1.0,
+                "%.3f",
+            ),
+            "design_head_capacity_m": _number_property(
+                "Design head capacity",
+                "m liquid",
+                0.1,
+                20_000.0,
+                1.0,
+                "%.3f",
+            ),
+            "motor_rating_kw": _number_property(
+                "Motor rating",
+                "kW",
+                0.001,
+                1_000_000.0,
+                1.0,
                 "%.3f",
             ),
         },
@@ -562,6 +597,21 @@ def process_unit_property_rows(
             "use_compressor_chart",
             "chart_template",
             "chart_num_speeds",
+        ):
+            selected_params.setdefault(
+                key,
+                copy.deepcopy(definition["default_params"][key]),
+            )
+
+    if cleaned_type == "pump":
+        # Earlier graph schemas stored only outlet pressure and efficiency.
+        # Preserve their operating behavior while making design-limit
+        # evaluation explicitly opt-in.
+        for key in (
+            "use_design_basis",
+            "design_flow_capacity_m3_per_hr",
+            "design_head_capacity_m",
+            "motor_rating_kw",
         ):
             selected_params.setdefault(
                 key,
