@@ -1892,6 +1892,9 @@ class ProcessBuilder:
         lines: List[str] = []
         fluid_spec = self._spec.get("fluid", {})
         process_steps = self._spec.get("process", [])
+        pump_design_bases = self._requested_pump_design_bases(
+            process_steps
+        )
 
         # --- Header ---
         lines.append('"""')
@@ -2073,6 +2076,20 @@ class ProcessBuilder:
                     )
                 lines.append(f"{var}.autoSize()")
             lines.append("process.run()")
+        if pump_design_bases:
+            lines.append("")
+            lines.append(
+                "# ── Studio pump design basis (reporting metadata) ──"
+            )
+            lines.append(
+                "pump_design_bases = "
+                + json.dumps(
+                    pump_design_bases,
+                    allow_nan=False,
+                    indent=4,
+                    sort_keys=True,
+                )
+            )
         lines.append("")
         safe = _safe_filename(self._process_name)
         lines.append("# ── Save to file ──")

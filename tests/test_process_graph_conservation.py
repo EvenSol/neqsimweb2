@@ -2199,17 +2199,61 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
         unknown = model._pump_design_constraint("export pump", incomplete)
         self.assertEqual(unknown.status, "UNKNOWN")
 
+    def test_legacy_script_preserves_design_basis_as_reporting_metadata(self):
+        builder = ProcessBuilder()
+        builder._process_name = "Legacy pump design replay"
+        builder._spec = {
+            "name": "Legacy pump design replay",
+            "fluid": {
+                "eos_model": "srk",
+                "components": {"n-hexane": 1.0},
+            },
+            "process": [
+                {"name": "feed", "type": "stream"},
+                {
+                    "name": "export pump",
+                    "type": "pump",
+                    "params": {
+                        "outlet_pressure_bara": 40.0,
+                        "efficiency": 0.75,
+                        "use_design_basis": True,
+                        "design_flow_capacity_m3_per_hr": 40.0,
+                        "design_head_capacity_m": 500.0,
+                        "motor_rating_kw": 60.0,
+                    },
+                },
+            ],
+        }
+
+        script = builder.to_python_script()
+
+        self.assertEqual(script.count("process.run()"), 1)
+        self.assertIn("pump_design_bases = {", script)
+        self.assertIn('"export pump": {', script)
+        self.assertIn('"design_flow_capacity_m3_per_hr": 40.0', script)
+        self.assertIn('"design_head_capacity_m": 500.0', script)
+        self.assertIn('"motor_rating_kw": 60.0', script)
+        compile(script, "<pump-design-replay>", "exec")
+
 
 class NativePumpPerformanceTest(unittest.TestCase):
     """Benchmark editable native pump performance at nearby points."""
 
     @staticmethod
-    def _run_case(flow_scale: float, efficiency: float):
+    def _run_case(
+        flow_scale: float,
+        efficiency: float,
+        motor_rating_kw: float = 60.0,
+    ):
         units, pump_id = add_catalog_unit([], "pump", "export pump")
         units[0]["params"].update(
             {
                 "outlet_pressure_bara": 40.0,
                 "efficiency": efficiency,
+                "use_design_basis": True,
+                "design_flow_capacity_m3_per_hr": 40.0,
+                "design_head_capacity_m": 500.0,
+                "motor_rating_kw": motor_rating_kw,
             }
         )
         graph_spec = {
@@ -2265,6 +2309,8 @@ class NativePumpPerformanceTest(unittest.TestCase):
         shaft_power = {}
         hydraulic_power = {}
         head = {}
+        flow_utilization = {}
+        motor_utilization = {}
 
         for flow_scale in (1.0, 1.05):
             for efficiency in (0.75, 0.85):
@@ -2284,6 +2330,12 @@ class NativePumpPerformanceTest(unittest.TestCase):
                         "export pump.hydraulicPower_kW"
                     ].value
                     head[key] = result.kpis["export pump.head_m"].value
+                    flow_utilization[key] = result.kpis[
+                        "export pump.flowUtilization_pct"
+                    ].value
+                    motor_utilization[key] = result.kpis[
+                        "export pump.motorUtilization_pct"
+                    ].value
 
                     self.assertAlmostEqual(
                         float(pump.getIsentropicEfficiency()),
@@ -2322,8 +2374,28 @@ class NativePumpPerformanceTest(unittest.TestCase):
                     )
                     self.assertIn("head_m", workbook_unit.properties)
                     self.assertEqual(
+                        workbook_unit.properties[
+                            "designFlowCapacity_m3_per_hr"
+                        ],
+                        40.0,
+                    )
+                    self.assertGreater(
+                        workbook_unit.properties["flowMargin_m3_per_hr"],
+                        0.0,
+                    )
+                    pump_constraint = next(
+                        constraint
+                        for constraint in result.constraints
+                        if constraint.name == "pump_design.export pump"
+                    )
+                    self.assertEqual(pump_constraint.status, "OK")
+                    self.assertEqual(
                         json.loads(json.dumps(graph_spec, allow_nan=False)),
                         graph_spec,
+                    )
+                    self.assertIn(
+                        "Registered pump design basis for: export pump",
+                        builder.build_log,
                     )
                     self.assertIn(
                         "Acyclic graph built and converged successfully.",
@@ -2362,6 +2434,60 @@ class NativePumpPerformanceTest(unittest.TestCase):
                 hydraulic_power[(flow_scale, 0.85)],
                 hydraulic_power[(flow_scale, 0.75)],
                 delta=1.0e-10,
+            )
+        for efficiency in (0.75, 0.85):
+            self.assertGreater(
+                flow_utilization[(1.05, efficiency)],
+                flow_utilization[(1.0, efficiency)],
+            )
+            self.assertGreater(
+                motor_utilization[(1.05, efficiency)],
+                motor_utilization[(1.0, efficiency)],
+            )
+
+        _, _, model, baseline_result, _ = self._run_case(1.0, 0.75)
+        clone = model.clone()
+        clone_result = clone.run(timeout_ms=180_000)
+        self.assertAlmostEqual(
+            clone_result.kpis["export pump.motorRating_kW"].value,
+            60.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in clone_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "OK",
+        )
+        self.assertAlmostEqual(
+            clone_result.kpis["export pump.shaftPower_kW"].value,
+            baseline_result.kpis["export pump.shaftPower_kW"].value,
+            delta=1.0e-8,
+        )
+
+        _, _, _, underrated_result, _ = self._run_case(
+            1.0,
+            0.75,
+            motor_rating_kw=1.0,
+        )
+        underrated_constraint = next(
+            constraint
+            for constraint in underrated_result.constraints
+            if constraint.name == "pump_design.export pump"
+        )
+        self.assertEqual(underrated_constraint.status, "VIOLATION")
+        self.assertIn("motor", underrated_constraint.detail)
+        for balance_name in (
+            "mass_balance_pct",
+            "component_balance_max_pct",
+            "energy_balance_pct",
+            "unit_mass_balance_max_pct",
+            "unit_energy_balance_max_pct",
+        ):
+            self.assertLess(
+                underrated_result.kpis[balance_name].value,
+                1.0e-6,
             )
 
 
