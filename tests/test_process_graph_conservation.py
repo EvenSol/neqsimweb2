@@ -2207,6 +2207,12 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
             "fluid": {
                 "eos_model": "srk",
                 "components": {"n-hexane": 1.0},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 25.0,
+                "pressure_bara": 10.0,
+                "total_flow": 20_000.0,
+                "flow_unit": "kg/hr",
+                "mixing_rule": 2,
             },
             "process": [
                 {"name": "feed", "type": "stream"},
@@ -2233,7 +2239,53 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
         self.assertIn('"design_flow_capacity_m3_per_hr": 40.0', script)
         self.assertIn('"design_head_capacity_m": 500.0', script)
         self.assertIn('"motor_rating_kw": 60.0', script)
+        self.assertIn(
+            "from process_chat.process_model import NeqSimProcessModel",
+            script,
+        )
+        self.assertIn(
+            "equipment_design_bases=pump_design_bases",
+            script,
+        )
+        self.assertIn("result = model.run(timeout_ms=180_000)", script)
+        self.assertIn("legacy_pump_design_replay.case.json", script)
+        self.assertIn("json.dump(", script)
         compile(script, "<pump-design-replay>", "exec")
+
+        namespace = {}
+        original_directory = os.getcwd()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            try:
+                os.chdir(temporary_directory)
+                exec(
+                    compile(script, "<pump-design-replay>", "exec"),
+                    namespace,
+                )
+                with open(
+                    "legacy_pump_design_replay.case.json",
+                    encoding="utf-8",
+                ) as case_file:
+                    saved_case = json.load(case_file)
+                self.assertTrue(
+                    os.path.isfile("legacy_pump_design_replay.neqsim")
+                )
+            finally:
+                os.chdir(original_directory)
+
+        replay_result = namespace["result"]
+        self.assertEqual(
+            replay_result.kpis["export pump.motorRating_kW"].value,
+            60.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in replay_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "OK",
+        )
+        self.assertEqual(saved_case, builder._spec)
 
 
 class NativePumpPerformanceTest(unittest.TestCase):
