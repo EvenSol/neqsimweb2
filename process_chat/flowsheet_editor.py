@@ -553,6 +553,7 @@ def process_unit_property_rows(
                     "kind": "boolean",
                     "label": metadata["label"],
                     "description": metadata["description"],
+                    "unit": "",
                     "value": raw_value,
                 }
             )

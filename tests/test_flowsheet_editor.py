@@ -437,6 +437,7 @@ class UnitCatalogTest(unittest.TestCase):
             ["auto_size", "design_gas_load_factor_m_per_s"],
         )
         self.assertEqual(separator_rows[0]["kind"], "boolean")
+        self.assertEqual(separator_rows[0]["unit"], "")
         self.assertFalse(separator_rows[0]["value"])
         self.assertEqual(separator_rows[1]["kind"], "number")
         self.assertEqual(separator_rows[1]["unit"], "m/s")
