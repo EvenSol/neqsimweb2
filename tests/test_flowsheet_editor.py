@@ -192,7 +192,13 @@ class UnitCatalogTest(unittest.TestCase):
             },
         )
         self.assertEqual(units[0]["params"], {})
-        self.assertEqual(units[1]["params"], {})
+        self.assertEqual(
+            units[1]["params"],
+            {
+                "auto_size": False,
+                "design_gas_load_factor_m_per_s": 0.11,
+            },
+        )
         self.assertEqual(units[2]["params"], {"split_factor": 0.5})
         validate_catalog_unit(units[0])
         validate_catalog_unit(units[1])
@@ -282,10 +288,15 @@ class UnitCatalogTest(unittest.TestCase):
                     list(definition["default_params"]),
                 )
                 self.assertTrue(all(row["label"] for row in rows))
-                self.assertTrue(all(row["unit"] for row in rows))
                 self.assertTrue(
                     all(
-                        row["minimum"] <= row["value"] <= row["maximum"]
+                        row["kind"] == "boolean"
+                        or (
+                            row["unit"]
+                            and row["minimum"]
+                            <= row["value"]
+                            <= row["maximum"]
+                        )
                         for row in rows
                     )
                 )
@@ -420,8 +431,47 @@ class UnitCatalogTest(unittest.TestCase):
             process_unit_property_rows("compressor", compressor_params),
             inline_unit_property_rows("compressor", compressor_params),
         )
-        self.assertEqual(process_unit_property_rows("separator"), [])
-        self.assertEqual(process_unit_property_rows("separator", {}), [])
+        separator_rows = process_unit_property_rows("separator")
+        self.assertEqual(
+            [row["key"] for row in separator_rows],
+            ["auto_size", "design_gas_load_factor_m_per_s"],
+        )
+        self.assertEqual(separator_rows[0]["kind"], "boolean")
+        self.assertFalse(separator_rows[0]["value"])
+        self.assertEqual(separator_rows[1]["kind"], "number")
+        self.assertEqual(separator_rows[1]["unit"], "m/s")
+        self.assertEqual(
+            process_unit_property_rows("separator", {}),
+            separator_rows,
+        )
+
+    def test_separator_design_properties_are_strict_and_opt_in(self):
+        rows = process_unit_property_rows(
+            "separator",
+            {
+                "auto_size": True,
+                "design_gas_load_factor_m_per_s": 0.08,
+            },
+        )
+        self.assertTrue(rows[0]["value"])
+        self.assertEqual(rows[1]["value"], 0.08)
+
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            process_unit_property_rows(
+                "separator",
+                {
+                    "auto_size": 1,
+                    "design_gas_load_factor_m_per_s": 0.11,
+                },
+            )
+        with self.assertRaisesRegex(ValueError, "between 0.01 and 1.0 m/s"):
+            process_unit_property_rows(
+                "separator",
+                {
+                    "auto_size": True,
+                    "design_gas_load_factor_m_per_s": 0.0,
+                },
+            )
 
     def test_process_property_rows_reject_invalid_requests(self):
         invalid_cases = (

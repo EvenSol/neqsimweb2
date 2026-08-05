@@ -32,12 +32,22 @@ def _number_property(
 ) -> dict[str, Any]:
     """Define one explicit-unit numeric property for editor presentation."""
     return {
+        "kind": "number",
         "label": label,
         "unit": unit,
         "minimum": minimum,
         "maximum": maximum,
         "step": step,
         "format": display_format,
+    }
+
+
+def _boolean_property(label: str, description: str) -> dict[str, Any]:
+    """Define one boolean property for editor presentation."""
+    return {
+        "kind": "boolean",
+        "label": label,
+        "description": description,
     }
 
 
@@ -321,8 +331,28 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             "material_in": ["in"],
             "material_out": ["gas", "liquid"],
         },
-        "default_params": {},
-        "properties": {},
+        "default_params": {
+            "auto_size": False,
+            "design_gas_load_factor_m_per_s": 0.11,
+        },
+        "properties": {
+            "auto_size": _boolean_property(
+                "Run native mechanical sizing",
+                (
+                    "Size the separator from the solved flow before the "
+                    "final closed rerun. This is a screening design, not "
+                    "design certification."
+                ),
+            ),
+            "design_gas_load_factor_m_per_s": _number_property(
+                "Design gas-load factor",
+                "m/s",
+                0.01,
+                1.0,
+                0.01,
+                "%.3f",
+            ),
+        },
     },
     "mixer": {
         "label": "Mixer",
@@ -439,6 +469,13 @@ def process_unit_property_rows(
         # their equal allocation became an editor-backed property.
         selected_params = copy.deepcopy(definition["default_params"])
 
+    if cleaned_type == "separator":
+        # Schema-v3 separators were parameterless before mechanical sizing
+        # became opt-in. Preserve their operating behavior while presenting
+        # the complete current property contract.
+        for key, value in definition["default_params"].items():
+            selected_params.setdefault(key, copy.deepcopy(value))
+
     if cleaned_type == "splitter" and "split_factors" in selected_params:
         if "split_factor" in selected_params:
             raise ValueError(
@@ -505,6 +542,21 @@ def process_unit_property_rows(
     rows: list[dict[str, Any]] = []
     for key, metadata in definition["properties"].items():
         raw_value = selected_params[key]
+        if metadata["kind"] == "boolean":
+            if type(raw_value) is not bool:
+                raise ValueError(
+                    f"Process unit property '{key}' must be boolean."
+                )
+            rows.append(
+                {
+                    "key": key,
+                    "kind": "boolean",
+                    "label": metadata["label"],
+                    "description": metadata["description"],
+                    "value": raw_value,
+                }
+            )
+            continue
         if isinstance(raw_value, bool):
             raise ValueError(f"Process unit property '{key}' must be numeric.")
         try:
@@ -524,6 +576,7 @@ def process_unit_property_rows(
         rows.append(
             {
                 "key": key,
+                "kind": "number",
                 "label": metadata["label"],
                 "unit": metadata["unit"],
                 "value": value,
@@ -3015,6 +3068,14 @@ def update_process_unit_properties(
         raise ValueError(f"Graph unit id '{cleaned_unit_id}' is duplicated.")
 
     selected_unit = copied_units[matches[0]]
+    if (
+        str(selected_unit.get("type", "")).strip().lower() == "separator"
+        and not property_updates
+        and "params" not in selected_unit
+    ):
+        # A no-op must not rewrite imported parameterless separators merely
+        # because the current editor can offer opt-in design properties.
+        return copied_units
     current_params = selected_unit.get("params", {})
     if not isinstance(current_params, dict):
         raise ValueError(
