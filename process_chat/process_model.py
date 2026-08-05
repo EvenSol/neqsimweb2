@@ -371,6 +371,9 @@ class NeqSimProcessModel:
         enforce_acyclic_mixer_energy: bool = False,
         trusted_solved: bool = False,
         allow_direct_runs: bool = False,
+        equipment_design_bases: Optional[
+            Dict[str, Dict[str, float]]
+        ] = None,
     ):
         """
         Args:
@@ -382,6 +385,8 @@ class NeqSimProcessModel:
                 adapter observed the successful run that produced it.
             allow_direct_runs: Accept direct-run exchanger UUID patterns for
                 that observed successful run.
+            equipment_design_bases: Validated engineering capacities keyed by
+                native unit name. These do not modify the NeqSim solve.
         """
         self._proc = process_system
         self._source_bytes = source_bytes
@@ -396,6 +401,13 @@ class NeqSimProcessModel:
             Tuple[str, Tuple[str, str], Tuple[str, str]],
         ] = {}
         self._heat_exchanger_state_snapshots: Dict[str, Tuple[Any, ...]] = {}
+        self._equipment_design_bases = {
+            str(unit_name): {
+                str(property_name): float(value)
+                for property_name, value in basis.items()
+            }
+            for unit_name, basis in (equipment_design_bases or {}).items()
+        }
         self._index_model_objects()
         if trusted_solved:
             self._capture_heat_exchanger_state_snapshots(
@@ -881,6 +893,9 @@ class NeqSimProcessModel:
         enforce_acyclic_mixer_energy: bool = False,
         trusted_solved: bool = False,
         allow_direct_runs: bool = False,
+        equipment_design_bases: Optional[
+            Dict[str, Dict[str, float]]
+        ] = None,
     ) -> "NeqSimProcessModel":
         """Wrap an existing ProcessSystem object (e.g. built in code)."""
         import neqsim
@@ -905,6 +920,7 @@ class NeqSimProcessModel:
             enforce_acyclic_mixer_energy=enforce_acyclic_mixer_energy,
             trusted_solved=trusted_solved,
             allow_direct_runs=allow_direct_runs,
+            equipment_design_bases=equipment_design_bases,
         )
 
     # ----- Cloning -----
@@ -948,6 +964,10 @@ class NeqSimProcessModel:
         clone._enforce_acyclic_mixer_energy = (
             self._enforce_acyclic_mixer_energy
         )
+        clone._equipment_design_bases = {
+            unit_name: dict(basis)
+            for unit_name, basis in self._equipment_design_bases.items()
+        }
         clone.rerun()
         return clone
 
@@ -2596,6 +2616,120 @@ class NeqSimProcessModel:
         )
         return properties
 
+    def _pump_design_properties(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> Dict[str, float]:
+        """Compare a solved pump with its opt-in engineering capacities."""
+        basis = getattr(self, "_equipment_design_bases", {}).get(unit_name)
+        if not basis:
+            return {}
+        properties = {
+            "designFlowCapacity_m3_per_hr": basis[
+                "design_flow_capacity_m3_per_hr"
+            ],
+            "designHeadCapacity_m": basis["design_head_capacity_m"],
+            "motorRating_kW": basis["motor_rating_kw"],
+        }
+        operating = self._pump_operating_properties(unit)
+        comparisons = (
+            (
+                "inletVolumetricFlow_m3_s",
+                3600.0,
+                "designFlowCapacity_m3_per_hr",
+                "flowUtilization_pct",
+                "flowMargin_m3_per_hr",
+            ),
+            (
+                "head_m",
+                1.0,
+                "designHeadCapacity_m",
+                "headUtilization_pct",
+                "headMargin_m",
+            ),
+            (
+                "shaftPower_kW",
+                1.0,
+                "motorRating_kW",
+                "motorUtilization_pct",
+                "motorMargin_kW",
+            ),
+        )
+        for (
+            operating_key,
+            conversion,
+            capacity_key,
+            utilization_key,
+            margin_key,
+        ) in comparisons:
+            raw_value = operating.get(operating_key)
+            if raw_value is None:
+                continue
+            actual_value = float(raw_value) * conversion
+            capacity = properties[capacity_key]
+            if not math.isfinite(actual_value):
+                continue
+            properties[utilization_key] = 100.0 * actual_value / capacity
+            properties[margin_key] = capacity - actual_value
+        return properties
+
+    @staticmethod
+    def _pump_design_property_unit(property_name: str) -> str:
+        return {
+            "designFlowCapacity_m3_per_hr": "m3/hr",
+            "designHeadCapacity_m": "m",
+            "motorRating_kW": "kW",
+            "flowUtilization_pct": "%",
+            "headUtilization_pct": "%",
+            "motorUtilization_pct": "%",
+            "flowMargin_m3_per_hr": "m3/hr",
+            "headMargin_m": "m",
+            "motorMargin_kW": "kW",
+        }[property_name]
+
+    def _pump_design_constraint(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> ConstraintStatus:
+        """Return a fail-loud capacity status for one designed pump."""
+        properties = self._pump_design_properties(unit_name, unit)
+        utilization_names = (
+            ("flow", "flowUtilization_pct", "flowMargin_m3_per_hr"),
+            ("head", "headUtilization_pct", "headMargin_m"),
+            ("motor", "motorUtilization_pct", "motorMargin_kW"),
+        )
+        if any(
+            utilization not in properties or margin not in properties
+            for _, utilization, margin in utilization_names
+        ):
+            return ConstraintStatus(
+                f"pump_design.{unit_name}",
+                "UNKNOWN",
+                "Pump design basis is active, but complete native flow, "
+                "head, and shaft-power results are unavailable.",
+            )
+        violations = [
+            label
+            for label, _, margin in utilization_names
+            if properties[margin] < -1.0e-9
+        ]
+        utilization = ", ".join(
+            f"{label}={properties[key]:.6g}%"
+            for label, key, _ in utilization_names
+        )
+        return ConstraintStatus(
+            f"pump_design.{unit_name}",
+            "VIOLATION" if violations else "OK",
+            (
+                "Pump exceeds " + ", ".join(violations)
+                + f" capacity; utilization: {utilization}."
+                if violations
+                else f"Pump is inside design capacities; utilization: {utilization}."
+            ),
+        )
+
     @staticmethod
     def _compressor_map_properties(unit: Any) -> Dict[str, Any]:
         """Return finite native map state and operating-limit margins.
@@ -3541,6 +3675,7 @@ class NeqSimProcessModel:
 
             if java_class in ("Pump", "ESPPump"):
                 props.update(self._pump_operating_properties(u))
+                props.update(self._pump_design_properties(name, u))
 
             if java_class == "Compressor":
                 props.update(self._compressor_map_properties(u))
@@ -4300,6 +4435,35 @@ class NeqSimProcessModel:
 
         # Extract detailed unit operation properties (utilization, sizing, performance)
         self._extract_unit_properties(kpis, report_duty_lookup)
+
+        for unit_name in self._equipment_design_bases:
+            unit = self._units.get(unit_name)
+            if unit is None:
+                constraints.append(
+                    ConstraintStatus(
+                        f"pump_design.{unit_name}",
+                        "UNKNOWN",
+                        "Pump design basis references a unit that is not "
+                        "present in the solved process.",
+                    )
+                )
+                continue
+            try:
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                java_class = ""
+            if java_class not in ("Pump", "ESPPump"):
+                constraints.append(
+                    ConstraintStatus(
+                        f"pump_design.{unit_name}",
+                        "UNKNOWN",
+                        "Pump design basis references a non-pump unit.",
+                    )
+                )
+                continue
+            constraints.append(
+                self._pump_design_constraint(unit_name, unit)
+            )
 
         for unit_name, unit in self._units.items():
             try:
@@ -5363,6 +5527,12 @@ class NeqSimProcessModel:
                         f"{prefix}.{prop}",
                         val,
                         pump_property_units[prop],
+                    )
+                for prop, val in self._pump_design_properties(name, u).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        self._pump_design_property_unit(prop),
                     )
 
             # ---------- Valve ----------
