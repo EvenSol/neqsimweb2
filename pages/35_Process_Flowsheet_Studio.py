@@ -5569,21 +5569,30 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                     selected_unit["params"],
                 )
             )
-            property_updates: dict[str, float] = {}
+            property_updates: dict[str, Any] = {}
             for row in property_rows:
-                property_updates[row["key"]] = st.number_input(
-                    f"{row['label']} [{row['unit']}]",
-                    min_value=float(row["minimum"]),
-                    max_value=float(row["maximum"]),
-                    value=float(row["value"]),
-                    step=float(row["step"]),
-                    format=row["format"],
-                    key=(
-                        "flowsheet_added_unit_property_"
-                        f"{selected_unit_id}_{row['key']}_"
-                        f"{graph_widget_revision}"
-                    ),
+                property_key = (
+                    "flowsheet_added_unit_property_"
+                    f"{selected_unit_id}_{row['key']}_"
+                    f"{graph_widget_revision}"
                 )
+                if row["kind"] == "boolean":
+                    property_updates[row["key"]] = st.checkbox(
+                        row["label"],
+                        value=bool(row["value"]),
+                        help=row["description"],
+                        key=property_key,
+                    )
+                else:
+                    property_updates[row["key"]] = st.number_input(
+                        f"{row['label']} [{row['unit']}]",
+                        min_value=float(row["minimum"]),
+                        max_value=float(row["maximum"]),
+                        value=float(row["value"]),
+                        step=float(row["step"]),
+                        format=row["format"],
+                        key=property_key,
+                    )
             splitter_weights: list[float] = []
             if splitter_rows:
                 st.caption(
