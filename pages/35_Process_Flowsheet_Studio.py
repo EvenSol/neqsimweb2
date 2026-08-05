@@ -5817,7 +5817,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                         [
                             {
                                 "Property": row["label"],
-                                    "Value": _property_row_display_value(row),
+                                "Value": _property_row_display_value(row),
                                 "Unit": row["unit"],
                             }
                             for row in replacement_rows
