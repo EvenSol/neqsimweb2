@@ -926,7 +926,17 @@ class ProcessBuilder:
                         "same native outlet."
                     )
 
-        pump_design_bases = self._requested_pump_design_bases(unit_specs)
+        requested_pump_design_bases = self._requested_pump_design_bases(
+            unit_specs
+        )
+        # Graph construction normalizes native unit names at its schema
+        # boundary. Keep adapter metadata keyed by that exact native name.
+        pump_design_bases = {
+            unit_name.strip(): dict(design_basis)
+            for unit_name, design_basis in (
+                requested_pump_design_bases.items()
+            )
+        }
 
         expected_ids = [*inlet_ids, *indexed_units]
         ordered_ids = [str(node_id).strip() for node_id in execution_order]
