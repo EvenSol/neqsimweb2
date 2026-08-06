@@ -1618,8 +1618,8 @@ class ProcessBuilder:
             enabled, flow, head, motor = cls._pump_design_settings(params)
             if not enabled:
                 continue
-            unit_name = str(unit_spec.get("name", "")).strip()
-            if not unit_name:
+            unit_name = str(unit_spec.get("name", ""))
+            if not unit_name.strip():
                 raise ValueError("Pump design basis requires a unit name.")
             design_bases[unit_name] = {
                 "design_flow_capacity_m3_per_hr": flow,
