@@ -2854,6 +2854,82 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
         self.assertIn("target-solved", comparison.cases[0].error)
         self.assertEqual(comparison.patch_log[-1]["status"], "FAILED")
 
+    def test_target_solver_propagates_added_valve_failures(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+
+        invalid_patches = (
+            InputPatch(
+                changes={},
+                add_units=[
+                    AddUnitOp(
+                        name="trim valve",
+                        equipment_type="valve",
+                        insert_after="metering valve",
+                        params={
+                            "outlet_pressure_bara": 20.0,
+                            "use_design_basis": True,
+                            "design_cv_capacity_us": 50.0,
+                            "Cv": 25.0,
+                        },
+                    )
+                ],
+            ),
+            InputPatch(
+                changes={"units.trim valve.cv": 25.0},
+                add_units=[
+                    AddUnitOp(
+                        name="trim valve",
+                        equipment_type="valve",
+                        insert_after="metering valve",
+                        params={
+                            "outlet_pressure_bara": 20.0,
+                            "use_design_basis": True,
+                            "design_cv_capacity_us": 50.0,
+                        },
+                    )
+                ],
+            ),
+        )
+
+        for index, invalid_patch in enumerate(invalid_patches):
+            with self.subTest(index=index):
+                invalid_patch.targets = [
+                    TargetSpec(
+                        target_kpi="metering valve.Cv",
+                        target_value=40.0,
+                        variable="stream_scale",
+                        stream_name="feed",
+                        initial_guess=1.0,
+                        min_value=0.5,
+                        max_value=1.5,
+                    )
+                ]
+                comparison = run_scenarios(
+                    model,
+                    [
+                        Scenario(
+                            name=f"invalid added valve target {index}",
+                            description=(
+                                "Propagate added-valve validation failures"
+                            ),
+                            patch=invalid_patch,
+                        )
+                    ],
+                    timeout_ms=180_000,
+                )
+
+                self.assertFalse(comparison.cases[0].success)
+                self.assertIn(
+                    "Iterative solver failed",
+                    comparison.cases[0].error,
+                )
+                self.assertEqual(
+                    comparison.patch_log[-1]["status"],
+                    "FAILED",
+                )
+
     def test_scenario_added_valve_registers_rated_cv_metadata(self):
         builder = ProcessBuilder()
         model = builder.build_from_spec(self._specification(1.0))
@@ -2874,8 +2950,9 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
                                 insert_after="metering valve",
                                 params={
                                     "outlet_pressure_bara": 20.0,
+                                    "percent_valve_opening": 20.0,
                                     "use_design_basis": True,
-                                    "design_cv_capacity_us": 50.0,
+                                    "design_cv_capacity_us": 100.0,
                                 },
                             )
                         ],
@@ -2889,15 +2966,20 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
         self.assertTrue(case.success, case.error)
         self.assertEqual(
             case.result.kpis["trim valve.designCvCapacity_US"].value,
-            50.0,
+            100.0,
         )
-        self.assertIn(
+        self.assertAlmostEqual(
+            case.result.kpis["trim valve.percentValveOpening"].value,
+            20.0,
+            delta=1.0e-12,
+        )
+        self.assertEqual(
             next(
                 constraint.status
                 for constraint in case.result.constraints
                 if constraint.name == "valve_design.trim valve"
             ),
-            ("OK", "VIOLATION"),
+            "VIOLATION",
         )
 
 

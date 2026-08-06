@@ -897,7 +897,20 @@ def solve_for_target(
             
             # Apply add_units if any
             if scenario.patch.add_units:
-                apply_add_units(clone, scenario.patch.add_units)
+                add_unit_log = apply_add_units(clone, scenario.patch.add_units)
+                failed = [
+                    entry
+                    for entry in add_unit_log
+                    if entry.get("status") == "FAILED"
+                ]
+                if failed:
+                    iteration_log.append({
+                        "iteration": iteration,
+                        "scale": mid,
+                        "status": "FAILED",
+                        "error": f"Scenario unit addition failed: {failed}",
+                    })
+                    break
 
             # Apply add_streams if any
             if scenario.patch.add_streams:
@@ -905,7 +918,20 @@ def solve_for_target(
             
             # Apply parameter changes if any
             if scenario.patch.changes:
-                apply_patch_to_model(clone, scenario.patch)
+                change_log = apply_patch_to_model(clone, scenario.patch)
+                failed = [
+                    entry
+                    for entry in change_log
+                    if entry.get("status") == "FAILED"
+                ]
+                if failed:
+                    iteration_log.append({
+                        "iteration": iteration,
+                        "scale": mid,
+                        "status": "FAILED",
+                        "error": f"Scenario parameter change failed: {failed}",
+                    })
+                    break
             
             # Run
             result = clone.run(timeout_ms=timeout_ms)
@@ -1210,6 +1236,8 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                     elif "pressure_drop" in pk or "pressuredrop" in pk:
                         inlet_p = float(outlet_stream.getPressure("bara"))
                         new_unit.setOutPressure(inlet_p - float(pval), "bara")
+                    elif eq_type == "valve" and pk == "percent_valve_opening":
+                        new_unit.setPercentValveOpening(float(pval))
                     elif "isentropic_efficiency" in pk or "efficiency" in pk:
                         if hasattr(new_unit, "setIsentropicEfficiency"):
                             new_unit.setIsentropicEfficiency(float(pval))
