@@ -459,7 +459,9 @@ Supported params by equipment type:
   cooler/heater/air_cooler/water_cooler: outlet_temperature_C, pressure_drop_bar, duty_kW, uaValue
   compressor: outlet_pressure_bara, isentropic_efficiency (default 0.75), polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
   separator/two_phase_separator/three_phase_separator/gas_scrubber: pressure_bara (sets inlet stream pressure — separator operates at feed pressure)
-  valve/control_valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening
+  valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening,
+    use_design_basis, design_cv_capacity_us (rated US Cv reporting capacity)
+  control_valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening
   expander: outlet_pressure_bara, isentropic_efficiency
   pump/esp_pump: outlet_pressure_bara, efficiency, head
   mixer: (no params needed, combines streams)
@@ -1637,7 +1639,8 @@ PARAMETER REFERENCE:
   compressor: outlet_pressure_bara, isentropic_efficiency (0-1, default 0.75),
               polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
   cooler/heater: outlet_temperature_C, pressure_drop_bar, duty_kW
-  valve: outlet_pressure_bara, cv, percent_valve_opening
+  valve: outlet_pressure_bara, cv, percent_valve_opening, use_design_basis,
+    design_cv_capacity_us (rated US Cv reporting capacity)
   expander: outlet_pressure_bara, isentropic_efficiency
   pump: outlet_pressure_bara, efficiency, head
   splitter: split_factor (0-1)
@@ -3786,6 +3789,15 @@ class ProcessChatSession:
         try:
             changes_applied: list = []
 
+            # Validate reporting-only design metadata before mutating any
+            # native object. In particular, a required-Cv screen cannot be
+            # combined with an explicitly fixed valve coefficient.
+            equipment_design_bases = (
+                self._builder._requested_equipment_design_bases(
+                    build_spec.get("process", [])
+                )
+            )
+
             # 1. Apply fluid condition changes to the feed stream(s)
             if fluid_changes:
                 for u in self.model.get_all_unit_operations():
@@ -3845,11 +3857,6 @@ class ProcessChatSession:
             # than native Java properties. Keep the live model synchronized
             # with the complete validated spec so edits and opt-out changes
             # are reflected in KPIs, constraints, and saved cases.
-            equipment_design_bases = (
-                self._builder._requested_equipment_design_bases(
-                    build_spec.get("process", [])
-                )
-            )
             if (
                 self.model._equipment_design_bases
                 != equipment_design_bases

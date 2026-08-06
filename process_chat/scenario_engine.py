@@ -24,7 +24,13 @@ from .patch_schema import (
     TargetSpec,
     AddProcessOp,
 )
-from .process_model import NeqSimProcessModel, ModelRunResult, KPI, ConstraintStatus
+from .process_model import (
+    NeqSimProcessModel,
+    ModelRunResult,
+    KPI,
+    ConstraintStatus,
+    _NativeObjectIdentitySet,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +671,84 @@ def _scale_stream_flow(model: NeqSimProcessModel, stream_name: str, scale: float
     stream.setFlowRate(current * scale, "kg/hr")
 
 
+_FIXED_CV_PROPERTIES = {"cv", "valve_cv", "flow_coefficient"}
+
+
+def _indexed_unit_name(
+    model: NeqSimProcessModel,
+    native_unit: Any,
+) -> Optional[str]:
+    """Return the exact current model index key for one native unit."""
+    identity = _NativeObjectIdentitySet()
+    identity.add(native_unit)
+    for registered_name, registered_unit in model._units.items():
+        if identity.contains(registered_unit):
+            return registered_name
+    return None
+
+
+def _has_required_cv_screen(
+    model: NeqSimProcessModel,
+    requested_unit_name: str,
+) -> bool:
+    """Resolve a unit and find its rated-Cv metadata case-insensitively."""
+    try:
+        resolved_unit = model.get_unit(requested_unit_name)
+    except KeyError:
+        return False
+
+    indexed_name = _indexed_unit_name(model, resolved_unit)
+    if indexed_name is None:
+        return False
+    basis = getattr(
+        model,
+        "_equipment_design_bases",
+        {},
+    ).get(indexed_name)
+    return (
+        isinstance(basis, dict)
+        and set(basis) == {"design_cv_capacity_us"}
+    )
+
+
+def _fixed_cv_patch_failure(
+    model: NeqSimProcessModel,
+    patch: InputPatch,
+) -> Optional[Dict[str, Any]]:
+    """Return a fail-loud entry for contradictory fixed-Cv changes."""
+
+    def _split_unit_key(key: str) -> Optional[tuple[str, str]]:
+        if key.startswith("streams."):
+            return None
+        normalized_key = key
+        if key.startswith("units."):
+            normalized_key = key[len("units."):]
+        parts = normalized_key.rsplit(".", 1)
+        if len(parts) != 2:
+            return None
+        return parts[0], parts[1]
+
+    for key in patch.changes:
+        split_key = _split_unit_key(key)
+        if split_key is None:
+            continue
+        unit_name, prop = split_key
+        if (
+            prop.lower().strip() in _FIXED_CV_PROPERTIES
+            and _has_required_cv_screen(model, unit_name)
+        ):
+            return {
+                "key": key,
+                "status": "FAILED",
+                "error": (
+                    "A fixed valve Cv cannot be applied while required-Cv "
+                    "design screening is active. Disable the screen or "
+                    "omit the fixed Cv."
+                ),
+            }
+    return None
+
+
 def solve_for_target(
     model: NeqSimProcessModel,
     scenario: Scenario,
@@ -714,6 +798,38 @@ def solve_for_target(
         patch=InputPatch(changes={})
     )
     base_sr = ScenarioResult(scenario=base_scenario, result=base_result)
+
+    preflight_failure = _fixed_cv_patch_failure(model, scenario.patch)
+    if (
+        preflight_failure is None
+        and use_unit_param
+        and unit_name
+        and unit_param.lower().strip() in _FIXED_CV_PROPERTIES
+        and _has_required_cv_screen(model, unit_name)
+    ):
+        preflight_failure = {
+            "key": f"unit_param.{unit_name}.{unit_param}",
+            "status": "FAILED",
+            "error": (
+                "A fixed valve Cv cannot be target-solved while required-Cv "
+                "design screening is active. Disable the screen or choose "
+                "another manipulated variable."
+            ),
+        }
+    if preflight_failure is not None:
+        case_sr = ScenarioResult(
+            scenario=scenario,
+            result=ModelRunResult(kpis={}, constraints=[], raw={}),
+            success=False,
+            error=preflight_failure["error"],
+        )
+        return Comparison(
+            base=base_sr,
+            cases=[case_sr],
+            delta_kpis=[],
+            constraint_summary=[],
+            patch_log=[{"scenario": scenario.name, **preflight_failure}],
+        )
     
     # Resolve the target KPI name against the base result
     resolved = _resolve_kpi_name(base_result.kpis, target.target_kpi)
@@ -778,7 +894,20 @@ def solve_for_target(
             
             # Apply add_units if any
             if scenario.patch.add_units:
-                apply_add_units(clone, scenario.patch.add_units)
+                add_unit_log = apply_add_units(clone, scenario.patch.add_units)
+                failed = [
+                    entry
+                    for entry in add_unit_log
+                    if entry.get("status") == "FAILED"
+                ]
+                if failed:
+                    iteration_log.append({
+                        "iteration": iteration,
+                        "scale": mid,
+                        "status": "FAILED",
+                        "error": f"Scenario unit addition failed: {failed}",
+                    })
+                    break
 
             # Apply add_streams if any
             if scenario.patch.add_streams:
@@ -786,7 +915,20 @@ def solve_for_target(
             
             # Apply parameter changes if any
             if scenario.patch.changes:
-                apply_patch_to_model(clone, scenario.patch)
+                change_log = apply_patch_to_model(clone, scenario.patch)
+                failed = [
+                    entry
+                    for entry in change_log
+                    if entry.get("status") == "FAILED"
+                ]
+                if failed:
+                    iteration_log.append({
+                        "iteration": iteration,
+                        "scale": mid,
+                        "status": "FAILED",
+                        "error": f"Scenario parameter change failed: {failed}",
+                    })
+                    break
             
             # Run
             result = clone.run(timeout_ms=timeout_ms)
@@ -960,6 +1102,60 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     log = []
     proc = model.get_process()
 
+    # Keep enough identity and process-system context to remap every existing
+    # design basis if reindexing qualifies a formerly unique raw unit name.
+    existing_design_units = []
+    for stored_name, basis in getattr(
+        model,
+        "_equipment_design_bases",
+        {},
+    ).items():
+        try:
+            native_unit = model.get_unit(stored_name)
+        except KeyError:
+            native_unit = None
+        raw_name = ""
+        if native_unit is not None:
+            try:
+                raw_name = str(native_unit.getName())
+            except Exception:
+                pass
+        existing_design_units.append((
+            stored_name,
+            getattr(model, "_unit_ps_name", {}).get(stored_name, ""),
+            raw_name,
+            native_unit,
+            dict(basis),
+        ))
+
+    # Validate reporting-only valve metadata before topology mutation. These
+    # fields do not have native Java setters and must follow the same strict
+    # contract as builder-created valves.
+    from .process_builder import ProcessBuilder
+
+    requested_valve_design_bases: Dict[str, Dict[str, float]] = {}
+    for add_op in add_units:
+        try:
+            requested_valve_design_bases.update(
+                ProcessBuilder._requested_valve_design_bases(
+                    [
+                        {
+                            "name": add_op.name,
+                            "type": add_op.equipment_type,
+                            "params": add_op.params,
+                        }
+                    ]
+                )
+            )
+        except ValueError as exc:
+            return [
+                {
+                    "key": f"add_unit.{add_op.name}.design_basis",
+                    "status": "FAILED",
+                    "error": str(exc),
+                }
+            ]
+
     # Collect all current units in order
     # For ProcessModel, apply_add_units works per ProcessSystem; find the
     # right child system for the first add_op's insert_after target.
@@ -1048,6 +1244,11 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
             params = dict(add_op.params)
             for pkey, pval in params.items():
                 pk = pkey.lower()
+                if eq_type == "valve" and pk in (
+                    "use_design_basis",
+                    "design_cv_capacity_us",
+                ):
+                    continue
                 try:
                     if "outlet_temperature" in pk or "out_temperature" in pk or "outtemperature" in pk:
                         new_unit.setOutTemperature(float(pval), "C")
@@ -1058,6 +1259,8 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                     elif "pressure_drop" in pk or "pressuredrop" in pk:
                         inlet_p = float(outlet_stream.getPressure("bara"))
                         new_unit.setOutPressure(inlet_p - float(pval), "bara")
+                    elif eq_type == "valve" and pk == "percent_valve_opening":
+                        new_unit.setPercentValveOpening(float(pval))
                     elif "isentropic_efficiency" in pk or "efficiency" in pk:
                         if hasattr(new_unit, "setIsentropicEfficiency"):
                             new_unit.setIsentropicEfficiency(float(pval))
@@ -1139,6 +1342,43 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
 
     # Re-index the model objects so introspection sees the new units/streams
     model._index_model_objects()
+
+    # ProcessModel qualifies duplicate raw unit names with their child-system
+    # name during indexing. Register reporting metadata against that indexed
+    # key, not the raw AddUnitOp name, so rerun invalidation and KPI extraction
+    # continue to address the exact created valve.
+    remapped_design_bases: Dict[str, Dict[str, float]] = {}
+    for stored_name, ps_name, raw_name, native_unit, basis in (
+        existing_design_units
+    ):
+        indexed_name = None
+        if native_unit is not None:
+            indexed_name = _indexed_unit_name(model, native_unit)
+        if indexed_name is None and ps_name and raw_name:
+            qualified_name = f"{ps_name}/{raw_name}"
+            if qualified_name in model._units:
+                indexed_name = qualified_name
+        if indexed_name is None and stored_name in model._units:
+            indexed_name = stored_name
+        remapped_design_bases[indexed_name or stored_name] = basis
+
+    for add_op, created_unit, _params in created_units:
+        basis = requested_valve_design_bases.get(add_op.name)
+        if basis is None:
+            continue
+        indexed_name = _indexed_unit_name(model, created_unit)
+        if indexed_name is None:
+            log.append({
+                "key": f"add_unit.{add_op.name}.design_basis",
+                "status": "FAILED",
+                "error": (
+                    "Created valve could not be resolved after process "
+                    "topology indexing."
+                ),
+            })
+            continue
+        remapped_design_bases[indexed_name] = basis
+    model._equipment_design_bases = remapped_design_bases
 
     return log
 
@@ -1315,6 +1555,12 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
         if len(parts) == 2:
             return parts[0], parts[1]
         return remainder, ""
+
+    # Preflight the complete patch so a fixed-Cv request cannot partially
+    # mutate a case whose active screen requires NeqSim to auto-size Cv.
+    fixed_cv_failure = _fixed_cv_patch_failure(model, patch)
+    if fixed_cv_failure is not None:
+        return [fixed_cv_failure]
 
     for key, raw_value in patch.changes.items():
         # Resolve relative operations

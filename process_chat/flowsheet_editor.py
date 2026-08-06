@@ -304,6 +304,8 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         "default_params": {
             "outlet_pressure_bara": 40.0,
             "percent_valve_opening": 100.0,
+            "use_design_basis": False,
+            "design_cv_capacity_us": 100.0,
         },
         "properties": {
             "outlet_pressure_bara": _number_property(
@@ -321,6 +323,21 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
                 100.0,
                 1.0,
                 "%.2f",
+            ),
+            "use_design_basis": _boolean_property(
+                "Evaluate valve Cv limit",
+                (
+                    "Compare the solved native required Cv with an explicit "
+                    "rated US Cv capacity."
+                ),
+            ),
+            "design_cv_capacity_us": _number_property(
+                "Rated Cv capacity",
+                "US Cv",
+                0.001,
+                100_000_000.0,
+                1.0,
+                "%.3f",
             ),
         },
     },
@@ -696,15 +713,19 @@ def process_unit_property_rows(
             scaled_factors[0] / sum(scaled_factors)
         )
 
-    if (
-        cleaned_type == "valve"
-        and "percent_valve_opening" not in selected_params
-    ):
-        # Earlier graph schemas stored only the specified outlet pressure.
-        # Preserve that behavior by migrating them to a fully open valve.
-        selected_params["percent_valve_opening"] = definition[
-            "default_params"
-        ]["percent_valve_opening"]
+    if cleaned_type == "valve":
+        # Earlier graph schemas stored only the specified outlet pressure or
+        # pressure plus opening. Preserve that solve and keep rated-Cv
+        # screening explicitly opt-in.
+        for key in (
+            "percent_valve_opening",
+            "use_design_basis",
+            "design_cv_capacity_us",
+        ):
+            selected_params.setdefault(
+                key,
+                copy.deepcopy(definition["default_params"][key]),
+            )
 
     property_keys = set(definition["properties"])
     parameter_keys = set(selected_params)

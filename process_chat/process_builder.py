@@ -1625,7 +1625,7 @@ class ProcessBuilder:
                     key in params for key in design_keys[1:]
                 )
                 if has_pump_specific_key or (
-                    unit_type != "heat_exchanger"
+                    unit_type not in ("heat_exchanger", "valve")
                     and "use_design_basis" in params
                 ):
                     raise ValueError(
@@ -1723,7 +1723,7 @@ class ProcessBuilder:
                     key in params for key in design_keys[1:]
                 )
                 if has_exchanger_specific_key or (
-                    unit_type != "pump"
+                    unit_type not in ("pump", "valve")
                     and "use_design_basis" in params
                 ):
                     raise ValueError(
@@ -1747,6 +1747,80 @@ class ProcessBuilder:
             }
         return design_bases
 
+    @staticmethod
+    def _valve_design_settings(params: dict) -> tuple[bool, float]:
+        """Validate one backward-compatible rated-Cv capacity request."""
+        raw_enabled = params.get("use_design_basis", False)
+        if type(raw_enabled) is not bool:
+            raise ValueError("Valve use_design_basis must be boolean.")
+        normalized_keys = {
+            str(key).lower().strip()
+            for key in params
+        }
+        if raw_enabled and normalized_keys.intersection(
+            {"cv", "valve_cv", "flow_coefficient"}
+        ):
+            raise ValueError(
+                "Valve required-Cv design screening cannot be combined "
+                "with an explicitly fixed cv or flow_coefficient."
+            )
+        raw_capacity = params.get("design_cv_capacity_us", 100.0)
+        if isinstance(raw_capacity, bool):
+            raise ValueError("Valve design_cv_capacity_us must be numeric.")
+        try:
+            capacity = float(raw_capacity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Valve design_cv_capacity_us must be numeric."
+            ) from exc
+        if not math.isfinite(capacity):
+            raise ValueError("Valve design_cv_capacity_us must be finite.")
+        if not 0.001 <= capacity <= 100_000_000.0:
+            raise ValueError(
+                "Valve design_cv_capacity_us must be between 0.001 and "
+                "100000000.0 US Cv."
+            )
+        return raw_enabled, capacity
+
+    @classmethod
+    def _requested_valve_design_bases(
+        cls,
+        unit_specs: List[dict],
+    ) -> Dict[str, Dict[str, float]]:
+        """Return validated opt-in rated-Cv capacities by valve name."""
+        design_bases: Dict[str, Dict[str, float]] = {}
+        design_keys = ("use_design_basis", "design_cv_capacity_us")
+        for unit_spec in unit_specs:
+            if not isinstance(unit_spec, dict):
+                continue
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                continue
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if unit_type != "valve":
+                has_valve_specific_key = design_keys[1] in params
+                if has_valve_specific_key or (
+                    unit_type not in ("pump", "heat_exchanger")
+                    and "use_design_basis" in params
+                ):
+                    raise ValueError(
+                        "Valve design-basis properties are supported only "
+                        "for valve units."
+                    )
+                continue
+            if not any(key in params for key in design_keys):
+                continue
+            enabled, capacity = cls._valve_design_settings(params)
+            if not enabled:
+                continue
+            unit_name = str(unit_spec.get("name", ""))
+            if not unit_name.strip():
+                raise ValueError("Valve design basis requires a unit name.")
+            design_bases[unit_name] = {
+                "design_cv_capacity_us": capacity,
+            }
+        return design_bases
+
     @classmethod
     def _requested_equipment_design_bases(
         cls,
@@ -1757,14 +1831,18 @@ class ProcessBuilder:
         exchanger_bases = cls._requested_heat_exchanger_design_bases(
             unit_specs
         )
-        duplicate_names = set(design_bases).intersection(exchanger_bases)
-        if duplicate_names:
-            raise ValueError(
-                "Equipment design-basis unit names must be unique: "
-                + ", ".join(sorted(duplicate_names))
-                + "."
+        valve_bases = cls._requested_valve_design_bases(unit_specs)
+        for additional_bases in (exchanger_bases, valve_bases):
+            duplicate_names = set(design_bases).intersection(
+                additional_bases
             )
-        design_bases.update(exchanger_bases)
+            if duplicate_names:
+                raise ValueError(
+                    "Equipment design-basis unit names must be unique: "
+                    + ", ".join(sorted(duplicate_names))
+                    + "."
+                )
+            design_bases.update(additional_bases)
         return design_bases
 
     @staticmethod

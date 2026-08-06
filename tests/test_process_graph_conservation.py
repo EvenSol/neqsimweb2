@@ -36,6 +36,12 @@ from process_chat.chat_tools import (
     _classify_build_change,
 )
 from process_chat.process_model import NeqSimProcessModel
+from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario, TargetSpec
+from process_chat.scenario_engine import (
+    apply_add_units,
+    apply_patch_to_model,
+    run_scenarios,
+)
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
     aggregate_unit_balances,
@@ -2265,6 +2271,911 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
         self.assertNotIn(
             "replacement pump.designFlowCapacity_m3_per_hr",
             kpis,
+        )
+
+
+class ValveDesignBasisModelTest(unittest.TestCase):
+    """Protect typed valve Cv metadata, margins, and fail-loud status."""
+
+    class _JavaClass:
+        @staticmethod
+        def getSimpleName():
+            return "ThrottlingValve"
+
+    class _Valve:
+        def __init__(self, cv=18.0):
+            self.cv = cv
+
+        @staticmethod
+        def getClass():
+            return ValveDesignBasisModelTest._JavaClass()
+
+        def getCv(self):
+            return self.cv
+
+    def test_validates_and_collects_enabled_valve_design_basis(self):
+        self.assertEqual(
+            ProcessBuilder._valve_design_settings(
+                {
+                    "use_design_basis": True,
+                    "design_cv_capacity_us": 20.0,
+                }
+            ),
+            (True, 20.0),
+        )
+        units = [
+            {
+                "name": "metering valve",
+                "type": "valve",
+                "params": {
+                    "outlet_pressure_bara": 30.0,
+                    "percent_valve_opening": 80.0,
+                    "use_design_basis": True,
+                    "design_cv_capacity_us": 20.0,
+                },
+            },
+            {
+                "name": "spare valve",
+                "type": "valve",
+                "params": {"use_design_basis": False},
+            },
+        ]
+        expected = {
+            "metering valve": {"design_cv_capacity_us": 20.0}
+        }
+        self.assertEqual(
+            ProcessBuilder._requested_valve_design_bases(units),
+            expected,
+        )
+        self.assertEqual(
+            ProcessBuilder._requested_equipment_design_bases(units),
+            expected,
+        )
+
+        for params, message in (
+            ({"use_design_basis": 1}, "must be boolean"),
+            ({"design_cv_capacity_us": math.nan}, "must be finite"),
+            ({"design_cv_capacity_us": 0.0}, "must be between"),
+        ):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._valve_design_settings(params)
+
+        with self.assertRaisesRegex(ValueError, "only for valve units"):
+            ProcessBuilder._requested_valve_design_bases(
+                [
+                    {
+                        "name": "not a valve",
+                        "type": "compressor",
+                        "params": {"design_cv_capacity_us": 20.0},
+                    }
+                ]
+            )
+
+    def test_rejects_fixed_cv_only_when_required_cv_screen_is_active(self):
+        for fixed_key in (
+            "cv",
+            "valve_cv",
+            "flow_coefficient",
+            "Cv",
+            "VALVE_CV",
+            "FLOW_COEFFICIENT",
+        ):
+            with self.subTest(fixed_key=fixed_key):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "cannot be combined",
+                ):
+                    ProcessBuilder._valve_design_settings(
+                        {
+                            "use_design_basis": True,
+                            "design_cv_capacity_us": 40.0,
+                            fixed_key: 25.0,
+                        }
+                    )
+
+                self.assertEqual(
+                    ProcessBuilder._valve_design_settings(
+                        {
+                            "use_design_basis": False,
+                            fixed_key: 25.0,
+                        }
+                    ),
+                    (False, 100.0),
+                )
+
+    def test_reports_rated_cv_capacity_margin_and_constraint(self):
+        valve = self._Valve()
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "metering valve": {"design_cv_capacity_us": 20.0}
+        }
+        model._units = {"metering valve": valve}
+        model._unit_ps_name = {"metering valve": "main"}
+
+        properties = model._valve_design_properties(
+            "metering valve",
+            valve,
+        )
+        self.assertEqual(properties["designCvCapacity_US"], 20.0)
+        self.assertAlmostEqual(properties["cvUtilization_pct"], 90.0)
+        self.assertAlmostEqual(properties["cvMargin_US"], 2.0)
+        self.assertEqual(
+            model._valve_design_property_unit("designCvCapacity_US"),
+            "US Cv",
+        )
+        self.assertEqual(
+            model._valve_design_property_unit("cvUtilization_pct"),
+            "%",
+        )
+        self.assertEqual(
+            model._valve_design_property_unit("cvMargin_US"),
+            "US Cv",
+        )
+        self.assertEqual(
+            model._valve_design_constraint("metering valve", valve).status,
+            "OK",
+        )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis["metering valve.designCvCapacity_US"].value,
+            20.0,
+        )
+        self.assertEqual(
+            kpis["metering valve.cvUtilization_pct"].unit,
+            "%",
+        )
+        self.assertEqual(kpis["metering valve.cvMargin_US"].unit, "US Cv")
+
+        model._equipment_design_bases["metering valve"][
+            "design_cv_capacity_us"
+        ] = 15.0
+        violation = model._valve_design_constraint("metering valve", valve)
+        self.assertEqual(violation.status, "VIOLATION")
+        self.assertIn("exceeds rated Cv", violation.detail)
+
+        valve.cv = math.nan
+        unknown = model._valve_design_constraint("metering valve", valve)
+        self.assertEqual(unknown.status, "UNKNOWN")
+
+    def test_saved_metadata_accepts_only_exact_valve_capacity_schema(self):
+        valid_basis = {"design_cv_capacity_us": 20.0}
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "neqsimweb2/studio_metadata.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "equipment_design_bases": {
+                            "metering valve": valid_basis,
+                        },
+                    }
+                ),
+            )
+        buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as archive:
+            self.assertEqual(
+                NeqSimProcessModel._read_studio_metadata(archive),
+                {"metering valve": valid_basis},
+            )
+
+        for invalid_basis in (
+            {},
+            {"design_cv_capacity_us": 0.0},
+            {"design_cv_capacity_us": math.inf},
+            {"design_cv_capacity_us": 20.0, "motor_rating_kw": 100.0},
+        ):
+            with self.subTest(invalid_basis=invalid_basis):
+                invalid_buffer = io.BytesIO()
+                with zipfile.ZipFile(invalid_buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "metering valve": invalid_basis,
+                                },
+                            }
+                        ),
+                    )
+                invalid_buffer.seek(0)
+                with zipfile.ZipFile(invalid_buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
+    def test_withholds_valve_properties_for_another_equipment_schema(self):
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "metering valve": {
+                "design_duty_capacity_kw": 2_500.0,
+                "design_ua_capacity_w_per_k": 125_000.0,
+            }
+        }
+
+        self.assertEqual(
+            model._valve_design_properties(
+                "metering valve",
+                self._Valve(),
+            ),
+            {},
+        )
+
+
+class NativeValveDesignPerformanceTest(unittest.TestCase):
+    """Validate rated-Cv margins, persistence, and Process Chat handoff."""
+
+    @staticmethod
+    def _specification(
+        flow_scale: float,
+        design_cv_capacity_us: float = 40.0,
+    ) -> dict:
+        return {
+            "name": "Native valve Cv design benchmark",
+            "fluid": {
+                "eos_model": "srk",
+                "mixing_rule": 2,
+                "components": {"methane": 0.90, "ethane": 0.10},
+                "composition_basis": "mole_fraction",
+                "temperature_C": 30.0,
+                "pressure_bara": 80.0,
+                "total_flow": 10_000.0 * flow_scale,
+                "flow_unit": "kg/hr",
+            },
+            "process": [
+                {"name": "feed", "type": "stream"},
+                {
+                    "name": "metering valve",
+                    "type": "valve",
+                    "params": {
+                        "outlet_pressure_bara": 30.0,
+                        "percent_valve_opening": 60.0,
+                        "use_design_basis": True,
+                        "design_cv_capacity_us": design_cv_capacity_us,
+                    },
+                },
+            ],
+        }
+
+    @staticmethod
+    def _constraint(result: ModelRunResult) -> ConstraintStatus:
+        return next(
+            constraint
+            for constraint in result.constraints
+            if constraint.name == "valve_design.metering valve"
+        )
+
+    def test_native_rated_cv_round_trips_and_updates_incrementally(self):
+        cv_by_scale = {}
+        utilization_by_scale = {}
+        baseline_builder = None
+        baseline_model = None
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder = ProcessBuilder()
+                model = builder.build_from_spec(
+                    self._specification(flow_scale)
+                )
+                result = model.run(timeout_ms=180_000)
+                valve = model.get_unit("metering valve")
+                cv = float(valve.getCv())
+                cv_kpi = result.kpis["metering valve.Cv"]
+                capacity_kpi = result.kpis[
+                    "metering valve.designCvCapacity_US"
+                ]
+                utilization_kpi = result.kpis[
+                    "metering valve.cvUtilization_pct"
+                ]
+                margin_kpi = result.kpis["metering valve.cvMargin_US"]
+
+                self.assertAlmostEqual(cv_kpi.value, cv, delta=1.0e-12)
+                self.assertEqual(cv_kpi.unit, "US Cv")
+                self.assertEqual(capacity_kpi.value, 40.0)
+                self.assertEqual(capacity_kpi.unit, "US Cv")
+                self.assertAlmostEqual(
+                    utilization_kpi.value,
+                    100.0 * cv / 40.0,
+                    delta=1.0e-10,
+                )
+                self.assertEqual(utilization_kpi.unit, "%")
+                self.assertAlmostEqual(
+                    margin_kpi.value,
+                    40.0 - cv,
+                    delta=1.0e-10,
+                )
+                self.assertEqual(margin_kpi.unit, "US Cv")
+                self.assertEqual(self._constraint(result).status, "OK")
+                self.assertAlmostEqual(
+                    float(valve.getOutletStream().getPressure("bara")),
+                    30.0,
+                    delta=0.05,
+                )
+                self.assertAlmostEqual(
+                    float(valve.getPercentValveOpening()),
+                    60.0,
+                    delta=1.0e-12,
+                )
+                self.assertLess(
+                    result.kpis["mass_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["component_balance_max_pct"].value,
+                    1.0e-6,
+                )
+                self.assertLess(
+                    result.kpis["energy_balance_pct"].value,
+                    1.0e-6,
+                )
+                self.assertIn(
+                    "Registered equipment design basis for: metering valve",
+                    builder.build_log,
+                )
+                generated_script = builder.to_python_script()
+                self.assertIn('"design_cv_capacity_us": 40.0', generated_script)
+                self.assertIn(
+                    "NeqSimProcessModel.from_process_system(",
+                    generated_script,
+                )
+                compile(
+                    generated_script,
+                    "<valve-cv-design-replay>",
+                    "exec",
+                )
+
+                cv_by_scale[flow_scale] = cv
+                utilization_by_scale[flow_scale] = utilization_kpi.value
+                if flow_scale == 1.0:
+                    baseline_builder = builder
+                    baseline_model = model
+                print(
+                    "native valve design benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"Cv={cv:.6f} US Cv",
+                    f"utilization={utilization_kpi.value:.6f}%",
+                    f"margin={margin_kpi.value:.6f} US Cv",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+
+        self.assertGreater(cv_by_scale[1.05], cv_by_scale[1.0])
+        self.assertGreater(
+            utilization_by_scale[1.05],
+            utilization_by_scale[1.0],
+        )
+        self.assertIsNotNone(baseline_builder)
+        self.assertIsNotNone(baseline_model)
+
+        saved = NeqSimProcessModel.from_bytes(baseline_model.save_bytes())
+        saved_result = saved.run(timeout_ms=180_000)
+        self.assertEqual(
+            saved_result.kpis[
+                "metering valve.designCvCapacity_US"
+            ].value,
+            40.0,
+        )
+        self.assertEqual(self._constraint(saved_result).status, "OK")
+
+        updated_specification = self._specification(
+            1.0,
+            design_cv_capacity_us=35.0,
+        )
+        change_type, param_changes, fluid_changes, extra_steps = (
+            _classify_build_change(
+                baseline_builder.spec,
+                updated_specification,
+            )
+        )
+        self.assertEqual(change_type, "property_update")
+        session = object.__new__(ProcessChatSession)
+        session.model = baseline_model
+        session._builder = baseline_builder
+        session.history = []
+        session._system_prompt = ""
+        session._llm_followup = lambda client, types: "updated"
+        with patch(
+            "process_chat.chat_tools.build_system_prompt",
+            return_value="updated prompt",
+        ), patch(
+            "process_chat.chat_tools._build_model_built_result",
+            return_value={},
+        ):
+            response = session._handle_incremental_update(
+                "update valve rated Cv",
+                updated_specification,
+                change_type,
+                param_changes,
+                fluid_changes,
+                extra_steps,
+                None,
+                None,
+            )
+        self.assertEqual(response, "updated")
+        self.assertEqual(
+            baseline_model._equipment_design_bases["metering valve"][
+                "design_cv_capacity_us"
+            ],
+            35.0,
+        )
+        updated_result = baseline_model.run(timeout_ms=180_000)
+        self.assertEqual(self._constraint(updated_result).status, "VIOLATION")
+
+        reloaded = NeqSimProcessModel.from_bytes(
+            baseline_builder.save_neqsim_bytes()
+        )
+        reloaded_result = reloaded.run(timeout_ms=180_000)
+        self.assertEqual(
+            reloaded_result.kpis[
+                "metering valve.designCvCapacity_US"
+            ].value,
+            35.0,
+        )
+        self.assertEqual(
+            self._constraint(reloaded_result).status,
+            "VIOLATION",
+        )
+
+    def test_native_rerun_recalculates_required_cv_after_flow_change(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(
+            self._specification(1.0, design_cv_capacity_us=50.0)
+        )
+        baseline = model.run(timeout_ms=180_000)
+        baseline_cv = baseline.kpis["metering valve.Cv"].value
+        self.assertEqual(self._constraint(baseline).status, "OK")
+
+        feed = model.get_unit("feed")
+        feed.getFluid().setTotalFlowRate(20_000.0, "kg/hr")
+        doubled = model.run(timeout_ms=180_000)
+        doubled_cv = doubled.kpis["metering valve.Cv"].value
+
+        self.assertAlmostEqual(
+            doubled_cv,
+            2.0 * baseline_cv,
+            delta=1.0e-8,
+        )
+        self.assertEqual(self._constraint(doubled).status, "VIOLATION")
+        self.assertLess(doubled.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            doubled.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+
+        repeated = model.run(timeout_ms=180_000)
+        self.assertAlmostEqual(
+            repeated.kpis["metering valve.Cv"].value,
+            doubled_cv,
+            delta=1.0e-12,
+        )
+
+    def test_incremental_fixed_cv_edit_is_rejected_before_native_mutation(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+        original_cv = float(model.get_unit("metering valve").getCv())
+        original_basis = {
+            name: dict(basis)
+            for name, basis in model._equipment_design_bases.items()
+        }
+
+        invalid_specification = json.loads(json.dumps(builder.spec))
+        invalid_specification["process"][1]["params"]["cv"] = 25.0
+        change_type, param_changes, fluid_changes, extra_steps = (
+            _classify_build_change(builder.spec, invalid_specification)
+        )
+        self.assertEqual(change_type, "property_update")
+
+        session = object.__new__(ProcessChatSession)
+        session.model = model
+        session._builder = builder
+        session.history = []
+        session._system_prompt = ""
+        session._handle_build = lambda *args, **kwargs: "rejected"
+        response = session._handle_incremental_update(
+            "set a fixed Cv while screening required Cv",
+            invalid_specification,
+            change_type,
+            param_changes,
+            fluid_changes,
+            extra_steps,
+            None,
+            None,
+        )
+
+        self.assertEqual(response, "rejected")
+        self.assertEqual(
+            float(model.get_unit("metering valve").getCv()),
+            original_cv,
+        )
+        self.assertEqual(model._equipment_design_bases, original_basis)
+
+    def test_scenario_fixed_cv_patch_is_rejected_without_mutation(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+        original_cv = float(model.get_unit("metering valve").getCv())
+
+        comparison = run_scenarios(
+            model,
+            [
+                Scenario(
+                    name="invalid fixed Cv",
+                    description="Reject fixed Cv while required-Cv screen is active",
+                    patch=InputPatch(
+                        changes={"units.METERING VALVE.cv": 25.0}
+                    ),
+                )
+            ],
+            timeout_ms=180_000,
+        )
+
+        self.assertFalse(comparison.cases[0].success)
+        self.assertIn("fixed valve Cv", comparison.cases[0].error)
+        self.assertEqual(
+            float(model.get_unit("metering valve").getCv()),
+            original_cv,
+        )
+        self.assertEqual(comparison.patch_log[-1]["status"], "FAILED")
+
+    def test_target_solver_rejects_fixed_cv_for_active_screen(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+
+        comparison = run_scenarios(
+            model,
+            [
+                Scenario(
+                    name="invalid target Cv",
+                    description="Reject Cv as the manipulated variable",
+                    patch=InputPatch(
+                        changes={},
+                        targets=[
+                            TargetSpec(
+                                target_kpi="metering valve.Cv",
+                                target_value=30.0,
+                                variable="unit_param",
+                                unit_name="METERING VALVE",
+                                unit_param="Cv",
+                                initial_guess=25.0,
+                                min_value=10.0,
+                                max_value=50.0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+            timeout_ms=180_000,
+        )
+
+        self.assertFalse(comparison.cases[0].success)
+        self.assertIn("target-solved", comparison.cases[0].error)
+        self.assertEqual(comparison.patch_log[-1]["status"], "FAILED")
+
+    def test_target_solver_propagates_added_valve_failures(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+
+        invalid_patches = (
+            InputPatch(
+                changes={},
+                add_units=[
+                    AddUnitOp(
+                        name="trim valve",
+                        equipment_type="valve",
+                        insert_after="metering valve",
+                        params={
+                            "outlet_pressure_bara": 20.0,
+                            "use_design_basis": True,
+                            "design_cv_capacity_us": 50.0,
+                            "valve_cv": 25.0,
+                        },
+                    )
+                ],
+            ),
+            InputPatch(
+                changes={"units.trim valve.cv": 25.0},
+                add_units=[
+                    AddUnitOp(
+                        name="trim valve",
+                        equipment_type="valve",
+                        insert_after="metering valve",
+                        params={
+                            "outlet_pressure_bara": 20.0,
+                            "use_design_basis": True,
+                            "design_cv_capacity_us": 50.0,
+                        },
+                    )
+                ],
+            ),
+        )
+
+        for index, invalid_patch in enumerate(invalid_patches):
+            with self.subTest(index=index):
+                invalid_patch.targets = [
+                    TargetSpec(
+                        target_kpi="metering valve.Cv",
+                        target_value=40.0,
+                        variable="stream_scale",
+                        stream_name="feed",
+                        initial_guess=1.0,
+                        min_value=0.5,
+                        max_value=1.5,
+                    )
+                ]
+                comparison = run_scenarios(
+                    model,
+                    [
+                        Scenario(
+                            name=f"invalid added valve target {index}",
+                            description=(
+                                "Propagate added-valve validation failures"
+                            ),
+                            patch=invalid_patch,
+                        )
+                    ],
+                    timeout_ms=180_000,
+                )
+
+                self.assertFalse(comparison.cases[0].success)
+                self.assertIn(
+                    "Iterative solver failed",
+                    comparison.cases[0].error,
+                )
+                self.assertEqual(
+                    comparison.patch_log[-1]["status"],
+                    "FAILED",
+                )
+
+    def test_scenario_added_valve_registers_rated_cv_metadata(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+
+        comparison = run_scenarios(
+            model,
+            [
+                Scenario(
+                    name="add trim valve",
+                    description="Add a screened trim valve",
+                    patch=InputPatch(
+                        changes={},
+                        add_units=[
+                            AddUnitOp(
+                                name="trim valve",
+                                equipment_type="valve",
+                                insert_after="metering valve",
+                                params={
+                                    "outlet_pressure_bara": 20.0,
+                                    "percent_valve_opening": 20.0,
+                                    "use_design_basis": True,
+                                    "design_cv_capacity_us": 100.0,
+                                },
+                            )
+                        ],
+                    ),
+                )
+            ],
+            timeout_ms=180_000,
+        )
+
+        case = comparison.cases[0]
+        self.assertTrue(case.success, case.error)
+        self.assertEqual(
+            case.result.kpis["trim valve.designCvCapacity_US"].value,
+            100.0,
+        )
+        self.assertAlmostEqual(
+            case.result.kpis["trim valve.percentValveOpening"].value,
+            20.0,
+            delta=1.0e-12,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in case.result.constraints
+                if constraint.name == "valve_design.trim valve"
+            ),
+            "VIOLATION",
+        )
+
+    def test_added_valve_basis_uses_qualified_multi_system_name(self):
+        from neqsim import jneqsim
+
+        def _train(
+            train_name: str,
+            feed_name: str,
+            valve_name: str,
+            outlet_pressure_bara: float,
+        ):
+            specification = self._specification(1.0)
+            specification["name"] = train_name
+            specification["process"][0]["name"] = feed_name
+            valve_spec = specification["process"][1]
+            valve_spec["name"] = valve_name
+            valve_spec["params"] = {
+                "outlet_pressure_bara": outlet_pressure_bara,
+                "percent_valve_opening": 60.0,
+            }
+            process = ProcessBuilder().build_from_spec(
+                specification
+            ).get_process()
+            process.setName(train_name)
+            return process
+
+        train_a = _train(
+            "train-a",
+            "feed a",
+            "metering valve a",
+            30.0,
+        )
+        train_b = _train(
+            "train-b",
+            "feed b",
+            "trim valve",
+            25.0,
+        )
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+
+        operation_log = apply_add_units(
+            model,
+            [
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="metering valve a",
+                    params={
+                        "outlet_pressure_bara": 20.0,
+                        "percent_valve_opening": 20.0,
+                        "use_design_basis": True,
+                        "design_cv_capacity_us": 100.0,
+                    },
+                )
+            ],
+        )
+
+        self.assertFalse(
+            [
+                entry
+                for entry in operation_log
+                if entry.get("status") == "FAILED"
+            ]
+        )
+        self.assertEqual(
+            model._equipment_design_bases,
+            {
+                "train-a/trim valve": {
+                    "design_cv_capacity_us": 100.0,
+                }
+            },
+        )
+        result = model.run(timeout_ms=180_000)
+        self.assertEqual(
+            result.kpis[
+                "train-a/trim valve.designCvCapacity_US"
+            ].value,
+            100.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in result.constraints
+                if constraint.name == "valve_design.train-a/trim valve"
+            ),
+            "VIOLATION",
+        )
+
+    def test_existing_screen_is_remapped_without_screening_duplicate(self):
+        from neqsim import jneqsim
+
+        def _train(
+            train_name: str,
+            feed_name: str,
+            valve_name: str,
+            outlet_pressure_bara: float,
+        ):
+            specification = self._specification(1.0)
+            specification["name"] = train_name
+            specification["process"][0]["name"] = feed_name
+            valve_spec = specification["process"][1]
+            valve_spec["name"] = valve_name
+            valve_spec["params"] = {
+                "outlet_pressure_bara": outlet_pressure_bara,
+                "percent_valve_opening": 60.0,
+            }
+            process = ProcessBuilder().build_from_spec(
+                specification
+            ).get_process()
+            process.setName(train_name)
+            return process
+
+        train_a = _train("train-a", "feed a", "trim valve", 30.0)
+        train_b = _train(
+            "train-b",
+            "feed b",
+            "metering valve b",
+            25.0,
+        )
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+        model._equipment_design_bases = {
+            "trim valve": {"design_cv_capacity_us": 100.0}
+        }
+
+        operation_log = apply_add_units(
+            model,
+            [
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="metering valve b",
+                    params={
+                        "outlet_pressure_bara": 20.0,
+                        "percent_valve_opening": 60.0,
+                    },
+                )
+            ],
+        )
+
+        self.assertFalse(
+            [
+                entry
+                for entry in operation_log
+                if entry.get("status") == "FAILED"
+            ]
+        )
+        self.assertEqual(
+            model._equipment_design_bases,
+            {
+                "train-a/trim valve": {
+                    "design_cv_capacity_us": 100.0,
+                }
+            },
+        )
+        patch_log = apply_patch_to_model(
+            model,
+            InputPatch(
+                changes={"units.train-b/trim valve.cv": 25.0}
+            ),
+        )
+        self.assertEqual(patch_log[-1]["status"], "OK", patch_log)
+        self.assertEqual(
+            float(model.get_unit("train-b/trim valve").getCv()),
+            25.0,
+        )
+
+        result = model.run(timeout_ms=180_000)
+        self.assertEqual(
+            result.kpis[
+                "train-a/trim valve.designCvCapacity_US"
+            ].value,
+            100.0,
+        )
+        self.assertNotIn(
+            "train-b/trim valve.designCvCapacity_US",
+            result.kpis,
+        )
+        self.assertNotEqual(
+            next(
+                constraint.status
+                for constraint in result.constraints
+                if constraint.name == "valve_design.train-a/trim valve"
+            ),
+            "UNKNOWN",
         )
 
 
@@ -7102,6 +8013,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                     {
                         "outlet_pressure_bara": 40.0,
                         "percent_valve_opening": 100.0,
+                        "use_design_basis": False,
+                        "design_cv_capacity_us": 100.0,
                     },
                 )
                 self.assertAlmostEqual(

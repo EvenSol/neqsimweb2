@@ -341,13 +341,22 @@ class UnitCatalogTest(unittest.TestCase):
         valve_rows = inline_unit_property_rows("valve")
         self.assertEqual(
             [row["key"] for row in valve_rows],
-            ["outlet_pressure_bara", "percent_valve_opening"],
+            [
+                "outlet_pressure_bara",
+                "percent_valve_opening",
+                "use_design_basis",
+                "design_cv_capacity_us",
+            ],
         )
         self.assertEqual(valve_rows[1]["label"], "Valve opening")
         self.assertEqual(valve_rows[1]["unit"], "%")
         self.assertEqual(valve_rows[1]["value"], 100.0)
         self.assertEqual(valve_rows[1]["minimum"], 1.0)
         self.assertEqual(valve_rows[1]["maximum"], 100.0)
+        self.assertFalse(valve_rows[2]["value"])
+        self.assertEqual(valve_rows[3]["label"], "Rated Cv capacity")
+        self.assertEqual(valve_rows[3]["unit"], "US Cv")
+        self.assertEqual(valve_rows[3]["value"], 100.0)
 
     def test_valve_property_rows_migrate_legacy_pressure_only_params(self):
         legacy_params = {"outlet_pressure_bara": 40.0}
@@ -358,6 +367,8 @@ class UnitCatalogTest(unittest.TestCase):
             {
                 "outlet_pressure_bara": 40.0,
                 "percent_valve_opening": 100.0,
+                "use_design_basis": False,
+                "design_cv_capacity_us": 100.0,
             },
         )
         self.assertEqual(legacy_params, {"outlet_pressure_bara": 40.0})
@@ -408,6 +419,16 @@ class UnitCatalogTest(unittest.TestCase):
                     "percent_valve_opening": 0.0,
                 },
                 "property 'percent_valve_opening' must be between",
+            ),
+            (
+                "valve",
+                {
+                    "outlet_pressure_bara": 40.0,
+                    "percent_valve_opening": 100.0,
+                    "use_design_basis": True,
+                    "design_cv_capacity_us": 0.0,
+                },
+                "property 'design_cv_capacity_us' must be between",
             ),
             (
                 "pump",
