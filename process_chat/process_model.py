@@ -38,6 +38,14 @@ _PUMP_DESIGN_CAPACITY_LIMITS = {
     "design_head_capacity_m": (0.1, 20_000.0),
     "motor_rating_kw": (0.001, 1_000_000.0),
 }
+_HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS = {
+    "design_duty_capacity_kw": (0.001, 100_000_000.0),
+    "design_ua_capacity_w_per_k": (1.0, 1_000_000_000.0),
+}
+_EQUIPMENT_DESIGN_CAPACITY_LIMITS = (
+    _PUMP_DESIGN_CAPACITY_LIMITS,
+    _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS,
+)
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
     "stream",
@@ -633,14 +641,23 @@ class NeqSimProcessModel:
                 not isinstance(unit_name, str)
                 or not unit_name.strip()
                 or not isinstance(raw_basis, dict)
-                or set(raw_basis) != set(_PUMP_DESIGN_CAPACITY_LIMITS)
             ):
                 raise RuntimeError(
                     "Saved NeqSim model has invalid equipment design metadata."
                 )
+            matching_limits = [
+                limits
+                for limits in _EQUIPMENT_DESIGN_CAPACITY_LIMITS
+                if set(raw_basis) == set(limits)
+            ]
+            if len(matching_limits) != 1:
+                raise RuntimeError(
+                    "Saved NeqSim model has invalid equipment design metadata."
+                )
+            capacity_limits = matching_limits[0]
             basis: Dict[str, float] = {}
             for property_name, (minimum, maximum) in (
-                _PUMP_DESIGN_CAPACITY_LIMITS.items()
+                capacity_limits.items()
             ):
                 raw_value = raw_basis[property_name]
                 if (
@@ -2835,6 +2852,114 @@ class NeqSimProcessModel:
             ),
         )
 
+    def _heat_exchanger_design_properties(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> Dict[str, float]:
+        """Compare a solved two-sided exchanger with explicit capacities."""
+        basis = getattr(self, "_equipment_design_bases", {}).get(unit_name)
+        if (
+            not basis
+            or set(basis) != set(_HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS)
+        ):
+            return {}
+        properties = {
+            "designDutyCapacity_kW": basis["design_duty_capacity_kw"],
+            "designUACapacity_W_K": basis[
+                "design_ua_capacity_w_per_k"
+            ],
+        }
+        operating = self._heat_exchanger_operating_properties(
+            unit,
+            getattr(self, "_direct_unit_run_provenance", {}).get(unit_name),
+            getattr(self, "_heat_exchanger_state_snapshots", {}).get(
+                unit_name
+            ),
+        )
+        comparisons = (
+            (
+                "heatTransferDuty_kW",
+                "designDutyCapacity_kW",
+                "dutyUtilization_pct",
+                "dutyMargin_kW",
+            ),
+            (
+                "UA_W_K",
+                "designUACapacity_W_K",
+                "uaUtilization_pct",
+                "uaMargin_W_K",
+            ),
+        )
+        for operating_key, capacity_key, utilization_key, margin_key in (
+            comparisons
+        ):
+            actual_value = operating.get(operating_key)
+            if actual_value is None or not math.isfinite(actual_value):
+                continue
+            capacity = properties[capacity_key]
+            properties[utilization_key] = (
+                100.0 * abs(actual_value) / capacity
+            )
+            properties[margin_key] = capacity - abs(actual_value)
+        return properties
+
+    @staticmethod
+    def _heat_exchanger_design_property_unit(property_name: str) -> str:
+        """Return explicit units for exchanger design-basis results."""
+        return {
+            "designDutyCapacity_kW": "kW",
+            "designUACapacity_W_K": "W/K",
+            "dutyUtilization_pct": "%",
+            "uaUtilization_pct": "%",
+            "dutyMargin_kW": "kW",
+            "uaMargin_W_K": "W/K",
+        }[property_name]
+
+    def _heat_exchanger_design_constraint(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> ConstraintStatus:
+        """Return a fail-loud duty and UA capacity status."""
+        properties = self._heat_exchanger_design_properties(unit_name, unit)
+        utilization_names = (
+            ("duty", "dutyUtilization_pct", "dutyMargin_kW"),
+            ("UA", "uaUtilization_pct", "uaMargin_W_K"),
+        )
+        if any(
+            utilization not in properties or margin not in properties
+            for _, utilization, margin in utilization_names
+        ):
+            return ConstraintStatus(
+                f"heat_exchanger_design.{unit_name}",
+                "UNKNOWN",
+                "Heat-exchanger design basis is active, but complete "
+                "trusted duty and UA results are unavailable.",
+            )
+        violations = [
+            label
+            for label, _, margin in utilization_names
+            if properties[margin] < -1.0e-9
+        ]
+        utilization = ", ".join(
+            f"{label}={properties[key]:.6g}%"
+            for label, key, _ in utilization_names
+        )
+        return ConstraintStatus(
+            f"heat_exchanger_design.{unit_name}",
+            "VIOLATION" if violations else "OK",
+            (
+                "Heat exchanger exceeds " + ", ".join(violations)
+                + f" capacity; utilization: {utilization}."
+                if violations
+                else (
+                    "Heat exchanger is inside design capacities; "
+                    f"utilization: {utilization}."
+                )
+            ),
+        )
+
     @staticmethod
     def _compressor_map_properties(unit: Any) -> Dict[str, Any]:
         """Return finite native map state and operating-limit margins.
@@ -4541,14 +4666,31 @@ class NeqSimProcessModel:
         # Extract detailed unit operation properties (utilization, sizing, performance)
         self._extract_unit_properties(kpis, report_duty_lookup)
 
-        for unit_name in getattr(self, "_equipment_design_bases", {}):
+        for unit_name, design_basis in getattr(
+            self,
+            "_equipment_design_bases",
+            {},
+        ).items():
+            is_pump_basis = set(design_basis) == set(
+                _PUMP_DESIGN_CAPACITY_LIMITS
+            )
+            is_exchanger_basis = set(design_basis) == set(
+                _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS
+            )
+            constraint_prefix = (
+                "pump_design"
+                if is_pump_basis
+                else "heat_exchanger_design"
+                if is_exchanger_basis
+                else "equipment_design"
+            )
             unit = self._units.get(unit_name)
             if unit is None:
                 constraints.append(
                     ConstraintStatus(
-                        f"pump_design.{unit_name}",
+                        f"{constraint_prefix}.{unit_name}",
                         "UNKNOWN",
-                        "Pump design basis references a unit that is not "
+                        "Equipment design basis references a unit that is not "
                         "present in the solved process.",
                     )
                 )
@@ -4557,18 +4699,31 @@ class NeqSimProcessModel:
                 java_class = str(unit.getClass().getSimpleName())
             except Exception:
                 java_class = ""
-            if java_class not in ("Pump", "ESPPump"):
+            expected_classes = (
+                ("Pump", "ESPPump")
+                if is_pump_basis
+                else ("HeatExchanger",)
+                if is_exchanger_basis
+                else ()
+            )
+            if java_class not in expected_classes:
                 constraints.append(
                     ConstraintStatus(
-                        f"pump_design.{unit_name}",
+                        f"{constraint_prefix}.{unit_name}",
                         "UNKNOWN",
-                        "Pump design basis references a non-pump unit.",
+                        "Equipment design basis references an incompatible "
+                        "unit type.",
                     )
                 )
                 continue
-            constraints.append(
-                self._pump_design_constraint(unit_name, unit)
-            )
+            if is_pump_basis:
+                constraints.append(
+                    self._pump_design_constraint(unit_name, unit)
+                )
+            else:
+                constraints.append(
+                    self._heat_exchanger_design_constraint(unit_name, unit)
+                )
 
         for unit_name, unit in self._units.items():
             try:
@@ -5499,6 +5654,16 @@ class NeqSimProcessModel:
                             f"{prefix}.{prop}",
                             val,
                             self._heat_exchanger_property_unit(prop),
+                        )
+                if java_class == "HeatExchanger":
+                    for prop, val in self._heat_exchanger_design_properties(
+                        name,
+                        u,
+                    ).items():
+                        kpis[f"{prefix}.{prop}"] = KPI(
+                            f"{prefix}.{prop}",
+                            val,
+                            self._heat_exchanger_design_property_unit(prop),
                         )
 
             # ---------- Pipeline hydraulics ----------
