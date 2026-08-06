@@ -37,7 +37,7 @@ from process_chat.chat_tools import (
 )
 from process_chat.process_model import NeqSimProcessModel
 from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario, TargetSpec
-from process_chat.scenario_engine import run_scenarios
+from process_chat.scenario_engine import apply_add_units, run_scenarios
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
     aggregate_unit_balances,
@@ -2351,8 +2351,10 @@ class ValveDesignBasisModelTest(unittest.TestCase):
     def test_rejects_fixed_cv_only_when_required_cv_screen_is_active(self):
         for fixed_key in (
             "cv",
+            "valve_cv",
             "flow_coefficient",
             "Cv",
+            "VALVE_CV",
             "FLOW_COEFFICIENT",
         ):
             with self.subTest(fixed_key=fixed_key):
@@ -2871,7 +2873,7 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
                             "outlet_pressure_bara": 20.0,
                             "use_design_basis": True,
                             "design_cv_capacity_us": 50.0,
-                            "Cv": 25.0,
+                            "valve_cv": 25.0,
                         },
                     )
                 ],
@@ -2978,6 +2980,95 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
                 constraint.status
                 for constraint in case.result.constraints
                 if constraint.name == "valve_design.trim valve"
+            ),
+            "VIOLATION",
+        )
+
+    def test_added_valve_basis_uses_qualified_multi_system_name(self):
+        from neqsim import jneqsim
+
+        def _train(
+            train_name: str,
+            feed_name: str,
+            valve_name: str,
+            outlet_pressure_bara: float,
+        ):
+            specification = self._specification(1.0)
+            specification["name"] = train_name
+            specification["process"][0]["name"] = feed_name
+            valve_spec = specification["process"][1]
+            valve_spec["name"] = valve_name
+            valve_spec["params"] = {
+                "outlet_pressure_bara": outlet_pressure_bara,
+                "percent_valve_opening": 60.0,
+            }
+            process = ProcessBuilder().build_from_spec(
+                specification
+            ).get_process()
+            process.setName(train_name)
+            return process
+
+        train_a = _train(
+            "train-a",
+            "feed a",
+            "metering valve a",
+            30.0,
+        )
+        train_b = _train(
+            "train-b",
+            "feed b",
+            "trim valve",
+            25.0,
+        )
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+
+        operation_log = apply_add_units(
+            model,
+            [
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="metering valve a",
+                    params={
+                        "outlet_pressure_bara": 20.0,
+                        "percent_valve_opening": 20.0,
+                        "use_design_basis": True,
+                        "design_cv_capacity_us": 100.0,
+                    },
+                )
+            ],
+        )
+
+        self.assertFalse(
+            [
+                entry
+                for entry in operation_log
+                if entry.get("status") == "FAILED"
+            ]
+        )
+        self.assertEqual(
+            model._equipment_design_bases,
+            {
+                "train-a/trim valve": {
+                    "design_cv_capacity_us": 100.0,
+                }
+            },
+        )
+        result = model.run(timeout_ms=180_000)
+        self.assertEqual(
+            result.kpis[
+                "train-a/trim valve.designCvCapacity_US"
+            ].value,
+            100.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in result.constraints
+                if constraint.name == "valve_design.train-a/trim valve"
             ),
             "VIOLATION",
         )

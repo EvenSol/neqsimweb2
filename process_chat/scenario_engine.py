@@ -1319,7 +1319,46 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
 
     # Re-index the model objects so introspection sees the new units/streams
     model._index_model_objects()
-    model._equipment_design_bases.update(requested_valve_design_bases)
+
+    # ProcessModel qualifies duplicate raw unit names with their child-system
+    # name during indexing. Register reporting metadata against that indexed
+    # key, not the raw AddUnitOp name, so rerun invalidation and KPI extraction
+    # continue to address the exact created valve.
+    indexed_valve_design_bases: Dict[str, Dict[str, float]] = {}
+    for add_op, created_unit, _params in created_units:
+        basis = requested_valve_design_bases.get(add_op.name)
+        if basis is None:
+            continue
+        indexed_name = None
+        for registered_name, registered_unit in model._units.items():
+            same_unit = registered_unit is created_unit
+            if not same_unit:
+                try:
+                    same_unit = registered_unit == created_unit
+                except Exception:
+                    same_unit = False
+            if not same_unit:
+                try:
+                    same_unit = int(registered_unit.hashCode()) == int(
+                        created_unit.hashCode()
+                    )
+                except Exception:
+                    same_unit = False
+            if same_unit:
+                indexed_name = registered_name
+                break
+        if indexed_name is None:
+            log.append({
+                "key": f"add_unit.{add_op.name}.design_basis",
+                "status": "FAILED",
+                "error": (
+                    "Created valve could not be resolved after process "
+                    "topology indexing."
+                ),
+            })
+            continue
+        indexed_valve_design_bases[indexed_name] = basis
+    model._equipment_design_bases.update(indexed_valve_design_bases)
 
     return log
 

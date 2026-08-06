@@ -1758,7 +1758,7 @@ class ProcessBuilder:
             for key in params
         }
         if raw_enabled and normalized_keys.intersection(
-            {"cv", "flow_coefficient"}
+            {"cv", "valve_cv", "flow_coefficient"}
         ):
             raise ValueError(
                 "Valve required-Cv design screening cannot be combined "
