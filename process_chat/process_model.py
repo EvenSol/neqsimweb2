@@ -33,6 +33,11 @@ _MAX_NATIVE_SPLIT_STREAM_COUNT = 256
 _STANDARD_GRAVITY_M_S2 = 9.80665
 _STUDIO_METADATA_MEMBER = "neqsimweb2/studio_metadata.json"
 _STUDIO_METADATA_SCHEMA_VERSION = 1
+_PUMP_DESIGN_CAPACITY_LIMITS = {
+    "design_flow_capacity_m3_per_hr": (0.001, 1_000_000.0),
+    "design_head_capacity_m": (0.1, 20_000.0),
+    "motor_rating_kw": (0.001, 1_000_000.0),
+}
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
     "stream",
@@ -624,17 +629,22 @@ class NeqSimProcessModel:
             )
         bases: Dict[str, Dict[str, float]] = {}
         for unit_name, raw_basis in raw_bases.items():
-            if not isinstance(unit_name, str) or not isinstance(
-                raw_basis, dict
+            if (
+                not isinstance(unit_name, str)
+                or not unit_name.strip()
+                or not isinstance(raw_basis, dict)
+                or set(raw_basis) != set(_PUMP_DESIGN_CAPACITY_LIMITS)
             ):
                 raise RuntimeError(
                     "Saved NeqSim model has invalid equipment design metadata."
                 )
             basis: Dict[str, float] = {}
-            for property_name, raw_value in raw_basis.items():
+            for property_name, (minimum, maximum) in (
+                _PUMP_DESIGN_CAPACITY_LIMITS.items()
+            ):
+                raw_value = raw_basis[property_name]
                 if (
-                    not isinstance(property_name, str)
-                    or isinstance(raw_value, bool)
+                    isinstance(raw_value, bool)
                     or not isinstance(raw_value, (int, float))
                 ):
                     raise RuntimeError(
@@ -645,6 +655,11 @@ class NeqSimProcessModel:
                 if not math.isfinite(value):
                     raise RuntimeError(
                         "Saved NeqSim model has non-finite equipment design "
+                        "metadata."
+                    )
+                if not minimum <= value <= maximum:
+                    raise RuntimeError(
+                        "Saved NeqSim model has out-of-range equipment design "
                         "metadata."
                     )
                 basis[property_name] = value
