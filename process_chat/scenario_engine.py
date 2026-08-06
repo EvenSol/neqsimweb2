@@ -1120,32 +1120,39 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                 raw_name = str(native_unit.getName())
             except Exception:
                 pass
-        existing_design_units.append((
-            stored_name,
-            getattr(model, "_unit_ps_name", {}).get(stored_name, ""),
-            raw_name,
-            native_unit,
-            dict(basis),
-        ))
+        existing_design_units.append({
+            "stored_name": stored_name,
+            "process_system": getattr(
+                model,
+                "_unit_ps_name",
+                {},
+            ).get(stored_name, ""),
+            "raw_name": raw_name,
+            "native_unit": native_unit,
+            "basis": dict(basis),
+        })
 
     # Validate reporting-only valve metadata before topology mutation. These
     # fields do not have native Java setters and must follow the same strict
     # contract as builder-created valves.
     from .process_builder import ProcessBuilder
 
-    requested_valve_design_bases: Dict[str, Dict[str, float]] = {}
+    requested_valve_design_bases: Dict[int, Optional[Dict[str, float]]] = {}
     for add_op in add_units:
         try:
-            requested_valve_design_bases.update(
-                ProcessBuilder._requested_valve_design_bases(
-                    [
-                        {
-                            "name": add_op.name,
-                            "type": add_op.equipment_type,
-                            "params": add_op.params,
-                        }
-                    ]
-                )
+            requested_basis = ProcessBuilder._requested_valve_design_bases(
+                [
+                    {
+                        "name": add_op.name,
+                        "type": add_op.equipment_type,
+                        "params": add_op.params,
+                    }
+                ]
+            )
+            requested_valve_design_bases[id(add_op)] = (
+                dict(requested_basis[add_op.name])
+                if add_op.name in requested_basis
+                else None
             )
         except ValueError as exc:
             return [
@@ -1165,6 +1172,33 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     if target_ps is not None:
         proc = target_ps
     original_units = list(proc.getUnitOperations())
+
+    # NeqSim ProcessSystem rejects duplicate equipment names. Fail before
+    # rebuilding so same-system duplicates cannot partially clear and refill
+    # the native process or make metadata identity ambiguous. The same raw tag
+    # remains valid in different ProcessSystem children.
+    occupied_names = set()
+    for original_unit in original_units:
+        try:
+            occupied_names.add(str(original_unit.getName()).casefold())
+        except Exception:
+            pass
+    planned_names = set()
+    for add_op in add_units:
+        normalized_name = str(add_op.name).casefold()
+        if normalized_name in occupied_names or normalized_name in planned_names:
+            return [
+                {
+                    "key": f"add_unit.{add_op.name}",
+                    "status": "FAILED",
+                    "error": (
+                        f"Unit name '{add_op.name}' already exists in the "
+                        "target ProcessSystem. Unit names must be unique "
+                        "within one ProcessSystem."
+                    ),
+                }
+            ]
+        planned_names.add(normalized_name)
     
     # Build an insertion plan: list of (position, AddUnitOp) 
     # Process all add_units first to determine where each goes
@@ -1281,7 +1315,12 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
             # Insert into sequence at the right position
             insert_pos = after_idx + 1
             new_sequence.insert(insert_pos, new_unit)
-            created_units.append((add_op, new_unit, params))
+            created_units.append((
+                add_op,
+                new_unit,
+                params,
+                requested_valve_design_bases.get(id(add_op)),
+            ))
             
             log.append({
                 "key": f"add_unit.{add_op.name}",
@@ -1325,13 +1364,24 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
             continue
         
         # Skip units we just created (they already have correct inlet)
-        is_newly_created = any(u is unit for _, u, _ in created_units)
+        is_newly_created = any(
+            u is unit for _, u, _, _ in created_units
+        )
         if is_newly_created:
             continue
         
         # Recreate this existing unit with the new inlet stream
         recreated = _recreate_unit(unit, prev_outlet)
         new_sequence[i] = recreated
+        original_identity = _NativeObjectIdentitySet()
+        original_identity.add(unit)
+        for design_record in existing_design_units:
+            native_unit = design_record["native_unit"]
+            if (
+                native_unit is not None
+                and original_identity.contains(native_unit)
+            ):
+                design_record["native_unit"] = recreated
     
     # Clear the process and re-add all units (new + recreated)
     unit_ops = proc.getUnitOperations()
@@ -1348,9 +1398,12 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     # key, not the raw AddUnitOp name, so rerun invalidation and KPI extraction
     # continue to address the exact created valve.
     remapped_design_bases: Dict[str, Dict[str, float]] = {}
-    for stored_name, ps_name, raw_name, native_unit, basis in (
-        existing_design_units
-    ):
+    for design_record in existing_design_units:
+        stored_name = design_record["stored_name"]
+        ps_name = design_record["process_system"]
+        raw_name = design_record["raw_name"]
+        native_unit = design_record["native_unit"]
+        basis = design_record["basis"]
         indexed_name = None
         if native_unit is not None:
             indexed_name = _indexed_unit_name(model, native_unit)
@@ -1362,8 +1415,7 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
             indexed_name = stored_name
         remapped_design_bases[indexed_name or stored_name] = basis
 
-    for add_op, created_unit, _params in created_units:
-        basis = requested_valve_design_bases.get(add_op.name)
+    for add_op, created_unit, _params, basis in created_units:
         if basis is None:
             continue
         indexed_name = _indexed_unit_name(model, created_unit)
