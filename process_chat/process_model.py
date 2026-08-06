@@ -31,6 +31,8 @@ _UNIT_BALANCE_SCALE_FLOOR_KG_HR = 1.0e-9
 _UNIT_BALANCE_SCALE_FLOOR_KW = 1.0e-9
 _MAX_NATIVE_SPLIT_STREAM_COUNT = 256
 _STANDARD_GRAVITY_M_S2 = 9.80665
+_STUDIO_METADATA_MEMBER = "neqsimweb2/studio_metadata.json"
+_STUDIO_METADATA_SCHEMA_VERSION = 1
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
     "stream",
@@ -596,9 +598,62 @@ class NeqSimProcessModel:
         # All strategies exhausted — raise the last error
         raise last_err
 
+    @staticmethod
+    def _read_studio_metadata(archive) -> Dict[str, Dict[str, float]]:
+        """Read validated Studio-only metadata from a native NeqSim archive."""
+        if _STUDIO_METADATA_MEMBER not in archive.namelist():
+            return {}
+        try:
+            metadata = json.loads(
+                archive.read(_STUDIO_METADATA_MEMBER).decode("utf-8")
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Saved NeqSim model contains invalid Studio metadata."
+            ) from exc
+        if not isinstance(metadata, dict) or metadata.get(
+            "schema_version"
+        ) != _STUDIO_METADATA_SCHEMA_VERSION:
+            raise RuntimeError(
+                "Saved NeqSim model uses unsupported Studio metadata."
+            )
+        raw_bases = metadata.get("equipment_design_bases", {})
+        if not isinstance(raw_bases, dict):
+            raise RuntimeError(
+                "Saved NeqSim model has invalid equipment design metadata."
+            )
+        bases: Dict[str, Dict[str, float]] = {}
+        for unit_name, raw_basis in raw_bases.items():
+            if not isinstance(unit_name, str) or not isinstance(
+                raw_basis, dict
+            ):
+                raise RuntimeError(
+                    "Saved NeqSim model has invalid equipment design metadata."
+                )
+            basis: Dict[str, float] = {}
+            for property_name, raw_value in raw_basis.items():
+                if (
+                    not isinstance(property_name, str)
+                    or isinstance(raw_value, bool)
+                    or not isinstance(raw_value, (int, float))
+                ):
+                    raise RuntimeError(
+                        "Saved NeqSim model has invalid equipment design "
+                        "metadata."
+                    )
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise RuntimeError(
+                        "Saved NeqSim model has non-finite equipment design "
+                        "metadata."
+                    )
+                basis[property_name] = value
+            bases[unit_name] = basis
+        return bases
+
     @classmethod
     def from_file(cls, filepath: str) -> "NeqSimProcessModel":
-        """Load a ProcessSystem from a .neqsim or .xml file."""
+        """Load a ProcessSystem and optional Studio metadata from a model file."""
         import zipfile
         import neqsim
         from neqsim import jneqsim
@@ -608,6 +663,10 @@ class NeqSimProcessModel:
 
         loaded = None
         is_zip = zipfile.is_zipfile(filepath)
+        equipment_design_bases: Dict[str, Dict[str, float]] = {}
+        if is_zip:
+            with zipfile.ZipFile(filepath, "r") as archive:
+                equipment_design_bases = cls._read_studio_metadata(archive)
         ext = os.path.splitext(filepath)[1].lower()
         errors_seen: list = []  # collect errors for diagnostics
 
@@ -662,6 +721,7 @@ class NeqSimProcessModel:
             loaded,
             source_bytes=file_bytes,
             trusted_solved=process_run_succeeded,
+            equipment_design_bases=equipment_design_bases,
         )
 
     @staticmethod
@@ -934,6 +994,33 @@ class NeqSimProcessModel:
             tmp_path = tmp.name
         try:
             neqsim.save_neqsim(self._proc, tmp_path)
+            if self._equipment_design_bases:
+                import zipfile
+
+                if not zipfile.is_zipfile(tmp_path):
+                    raise RuntimeError(
+                        "Cannot preserve Studio equipment design metadata: "
+                        "native NeqSim serialization is not a ZIP archive."
+                    )
+                metadata = {
+                    "schema_version": _STUDIO_METADATA_SCHEMA_VERSION,
+                    "equipment_design_bases": self._equipment_design_bases,
+                }
+                metadata_json = json.dumps(
+                    metadata,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                with zipfile.ZipFile(
+                    tmp_path,
+                    "a",
+                    compression=zipfile.ZIP_DEFLATED,
+                ) as archive:
+                    archive.writestr(
+                        _STUDIO_METADATA_MEMBER,
+                        metadata_json.encode("utf-8"),
+                    )
             with open(tmp_path, "rb") as f:
                 self._source_bytes = f.read()
         finally:
@@ -945,6 +1032,9 @@ class NeqSimProcessModel:
     def save_bytes(self) -> Optional[bytes]:
         """Return the current process state as serialized .neqsim bytes.
 
+        Studio-only equipment design metadata is stored as a versioned JSON
+        member inside the native ZIP archive. Native NeqSim readers continue
+        to use the XML member and ignore the additional metadata member.
         Works for both ProcessSystem and ProcessModel.
         """
         self.refresh_source_bytes()
