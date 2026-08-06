@@ -45,10 +45,15 @@ _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS = {
 _VALVE_DESIGN_CAPACITY_LIMITS = {
     "design_cv_capacity_us": (0.001, 100_000_000.0),
 }
+_PIPELINE_DESIGN_CAPACITY_LIMITS = {
+    "design_pressure_drop_capacity_bar": (0.000001, 1_000.0),
+    "design_velocity_capacity_m_per_s": (0.001, 100.0),
+}
 _EQUIPMENT_DESIGN_CAPACITY_LIMITS = (
     _PUMP_DESIGN_CAPACITY_LIMITS,
     _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS,
     _VALVE_DESIGN_CAPACITY_LIMITS,
+    _PIPELINE_DESIGN_CAPACITY_LIMITS,
 )
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
@@ -3037,6 +3042,146 @@ class NeqSimProcessModel:
         )
 
     @staticmethod
+    def _pipeline_operating_design_properties(unit: Any) -> Dict[str, float]:
+        """Return finite pressure-drop and velocity values for screening."""
+        properties: Dict[str, float] = {}
+        if hasattr(unit, "getPressureDrop"):
+            try:
+                pressure_drop = abs(float(unit.getPressureDrop()))
+            except Exception:
+                pressure_drop = math.nan
+            if math.isfinite(pressure_drop):
+                properties["pressureDrop_bar"] = pressure_drop
+
+        try:
+            java_class = str(unit.getClass().getSimpleName())
+        except Exception:
+            java_class = ""
+        velocity_getter = (
+            "getMixtureVelocity"
+            if java_class == "PipeBeggsAndBrills"
+            else "getVelocity"
+        )
+        if hasattr(unit, velocity_getter):
+            try:
+                velocity = abs(float(getattr(unit, velocity_getter)()))
+            except Exception:
+                velocity = math.nan
+            if math.isfinite(velocity):
+                properties["velocity_m_s"] = velocity
+        return properties
+
+    def _pipeline_design_properties(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> Dict[str, float]:
+        """Compare solved pipeline hydraulics with explicit capacities."""
+        basis = getattr(self, "_equipment_design_bases", {}).get(unit_name)
+        if (
+            not basis
+            or set(basis) != set(_PIPELINE_DESIGN_CAPACITY_LIMITS)
+        ):
+            return {}
+        properties = {
+            "designPressureDropCapacity_bar": basis[
+                "design_pressure_drop_capacity_bar"
+            ],
+            "designVelocityCapacity_m_s": basis[
+                "design_velocity_capacity_m_per_s"
+            ],
+        }
+        operating = self._pipeline_operating_design_properties(unit)
+        comparisons = (
+            (
+                "pressureDrop_bar",
+                "designPressureDropCapacity_bar",
+                "pressureDropUtilization_pct",
+                "pressureDropMargin_bar",
+            ),
+            (
+                "velocity_m_s",
+                "designVelocityCapacity_m_s",
+                "velocityUtilization_pct",
+                "velocityMargin_m_s",
+            ),
+        )
+        for operating_key, capacity_key, utilization_key, margin_key in (
+            comparisons
+        ):
+            actual_value = operating.get(operating_key)
+            if actual_value is None:
+                continue
+            capacity = properties[capacity_key]
+            properties[utilization_key] = 100.0 * actual_value / capacity
+            properties[margin_key] = capacity - actual_value
+        return properties
+
+    @staticmethod
+    def _pipeline_design_property_unit(property_name: str) -> str:
+        """Return explicit units for pipeline hydraulic screening."""
+        return {
+            "designPressureDropCapacity_bar": "bar",
+            "designVelocityCapacity_m_s": "m/s",
+            "pressureDropUtilization_pct": "%",
+            "velocityUtilization_pct": "%",
+            "pressureDropMargin_bar": "bar",
+            "velocityMargin_m_s": "m/s",
+        }[property_name]
+
+    def _pipeline_design_constraint(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> ConstraintStatus:
+        """Return fail-loud pressure-drop and velocity capacity status."""
+        properties = self._pipeline_design_properties(unit_name, unit)
+        utilization_names = (
+            (
+                "pressure drop",
+                "pressureDropUtilization_pct",
+                "pressureDropMargin_bar",
+            ),
+            (
+                "velocity",
+                "velocityUtilization_pct",
+                "velocityMargin_m_s",
+            ),
+        )
+        if any(
+            utilization not in properties or margin not in properties
+            for _, utilization, margin in utilization_names
+        ):
+            return ConstraintStatus(
+                f"pipeline_design.{unit_name}",
+                "UNKNOWN",
+                "Pipeline design basis is active, but complete finite native "
+                "pressure-drop and velocity results are unavailable.",
+            )
+        violations = [
+            label
+            for label, _, margin in utilization_names
+            if properties[margin] < -1.0e-9
+        ]
+        utilization = ", ".join(
+            f"{label}={properties[key]:.6g}%"
+            for label, key, _ in utilization_names
+        )
+        return ConstraintStatus(
+            f"pipeline_design.{unit_name}",
+            "VIOLATION" if violations else "OK",
+            (
+                "Pipeline exceeds " + ", ".join(violations)
+                + f" capacity; utilization: {utilization}."
+                if violations
+                else (
+                    "Pipeline is inside hydraulic capacities; "
+                    f"utilization: {utilization}."
+                )
+            ),
+        )
+
+    @staticmethod
     def _compressor_map_properties(unit: Any) -> Dict[str, Any]:
         """Return finite native map state and operating-limit margins.
 
@@ -3983,6 +4128,14 @@ class NeqSimProcessModel:
                 props.update(self._pump_operating_properties(u))
                 props.update(self._pump_design_properties(name, u))
 
+            if java_class in (
+                "Pipeline",
+                "AdiabaticPipe",
+                "PipeBeggsAndBrills",
+                "OnePhasePipeLine",
+            ):
+                props.update(self._pipeline_design_properties(name, u))
+
             if java_class == "Compressor":
                 props.update(self._compressor_map_properties(u))
 
@@ -4787,6 +4940,9 @@ class NeqSimProcessModel:
             is_valve_basis = set(design_basis) == set(
                 _VALVE_DESIGN_CAPACITY_LIMITS
             )
+            is_pipeline_basis = set(design_basis) == set(
+                _PIPELINE_DESIGN_CAPACITY_LIMITS
+            )
             constraint_prefix = (
                 "pump_design"
                 if is_pump_basis
@@ -4794,6 +4950,8 @@ class NeqSimProcessModel:
                 if is_exchanger_basis
                 else "valve_design"
                 if is_valve_basis
+                else "pipeline_design"
+                if is_pipeline_basis
                 else "equipment_design"
             )
             unit = self._units.get(unit_name)
@@ -4818,6 +4976,13 @@ class NeqSimProcessModel:
                 if is_exchanger_basis
                 else ("ThrottlingValve", "ControlValve", "Valve")
                 if is_valve_basis
+                else (
+                    "Pipeline",
+                    "AdiabaticPipe",
+                    "PipeBeggsAndBrills",
+                    "OnePhasePipeLine",
+                )
+                if is_pipeline_basis
                 else ()
             )
             if java_class not in expected_classes:
@@ -4838,9 +5003,13 @@ class NeqSimProcessModel:
                 constraints.append(
                     self._heat_exchanger_design_constraint(unit_name, unit)
                 )
-            else:
+            elif is_valve_basis:
                 constraints.append(
                     self._valve_design_constraint(unit_name, unit)
+                )
+            else:
+                constraints.append(
+                    self._pipeline_design_constraint(unit_name, unit)
                 )
 
         for unit_name, unit in self._units.items():
@@ -5858,6 +6027,15 @@ class NeqSimProcessModel:
                         kpis[f"{prefix}.{prop}"] = KPI(
                             f"{prefix}.{prop}", val, unit
                         )
+                for prop, val in self._pipeline_design_properties(
+                    name,
+                    u,
+                ).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        self._pipeline_design_property_unit(prop),
+                    )
 
             # ---------- Expander ----------
             elif java_class == "Expander":

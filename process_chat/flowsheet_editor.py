@@ -450,6 +450,9 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
             "length": 1000.0,
             "diameter": 0.30,
             "roughness": 1.0e-5,
+            "use_design_basis": False,
+            "design_pressure_drop_capacity_bar": 1.0,
+            "design_velocity_capacity_m_per_s": 20.0,
         },
         "properties": {
             "length": _number_property(
@@ -475,6 +478,29 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
                 0.1,
                 1.0e-6,
                 "%.7f",
+            ),
+            "use_design_basis": _boolean_property(
+                "Evaluate pipeline hydraulic limits",
+                (
+                    "Compare solved native pressure drop and mixture velocity "
+                    "with explicit screening capacities."
+                ),
+            ),
+            "design_pressure_drop_capacity_bar": _number_property(
+                "Design pressure-drop capacity",
+                "bar",
+                0.000001,
+                1_000.0,
+                0.01,
+                "%.6f",
+            ),
+            "design_velocity_capacity_m_per_s": _number_property(
+                "Design velocity capacity",
+                "m/s",
+                0.001,
+                100.0,
+                0.1,
+                "%.3f",
             ),
         },
     },
@@ -668,6 +694,19 @@ def process_unit_property_rows(
             "use_design_basis",
             "design_duty_capacity_kw",
             "design_ua_capacity_w_per_k",
+        ):
+            selected_params.setdefault(
+                key,
+                copy.deepcopy(definition["default_params"][key]),
+            )
+
+    if cleaned_type == "pipeline":
+        # Earlier graph schemas stored only geometry. Preserve that solve and
+        # make hydraulic-capacity screening explicitly opt-in.
+        for key in (
+            "use_design_basis",
+            "design_pressure_drop_capacity_bar",
+            "design_velocity_capacity_m_per_s",
         ):
             selected_params.setdefault(
                 key,

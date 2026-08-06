@@ -1625,7 +1625,11 @@ class ProcessBuilder:
                     key in params for key in design_keys[1:]
                 )
                 if has_pump_specific_key or (
-                    unit_type not in ("heat_exchanger", "valve")
+                    unit_type not in (
+                        "heat_exchanger",
+                        "valve",
+                        "pipeline",
+                    )
                     and "use_design_basis" in params
                 ):
                     raise ValueError(
@@ -1723,7 +1727,7 @@ class ProcessBuilder:
                     key in params for key in design_keys[1:]
                 )
                 if has_exchanger_specific_key or (
-                    unit_type not in ("pump", "valve")
+                    unit_type not in ("pump", "valve", "pipeline")
                     and "use_design_basis" in params
                 ):
                     raise ValueError(
@@ -1800,7 +1804,11 @@ class ProcessBuilder:
             if unit_type != "valve":
                 has_valve_specific_key = design_keys[1] in params
                 if has_valve_specific_key or (
-                    unit_type not in ("pump", "heat_exchanger")
+                    unit_type not in (
+                        "pump",
+                        "heat_exchanger",
+                        "pipeline",
+                    )
                     and "use_design_basis" in params
                 ):
                     raise ValueError(
@@ -1821,6 +1829,101 @@ class ProcessBuilder:
             }
         return design_bases
 
+    @staticmethod
+    def _pipeline_design_settings(
+        params: dict,
+    ) -> tuple[bool, float, float]:
+        """Validate one backward-compatible pipeline screening request."""
+        raw_enabled = params.get("use_design_basis", False)
+        if type(raw_enabled) is not bool:
+            raise ValueError("Pipeline use_design_basis must be boolean.")
+        definitions = (
+            (
+                "design_pressure_drop_capacity_bar",
+                1.0,
+                0.000001,
+                1_000.0,
+                "bar",
+            ),
+            (
+                "design_velocity_capacity_m_per_s",
+                20.0,
+                0.001,
+                100.0,
+                "m/s",
+            ),
+        )
+        values: list[float] = []
+        for key, default, minimum, maximum, unit in definitions:
+            raw_value = params.get(key, default)
+            if isinstance(raw_value, bool):
+                raise ValueError(f"Pipeline {key} must be numeric.")
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Pipeline {key} must be numeric.") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"Pipeline {key} must be finite.")
+            if not minimum <= value <= maximum:
+                raise ValueError(
+                    f"Pipeline {key} must be between {minimum} and "
+                    f"{maximum} {unit}."
+                )
+            values.append(value)
+        return raw_enabled, values[0], values[1]
+
+    @classmethod
+    def _requested_pipeline_design_bases(
+        cls,
+        unit_specs: List[dict],
+    ) -> Dict[str, Dict[str, float]]:
+        """Return validated opt-in hydraulic capacities by pipeline name."""
+        design_bases: Dict[str, Dict[str, float]] = {}
+        design_keys = (
+            "use_design_basis",
+            "design_pressure_drop_capacity_bar",
+            "design_velocity_capacity_m_per_s",
+        )
+        for unit_spec in unit_specs:
+            if not isinstance(unit_spec, dict):
+                continue
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                continue
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if unit_type != "pipeline":
+                has_pipeline_specific_key = any(
+                    key in params for key in design_keys[1:]
+                )
+                if has_pipeline_specific_key or (
+                    unit_type not in (
+                        "pump",
+                        "heat_exchanger",
+                        "valve",
+                    )
+                    and "use_design_basis" in params
+                ):
+                    raise ValueError(
+                        "Pipeline design-basis properties are supported only "
+                        "for pipeline units."
+                    )
+                continue
+            if not any(key in params for key in design_keys):
+                continue
+            enabled, pressure_drop, velocity = (
+                cls._pipeline_design_settings(params)
+            )
+            if not enabled:
+                continue
+            unit_name = str(unit_spec.get("name", ""))
+            if not unit_name.strip():
+                raise ValueError("Pipeline design basis requires a unit name.")
+            design_bases[unit_name] = {
+                "design_pressure_drop_capacity_bar": pressure_drop,
+                "design_velocity_capacity_m_per_s": velocity,
+            }
+        return design_bases
+
     @classmethod
     def _requested_equipment_design_bases(
         cls,
@@ -1832,7 +1935,12 @@ class ProcessBuilder:
             unit_specs
         )
         valve_bases = cls._requested_valve_design_bases(unit_specs)
-        for additional_bases in (exchanger_bases, valve_bases):
+        pipeline_bases = cls._requested_pipeline_design_bases(unit_specs)
+        for additional_bases in (
+            exchanger_bases,
+            valve_bases,
+            pipeline_bases,
+        ):
             duplicate_names = set(design_bases).intersection(
                 additional_bases
             )

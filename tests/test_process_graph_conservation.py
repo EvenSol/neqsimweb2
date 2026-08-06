@@ -19,6 +19,7 @@ from process_chat.flowsheet_editor import (
     create_graph_history,
     extend_material_path,
     insert_mixer_on_connection,
+    process_unit_property_rows,
     record_graph_history,
     redo_graph_history,
     replace_inline_unit,
@@ -4382,17 +4383,339 @@ class PipelinePropertyExtractionTest(unittest.TestCase):
         )
 
 
+class PipelineDesignBasisModelTest(unittest.TestCase):
+    """Protect pipeline hydraulic capacities, margins, and status."""
+
+    class _JavaClass:
+        def __init__(self, name="PipeBeggsAndBrills"):
+            self.name = name
+
+        def getSimpleName(self):
+            return self.name
+
+    class _Pipeline:
+        def __init__(
+            self,
+            pressure_drop_bar=0.0048,
+            velocity_m_s=0.58,
+            java_class="PipeBeggsAndBrills",
+        ):
+            self.pressure_drop_bar = pressure_drop_bar
+            self.velocity_m_s = velocity_m_s
+            self.java_class = java_class
+
+        def getClass(self):
+            return PipelineDesignBasisModelTest._JavaClass(self.java_class)
+
+        def getPressureDrop(self):
+            return self.pressure_drop_bar
+
+        def getMixtureVelocity(self):
+            return self.velocity_m_s
+
+        def getVelocity(self):
+            return self.velocity_m_s
+
+    @staticmethod
+    def _model(pipeline):
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "transport pipeline": {
+                "design_pressure_drop_capacity_bar": 0.005,
+                "design_velocity_capacity_m_per_s": 0.60,
+            }
+        }
+        model._units = {"transport pipeline": pipeline}
+        model._unit_ps_name = {"transport pipeline": "main"}
+        return model
+
+    def test_reports_hydraulic_capacity_margins_with_explicit_units(self):
+        pipeline = self._Pipeline()
+        model = self._model(pipeline)
+
+        properties = model._pipeline_design_properties(
+            "transport pipeline",
+            pipeline,
+        )
+
+        self.assertEqual(properties["designPressureDropCapacity_bar"], 0.005)
+        self.assertEqual(properties["designVelocityCapacity_m_s"], 0.60)
+        self.assertAlmostEqual(properties["pressureDropUtilization_pct"], 96.0)
+        self.assertAlmostEqual(
+            properties["velocityUtilization_pct"],
+            96.66666666666667,
+        )
+        self.assertAlmostEqual(properties["pressureDropMargin_bar"], 0.0002)
+        self.assertAlmostEqual(properties["velocityMargin_m_s"], 0.02)
+        self.assertEqual(
+            model._pipeline_design_constraint(
+                "transport pipeline",
+                pipeline,
+            ).status,
+            "OK",
+        )
+        expected_units = {
+            "designPressureDropCapacity_bar": "bar",
+            "designVelocityCapacity_m_s": "m/s",
+            "pressureDropUtilization_pct": "%",
+            "velocityUtilization_pct": "%",
+            "pressureDropMargin_bar": "bar",
+            "velocityMargin_m_s": "m/s",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(property_name=property_name):
+                self.assertEqual(
+                    model._pipeline_design_property_unit(property_name),
+                    unit,
+                )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis[
+                "transport pipeline.designPressureDropCapacity_bar"
+            ].unit,
+            "bar",
+        )
+        self.assertEqual(
+            kpis["transport pipeline.velocityMargin_m_s"].unit,
+            "m/s",
+        )
+        workbook_properties = model.list_units()[0].properties
+        self.assertAlmostEqual(
+            workbook_properties["pressureDropMargin_bar"],
+            0.0002,
+        )
+
+    def test_validates_and_collects_enabled_pipeline_design_basis(self):
+        self.assertEqual(
+            ProcessBuilder._pipeline_design_settings(
+                {
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": 0.005,
+                    "design_velocity_capacity_m_per_s": 0.60,
+                }
+            ),
+            (True, 0.005, 0.60),
+        )
+        units = [
+            {
+                "name": "transport pipeline",
+                "type": "pipeline",
+                "params": {
+                    "length": 1_000.0,
+                    "diameter": 0.30,
+                    "roughness": 1.0e-5,
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": 0.005,
+                    "design_velocity_capacity_m_per_s": 0.60,
+                },
+            },
+            {
+                "name": "spare pipeline",
+                "type": "pipeline",
+                "params": {"use_design_basis": False},
+            },
+        ]
+        expected = {
+            "transport pipeline": {
+                "design_pressure_drop_capacity_bar": 0.005,
+                "design_velocity_capacity_m_per_s": 0.60,
+            }
+        }
+        self.assertEqual(
+            ProcessBuilder._requested_pipeline_design_bases(units),
+            expected,
+        )
+        self.assertEqual(
+            ProcessBuilder._requested_equipment_design_bases(units),
+            expected,
+        )
+
+        for params, message in (
+            ({"use_design_basis": 1}, "must be boolean"),
+            (
+                {"design_pressure_drop_capacity_bar": math.nan},
+                "must be finite",
+            ),
+            (
+                {"design_velocity_capacity_m_per_s": 0.0},
+                "must be between",
+            ),
+        ):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._pipeline_design_settings(params)
+
+        with self.assertRaisesRegex(ValueError, "only for pipeline units"):
+            ProcessBuilder._requested_pipeline_design_bases(
+                [
+                    {
+                        "name": "not a pipeline",
+                        "type": "compressor",
+                        "params": {
+                            "design_pressure_drop_capacity_bar": 1.0,
+                        },
+                    }
+                ]
+            )
+
+    def test_editor_defaults_migrate_legacy_geometry_without_enabling_screen(self):
+        rows = process_unit_property_rows(
+            "pipeline",
+            {
+                "length": 2_000.0,
+                "diameter": 0.40,
+                "roughness": 2.0e-5,
+            },
+        )
+        row_by_key = {row["key"]: row for row in rows}
+        self.assertFalse(row_by_key["use_design_basis"]["value"])
+        self.assertEqual(
+            row_by_key["design_pressure_drop_capacity_bar"]["value"],
+            1.0,
+        )
+        self.assertEqual(
+            row_by_key["design_pressure_drop_capacity_bar"]["unit"],
+            "bar",
+        )
+        self.assertEqual(
+            row_by_key["design_velocity_capacity_m_per_s"]["unit"],
+            "m/s",
+        )
+
+        units, pipeline_id = add_catalog_unit(
+            [],
+            "pipeline",
+            "transport pipeline",
+        )
+        self.assertFalse(units[0]["params"]["use_design_basis"])
+        self.assertEqual(
+            units[0]["params"]["design_pressure_drop_capacity_bar"],
+            1.0,
+        )
+        self.assertEqual(pipeline_id, units[0]["id"])
+
+    def test_violates_or_fails_loud_when_native_results_require_it(self):
+        pipeline = self._Pipeline(
+            pressure_drop_bar=0.0051,
+            velocity_m_s=0.61,
+        )
+        model = self._model(pipeline)
+        violation = model._pipeline_design_constraint(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertEqual(violation.status, "VIOLATION")
+        self.assertIn("pressure drop", violation.detail)
+        self.assertIn("velocity", violation.detail)
+
+        pipeline.velocity_m_s = math.nan
+        unknown = model._pipeline_design_constraint(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertEqual(unknown.status, "UNKNOWN")
+
+    def test_supports_one_phase_velocity_and_absolute_pressure_drop(self):
+        pipeline = self._Pipeline(
+            pressure_drop_bar=-0.0048,
+            velocity_m_s=-0.58,
+            java_class="OnePhasePipeLine",
+        )
+        model = self._model(pipeline)
+        properties = model._pipeline_design_properties(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertAlmostEqual(properties["pressureDropUtilization_pct"], 96.0)
+        self.assertAlmostEqual(
+            properties["velocityUtilization_pct"],
+            96.66666666666667,
+        )
+
+    def test_saved_metadata_accepts_only_exact_pipeline_capacity_schema(self):
+        valid_basis = {
+            "design_pressure_drop_capacity_bar": 0.005,
+            "design_velocity_capacity_m_per_s": 0.60,
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "neqsimweb2/studio_metadata.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "equipment_design_bases": {
+                            "transport pipeline": valid_basis,
+                        },
+                    }
+                ),
+            )
+        buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as archive:
+            self.assertEqual(
+                NeqSimProcessModel._read_studio_metadata(archive),
+                {"transport pipeline": valid_basis},
+            )
+
+        for invalid_basis in (
+            {"design_pressure_drop_capacity_bar": 0.005},
+            {**valid_basis, "design_velocity_capacity_m_per_s": 0.0},
+            {**valid_basis, "motor_rating_kw": 100.0},
+        ):
+            with self.subTest(invalid_basis=invalid_basis):
+                invalid_buffer = io.BytesIO()
+                with zipfile.ZipFile(invalid_buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "transport pipeline": invalid_basis,
+                                },
+                            }
+                        ),
+                    )
+                invalid_buffer.seek(0)
+                with zipfile.ZipFile(invalid_buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
+
 class NativePipelineHydraulicsTest(unittest.TestCase):
     """Benchmark adiabatic native pipeline hydraulics and closure."""
 
     @staticmethod
-    def _run_case(flow_scale: float, roughness_m: float):
+    def _run_case(
+        flow_scale: float,
+        roughness_m: float,
+        *,
+        design_pressure_drop_capacity_bar: float | None = None,
+        design_velocity_capacity_m_per_s: float | None = None,
+    ):
         units, pipeline_id = add_catalog_unit(
             [],
             "pipeline",
             "transport pipeline",
         )
         units[0]["params"]["roughness"] = roughness_m
+        if design_pressure_drop_capacity_bar is not None:
+            units[0]["params"].update(
+                {
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": (
+                        design_pressure_drop_capacity_bar
+                    ),
+                    "design_velocity_capacity_m_per_s": (
+                        design_velocity_capacity_m_per_s
+                    ),
+                }
+            )
         graph_spec = {
             "name": "Native adiabatic pipeline benchmark",
             "units": units,
@@ -4442,6 +4765,98 @@ class NativePipelineHydraulicsTest(unittest.TestCase):
         result = model.run(timeout_ms=180_000)
 
         return builder, graph_spec, model, result, expected_flow
+
+    def test_native_design_screen_crosses_limits_at_nearby_point(self):
+        results = {}
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                _, _, model, result, expected_flow = self._run_case(
+                    flow_scale,
+                    1.0e-5,
+                    design_pressure_drop_capacity_bar=0.005,
+                    design_velocity_capacity_m_per_s=0.60,
+                )
+                constraint = next(
+                    item
+                    for item in result.constraints
+                    if item.name == "pipeline_design.transport pipeline"
+                )
+                results[flow_scale] = (result, constraint)
+                self.assertEqual(
+                    model._equipment_design_bases,
+                    {
+                        "transport pipeline": {
+                            "design_pressure_drop_capacity_bar": 0.005,
+                            "design_velocity_capacity_m_per_s": 0.60,
+                        }
+                    },
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                for balance_name in (
+                    "mass_balance_pct",
+                    "component_balance_max_pct",
+                    "energy_balance_pct",
+                    "unit_mass_balance_max_pct",
+                    "unit_energy_balance_max_pct",
+                ):
+                    self.assertLess(
+                        result.kpis[balance_name].value,
+                        1.0e-6,
+                    )
+
+        baseline, baseline_constraint = results[1.0]
+        nearby, nearby_constraint = results[1.05]
+        self.assertEqual(baseline_constraint.status, "OK")
+        self.assertEqual(nearby_constraint.status, "VIOLATION")
+        self.assertGreater(
+            baseline.kpis[
+                "transport pipeline.pressureDropMargin_bar"
+            ].value,
+            0.0,
+        )
+        self.assertGreater(
+            baseline.kpis["transport pipeline.velocityMargin_m_s"].value,
+            0.0,
+        )
+        self.assertLess(
+            nearby.kpis[
+                "transport pipeline.pressureDropMargin_bar"
+            ].value,
+            0.0,
+        )
+        self.assertLess(
+            nearby.kpis["transport pipeline.velocityMargin_m_s"].value,
+            0.0,
+        )
+        self.assertEqual(
+            nearby.kpis[
+                "transport pipeline.designPressureDropCapacity_bar"
+            ].unit,
+            "bar",
+        )
+        self.assertEqual(
+            nearby.kpis[
+                "transport pipeline.designVelocityCapacity_m_s"
+            ].unit,
+            "m/s",
+        )
+        print(
+            "native pipeline design screen:",
+            "baseline=OK",
+            "nearby=VIOLATION",
+            "baseline_drop_margin="
+            f"{baseline.kpis['transport pipeline.pressureDropMargin_bar'].value:.9f} bar",
+            "nearby_drop_margin="
+            f"{nearby.kpis['transport pipeline.pressureDropMargin_bar'].value:.9f} bar",
+            "baseline_velocity_margin="
+            f"{baseline.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+            "nearby_velocity_margin="
+            f"{nearby.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+        )
 
     def test_native_pipeline_conserves_and_trends_at_nearby_points(self):
         pressure_drop = {}
