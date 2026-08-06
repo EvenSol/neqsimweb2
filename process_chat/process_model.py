@@ -42,9 +42,13 @@ _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS = {
     "design_duty_capacity_kw": (0.001, 100_000_000.0),
     "design_ua_capacity_w_per_k": (1.0, 1_000_000_000.0),
 }
+_VALVE_DESIGN_CAPACITY_LIMITS = {
+    "design_cv_capacity_us": (0.001, 100_000_000.0),
+}
 _EQUIPMENT_DESIGN_CAPACITY_LIMITS = (
     _PUMP_DESIGN_CAPACITY_LIMITS,
     _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS,
+    _VALVE_DESIGN_CAPACITY_LIMITS,
 )
 _MATERIAL_STREAM_UNIT_CLASSES = {
     "equilibriumstream",
@@ -2963,6 +2967,75 @@ class NeqSimProcessModel:
             ),
         )
 
+    def _valve_design_properties(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> Dict[str, float]:
+        """Compare a solved valve Cv with its explicit rated capacity."""
+        basis = getattr(self, "_equipment_design_bases", {}).get(unit_name)
+        if (
+            not basis
+            or set(basis) != set(_VALVE_DESIGN_CAPACITY_LIMITS)
+        ):
+            return {}
+        properties = {
+            "designCvCapacity_US": basis["design_cv_capacity_us"],
+        }
+        if not hasattr(unit, "getCv"):
+            return properties
+        try:
+            operating_cv = float(unit.getCv())
+        except Exception:
+            return properties
+        if not math.isfinite(operating_cv) or operating_cv < 0.0:
+            return properties
+        capacity = properties["designCvCapacity_US"]
+        properties["cvUtilization_pct"] = 100.0 * operating_cv / capacity
+        properties["cvMargin_US"] = capacity - operating_cv
+        return properties
+
+    @staticmethod
+    def _valve_design_property_unit(property_name: str) -> str:
+        """Return explicit units for valve Cv design-basis results."""
+        return {
+            "designCvCapacity_US": "US Cv",
+            "cvUtilization_pct": "%",
+            "cvMargin_US": "US Cv",
+        }[property_name]
+
+    def _valve_design_constraint(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> ConstraintStatus:
+        """Return a fail-loud rated-Cv capacity status for one valve."""
+        properties = self._valve_design_properties(unit_name, unit)
+        if (
+            "cvUtilization_pct" not in properties
+            or "cvMargin_US" not in properties
+        ):
+            return ConstraintStatus(
+                f"valve_design.{unit_name}",
+                "UNKNOWN",
+                "Valve design basis is active, but a finite native Cv "
+                "result is unavailable.",
+            )
+        utilization = properties["cvUtilization_pct"]
+        violation = properties["cvMargin_US"] < -1.0e-9
+        return ConstraintStatus(
+            f"valve_design.{unit_name}",
+            "VIOLATION" if violation else "OK",
+            (
+                f"Valve exceeds rated Cv capacity; utilization={utilization:.6g}%."
+                if violation
+                else (
+                    "Valve is inside rated Cv capacity; "
+                    f"utilization={utilization:.6g}%."
+                )
+            ),
+        )
+
     @staticmethod
     def _compressor_map_properties(unit: Any) -> Dict[str, Any]:
         """Return finite native map state and operating-limit margins.
@@ -4680,11 +4753,16 @@ class NeqSimProcessModel:
             is_exchanger_basis = set(design_basis) == set(
                 _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS
             )
+            is_valve_basis = set(design_basis) == set(
+                _VALVE_DESIGN_CAPACITY_LIMITS
+            )
             constraint_prefix = (
                 "pump_design"
                 if is_pump_basis
                 else "heat_exchanger_design"
                 if is_exchanger_basis
+                else "valve_design"
+                if is_valve_basis
                 else "equipment_design"
             )
             unit = self._units.get(unit_name)
@@ -4707,6 +4785,8 @@ class NeqSimProcessModel:
                 if is_pump_basis
                 else ("HeatExchanger",)
                 if is_exchanger_basis
+                else ("ThrottlingValve", "ControlValve", "Valve")
+                if is_valve_basis
                 else ()
             )
             if java_class not in expected_classes:
@@ -4723,9 +4803,13 @@ class NeqSimProcessModel:
                 constraints.append(
                     self._pump_design_constraint(unit_name, unit)
                 )
-            else:
+            elif is_exchanger_basis:
                 constraints.append(
                     self._heat_exchanger_design_constraint(unit_name, unit)
+                )
+            else:
+                constraints.append(
+                    self._valve_design_constraint(unit_name, unit)
                 )
 
         for unit_name, unit in self._units.items():
@@ -5833,6 +5917,12 @@ class NeqSimProcessModel:
                         )
                     except Exception:
                         pass
+                for prop, val in self._valve_design_properties(name, u).items():
+                    kpis[f"{prefix}.{prop}"] = KPI(
+                        f"{prefix}.{prop}",
+                        val,
+                        self._valve_design_property_unit(prop),
+                    )
 
             # ---------- Splitter ----------
             elif "Splitter" in java_class:

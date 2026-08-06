@@ -2268,6 +2268,149 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
         )
 
 
+class ValveDesignBasisModelTest(unittest.TestCase):
+    """Protect typed valve Cv metadata, margins, and fail-loud status."""
+
+    class _JavaClass:
+        @staticmethod
+        def getSimpleName():
+            return "ThrottlingValve"
+
+    class _Valve:
+        def __init__(self, cv=18.0):
+            self.cv = cv
+
+        @staticmethod
+        def getClass():
+            return ValveDesignBasisModelTest._JavaClass()
+
+        def getCv(self):
+            return self.cv
+
+    def test_reports_rated_cv_capacity_margin_and_constraint(self):
+        valve = self._Valve()
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "metering valve": {"design_cv_capacity_us": 20.0}
+        }
+        model._units = {"metering valve": valve}
+        model._unit_ps_name = {"metering valve": "main"}
+
+        properties = model._valve_design_properties(
+            "metering valve",
+            valve,
+        )
+        self.assertEqual(properties["designCvCapacity_US"], 20.0)
+        self.assertAlmostEqual(properties["cvUtilization_pct"], 90.0)
+        self.assertAlmostEqual(properties["cvMargin_US"], 2.0)
+        self.assertEqual(
+            model._valve_design_property_unit("designCvCapacity_US"),
+            "US Cv",
+        )
+        self.assertEqual(
+            model._valve_design_property_unit("cvUtilization_pct"),
+            "%",
+        )
+        self.assertEqual(
+            model._valve_design_property_unit("cvMargin_US"),
+            "US Cv",
+        )
+        self.assertEqual(
+            model._valve_design_constraint("metering valve", valve).status,
+            "OK",
+        )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis["metering valve.designCvCapacity_US"].value,
+            20.0,
+        )
+        self.assertEqual(
+            kpis["metering valve.cvUtilization_pct"].unit,
+            "%",
+        )
+        self.assertEqual(kpis["metering valve.cvMargin_US"].unit, "US Cv")
+
+        model._equipment_design_bases["metering valve"][
+            "design_cv_capacity_us"
+        ] = 15.0
+        violation = model._valve_design_constraint("metering valve", valve)
+        self.assertEqual(violation.status, "VIOLATION")
+        self.assertIn("exceeds rated Cv", violation.detail)
+
+        valve.cv = math.nan
+        unknown = model._valve_design_constraint("metering valve", valve)
+        self.assertEqual(unknown.status, "UNKNOWN")
+
+    def test_saved_metadata_accepts_only_exact_valve_capacity_schema(self):
+        valid_basis = {"design_cv_capacity_us": 20.0}
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "neqsimweb2/studio_metadata.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "equipment_design_bases": {
+                            "metering valve": valid_basis,
+                        },
+                    }
+                ),
+            )
+        buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as archive:
+            self.assertEqual(
+                NeqSimProcessModel._read_studio_metadata(archive),
+                {"metering valve": valid_basis},
+            )
+
+        for invalid_basis in (
+            {},
+            {"design_cv_capacity_us": 0.0},
+            {"design_cv_capacity_us": math.inf},
+            {"design_cv_capacity_us": 20.0, "motor_rating_kw": 100.0},
+        ):
+            with self.subTest(invalid_basis=invalid_basis):
+                invalid_buffer = io.BytesIO()
+                with zipfile.ZipFile(invalid_buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "metering valve": invalid_basis,
+                                },
+                            }
+                        ),
+                    )
+                invalid_buffer.seek(0)
+                with zipfile.ZipFile(invalid_buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
+    def test_withholds_valve_properties_for_another_equipment_schema(self):
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "metering valve": {
+                "design_duty_capacity_kw": 2_500.0,
+                "design_ua_capacity_w_per_k": 125_000.0,
+            }
+        }
+
+        self.assertEqual(
+            model._valve_design_properties(
+                "metering valve",
+                self._Valve(),
+            ),
+            {},
+        )
+
+
 class PumpDesignBasisApplicationTest(unittest.TestCase):
     """Protect strict opt-in pump capacities and solved-model propagation."""
 
