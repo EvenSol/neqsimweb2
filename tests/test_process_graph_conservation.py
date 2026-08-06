@@ -2441,7 +2441,7 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
         script = builder.to_python_script()
 
         self.assertEqual(script.count("process.run()"), 1)
-        self.assertIn("pump_design_bases = {", script)
+        self.assertIn("equipment_design_bases = {", script)
         self.assertIn('"export pump": {', script)
         self.assertIn('"design_flow_capacity_m3_per_hr": 40.0', script)
         self.assertIn('"design_head_capacity_m": 500.0', script)
@@ -2451,7 +2451,7 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
             script,
         )
         self.assertIn(
-            "equipment_design_bases=pump_design_bases",
+            "equipment_design_bases=equipment_design_bases",
             script,
         )
         self.assertIn("result = model.run(timeout_ms=180_000)", script)
@@ -2977,7 +2977,7 @@ class NativePumpPerformanceTest(unittest.TestCase):
                         graph_spec,
                     )
                     self.assertIn(
-                        "Registered pump design basis for: export pump",
+                        "Registered equipment design basis for: export pump",
                         builder.build_log,
                     )
                     self.assertIn(
@@ -3680,6 +3680,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         declared_input_ports=None,
         declared_output_ports=None,
         downstream_source_port=None,
+        design_basis=None,
     ):
         inlet_specs = []
         for inlet_id, name, temperature_C, total_flow, components in (
@@ -3731,7 +3732,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                             or ("hot_out", "cold_out")
                         ),
                     },
-                    "params": {"ua_w_per_k": 100_000.0},
+                    "params": {
+                        "ua_w_per_k": 100_000.0,
+                        **(
+                            {
+                                "use_design_basis": True,
+                                **design_basis,
+                            }
+                            if design_basis is not None
+                            else {}
+                        ),
+                    },
                 }
             ],
             "connections": [
@@ -3806,6 +3817,96 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             execution_order,
         )
         return builder, model
+
+    def test_native_exchanger_design_basis_round_trips_nearby_points(self):
+        design_basis = {
+            "design_duty_capacity_kw": 100_000.0,
+            "design_ua_capacity_w_per_k": 125_000.0,
+        }
+        duties = {}
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model = self._build_two_sided_heat_exchanger_case(
+                    flow_scale,
+                    design_basis=design_basis,
+                )
+                result = model.run(timeout_ms=180_000)
+                duties[flow_scale] = result.kpis[
+                    "cross exchanger.heatTransferDuty_kW"
+                ].value
+                self.assertEqual(
+                    result.kpis[
+                        "cross exchanger.designDutyCapacity_kW"
+                    ].unit,
+                    "kW",
+                )
+                self.assertEqual(
+                    result.kpis[
+                        "cross exchanger.designUACapacity_W_K"
+                    ].unit,
+                    "W/K",
+                )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        "cross exchanger.uaUtilization_pct"
+                    ].value,
+                    80.0,
+                    delta=1.0e-12,
+                )
+                constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name
+                    == "heat_exchanger_design.cross exchanger"
+                )
+                self.assertEqual(constraint.status, "OK")
+                for balance_name in (
+                    "mass_balance_pct",
+                    "component_balance_max_pct",
+                    "energy_balance_pct",
+                    "unit_mass_balance_max_pct",
+                    "unit_energy_balance_max_pct",
+                ):
+                    self.assertLess(
+                        result.kpis[balance_name].value,
+                        1.0e-6,
+                    )
+
+                saved_model = builder.save_neqsim_bytes()
+                reloaded = NeqSimProcessModel.from_bytes(saved_model)
+                reloaded_result = reloaded.run(timeout_ms=180_000)
+                self.assertEqual(
+                    reloaded_result.kpis[
+                        "cross exchanger.designDutyCapacity_kW"
+                    ].value,
+                    100_000.0,
+                )
+                self.assertEqual(
+                    next(
+                        item.status
+                        for item in reloaded_result.constraints
+                        if item.name
+                        == "heat_exchanger_design.cross exchanger"
+                    ),
+                    "OK",
+                )
+                self.assertIn(
+                    "Registered equipment design basis for: "
+                    "cross exchanger",
+                    builder.build_log,
+                )
+                print(
+                    "native exchanger design benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"duty={duties[flow_scale]:.6f} kW",
+                    "ua=100000.000000 W/K",
+                    "ua_utilization=80.000000%",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+        self.assertGreater(duties[1.05], duties[1.0])
 
     @staticmethod
     def _build_mixer_heat_exchanger_case():
