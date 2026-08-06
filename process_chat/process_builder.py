@@ -2300,25 +2300,10 @@ class ProcessBuilder:
     # -- .neqsim file export ------------------------------------------------
 
     def save_neqsim_bytes(self) -> Optional[bytes]:
-        """Serialize the built process to .neqsim ZIP bytes for download."""
+        """Serialize the process and Studio metadata for model download."""
         if self._model is None:
             return None
-
-        import neqsim
-        proc = self._model.get_process()
-
-        with tempfile.NamedTemporaryFile(suffix=".neqsim", delete=False) as tmp:
-            tmp_path = tmp.name
-
-        try:
-            neqsim.save_neqsim(proc, tmp_path)
-            with open(tmp_path, "rb") as f:
-                return f.read()
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        return self._model.save_bytes()
 
     # -- Build summary (for LLM context) ------------------------------------
 
