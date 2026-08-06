@@ -2108,8 +2108,13 @@ class ProcessBuilder:
         lines.append("")
         safe = _safe_filename(self._process_name)
         lines.append("# ── Save to file ──")
-        lines.append(f"neqsim.save_neqsim(process, '{safe}.neqsim')")
         if pump_design_bases:
+            lines.extend(
+                [
+                    f"with open('{safe}.neqsim', 'wb') as model_file:",
+                    "    model_file.write(model.save_bytes())",
+                ]
+            )
             try:
                 serialized_case = json.dumps(
                     self._spec,
@@ -2124,8 +2129,7 @@ class ProcessBuilder:
                 ) from exc
             lines.extend(
                 [
-                    "# Native .neqsim files do not store Studio metadata.",
-                    "# Keep this case sidecar with the native process file.",
+                    "# Keep the complete editable case with the native model.",
                     f"case_data = json.loads({serialized_case!r})",
                     (
                         f"with open('{safe}.case.json', 'w', "
@@ -2141,6 +2145,8 @@ class ProcessBuilder:
                     "    )",
                 ]
             )
+        else:
+            lines.append(f"neqsim.save_neqsim(process, '{safe}.neqsim')")
         lines.append("")
         lines.append('print("Process simulation complete!")')
         lines.append("")
