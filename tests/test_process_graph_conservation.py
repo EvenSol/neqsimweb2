@@ -4691,13 +4691,31 @@ class NativePipelineHydraulicsTest(unittest.TestCase):
     """Benchmark adiabatic native pipeline hydraulics and closure."""
 
     @staticmethod
-    def _run_case(flow_scale: float, roughness_m: float):
+    def _run_case(
+        flow_scale: float,
+        roughness_m: float,
+        *,
+        design_pressure_drop_capacity_bar: float | None = None,
+        design_velocity_capacity_m_per_s: float | None = None,
+    ):
         units, pipeline_id = add_catalog_unit(
             [],
             "pipeline",
             "transport pipeline",
         )
         units[0]["params"]["roughness"] = roughness_m
+        if design_pressure_drop_capacity_bar is not None:
+            units[0]["params"].update(
+                {
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": (
+                        design_pressure_drop_capacity_bar
+                    ),
+                    "design_velocity_capacity_m_per_s": (
+                        design_velocity_capacity_m_per_s
+                    ),
+                }
+            )
         graph_spec = {
             "name": "Native adiabatic pipeline benchmark",
             "units": units,
@@ -4747,6 +4765,98 @@ class NativePipelineHydraulicsTest(unittest.TestCase):
         result = model.run(timeout_ms=180_000)
 
         return builder, graph_spec, model, result, expected_flow
+
+    def test_native_design_screen_crosses_limits_at_nearby_point(self):
+        results = {}
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                _, _, model, result, expected_flow = self._run_case(
+                    flow_scale,
+                    1.0e-5,
+                    design_pressure_drop_capacity_bar=0.005,
+                    design_velocity_capacity_m_per_s=0.60,
+                )
+                constraint = next(
+                    item
+                    for item in result.constraints
+                    if item.name == "pipeline_design.transport pipeline"
+                )
+                results[flow_scale] = (result, constraint)
+                self.assertEqual(
+                    model._equipment_design_bases,
+                    {
+                        "transport pipeline": {
+                            "design_pressure_drop_capacity_bar": 0.005,
+                            "design_velocity_capacity_m_per_s": 0.60,
+                        }
+                    },
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                for balance_name in (
+                    "mass_balance_pct",
+                    "component_balance_max_pct",
+                    "energy_balance_pct",
+                    "unit_mass_balance_max_pct",
+                    "unit_energy_balance_max_pct",
+                ):
+                    self.assertLess(
+                        result.kpis[balance_name].value,
+                        1.0e-6,
+                    )
+
+        baseline, baseline_constraint = results[1.0]
+        nearby, nearby_constraint = results[1.05]
+        self.assertEqual(baseline_constraint.status, "OK")
+        self.assertEqual(nearby_constraint.status, "VIOLATION")
+        self.assertGreater(
+            baseline.kpis[
+                "transport pipeline.pressureDropMargin_bar"
+            ].value,
+            0.0,
+        )
+        self.assertGreater(
+            baseline.kpis["transport pipeline.velocityMargin_m_s"].value,
+            0.0,
+        )
+        self.assertLess(
+            nearby.kpis[
+                "transport pipeline.pressureDropMargin_bar"
+            ].value,
+            0.0,
+        )
+        self.assertLess(
+            nearby.kpis["transport pipeline.velocityMargin_m_s"].value,
+            0.0,
+        )
+        self.assertEqual(
+            nearby.kpis[
+                "transport pipeline.designPressureDropCapacity_bar"
+            ].unit,
+            "bar",
+        )
+        self.assertEqual(
+            nearby.kpis[
+                "transport pipeline.designVelocityCapacity_m_s"
+            ].unit,
+            "m/s",
+        )
+        print(
+            "native pipeline design screen:",
+            "baseline=OK",
+            "nearby=VIOLATION",
+            "baseline_drop_margin="
+            f"{baseline.kpis['transport pipeline.pressureDropMargin_bar'].value:.9f} bar",
+            "nearby_drop_margin="
+            f"{nearby.kpis['transport pipeline.pressureDropMargin_bar'].value:.9f} bar",
+            "baseline_velocity_margin="
+            f"{baseline.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+            "nearby_velocity_margin="
+            f"{nearby.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+        )
 
     def test_native_pipeline_conserves_and_trends_at_nearby_points(self):
         pressure_drop = {}
