@@ -3664,6 +3664,36 @@ class ProcessChatSession:
                 from .patch_schema import AddUnitOp
 
                 add_list = build_spec["add"]
+                added_process_steps = [
+                    {
+                        "name": addition["name"],
+                        "type": addition["type"],
+                        "params": addition.get("params", {}),
+                    }
+                    for addition in add_list
+                ]
+                if self._builder and self._builder.spec:
+                    projected_process_steps = [
+                        *self._builder.spec.get("process", []),
+                        *added_process_steps,
+                    ]
+                    pump_design_bases = (
+                        ProcessBuilder._requested_pump_design_bases(
+                            projected_process_steps
+                        )
+                    )
+                else:
+                    pump_design_bases = {
+                        unit_name: dict(design_basis)
+                        for unit_name, design_basis in (
+                            self.model._equipment_design_bases.items()
+                        )
+                    }
+                    pump_design_bases.update(
+                        ProcessBuilder._requested_pump_design_bases(
+                            added_process_steps
+                        )
+                    )
                 add_ops = [
                     AddUnitOp(
                         name=a["name"],
@@ -3679,6 +3709,18 @@ class ProcessChatSession:
                 if failed:
                     raise RuntimeError(f"Add unit errors: {failed}")
 
+                # Keep the builder and live adapter metadata synchronized
+                # before refreshing source bytes. Design-basis properties are
+                # reporting metadata and are intentionally not Java setters.
+                if self._builder and self._builder.spec:
+                    self._builder.spec.setdefault("process", []).extend(
+                        added_process_steps
+                    )
+                self.model._equipment_design_bases = {
+                    unit_name: dict(design_basis)
+                    for unit_name, design_basis in pump_design_bases.items()
+                }
+
                 # Re-run, re-index, refresh source bytes
                 self.model.rerun()
                 self.model._index_model_objects()
@@ -3692,16 +3734,6 @@ class ProcessChatSession:
 
                 summary = self.model.get_model_summary()
                 log_str = "\n".join(str(e) for e in log)
-
-                # Keep builder spec in sync so to_python_script() is accurate
-                if self._builder and self._builder.spec:
-                    proc_steps = self._builder.spec.setdefault("process", [])
-                    for a in add_list:
-                        proc_steps.append({
-                            "name": a["name"],
-                            "type": a["type"],
-                            "params": a.get("params", {}),
-                        })
 
                 self.history.append({"role": "assistant", "content": assistant_text})
                 self.history.append({

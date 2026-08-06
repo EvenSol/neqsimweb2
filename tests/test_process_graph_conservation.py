@@ -2590,6 +2590,97 @@ class NativePumpPerformanceTest(unittest.TestCase):
             "VIOLATION",
         )
 
+    def test_incremental_add_pump_updates_saved_model_metadata(self):
+        specification = {
+            "name": "Incremental add pump design benchmark",
+            "fluid": {
+                "eos_model": "srk",
+                "mixing_rule": 2,
+                "components": {
+                    "n-hexane": 0.85,
+                    "n-heptane": 0.15,
+                },
+                "composition_basis": "mole_fraction",
+                "temperature_C": 25.0,
+                "pressure_bara": 10.0,
+                "total_flow": 20_000.0,
+                "flow_unit": "kg/hr",
+            },
+            "process": [
+                {
+                    "name": "feed",
+                    "type": "stream",
+                },
+            ],
+        }
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(specification)
+        add_specification = {
+            "add": [
+                {
+                    "name": "export pump",
+                    "type": "pump",
+                    "insert_after": "feed",
+                    "params": {
+                        "outlet_pressure_bara": 40.0,
+                        "efficiency": 0.75,
+                        "use_design_basis": True,
+                        "design_flow_capacity_m3_per_hr": 40.0,
+                        "design_head_capacity_m": 500.0,
+                        "motor_rating_kw": 60.0,
+                    },
+                },
+            ],
+        }
+
+        session = object.__new__(ProcessChatSession)
+        session.model = model
+        session._builder = builder
+        session.history = []
+        session._system_prompt = ""
+        session._llm_followup = lambda client, types: "updated"
+        with patch(
+            "process_chat.chat_tools.build_system_prompt",
+            return_value="updated prompt",
+        ), patch(
+            "process_chat.chat_tools._build_model_built_result",
+            return_value={},
+        ):
+            response = session._handle_build(
+                "add export pump",
+                add_specification,
+                None,
+                None,
+            )
+
+        self.assertEqual(response, "updated")
+        self.assertEqual(
+            model._equipment_design_bases["export pump"][
+                "motor_rating_kw"
+            ],
+            60.0,
+        )
+        self.assertEqual(
+            builder.spec["process"][-1]["name"],
+            "export pump",
+        )
+
+        saved_bytes = builder.save_neqsim_bytes()
+        reloaded = NeqSimProcessModel.from_bytes(saved_bytes)
+        reloaded_result = reloaded.run(timeout_ms=180_000)
+        self.assertEqual(
+            reloaded_result.kpis["export pump.motorRating_kW"].value,
+            60.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in reloaded_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "OK",
+        )
+
     def test_native_pump_conserves_and_trends_with_flow_and_efficiency(self):
         shaft_power = {}
         hydraulic_power = {}
