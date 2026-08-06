@@ -31,6 +31,10 @@ from process_chat.flowsheet_editor import (
     update_splitter_allocations,
 )
 from process_chat.process_builder import ProcessBuilder, _apply_param
+from process_chat.chat_tools import (
+    ProcessChatSession,
+    _classify_build_change,
+)
 from process_chat.process_model import NeqSimProcessModel
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
@@ -2470,6 +2474,102 @@ class NativePumpPerformanceTest(unittest.TestCase):
                 if constraint.name == "pump_design.export pump"
             ),
             "OK",
+        )
+
+    def test_incremental_pump_design_edit_updates_saved_model_metadata(self):
+        specification = {
+            "name": "Incremental pump design benchmark",
+            "fluid": {
+                "eos_model": "srk",
+                "mixing_rule": 2,
+                "components": {
+                    "n-hexane": 0.85,
+                    "n-heptane": 0.15,
+                },
+                "composition_basis": "mole_fraction",
+                "temperature_C": 25.0,
+                "pressure_bara": 10.0,
+                "total_flow": 20_000.0,
+                "flow_unit": "kg/hr",
+            },
+            "process": [
+                {
+                    "name": "feed",
+                    "type": "stream",
+                },
+                {
+                    "name": "export pump",
+                    "type": "pump",
+                    "params": {
+                        "outlet_pressure_bara": 40.0,
+                        "efficiency": 0.75,
+                        "use_design_basis": True,
+                        "design_flow_capacity_m3_per_hr": 40.0,
+                        "design_head_capacity_m": 500.0,
+                        "motor_rating_kw": 60.0,
+                    },
+                },
+            ],
+        }
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(specification)
+        updated_specification = json.loads(json.dumps(specification))
+        updated_specification["process"][1]["params"][
+            "motor_rating_kw"
+        ] = 30.0
+        change_type, param_changes, fluid_changes, extra_steps = (
+            _classify_build_change(
+                builder.spec,
+                updated_specification,
+            )
+        )
+        self.assertEqual(change_type, "property_update")
+
+        session = object.__new__(ProcessChatSession)
+        session.model = model
+        session._builder = builder
+        session.history = []
+        session._system_prompt = ""
+        session._llm_followup = lambda client, types: "updated"
+        with patch(
+            "process_chat.chat_tools.build_system_prompt",
+            return_value="updated prompt",
+        ), patch(
+            "process_chat.chat_tools._build_model_built_result",
+            return_value={},
+        ):
+            response = session._handle_incremental_update(
+                "update pump motor rating",
+                updated_specification,
+                change_type,
+                param_changes,
+                fluid_changes,
+                extra_steps,
+                None,
+                None,
+            )
+        self.assertEqual(response, "updated")
+        self.assertEqual(
+            model._equipment_design_bases["export pump"][
+                "motor_rating_kw"
+            ],
+            30.0,
+        )
+
+        saved_bytes = builder.save_neqsim_bytes()
+        reloaded = NeqSimProcessModel.from_bytes(saved_bytes)
+        reloaded_result = reloaded.run(timeout_ms=180_000)
+        self.assertEqual(
+            reloaded_result.kpis["export pump.motorRating_kW"].value,
+            30.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in reloaded_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "VIOLATION",
         )
 
     def test_native_pump_conserves_and_trends_with_flow_and_efficiency(self):
