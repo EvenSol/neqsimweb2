@@ -19,6 +19,7 @@ from process_chat.flowsheet_editor import (
     create_graph_history,
     extend_material_path,
     insert_mixer_on_connection,
+    process_unit_property_rows,
     record_graph_history,
     redo_graph_history,
     replace_inline_unit,
@@ -4485,6 +4486,115 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
             workbook_properties["pressureDropMargin_bar"],
             0.0002,
         )
+
+    def test_validates_and_collects_enabled_pipeline_design_basis(self):
+        self.assertEqual(
+            ProcessBuilder._pipeline_design_settings(
+                {
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": 0.005,
+                    "design_velocity_capacity_m_per_s": 0.60,
+                }
+            ),
+            (True, 0.005, 0.60),
+        )
+        units = [
+            {
+                "name": "transport pipeline",
+                "type": "pipeline",
+                "params": {
+                    "length": 1_000.0,
+                    "diameter": 0.30,
+                    "roughness": 1.0e-5,
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": 0.005,
+                    "design_velocity_capacity_m_per_s": 0.60,
+                },
+            },
+            {
+                "name": "spare pipeline",
+                "type": "pipeline",
+                "params": {"use_design_basis": False},
+            },
+        ]
+        expected = {
+            "transport pipeline": {
+                "design_pressure_drop_capacity_bar": 0.005,
+                "design_velocity_capacity_m_per_s": 0.60,
+            }
+        }
+        self.assertEqual(
+            ProcessBuilder._requested_pipeline_design_bases(units),
+            expected,
+        )
+        self.assertEqual(
+            ProcessBuilder._requested_equipment_design_bases(units),
+            expected,
+        )
+
+        for params, message in (
+            ({"use_design_basis": 1}, "must be boolean"),
+            (
+                {"design_pressure_drop_capacity_bar": math.nan},
+                "must be finite",
+            ),
+            (
+                {"design_velocity_capacity_m_per_s": 0.0},
+                "must be between",
+            ),
+        ):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._pipeline_design_settings(params)
+
+        with self.assertRaisesRegex(ValueError, "only for pipeline units"):
+            ProcessBuilder._requested_pipeline_design_bases(
+                [
+                    {
+                        "name": "not a pipeline",
+                        "type": "compressor",
+                        "params": {
+                            "design_pressure_drop_capacity_bar": 1.0,
+                        },
+                    }
+                ]
+            )
+
+    def test_editor_defaults_migrate_legacy_geometry_without_enabling_screen(self):
+        rows = process_unit_property_rows(
+            "pipeline",
+            {
+                "length": 2_000.0,
+                "diameter": 0.40,
+                "roughness": 2.0e-5,
+            },
+        )
+        row_by_key = {row["key"]: row for row in rows}
+        self.assertFalse(row_by_key["use_design_basis"]["value"])
+        self.assertEqual(
+            row_by_key["design_pressure_drop_capacity_bar"]["value"],
+            1.0,
+        )
+        self.assertEqual(
+            row_by_key["design_pressure_drop_capacity_bar"]["unit"],
+            "bar",
+        )
+        self.assertEqual(
+            row_by_key["design_velocity_capacity_m_per_s"]["unit"],
+            "m/s",
+        )
+
+        units, pipeline_id = add_catalog_unit(
+            [],
+            "pipeline",
+            "transport pipeline",
+        )
+        self.assertFalse(units[0]["params"]["use_design_basis"])
+        self.assertEqual(
+            units[0]["params"]["design_pressure_drop_capacity_bar"],
+            1.0,
+        )
+        self.assertEqual(pipeline_id, units[0]["id"])
 
     def test_violates_or_fails_loud_when_native_results_require_it(self):
         pipeline = self._Pipeline(
