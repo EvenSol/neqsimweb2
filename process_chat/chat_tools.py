@@ -3677,20 +3677,20 @@ class ProcessChatSession:
                         *self._builder.spec.get("process", []),
                         *added_process_steps,
                     ]
-                    pump_design_bases = (
-                        ProcessBuilder._requested_pump_design_bases(
+                    equipment_design_bases = (
+                        ProcessBuilder._requested_equipment_design_bases(
                             projected_process_steps
                         )
                     )
                 else:
-                    pump_design_bases = {
+                    equipment_design_bases = {
                         unit_name: dict(design_basis)
                         for unit_name, design_basis in (
                             self.model._equipment_design_bases.items()
                         )
                     }
-                    pump_design_bases.update(
-                        ProcessBuilder._requested_pump_design_bases(
+                    equipment_design_bases.update(
+                        ProcessBuilder._requested_equipment_design_bases(
                             added_process_steps
                         )
                     )
@@ -3718,7 +3718,9 @@ class ProcessChatSession:
                     )
                 self.model._equipment_design_bases = {
                     unit_name: dict(design_basis)
-                    for unit_name, design_basis in pump_design_bases.items()
+                    for unit_name, design_basis in (
+                        equipment_design_bases.items()
+                    )
                 }
 
                 # Re-run, re-index, refresh source bytes
@@ -3839,22 +3841,27 @@ class ProcessChatSession:
                     except Exception as e:
                         changes_applied.append(f"{unit_name}: FAILED — {e}")
 
-            # Pump design capacities are Studio adapter metadata rather than
-            # native Java properties.  Keep the live model synchronized with
-            # the complete validated spec so incremental edits and opt-out
-            # changes are reflected in KPIs, constraints, and saved cases.
-            pump_design_bases = (
-                self._builder._requested_pump_design_bases(
+            # Equipment design capacities are Studio adapter metadata rather
+            # than native Java properties. Keep the live model synchronized
+            # with the complete validated spec so edits and opt-out changes
+            # are reflected in KPIs, constraints, and saved cases.
+            equipment_design_bases = (
+                self._builder._requested_equipment_design_bases(
                     build_spec.get("process", [])
                 )
             )
-            if self.model._equipment_design_bases != pump_design_bases:
+            if (
+                self.model._equipment_design_bases
+                != equipment_design_bases
+            ):
                 self.model._equipment_design_bases = {
                     unit_name: dict(design_basis)
-                    for unit_name, design_basis in pump_design_bases.items()
+                    for unit_name, design_basis in (
+                        equipment_design_bases.items()
+                    )
                 }
                 changes_applied.append(
-                    "Pump design basis metadata synchronized"
+                    "Equipment design basis metadata synchronized"
                 )
 
             # 3. Append / prepend new equipment at the ends
