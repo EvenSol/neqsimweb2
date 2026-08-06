@@ -2287,6 +2287,65 @@ class ValveDesignBasisModelTest(unittest.TestCase):
         def getCv(self):
             return self.cv
 
+    def test_validates_and_collects_enabled_valve_design_basis(self):
+        self.assertEqual(
+            ProcessBuilder._valve_design_settings(
+                {
+                    "use_design_basis": True,
+                    "design_cv_capacity_us": 20.0,
+                }
+            ),
+            (True, 20.0),
+        )
+        units = [
+            {
+                "name": "metering valve",
+                "type": "valve",
+                "params": {
+                    "outlet_pressure_bara": 30.0,
+                    "percent_valve_opening": 80.0,
+                    "use_design_basis": True,
+                    "design_cv_capacity_us": 20.0,
+                },
+            },
+            {
+                "name": "spare valve",
+                "type": "valve",
+                "params": {"use_design_basis": False},
+            },
+        ]
+        expected = {
+            "metering valve": {"design_cv_capacity_us": 20.0}
+        }
+        self.assertEqual(
+            ProcessBuilder._requested_valve_design_bases(units),
+            expected,
+        )
+        self.assertEqual(
+            ProcessBuilder._requested_equipment_design_bases(units),
+            expected,
+        )
+
+        for params, message in (
+            ({"use_design_basis": 1}, "must be boolean"),
+            ({"design_cv_capacity_us": math.nan}, "must be finite"),
+            ({"design_cv_capacity_us": 0.0}, "must be between"),
+        ):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._valve_design_settings(params)
+
+        with self.assertRaisesRegex(ValueError, "only for valve units"):
+            ProcessBuilder._requested_valve_design_bases(
+                [
+                    {
+                        "name": "not a valve",
+                        "type": "compressor",
+                        "params": {"design_cv_capacity_us": 20.0},
+                    }
+                ]
+            )
+
     def test_reports_rated_cv_capacity_margin_and_constraint(self):
         valve = self._Valve()
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
