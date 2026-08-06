@@ -2232,6 +2232,41 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
                     ):
                         NeqSimProcessModel._read_studio_metadata(archive)
 
+    def test_mismatched_equipment_schema_is_withheld_before_kpi_reads(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Pump"
+
+        class _Pump:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "replacement pump": {
+                "design_duty_capacity_kw": 2_500.0,
+                "design_ua_capacity_w_per_k": 125_000.0,
+            }
+        }
+        model._units = {"replacement pump": _Pump()}
+        model._unit_ps_name = {"replacement pump": "main"}
+
+        self.assertEqual(
+            model._pump_design_properties(
+                "replacement pump",
+                model._units["replacement pump"],
+            ),
+            {},
+        )
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertNotIn(
+            "replacement pump.designFlowCapacity_m3_per_hr",
+            kpis,
+        )
+
 
 class PumpDesignBasisApplicationTest(unittest.TestCase):
     """Protect strict opt-in pump capacities and solved-model propagation."""

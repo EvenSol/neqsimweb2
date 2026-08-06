@@ -2745,7 +2745,10 @@ class NeqSimProcessModel:
     ) -> Dict[str, float]:
         """Compare a solved pump with its opt-in engineering capacities."""
         basis = getattr(self, "_equipment_design_bases", {}).get(unit_name)
-        if not basis:
+        if (
+            not basis
+            or set(basis) != set(_PUMP_DESIGN_CAPACITY_LIMITS)
+        ):
             return {}
         properties = {
             "designFlowCapacity_m3_per_hr": basis[
