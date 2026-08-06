@@ -4329,6 +4329,35 @@ class NeqSimProcessModel:
 
     # ----- Run and report -----
 
+    def _invalidate_auto_sized_valve_cv(self) -> None:
+        """Force active required-Cv screens to use the next solved state.
+
+        NeqSim marks both explicitly configured and automatically calculated
+        valve coefficients as set. Studio forbids explicit Cv together with
+        this screen, so every matching basis identifies an auto-sized value
+        that must be recalculated after scenario or Process Chat changes.
+        """
+        for unit_name, basis in getattr(
+            self,
+            "_equipment_design_bases",
+            {},
+        ).items():
+            if set(basis) != set(_VALVE_DESIGN_CAPACITY_LIMITS):
+                continue
+            unit = self._units.get(unit_name)
+            if unit is None or not hasattr(unit, "setValveKvSet"):
+                continue
+            try:
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if java_class not in ("ThrottlingValve", "ControlValve", "Valve"):
+                continue
+            try:
+                unit.setValveKvSet(False)
+            except Exception:
+                continue
+
     def run(self, timeout_ms: int = 120000) -> ModelRunResult:
         """
         Run the process and extract KPIs and constraints.
@@ -4338,6 +4367,7 @@ class NeqSimProcessModel:
         Args:
             timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
         """
+        self._invalidate_auto_sized_valve_cv()
         self._direct_unit_run_provenance.clear()
         self._heat_exchanger_state_snapshots.clear()
         direct_closure_ran = False
@@ -4377,6 +4407,7 @@ class NeqSimProcessModel:
         simulation (e.g. after modifying parameters) and then re-index.
         Handles both ProcessSystem and ProcessModel transparently.
         """
+        self._invalidate_auto_sized_valve_cv()
         self._direct_unit_run_provenance.clear()
         self._heat_exchanger_state_snapshots.clear()
         direct_closure_ran = False

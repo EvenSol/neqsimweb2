@@ -2346,6 +2346,31 @@ class ValveDesignBasisModelTest(unittest.TestCase):
                 ]
             )
 
+    def test_rejects_fixed_cv_only_when_required_cv_screen_is_active(self):
+        for fixed_key in ("cv", "flow_coefficient"):
+            with self.subTest(fixed_key=fixed_key):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "cannot be combined",
+                ):
+                    ProcessBuilder._valve_design_settings(
+                        {
+                            "use_design_basis": True,
+                            "design_cv_capacity_us": 40.0,
+                            fixed_key: 25.0,
+                        }
+                    )
+
+                self.assertEqual(
+                    ProcessBuilder._valve_design_settings(
+                        {
+                            "use_design_basis": False,
+                            fixed_key: 25.0,
+                        }
+                    ),
+                    (False, 100.0),
+                )
+
     def test_reports_rated_cv_capacity_margin_and_constraint(self):
         valve = self._Valve()
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
@@ -2684,6 +2709,80 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
             self._constraint(reloaded_result).status,
             "VIOLATION",
         )
+
+    def test_native_rerun_recalculates_required_cv_after_flow_change(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(
+            self._specification(1.0, design_cv_capacity_us=50.0)
+        )
+        baseline = model.run(timeout_ms=180_000)
+        baseline_cv = baseline.kpis["metering valve.Cv"].value
+        self.assertEqual(self._constraint(baseline).status, "OK")
+
+        feed = model.get_unit("feed")
+        feed.getFluid().setTotalFlowRate(20_000.0, "kg/hr")
+        doubled = model.run(timeout_ms=180_000)
+        doubled_cv = doubled.kpis["metering valve.Cv"].value
+
+        self.assertAlmostEqual(
+            doubled_cv,
+            2.0 * baseline_cv,
+            delta=1.0e-8,
+        )
+        self.assertEqual(self._constraint(doubled).status, "VIOLATION")
+        self.assertLess(doubled.kpis["mass_balance_pct"].value, 1.0e-6)
+        self.assertLess(
+            doubled.kpis["component_balance_max_pct"].value,
+            1.0e-6,
+        )
+
+        repeated = model.run(timeout_ms=180_000)
+        self.assertAlmostEqual(
+            repeated.kpis["metering valve.Cv"].value,
+            doubled_cv,
+            delta=1.0e-12,
+        )
+
+    def test_incremental_fixed_cv_edit_is_rejected_before_native_mutation(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+        original_cv = float(model.get_unit("metering valve").getCv())
+        original_basis = {
+            name: dict(basis)
+            for name, basis in model._equipment_design_bases.items()
+        }
+
+        invalid_specification = json.loads(json.dumps(builder.spec))
+        invalid_specification["process"][1]["params"]["cv"] = 25.0
+        change_type, param_changes, fluid_changes, extra_steps = (
+            _classify_build_change(builder.spec, invalid_specification)
+        )
+        self.assertEqual(change_type, "property_update")
+
+        session = object.__new__(ProcessChatSession)
+        session.model = model
+        session._builder = builder
+        session.history = []
+        session._system_prompt = ""
+        session._handle_build = lambda *args, **kwargs: "rejected"
+        response = session._handle_incremental_update(
+            "set a fixed Cv while screening required Cv",
+            invalid_specification,
+            change_type,
+            param_changes,
+            fluid_changes,
+            extra_steps,
+            None,
+            None,
+        )
+
+        self.assertEqual(response, "rejected")
+        self.assertEqual(
+            float(model.get_unit("metering valve").getCv()),
+            original_cv,
+        )
+        self.assertEqual(model._equipment_design_bases, original_basis)
 
 
 class PumpDesignBasisApplicationTest(unittest.TestCase):

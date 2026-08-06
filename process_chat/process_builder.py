@@ -1753,6 +1753,13 @@ class ProcessBuilder:
         raw_enabled = params.get("use_design_basis", False)
         if type(raw_enabled) is not bool:
             raise ValueError("Valve use_design_basis must be boolean.")
+        if raw_enabled and any(
+            key in params for key in ("cv", "flow_coefficient")
+        ):
+            raise ValueError(
+                "Valve required-Cv design screening cannot be combined "
+                "with an explicitly fixed cv or flow_coefficient."
+            )
         raw_capacity = params.get("design_cv_capacity_us", 100.0)
         if isinstance(raw_capacity, bool):
             raise ValueError("Valve design_cv_capacity_us must be numeric.")

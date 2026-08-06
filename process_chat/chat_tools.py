@@ -3789,6 +3789,15 @@ class ProcessChatSession:
         try:
             changes_applied: list = []
 
+            # Validate reporting-only design metadata before mutating any
+            # native object. In particular, a required-Cv screen cannot be
+            # combined with an explicitly fixed valve coefficient.
+            equipment_design_bases = (
+                self._builder._requested_equipment_design_bases(
+                    build_spec.get("process", [])
+                )
+            )
+
             # 1. Apply fluid condition changes to the feed stream(s)
             if fluid_changes:
                 for u in self.model.get_all_unit_operations():
@@ -3848,11 +3857,6 @@ class ProcessChatSession:
             # than native Java properties. Keep the live model synchronized
             # with the complete validated spec so edits and opt-out changes
             # are reflected in KPIs, constraints, and saved cases.
-            equipment_design_bases = (
-                self._builder._requested_equipment_design_bases(
-                    build_spec.get("process", [])
-                )
-            )
             if (
                 self.model._equipment_design_bases
                 != equipment_design_bases
