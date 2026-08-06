@@ -2189,7 +2189,6 @@ class ProcessBuilder:
             "# Run from this repository checkout with neqsim installed.",
             "import json",
             "",
-            "import neqsim",
             "from process_chat.process_builder import ProcessBuilder",
             "",
             f"case_data = json.loads({serialized_case!r})",
@@ -2291,7 +2290,8 @@ class ProcessBuilder:
             "else:",
             '    print("Energy imbalance: not applicable")',
             "",
-            f"neqsim.save_neqsim(process, {safe + '.neqsim'!r})",
+            f"with open({safe + '.neqsim'!r}, 'wb') as model_file:",
+            "    model_file.write(model.save_bytes())",
             'print("Process simulation complete!")',
             "",
         ]
