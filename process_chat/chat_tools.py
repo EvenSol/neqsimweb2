@@ -3719,12 +3719,23 @@ class ProcessChatSession:
                     self._builder.spec.setdefault("process", []).extend(
                         added_process_steps
                     )
-                self.model._equipment_design_bases = {
+                synchronized_design_bases = {
                     unit_name: dict(design_basis)
                     for unit_name, design_basis in (
-                        equipment_design_bases.items()
+                        self.model._equipment_design_bases.items()
                     )
                 }
+                for unit_name, design_basis in (
+                    equipment_design_bases.items()
+                ):
+                    if set(design_basis) == {"design_cv_capacity_us"}:
+                        continue
+                    synchronized_design_bases[unit_name] = dict(
+                        design_basis
+                    )
+                self.model._equipment_design_bases = (
+                    synchronized_design_bases
+                )
 
                 # Re-run, re-index, refresh source bytes
                 self.model.rerun()
