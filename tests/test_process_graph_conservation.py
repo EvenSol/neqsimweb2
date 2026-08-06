@@ -2034,6 +2034,72 @@ class PumpPropertyExtractionTest(unittest.TestCase):
 class HeatExchangerDesignBasisModelTest(unittest.TestCase):
     """Protect typed exchanger design metadata and solved capacity margins."""
 
+    def test_validates_and_collects_enabled_exchanger_design_basis(self):
+        self.assertEqual(
+            ProcessBuilder._heat_exchanger_design_settings(
+                {
+                    "use_design_basis": True,
+                    "design_duty_capacity_kw": 2_500.0,
+                    "design_ua_capacity_w_per_k": 125_000.0,
+                }
+            ),
+            (True, 2_500.0, 125_000.0),
+        )
+        units = [
+            {
+                "name": "cross exchanger",
+                "type": "heat_exchanger",
+                "params": {
+                    "ua_w_per_k": 100_000.0,
+                    "use_design_basis": True,
+                    "design_duty_capacity_kw": 2_500.0,
+                    "design_ua_capacity_w_per_k": 125_000.0,
+                },
+            },
+            {
+                "name": "spare exchanger",
+                "type": "heat_exchanger",
+                "params": {"use_design_basis": False},
+            },
+        ]
+        expected = {
+            "cross exchanger": {
+                "design_duty_capacity_kw": 2_500.0,
+                "design_ua_capacity_w_per_k": 125_000.0,
+            }
+        }
+        self.assertEqual(
+            ProcessBuilder._requested_heat_exchanger_design_bases(units),
+            expected,
+        )
+        self.assertEqual(
+            ProcessBuilder._requested_equipment_design_bases(units),
+            expected,
+        )
+
+        for params, message in (
+            ({"use_design_basis": 1}, "must be boolean"),
+            ({"design_duty_capacity_kw": math.nan}, "must be finite"),
+            ({"design_ua_capacity_w_per_k": 0.0}, "must be between"),
+        ):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(ValueError, message):
+                    ProcessBuilder._heat_exchanger_design_settings(params)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "only for heat_exchanger units",
+        ):
+            ProcessBuilder._requested_heat_exchanger_design_bases(
+                [
+                    {
+                        "name": "not an exchanger",
+                        "type": "compressor",
+                        "params": {"design_duty_capacity_kw": 2_500.0},
+                    }
+                ]
+            )
+
     def test_reports_duty_and_ua_margins_with_explicit_units(self):
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         model._equipment_design_bases = {

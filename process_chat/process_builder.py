@@ -926,15 +926,17 @@ class ProcessBuilder:
                         "same native outlet."
                     )
 
-        requested_pump_design_bases = self._requested_pump_design_bases(
-            unit_specs
+        requested_equipment_design_bases = (
+            self._requested_equipment_design_bases(
+                unit_specs
+            )
         )
         # Graph construction normalizes native unit names at its schema
         # boundary. Keep adapter metadata keyed by that exact native name.
-        pump_design_bases = {
+        equipment_design_bases = {
             unit_name.strip(): dict(design_basis)
             for unit_name, design_basis in (
-                requested_pump_design_bases.items()
+                requested_equipment_design_bases.items()
             )
         }
 
@@ -1414,12 +1416,12 @@ class ProcessBuilder:
             enforce_acyclic_mixer_energy=True,
             trusted_solved=True,
             allow_direct_runs=direct_closure_ran,
-            equipment_design_bases=pump_design_bases,
+            equipment_design_bases=equipment_design_bases,
         )
-        if pump_design_bases:
+        if equipment_design_bases:
             self._build_log.append(
-                "Registered pump design basis for: "
-                + ", ".join(pump_design_bases)
+                "Registered equipment design basis for: "
+                + ", ".join(equipment_design_bases)
             )
         self._build_log.append("Acyclic graph built and converged successfully.")
         return self._model
@@ -1615,16 +1617,24 @@ class ProcessBuilder:
             if not isinstance(unit_spec, dict):
                 continue
             params = unit_spec.get("params", {})
-            if not isinstance(params, dict) or not any(
-                key in params for key in design_keys
-            ):
+            if not isinstance(params, dict):
                 continue
             unit_type = str(unit_spec.get("type", "")).strip().lower()
             if unit_type != "pump":
-                raise ValueError(
-                    "Pump design-basis properties are supported only for "
-                    "pump units."
+                has_pump_specific_key = any(
+                    key in params for key in design_keys[1:]
                 )
+                if has_pump_specific_key or (
+                    unit_type != "heat_exchanger"
+                    and "use_design_basis" in params
+                ):
+                    raise ValueError(
+                        "Pump design-basis properties are supported only for "
+                        "pump units."
+                    )
+                continue
+            if not any(key in params for key in design_keys):
+                continue
             enabled, flow, head, motor = cls._pump_design_settings(params)
             if not enabled:
                 continue
@@ -1636,6 +1646,125 @@ class ProcessBuilder:
                 "design_head_capacity_m": head,
                 "motor_rating_kw": motor,
             }
+        return design_bases
+
+    @staticmethod
+    def _heat_exchanger_design_settings(
+        params: dict,
+    ) -> tuple[bool, float, float]:
+        """Validate one backward-compatible exchanger capacity request."""
+        raw_enabled = params.get("use_design_basis", False)
+        if type(raw_enabled) is not bool:
+            raise ValueError(
+                "Heat exchanger use_design_basis must be boolean."
+            )
+        definitions = (
+            (
+                "design_duty_capacity_kw",
+                2_500.0,
+                0.001,
+                100_000_000.0,
+                "kW",
+            ),
+            (
+                "design_ua_capacity_w_per_k",
+                125_000.0,
+                1.0,
+                1_000_000_000.0,
+                "W/K",
+            ),
+        )
+        values: list[float] = []
+        for key, default, minimum, maximum, unit in definitions:
+            raw_value = params.get(key, default)
+            if isinstance(raw_value, bool):
+                raise ValueError(
+                    f"Heat exchanger {key} must be numeric."
+                )
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Heat exchanger {key} must be numeric."
+                ) from exc
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"Heat exchanger {key} must be finite."
+                )
+            if not minimum <= value <= maximum:
+                raise ValueError(
+                    f"Heat exchanger {key} must be between {minimum} and "
+                    f"{maximum} {unit}."
+                )
+            values.append(value)
+        return raw_enabled, values[0], values[1]
+
+    @classmethod
+    def _requested_heat_exchanger_design_bases(
+        cls,
+        unit_specs: List[dict],
+    ) -> Dict[str, Dict[str, float]]:
+        """Return validated opt-in exchanger capacities by unit name."""
+        design_bases: Dict[str, Dict[str, float]] = {}
+        design_keys = (
+            "use_design_basis",
+            "design_duty_capacity_kw",
+            "design_ua_capacity_w_per_k",
+        )
+        for unit_spec in unit_specs:
+            if not isinstance(unit_spec, dict):
+                continue
+            params = unit_spec.get("params", {})
+            if not isinstance(params, dict):
+                continue
+            unit_type = str(unit_spec.get("type", "")).strip().lower()
+            if unit_type != "heat_exchanger":
+                has_exchanger_specific_key = any(
+                    key in params for key in design_keys[1:]
+                )
+                if has_exchanger_specific_key or (
+                    unit_type != "pump"
+                    and "use_design_basis" in params
+                ):
+                    raise ValueError(
+                        "Heat-exchanger design-basis properties are supported "
+                        "only for heat_exchanger units."
+                    )
+                continue
+            if not any(key in params for key in design_keys):
+                continue
+            enabled, duty, ua = cls._heat_exchanger_design_settings(params)
+            if not enabled:
+                continue
+            unit_name = str(unit_spec.get("name", ""))
+            if not unit_name.strip():
+                raise ValueError(
+                    "Heat exchanger design basis requires a unit name."
+                )
+            design_bases[unit_name] = {
+                "design_duty_capacity_kw": duty,
+                "design_ua_capacity_w_per_k": ua,
+            }
+        return design_bases
+
+    @classmethod
+    def _requested_equipment_design_bases(
+        cls,
+        unit_specs: List[dict],
+    ) -> Dict[str, Dict[str, float]]:
+        """Return every validated opt-in reporting design basis."""
+        design_bases = cls._requested_pump_design_bases(unit_specs)
+        exchanger_bases = cls._requested_heat_exchanger_design_bases(
+            unit_specs
+        )
+        duplicate_names = set(design_bases).intersection(exchanger_bases)
+        if duplicate_names:
+            raise ValueError(
+                "Equipment design-basis unit names must be unique: "
+                + ", ".join(sorted(duplicate_names))
+                + "."
+            )
+        design_bases.update(exchanger_bases)
         return design_bases
 
     @staticmethod
@@ -1765,7 +1894,9 @@ class ProcessBuilder:
 
         if not process_steps:
             raise ValueError("Process spec must contain at least one step in 'process'.")
-        pump_design_bases = self._requested_pump_design_bases(process_steps)
+        equipment_design_bases = self._requested_equipment_design_bases(
+            process_steps
+        )
 
         # 1. Create the thermodynamic fluid
         fluid = self.create_fluid_from_spec(fluid_spec)
@@ -1880,12 +2011,12 @@ class ProcessBuilder:
         self._model = NeqSimProcessModel.from_process_system(
             proc,
             trusted_solved=True,
-            equipment_design_bases=pump_design_bases,
+            equipment_design_bases=equipment_design_bases,
         )
-        if pump_design_bases:
+        if equipment_design_bases:
             self._build_log.append(
-                "Registered pump design basis for: "
-                + ", ".join(pump_design_bases)
+                "Registered equipment design basis for: "
+                + ", ".join(equipment_design_bases)
             )
         self._build_log.append("Process built and converged successfully.")
         return self._model
@@ -1902,7 +2033,7 @@ class ProcessBuilder:
         lines: List[str] = []
         fluid_spec = self._spec.get("fluid", {})
         process_steps = self._spec.get("process", [])
-        pump_design_bases = self._requested_pump_design_bases(
+        equipment_design_bases = self._requested_equipment_design_bases(
             process_steps
         )
 
@@ -1913,7 +2044,7 @@ class ProcessBuilder:
         lines.append('"""')
         lines.append("from neqsim import jneqsim")
         lines.append("import neqsim")
-        if pump_design_bases:
+        if equipment_design_bases:
             lines.append("import json")
             lines.append(
                 "from process_chat.process_model import NeqSimProcessModel"
@@ -2091,15 +2222,15 @@ class ProcessBuilder:
                     )
                 lines.append(f"{var}.autoSize()")
             lines.append("process.run()")
-        if pump_design_bases:
+        if equipment_design_bases:
             lines.append("")
             lines.append(
-                "# ── Studio pump design basis (reporting metadata) ──"
+                "# ── Studio equipment design basis (reporting metadata) ──"
             )
             lines.append(
-                "pump_design_bases = "
+                "equipment_design_bases = "
                 + json.dumps(
-                    pump_design_bases,
+                    equipment_design_bases,
                     allow_nan=False,
                     indent=4,
                     sort_keys=True,
@@ -2110,7 +2241,7 @@ class ProcessBuilder:
                     "model = NeqSimProcessModel.from_process_system(",
                     "    process,",
                     "    trusted_solved=True,",
-                    "    equipment_design_bases=pump_design_bases,",
+                    "    equipment_design_bases=equipment_design_bases,",
                     ")",
                     "result = model.run(timeout_ms=180_000)",
                 ]
@@ -2118,7 +2249,7 @@ class ProcessBuilder:
         lines.append("")
         safe = _safe_filename(self._process_name)
         lines.append("# ── Save to file ──")
-        if pump_design_bases:
+        if equipment_design_bases:
             lines.extend(
                 [
                     f"with open('{safe}.neqsim', 'wb') as model_file:",
@@ -2134,7 +2265,7 @@ class ProcessBuilder:
                 )
             except (TypeError, ValueError) as exc:
                 raise ValueError(
-                    "Pump design replay requires finite JSON-compatible "
+                    "Equipment design replay requires finite JSON-compatible "
                     "case data."
                 ) from exc
             lines.extend(
