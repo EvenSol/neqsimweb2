@@ -665,6 +665,93 @@ def _scale_stream_flow(model: NeqSimProcessModel, stream_name: str, scale: float
     stream.setFlowRate(current * scale, "kg/hr")
 
 
+_FIXED_CV_PROPERTIES = {"cv", "valve_cv", "flow_coefficient"}
+
+
+def _has_required_cv_screen(
+    model: NeqSimProcessModel,
+    requested_unit_name: str,
+) -> bool:
+    """Resolve a unit and find its rated-Cv metadata case-insensitively."""
+    try:
+        resolved_unit = model.get_unit(requested_unit_name)
+    except KeyError:
+        return False
+
+    resolved_names = set()
+    for registered_name, registered_unit in model._units.items():
+        try:
+            same_unit = registered_unit is resolved_unit or (
+                registered_unit == resolved_unit
+            )
+        except Exception:
+            same_unit = registered_unit is resolved_unit
+        if same_unit:
+            resolved_names.add(str(registered_name).casefold())
+    try:
+        raw_name = str(resolved_unit.getName()).casefold()
+        resolved_names.add(raw_name)
+    except Exception:
+        raw_name = ""
+
+    for basis_name, basis in getattr(
+        model,
+        "_equipment_design_bases",
+        {},
+    ).items():
+        normalized_basis_name = str(basis_name).casefold()
+        name_matches = normalized_basis_name in resolved_names
+        if raw_name:
+            name_matches = name_matches or normalized_basis_name.endswith(
+                f"/{raw_name}"
+            )
+        if (
+            name_matches
+            and isinstance(basis, dict)
+            and set(basis) == {"design_cv_capacity_us"}
+        ):
+            return True
+    return False
+
+
+def _fixed_cv_patch_failure(
+    model: NeqSimProcessModel,
+    patch: InputPatch,
+) -> Optional[Dict[str, Any]]:
+    """Return a fail-loud entry for contradictory fixed-Cv changes."""
+
+    def _split_unit_key(key: str) -> Optional[tuple[str, str]]:
+        if key.startswith("streams."):
+            return None
+        normalized_key = key
+        if key.startswith("units."):
+            normalized_key = key[len("units."):]
+        parts = normalized_key.rsplit(".", 1)
+        if len(parts) != 2:
+            return None
+        return parts[0], parts[1]
+
+    for key in patch.changes:
+        split_key = _split_unit_key(key)
+        if split_key is None:
+            continue
+        unit_name, prop = split_key
+        if (
+            prop.lower().strip() in _FIXED_CV_PROPERTIES
+            and _has_required_cv_screen(model, unit_name)
+        ):
+            return {
+                "key": key,
+                "status": "FAILED",
+                "error": (
+                    "A fixed valve Cv cannot be applied while required-Cv "
+                    "design screening is active. Disable the screen or "
+                    "omit the fixed Cv."
+                ),
+            }
+    return None
+
+
 def solve_for_target(
     model: NeqSimProcessModel,
     scenario: Scenario,
@@ -714,6 +801,38 @@ def solve_for_target(
         patch=InputPatch(changes={})
     )
     base_sr = ScenarioResult(scenario=base_scenario, result=base_result)
+
+    preflight_failure = _fixed_cv_patch_failure(model, scenario.patch)
+    if (
+        preflight_failure is None
+        and use_unit_param
+        and unit_name
+        and unit_param.lower().strip() in _FIXED_CV_PROPERTIES
+        and _has_required_cv_screen(model, unit_name)
+    ):
+        preflight_failure = {
+            "key": f"unit_param.{unit_name}.{unit_param}",
+            "status": "FAILED",
+            "error": (
+                "A fixed valve Cv cannot be target-solved while required-Cv "
+                "design screening is active. Disable the screen or choose "
+                "another manipulated variable."
+            ),
+        }
+    if preflight_failure is not None:
+        case_sr = ScenarioResult(
+            scenario=scenario,
+            result=ModelRunResult(kpis={}, constraints=[], raw={}),
+            success=False,
+            error=preflight_failure["error"],
+        )
+        return Comparison(
+            base=base_sr,
+            cases=[case_sr],
+            delta_kpis=[],
+            constraint_summary=[],
+            patch_log=[{"scenario": scenario.name, **preflight_failure}],
+        )
     
     # Resolve the target KPI name against the base result
     resolved = _resolve_kpi_name(base_result.kpis, target.target_kpi)
@@ -1352,38 +1471,9 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
 
     # Preflight the complete patch so a fixed-Cv request cannot partially
     # mutate a case whose active screen requires NeqSim to auto-size Cv.
-    for key in patch.changes:
-        if key.startswith("streams."):
-            continue
-        if key.startswith("units."):
-            obj_name, prop = _split_key(key, "units.")
-        else:
-            parts = key.rsplit(".", 1)
-            if len(parts) != 2:
-                continue
-            obj_name, prop = parts
-        if prop.lower() not in ("cv", "valve_cv", "flow_coefficient"):
-            continue
-        design_basis = getattr(
-            model,
-            "_equipment_design_bases",
-            {},
-        ).get(obj_name)
-        if (
-            isinstance(design_basis, dict)
-            and set(design_basis) == {"design_cv_capacity_us"}
-        ):
-            return [
-                {
-                    "key": key,
-                    "status": "FAILED",
-                    "error": (
-                        "A fixed valve Cv cannot be applied while required-Cv "
-                        "design screening is active. Disable the screen or "
-                        "omit the fixed Cv."
-                    ),
-                }
-            ]
+    fixed_cv_failure = _fixed_cv_patch_failure(model, patch)
+    if fixed_cv_failure is not None:
+        return [fixed_cv_failure]
 
     for key, raw_value in patch.changes.items():
         # Resolve relative operations

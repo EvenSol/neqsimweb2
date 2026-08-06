@@ -1753,8 +1753,12 @@ class ProcessBuilder:
         raw_enabled = params.get("use_design_basis", False)
         if type(raw_enabled) is not bool:
             raise ValueError("Valve use_design_basis must be boolean.")
-        if raw_enabled and any(
-            key in params for key in ("cv", "flow_coefficient")
+        normalized_keys = {
+            str(key).lower().strip()
+            for key in params
+        }
+        if raw_enabled and normalized_keys.intersection(
+            {"cv", "flow_coefficient"}
         ):
             raise ValueError(
                 "Valve required-Cv design screening cannot be combined "

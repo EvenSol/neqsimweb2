@@ -36,7 +36,7 @@ from process_chat.chat_tools import (
     _classify_build_change,
 )
 from process_chat.process_model import NeqSimProcessModel
-from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario
+from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario, TargetSpec
 from process_chat.scenario_engine import run_scenarios
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
@@ -2349,7 +2349,12 @@ class ValveDesignBasisModelTest(unittest.TestCase):
             )
 
     def test_rejects_fixed_cv_only_when_required_cv_screen_is_active(self):
-        for fixed_key in ("cv", "flow_coefficient"):
+        for fixed_key in (
+            "cv",
+            "flow_coefficient",
+            "Cv",
+            "FLOW_COEFFICIENT",
+        ):
             with self.subTest(fixed_key=fixed_key):
                 with self.assertRaisesRegex(
                     ValueError,
@@ -2799,7 +2804,7 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
                     name="invalid fixed Cv",
                     description="Reject fixed Cv while required-Cv screen is active",
                     patch=InputPatch(
-                        changes={"units.metering valve.cv": 25.0}
+                        changes={"units.METERING VALVE.cv": 25.0}
                     ),
                 )
             ],
@@ -2812,6 +2817,41 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
             float(model.get_unit("metering valve").getCv()),
             original_cv,
         )
+        self.assertEqual(comparison.patch_log[-1]["status"], "FAILED")
+
+    def test_target_solver_rejects_fixed_cv_for_active_screen(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+
+        comparison = run_scenarios(
+            model,
+            [
+                Scenario(
+                    name="invalid target Cv",
+                    description="Reject Cv as the manipulated variable",
+                    patch=InputPatch(
+                        changes={},
+                        targets=[
+                            TargetSpec(
+                                target_kpi="metering valve.Cv",
+                                target_value=30.0,
+                                variable="unit_param",
+                                unit_name="METERING VALVE",
+                                unit_param="Cv",
+                                initial_guess=25.0,
+                                min_value=10.0,
+                                max_value=50.0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+            timeout_ms=180_000,
+        )
+
+        self.assertFalse(comparison.cases[0].success)
+        self.assertIn("target-solved", comparison.cases[0].error)
         self.assertEqual(comparison.patch_log[-1]["status"], "FAILED")
 
     def test_scenario_added_valve_registers_rated_cv_metadata(self):
