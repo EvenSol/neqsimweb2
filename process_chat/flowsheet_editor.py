@@ -252,10 +252,36 @@ _INLINE_UNIT_CATALOG: dict[str, dict[str, Any]] = {
         },
         "default_params": {
             "ua_w_per_k": 100_000.0,
+            "use_design_basis": False,
+            "design_duty_capacity_kw": 2_500.0,
+            "design_ua_capacity_w_per_k": 125_000.0,
         },
         "properties": {
             "ua_w_per_k": _number_property(
                 "Overall conductance UA",
+                "W/K",
+                1.0,
+                1_000_000_000.0,
+                1_000.0,
+                "%.2f",
+            ),
+            "use_design_basis": _boolean_property(
+                "Evaluate exchanger design limits",
+                (
+                    "Compare the trusted solved heat-transfer duty and "
+                    "native UA with explicit screening capacities."
+                ),
+            ),
+            "design_duty_capacity_kw": _number_property(
+                "Design duty capacity",
+                "kW (absolute heat-transfer duty)",
+                0.001,
+                100_000_000.0,
+                10.0,
+                "%.3f",
+            ),
+            "design_ua_capacity_w_per_k": _number_property(
+                "Design UA capacity",
                 "W/K",
                 1.0,
                 1_000_000_000.0,
@@ -612,6 +638,19 @@ def process_unit_property_rows(
             "design_flow_capacity_m3_per_hr",
             "design_head_capacity_m",
             "motor_rating_kw",
+        ):
+            selected_params.setdefault(
+                key,
+                copy.deepcopy(definition["default_params"][key]),
+            )
+
+    if cleaned_type == "heat_exchanger":
+        # Earlier graph schemas stored only the operating UA. Preserve that
+        # solve while making screening capacities explicitly opt-in.
+        for key in (
+            "use_design_basis",
+            "design_duty_capacity_kw",
+            "design_ua_capacity_w_per_k",
         ):
             selected_params.setdefault(
                 key,

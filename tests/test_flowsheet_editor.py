@@ -110,7 +110,12 @@ class UnitCatalogTest(unittest.TestCase):
         )
         self.assertEqual(
             heat_exchanger["default_params"],
-            {"ua_w_per_k": 100_000.0},
+            {
+                "ua_w_per_k": 100_000.0,
+                "use_design_basis": False,
+                "design_duty_capacity_kw": 2_500.0,
+                "design_ua_capacity_w_per_k": 125_000.0,
+            },
         )
 
     def test_create_unit_uses_defaults_and_collision_free_id(self):
@@ -317,6 +322,22 @@ class UnitCatalogTest(unittest.TestCase):
         self.assertEqual(heat_exchanger_row["key"], "ua_w_per_k")
         self.assertEqual(heat_exchanger_row["unit"], "W/K")
         self.assertEqual(heat_exchanger_row["value"], 100_000.0)
+        heat_exchanger_rows = inline_unit_property_rows("heat_exchanger")
+        self.assertEqual(
+            [row["key"] for row in heat_exchanger_rows],
+            [
+                "ua_w_per_k",
+                "use_design_basis",
+                "design_duty_capacity_kw",
+                "design_ua_capacity_w_per_k",
+            ],
+        )
+        self.assertFalse(heat_exchanger_rows[1]["value"])
+        self.assertEqual(
+            heat_exchanger_rows[2]["unit"],
+            "kW (absolute heat-transfer duty)",
+        )
+        self.assertEqual(heat_exchanger_rows[3]["unit"], "W/K")
         valve_rows = inline_unit_property_rows("valve")
         self.assertEqual(
             [row["key"] for row in valve_rows],
@@ -598,6 +619,50 @@ class UnitCatalogTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     process_unit_property_rows(
                         "pump",
+                        {**legacy_params, **defaults, **updates},
+                    )
+
+    def test_heat_exchanger_design_basis_is_strict_and_opt_in(self):
+        legacy_params = {"ua_w_per_k": 100_000.0}
+        rows = process_unit_property_rows(
+            "heat_exchanger",
+            legacy_params,
+        )
+        self.assertEqual(
+            [row["key"] for row in rows],
+            [
+                "ua_w_per_k",
+                "use_design_basis",
+                "design_duty_capacity_kw",
+                "design_ua_capacity_w_per_k",
+            ],
+        )
+        self.assertFalse(rows[1]["value"])
+        self.assertEqual(rows[2]["value"], 2_500.0)
+        self.assertEqual(rows[3]["value"], 125_000.0)
+        self.assertEqual(legacy_params, {"ua_w_per_k": 100_000.0})
+
+        invalid_cases = (
+            ({"use_design_basis": 1}, "use_design_basis' must be boolean"),
+            (
+                {"design_duty_capacity_kw": 0.0},
+                "design_duty_capacity_kw' must be between",
+            ),
+            (
+                {"design_ua_capacity_w_per_k": float("inf")},
+                "design_ua_capacity_w_per_k' must be finite",
+            ),
+        )
+        defaults = {
+            "use_design_basis": False,
+            "design_duty_capacity_kw": 2_500.0,
+            "design_ua_capacity_w_per_k": 125_000.0,
+        }
+        for updates, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    process_unit_property_rows(
+                        "heat_exchanger",
                         {**legacy_params, **defaults, **updates},
                     )
 
