@@ -2031,6 +2031,142 @@ class PumpPropertyExtractionTest(unittest.TestCase):
         )
 
 
+class HeatExchangerDesignBasisModelTest(unittest.TestCase):
+    """Protect typed exchanger design metadata and solved capacity margins."""
+
+    def test_reports_duty_and_ua_margins_with_explicit_units(self):
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "cross exchanger": {
+                "design_duty_capacity_kw": 2_500.0,
+                "design_ua_capacity_w_per_k": 125_000.0,
+            }
+        }
+        model._direct_unit_run_provenance = {}
+        model._heat_exchanger_state_snapshots = {
+            "cross exchanger": ("trusted",)
+        }
+        operating = {
+            "heatTransferDuty_kW": 2_400.0,
+            "UA_W_K": 100_000.0,
+        }
+        with patch.object(
+            NeqSimProcessModel,
+            "_heat_exchanger_operating_properties",
+            return_value=operating,
+        ):
+            properties = model._heat_exchanger_design_properties(
+                "cross exchanger",
+                object(),
+            )
+            constraint = model._heat_exchanger_design_constraint(
+                "cross exchanger",
+                object(),
+            )
+
+        self.assertEqual(properties["designDutyCapacity_kW"], 2_500.0)
+        self.assertEqual(properties["designUACapacity_W_K"], 125_000.0)
+        self.assertAlmostEqual(properties["dutyUtilization_pct"], 96.0)
+        self.assertAlmostEqual(properties["uaUtilization_pct"], 80.0)
+        self.assertAlmostEqual(properties["dutyMargin_kW"], 100.0)
+        self.assertAlmostEqual(properties["uaMargin_W_K"], 25_000.0)
+        self.assertEqual(constraint.status, "OK")
+        expected_units = {
+            "designDutyCapacity_kW": "kW",
+            "designUACapacity_W_K": "W/K",
+            "dutyUtilization_pct": "%",
+            "uaUtilization_pct": "%",
+            "dutyMargin_kW": "kW",
+            "uaMargin_W_K": "W/K",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(property_name=property_name):
+                self.assertEqual(
+                    model._heat_exchanger_design_property_unit(
+                        property_name
+                    ),
+                    unit,
+                )
+
+        model._equipment_design_bases["cross exchanger"][
+            "design_duty_capacity_kw"
+        ] = 2_000.0
+        with patch.object(
+            NeqSimProcessModel,
+            "_heat_exchanger_operating_properties",
+            return_value=operating,
+        ):
+            violation = model._heat_exchanger_design_constraint(
+                "cross exchanger",
+                object(),
+            )
+        self.assertEqual(violation.status, "VIOLATION")
+        self.assertIn("duty", violation.detail)
+
+        with patch.object(
+            NeqSimProcessModel,
+            "_heat_exchanger_operating_properties",
+            return_value={"UA_W_K": 100_000.0},
+        ):
+            unknown = model._heat_exchanger_design_constraint(
+                "cross exchanger",
+                object(),
+            )
+        self.assertEqual(unknown.status, "UNKNOWN")
+
+    def test_saved_metadata_accepts_exact_exchanger_capacity_schema(self):
+        valid_basis = {
+            "design_duty_capacity_kw": 2_500.0,
+            "design_ua_capacity_w_per_k": 125_000.0,
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "neqsimweb2/studio_metadata.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "equipment_design_bases": {
+                            "cross exchanger": valid_basis,
+                        },
+                    }
+                ),
+            )
+        buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as archive:
+            self.assertEqual(
+                NeqSimProcessModel._read_studio_metadata(archive),
+                {"cross exchanger": valid_basis},
+            )
+
+        for invalid_basis in (
+            {"design_duty_capacity_kw": 2_500.0},
+            {**valid_basis, "design_ua_capacity_w_per_k": 0.0},
+            {**valid_basis, "motor_rating_kw": 100.0},
+        ):
+            with self.subTest(invalid_basis=invalid_basis):
+                invalid_buffer = io.BytesIO()
+                with zipfile.ZipFile(invalid_buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "cross exchanger": invalid_basis,
+                                },
+                            }
+                        ),
+                    )
+                invalid_buffer.seek(0)
+                with zipfile.ZipFile(invalid_buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
+
 class PumpDesignBasisApplicationTest(unittest.TestCase):
     """Protect strict opt-in pump capacities and solved-model propagation."""
 
