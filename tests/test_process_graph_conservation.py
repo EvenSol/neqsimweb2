@@ -11,7 +11,7 @@ import os
 import tempfile
 import unittest
 import zipfile
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 from process_chat.flowsheet_editor import (
     add_catalog_unit,
@@ -2288,6 +2288,51 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
         )
         self.assertEqual(saved_case, builder._spec)
 
+    def test_rejects_incomplete_or_out_of_range_saved_design_metadata(self):
+        valid_basis = {
+            "design_flow_capacity_m3_per_hr": 40.0,
+            "design_head_capacity_m": 500.0,
+            "motor_rating_kw": 60.0,
+        }
+        invalid_bases = []
+        for missing_key in valid_basis:
+            incomplete = dict(valid_basis)
+            incomplete.pop(missing_key)
+            invalid_bases.append(incomplete)
+        invalid_bases.extend(
+            (
+                {**valid_basis, "unknown_capacity": 1.0},
+                {**valid_basis, "motor_rating_kw": 0.0},
+                {
+                    **valid_basis,
+                    "design_head_capacity_m": 20_000.1,
+                },
+            )
+        )
+
+        for basis in invalid_bases:
+            with self.subTest(basis=basis):
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "export pump": basis,
+                                },
+                            }
+                        ),
+                    )
+                buffer.seek(0)
+                with zipfile.ZipFile(buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
 
 class NativePumpPerformanceTest(unittest.TestCase):
     """Benchmark editable native pump performance at nearby points."""
@@ -2378,6 +2423,41 @@ class NativePumpPerformanceTest(unittest.TestCase):
         )
 
         reloaded = NeqSimProcessModel.from_bytes(saved_bytes)
+        reloaded_result = reloaded.run(timeout_ms=180_000)
+        self.assertEqual(
+            reloaded_result.kpis["export pump.motorRating_kW"].value,
+            60.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in reloaded_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "OK",
+        )
+
+    def test_graph_replay_saved_model_preserves_pump_design_metadata(self):
+        builder, _, _, _, _ = self._run_case(1.0, 0.75)
+        script = builder.to_python_script()
+        namespace: dict[str, object] = {}
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            previous_directory = os.getcwd()
+            try:
+                os.chdir(temporary_directory)
+                exec(
+                    compile(script, "<pump-graph-replay>", "exec"),
+                    namespace,
+                )
+                saved_path = os.path.join(
+                    temporary_directory,
+                    "native_pump_performance_benchmark.neqsim",
+                )
+                reloaded = NeqSimProcessModel.from_file(saved_path)
+            finally:
+                os.chdir(previous_directory)
+
         reloaded_result = reloaded.run(timeout_ms=180_000)
         self.assertEqual(
             reloaded_result.kpis["export pump.motorRating_kW"].value,
@@ -4866,14 +4946,19 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             def get_process():
                 return object()
 
+            @staticmethod
+            def save_bytes():
+                return b"serialized-model"
+
         output = io.StringIO()
+        saved_model = mock_open()
         with (
             patch.object(
                 ProcessBuilder,
                 "build_acyclic_graph",
                 return_value=_Model(),
             ),
-            patch("neqsim.save_neqsim") as save_model,
+            patch("builtins.open", saved_model),
             redirect_stdout(output),
         ):
             namespace: dict[str, object] = {}
@@ -4886,7 +4971,11 @@ class MultiInletMixerConservationTest(unittest.TestCase):
                 namespace,
             )
 
-        save_model.assert_called_once()
+        saved_model.assert_called_once_with(
+            "unaudited_transport.neqsim",
+            "wb",
+        )
+        saved_model().write.assert_called_once_with(b"serialized-model")
         self.assertIs(namespace["result"], result)
         self.assertIn(
             "Mass imbalance: not applicable",
