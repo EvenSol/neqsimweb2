@@ -459,7 +459,9 @@ Supported params by equipment type:
   cooler/heater/air_cooler/water_cooler: outlet_temperature_C, pressure_drop_bar, duty_kW, uaValue
   compressor: outlet_pressure_bara, isentropic_efficiency (default 0.75), polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
   separator/two_phase_separator/three_phase_separator/gas_scrubber: pressure_bara (sets inlet stream pressure — separator operates at feed pressure)
-  valve/control_valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening
+  valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening,
+    use_design_basis, design_cv_capacity_us (rated US Cv reporting capacity)
+  control_valve: outlet_pressure_bara, cv (Cv flow coefficient), percent_valve_opening
   expander: outlet_pressure_bara, isentropic_efficiency
   pump/esp_pump: outlet_pressure_bara, efficiency, head
   mixer: (no params needed, combines streams)
@@ -1637,7 +1639,8 @@ PARAMETER REFERENCE:
   compressor: outlet_pressure_bara, isentropic_efficiency (0-1, default 0.75),
               polytropic_efficiency, speed, compression_ratio, use_polytropic_calc
   cooler/heater: outlet_temperature_C, pressure_drop_bar, duty_kW
-  valve: outlet_pressure_bara, cv, percent_valve_opening
+  valve: outlet_pressure_bara, cv, percent_valve_opening, use_design_basis,
+    design_cv_capacity_us (rated US Cv reporting capacity)
   expander: outlet_pressure_bara, isentropic_efficiency
   pump: outlet_pressure_bara, efficiency, head
   splitter: split_factor (0-1)
