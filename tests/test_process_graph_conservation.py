@@ -3178,6 +3178,169 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
             "UNKNOWN",
         )
 
+    def test_same_system_duplicate_is_rejected_before_reindexing(self):
+        specification = self._specification(1.0)
+        specification["name"] = "train"
+        specification["process"][1]["name"] = "trim valve"
+        model = ProcessBuilder().build_from_spec(specification)
+
+        operation_log = apply_add_units(
+            model,
+            [
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="feed",
+                    params={
+                        "outlet_pressure_bara": 50.0,
+                        "percent_valve_opening": 100.0,
+                    },
+                )
+            ],
+        )
+
+        self.assertTrue(
+            [
+                entry
+                for entry in operation_log
+                if entry.get("status") == "FAILED"
+            ]
+        )
+        self.assertEqual(
+            model._equipment_design_bases,
+            {
+                "trim valve": {
+                    "design_cv_capacity_us": 40.0,
+                }
+            },
+        )
+        self.assertEqual(
+            [unit.name for unit in model.list_units()],
+            ["feed", "trim valve"],
+        )
+
+    def test_duplicate_added_valves_fail_before_topology_mutation(self):
+        specification = self._specification(1.0)
+        specification["name"] = "train"
+        model = ProcessBuilder().build_from_spec(specification)
+
+        operation_log = apply_add_units(
+            model,
+            [
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="metering valve",
+                    params={
+                        "outlet_pressure_bara": 20.0,
+                        "percent_valve_opening": 20.0,
+                        "use_design_basis": True,
+                        "design_cv_capacity_us": 50.0,
+                    },
+                ),
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="metering valve",
+                    params={
+                        "outlet_pressure_bara": 20.0,
+                        "percent_valve_opening": 100.0,
+                        "use_design_basis": True,
+                        "design_cv_capacity_us": 100.0,
+                    },
+                ),
+            ],
+        )
+
+        self.assertTrue(
+            [
+                entry
+                for entry in operation_log
+                if entry.get("status") == "FAILED"
+            ]
+        )
+        opening_to_capacity = {}
+        for unit_name, basis in model._equipment_design_bases.items():
+            if unit_name.startswith("train/trim valve"):
+                opening = float(
+                    model.get_unit(unit_name).getPercentValveOpening()
+                )
+                opening_to_capacity[opening] = basis[
+                    "design_cv_capacity_us"
+                ]
+        self.assertEqual(opening_to_capacity, {})
+        self.assertEqual(
+            [unit.name for unit in model.list_units()],
+            ["feed", "metering valve"],
+        )
+
+    def test_process_chat_addition_preserves_remapped_valve_basis(self):
+        from neqsim import jneqsim
+
+        train_a = ProcessBuilder().build_from_spec(
+            self._specification(1.0)
+        ).get_process()
+        train_a.setName("train-a")
+        train_a.getUnit("metering valve").setName("trim valve")
+
+        train_b_specification = self._specification(1.0)
+        train_b_specification["process"][0]["name"] = "feed b"
+        train_b_specification["process"][1]["name"] = "metering valve b"
+        train_b = ProcessBuilder().build_from_spec(
+            train_b_specification
+        ).get_process()
+        train_b.setName("train-b")
+
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+        model._equipment_design_bases = {
+            "trim valve": {"design_cv_capacity_us": 40.0}
+        }
+
+        session = object.__new__(ProcessChatSession)
+        session.model = model
+        session._builder = None
+        session.history = []
+        session._system_prompt = ""
+        session._llm_followup = lambda client, types: "updated"
+        with patch(
+            "process_chat.chat_tools.build_system_prompt",
+            return_value="updated prompt",
+        ), patch(
+            "process_chat.chat_tools._build_model_built_result",
+            return_value={},
+        ):
+            response = session._handle_build(
+                "add duplicate valve",
+                {
+                    "add": [
+                        {
+                            "name": "trim valve",
+                            "type": "valve",
+                            "insert_after": "metering valve b",
+                            "params": {
+                                "outlet_pressure_bara": 20.0,
+                                "percent_valve_opening": 60.0,
+                            },
+                        }
+                    ]
+                },
+                None,
+                None,
+            )
+
+        self.assertEqual(response, "updated")
+        self.assertEqual(
+            model._equipment_design_bases,
+            {
+                "train-a/trim valve": {
+                    "design_cv_capacity_us": 40.0,
+                }
+            },
+        )
+
 
 class PumpDesignBasisApplicationTest(unittest.TestCase):
     """Protect strict opt-in pump capacities and solved-model propagation."""
