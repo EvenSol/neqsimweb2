@@ -3807,6 +3807,24 @@ class ProcessChatSession:
                     except Exception as e:
                         changes_applied.append(f"{unit_name}: FAILED — {e}")
 
+            # Pump design capacities are Studio adapter metadata rather than
+            # native Java properties.  Keep the live model synchronized with
+            # the complete validated spec so incremental edits and opt-out
+            # changes are reflected in KPIs, constraints, and saved cases.
+            pump_design_bases = (
+                self._builder._requested_pump_design_bases(
+                    build_spec.get("process", [])
+                )
+            )
+            if self.model._equipment_design_bases != pump_design_bases:
+                self.model._equipment_design_bases = {
+                    unit_name: dict(design_basis)
+                    for unit_name, design_basis in pump_design_bases.items()
+                }
+                changes_applied.append(
+                    "Pump design basis metadata synchronized"
+                )
+
             # 3. Append / prepend new equipment at the ends
             if extra_steps and change_type in (
                 "append_end", "prepend_start", "append_both",
