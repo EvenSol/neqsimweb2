@@ -2364,8 +2364,9 @@ class NativePumpPerformanceTest(unittest.TestCase):
         flow_scale: float,
         efficiency: float,
         motor_rating_kw: float = 60.0,
+        pump_name: str = "export pump",
     ):
-        units, pump_id = add_catalog_unit([], "pump", "export pump")
+        units, pump_id = add_catalog_unit([], "pump", pump_name)
         units[0]["params"].update(
             {
                 "outlet_pressure_bara": 40.0,
@@ -2426,7 +2427,11 @@ class NativePumpPerformanceTest(unittest.TestCase):
         return builder, graph_spec, model, result, expected_flow
 
     def test_saved_neqsim_round_trip_preserves_pump_design_metadata(self):
-        builder, _, _, _, _ = self._run_case(1.0, 0.75)
+        builder, _, _, _, _ = self._run_case(
+            1.0,
+            0.75,
+            pump_name=" export pump ",
+        )
         saved_bytes = builder.save_neqsim_bytes()
 
         self.assertIsNotNone(saved_bytes)
