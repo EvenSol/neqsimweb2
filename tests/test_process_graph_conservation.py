@@ -10,6 +10,7 @@ import math
 import os
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 from process_chat.flowsheet_editor import (
@@ -2356,6 +2357,40 @@ class NativePumpPerformanceTest(unittest.TestCase):
         )
         result = model.run(timeout_ms=180_000)
         return builder, graph_spec, model, result, expected_flow
+
+    def test_saved_neqsim_round_trip_preserves_pump_design_metadata(self):
+        builder, _, _, _, _ = self._run_case(1.0, 0.75)
+        saved_bytes = builder.save_neqsim_bytes()
+
+        self.assertIsNotNone(saved_bytes)
+        with zipfile.ZipFile(io.BytesIO(saved_bytes), "r") as archive:
+            metadata = json.loads(
+                archive.read(
+                    "neqsimweb2/studio_metadata.json"
+                ).decode("utf-8")
+            )
+        self.assertEqual(metadata["schema_version"], 1)
+        self.assertEqual(
+            metadata["equipment_design_bases"]["export pump"][
+                "motor_rating_kw"
+            ],
+            60.0,
+        )
+
+        reloaded = NeqSimProcessModel.from_bytes(saved_bytes)
+        reloaded_result = reloaded.run(timeout_ms=180_000)
+        self.assertEqual(
+            reloaded_result.kpis["export pump.motorRating_kW"].value,
+            60.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in reloaded_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "OK",
+        )
 
     def test_native_pump_conserves_and_trends_with_flow_and_efficiency(self):
         shaft_power = {}
