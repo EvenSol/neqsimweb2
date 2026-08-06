@@ -2253,6 +2253,7 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
             script,
         )
         self.assertIn("result = model.run(timeout_ms=180_000)", script)
+        self.assertIn("model_file.write(model.save_bytes())", script)
         self.assertIn("legacy_pump_design_replay.case.json", script)
         self.assertIn("json.dump(", script)
         compile(script, "<pump-design-replay>", "exec")
@@ -2271,9 +2272,11 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
                     encoding="utf-8",
                 ) as case_file:
                     saved_case = json.load(case_file)
-                self.assertTrue(
-                    os.path.isfile("legacy_pump_design_replay.neqsim")
-                )
+                with open(
+                    "legacy_pump_design_replay.neqsim",
+                    "rb",
+                ) as model_file:
+                    saved_model = model_file.read()
             finally:
                 os.chdir(original_directory)
 
@@ -2291,6 +2294,21 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
             "OK",
         )
         self.assertEqual(saved_case, builder._spec)
+
+        reloaded = NeqSimProcessModel.from_bytes(saved_model)
+        reloaded_result = reloaded.run(timeout_ms=180_000)
+        self.assertEqual(
+            reloaded_result.kpis["export pump.motorRating_kW"].value,
+            60.0,
+        )
+        self.assertEqual(
+            next(
+                constraint.status
+                for constraint in reloaded_result.constraints
+                if constraint.name == "pump_design.export pump"
+            ),
+            "OK",
+        )
 
     def test_rejects_incomplete_or_out_of_range_saved_design_metadata(self):
         valid_basis = {
