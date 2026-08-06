@@ -37,7 +37,11 @@ from process_chat.chat_tools import (
 )
 from process_chat.process_model import NeqSimProcessModel
 from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario, TargetSpec
-from process_chat.scenario_engine import apply_add_units, run_scenarios
+from process_chat.scenario_engine import (
+    apply_add_units,
+    apply_patch_to_model,
+    run_scenarios,
+)
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
     aggregate_unit_balances,
@@ -3071,6 +3075,107 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
                 if constraint.name == "valve_design.train-a/trim valve"
             ),
             "VIOLATION",
+        )
+
+    def test_existing_screen_is_remapped_without_screening_duplicate(self):
+        from neqsim import jneqsim
+
+        def _train(
+            train_name: str,
+            feed_name: str,
+            valve_name: str,
+            outlet_pressure_bara: float,
+        ):
+            specification = self._specification(1.0)
+            specification["name"] = train_name
+            specification["process"][0]["name"] = feed_name
+            valve_spec = specification["process"][1]
+            valve_spec["name"] = valve_name
+            valve_spec["params"] = {
+                "outlet_pressure_bara": outlet_pressure_bara,
+                "percent_valve_opening": 60.0,
+            }
+            process = ProcessBuilder().build_from_spec(
+                specification
+            ).get_process()
+            process.setName(train_name)
+            return process
+
+        train_a = _train("train-a", "feed a", "trim valve", 30.0)
+        train_b = _train(
+            "train-b",
+            "feed b",
+            "metering valve b",
+            25.0,
+        )
+        process_model = jneqsim.process.processmodel.ProcessModel()
+        self.assertTrue(process_model.add("train-a", train_a))
+        self.assertTrue(process_model.add("train-b", train_b))
+        model = NeqSimProcessModel(process_model)
+        model._equipment_design_bases = {
+            "trim valve": {"design_cv_capacity_us": 100.0}
+        }
+
+        operation_log = apply_add_units(
+            model,
+            [
+                AddUnitOp(
+                    name="trim valve",
+                    equipment_type="valve",
+                    insert_after="metering valve b",
+                    params={
+                        "outlet_pressure_bara": 20.0,
+                        "percent_valve_opening": 60.0,
+                    },
+                )
+            ],
+        )
+
+        self.assertFalse(
+            [
+                entry
+                for entry in operation_log
+                if entry.get("status") == "FAILED"
+            ]
+        )
+        self.assertEqual(
+            model._equipment_design_bases,
+            {
+                "train-a/trim valve": {
+                    "design_cv_capacity_us": 100.0,
+                }
+            },
+        )
+        patch_log = apply_patch_to_model(
+            model,
+            InputPatch(
+                changes={"units.train-b/trim valve.cv": 25.0}
+            ),
+        )
+        self.assertEqual(patch_log[-1]["status"], "OK", patch_log)
+        self.assertEqual(
+            float(model.get_unit("train-b/trim valve").getCv()),
+            25.0,
+        )
+
+        result = model.run(timeout_ms=180_000)
+        self.assertEqual(
+            result.kpis[
+                "train-a/trim valve.designCvCapacity_US"
+            ].value,
+            100.0,
+        )
+        self.assertNotIn(
+            "train-b/trim valve.designCvCapacity_US",
+            result.kpis,
+        )
+        self.assertNotEqual(
+            next(
+                constraint.status
+                for constraint in result.constraints
+                if constraint.name == "valve_design.train-a/trim valve"
+            ),
+            "UNKNOWN",
         )
 
 

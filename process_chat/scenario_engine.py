@@ -24,7 +24,13 @@ from .patch_schema import (
     TargetSpec,
     AddProcessOp,
 )
-from .process_model import NeqSimProcessModel, ModelRunResult, KPI, ConstraintStatus
+from .process_model import (
+    NeqSimProcessModel,
+    ModelRunResult,
+    KPI,
+    ConstraintStatus,
+    _NativeObjectIdentitySet,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +674,19 @@ def _scale_stream_flow(model: NeqSimProcessModel, stream_name: str, scale: float
 _FIXED_CV_PROPERTIES = {"cv", "valve_cv", "flow_coefficient"}
 
 
+def _indexed_unit_name(
+    model: NeqSimProcessModel,
+    native_unit: Any,
+) -> Optional[str]:
+    """Return the exact current model index key for one native unit."""
+    identity = _NativeObjectIdentitySet()
+    identity.add(native_unit)
+    for registered_name, registered_unit in model._units.items():
+        if identity.contains(registered_unit):
+            return registered_name
+    return None
+
+
 def _has_required_cv_screen(
     model: NeqSimProcessModel,
     requested_unit_name: str,
@@ -678,40 +697,18 @@ def _has_required_cv_screen(
     except KeyError:
         return False
 
-    resolved_names = set()
-    for registered_name, registered_unit in model._units.items():
-        try:
-            same_unit = registered_unit is resolved_unit or (
-                registered_unit == resolved_unit
-            )
-        except Exception:
-            same_unit = registered_unit is resolved_unit
-        if same_unit:
-            resolved_names.add(str(registered_name).casefold())
-    try:
-        raw_name = str(resolved_unit.getName()).casefold()
-        resolved_names.add(raw_name)
-    except Exception:
-        raw_name = ""
-
-    for basis_name, basis in getattr(
+    indexed_name = _indexed_unit_name(model, resolved_unit)
+    if indexed_name is None:
+        return False
+    basis = getattr(
         model,
         "_equipment_design_bases",
         {},
-    ).items():
-        normalized_basis_name = str(basis_name).casefold()
-        name_matches = normalized_basis_name in resolved_names
-        if raw_name:
-            name_matches = name_matches or normalized_basis_name.endswith(
-                f"/{raw_name}"
-            )
-        if (
-            name_matches
-            and isinstance(basis, dict)
-            and set(basis) == {"design_cv_capacity_us"}
-        ):
-            return True
-    return False
+    ).get(indexed_name)
+    return (
+        isinstance(basis, dict)
+        and set(basis) == {"design_cv_capacity_us"}
+    )
 
 
 def _fixed_cv_patch_failure(
@@ -1105,6 +1102,32 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     log = []
     proc = model.get_process()
 
+    # Keep enough identity and process-system context to remap every existing
+    # design basis if reindexing qualifies a formerly unique raw unit name.
+    existing_design_units = []
+    for stored_name, basis in getattr(
+        model,
+        "_equipment_design_bases",
+        {},
+    ).items():
+        try:
+            native_unit = model.get_unit(stored_name)
+        except KeyError:
+            native_unit = None
+        raw_name = ""
+        if native_unit is not None:
+            try:
+                raw_name = str(native_unit.getName())
+            except Exception:
+                pass
+        existing_design_units.append((
+            stored_name,
+            getattr(model, "_unit_ps_name", {}).get(stored_name, ""),
+            raw_name,
+            native_unit,
+            dict(basis),
+        ))
+
     # Validate reporting-only valve metadata before topology mutation. These
     # fields do not have native Java setters and must follow the same strict
     # contract as builder-created valves.
@@ -1324,29 +1347,26 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     # name during indexing. Register reporting metadata against that indexed
     # key, not the raw AddUnitOp name, so rerun invalidation and KPI extraction
     # continue to address the exact created valve.
-    indexed_valve_design_bases: Dict[str, Dict[str, float]] = {}
+    remapped_design_bases: Dict[str, Dict[str, float]] = {}
+    for stored_name, ps_name, raw_name, native_unit, basis in (
+        existing_design_units
+    ):
+        indexed_name = None
+        if native_unit is not None:
+            indexed_name = _indexed_unit_name(model, native_unit)
+        if indexed_name is None and ps_name and raw_name:
+            qualified_name = f"{ps_name}/{raw_name}"
+            if qualified_name in model._units:
+                indexed_name = qualified_name
+        if indexed_name is None and stored_name in model._units:
+            indexed_name = stored_name
+        remapped_design_bases[indexed_name or stored_name] = basis
+
     for add_op, created_unit, _params in created_units:
         basis = requested_valve_design_bases.get(add_op.name)
         if basis is None:
             continue
-        indexed_name = None
-        for registered_name, registered_unit in model._units.items():
-            same_unit = registered_unit is created_unit
-            if not same_unit:
-                try:
-                    same_unit = registered_unit == created_unit
-                except Exception:
-                    same_unit = False
-            if not same_unit:
-                try:
-                    same_unit = int(registered_unit.hashCode()) == int(
-                        created_unit.hashCode()
-                    )
-                except Exception:
-                    same_unit = False
-            if same_unit:
-                indexed_name = registered_name
-                break
+        indexed_name = _indexed_unit_name(model, created_unit)
         if indexed_name is None:
             log.append({
                 "key": f"add_unit.{add_op.name}.design_basis",
@@ -1357,8 +1377,8 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
                 ),
             })
             continue
-        indexed_valve_design_bases[indexed_name] = basis
-    model._equipment_design_bases.update(indexed_valve_design_bases)
+        remapped_design_bases[indexed_name] = basis
+    model._equipment_design_bases = remapped_design_bases
 
     return log
 
