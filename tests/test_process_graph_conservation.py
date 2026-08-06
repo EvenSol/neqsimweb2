@@ -4382,6 +4382,201 @@ class PipelinePropertyExtractionTest(unittest.TestCase):
         )
 
 
+class PipelineDesignBasisModelTest(unittest.TestCase):
+    """Protect pipeline hydraulic capacities, margins, and status."""
+
+    class _JavaClass:
+        def __init__(self, name="PipeBeggsAndBrills"):
+            self.name = name
+
+        def getSimpleName(self):
+            return self.name
+
+    class _Pipeline:
+        def __init__(
+            self,
+            pressure_drop_bar=0.0048,
+            velocity_m_s=0.58,
+            java_class="PipeBeggsAndBrills",
+        ):
+            self.pressure_drop_bar = pressure_drop_bar
+            self.velocity_m_s = velocity_m_s
+            self.java_class = java_class
+
+        def getClass(self):
+            return PipelineDesignBasisModelTest._JavaClass(self.java_class)
+
+        def getPressureDrop(self):
+            return self.pressure_drop_bar
+
+        def getMixtureVelocity(self):
+            return self.velocity_m_s
+
+        def getVelocity(self):
+            return self.velocity_m_s
+
+    @staticmethod
+    def _model(pipeline):
+        model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        model._equipment_design_bases = {
+            "transport pipeline": {
+                "design_pressure_drop_capacity_bar": 0.005,
+                "design_velocity_capacity_m_per_s": 0.60,
+            }
+        }
+        model._units = {"transport pipeline": pipeline}
+        model._unit_ps_name = {"transport pipeline": "main"}
+        return model
+
+    def test_reports_hydraulic_capacity_margins_with_explicit_units(self):
+        pipeline = self._Pipeline()
+        model = self._model(pipeline)
+
+        properties = model._pipeline_design_properties(
+            "transport pipeline",
+            pipeline,
+        )
+
+        self.assertEqual(properties["designPressureDropCapacity_bar"], 0.005)
+        self.assertEqual(properties["designVelocityCapacity_m_s"], 0.60)
+        self.assertAlmostEqual(properties["pressureDropUtilization_pct"], 96.0)
+        self.assertAlmostEqual(
+            properties["velocityUtilization_pct"],
+            96.66666666666667,
+        )
+        self.assertAlmostEqual(properties["pressureDropMargin_bar"], 0.0002)
+        self.assertAlmostEqual(properties["velocityMargin_m_s"], 0.02)
+        self.assertEqual(
+            model._pipeline_design_constraint(
+                "transport pipeline",
+                pipeline,
+            ).status,
+            "OK",
+        )
+        expected_units = {
+            "designPressureDropCapacity_bar": "bar",
+            "designVelocityCapacity_m_s": "m/s",
+            "pressureDropUtilization_pct": "%",
+            "velocityUtilization_pct": "%",
+            "pressureDropMargin_bar": "bar",
+            "velocityMargin_m_s": "m/s",
+        }
+        for property_name, unit in expected_units.items():
+            with self.subTest(property_name=property_name):
+                self.assertEqual(
+                    model._pipeline_design_property_unit(property_name),
+                    unit,
+                )
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis[
+                "transport pipeline.designPressureDropCapacity_bar"
+            ].unit,
+            "bar",
+        )
+        self.assertEqual(
+            kpis["transport pipeline.velocityMargin_m_s"].unit,
+            "m/s",
+        )
+        workbook_properties = model.list_units()[0].properties
+        self.assertAlmostEqual(
+            workbook_properties["pressureDropMargin_bar"],
+            0.0002,
+        )
+
+    def test_violates_or_fails_loud_when_native_results_require_it(self):
+        pipeline = self._Pipeline(
+            pressure_drop_bar=0.0051,
+            velocity_m_s=0.61,
+        )
+        model = self._model(pipeline)
+        violation = model._pipeline_design_constraint(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertEqual(violation.status, "VIOLATION")
+        self.assertIn("pressure drop", violation.detail)
+        self.assertIn("velocity", violation.detail)
+
+        pipeline.velocity_m_s = math.nan
+        unknown = model._pipeline_design_constraint(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertEqual(unknown.status, "UNKNOWN")
+
+    def test_supports_one_phase_velocity_and_absolute_pressure_drop(self):
+        pipeline = self._Pipeline(
+            pressure_drop_bar=-0.0048,
+            velocity_m_s=-0.58,
+            java_class="OnePhasePipeLine",
+        )
+        model = self._model(pipeline)
+        properties = model._pipeline_design_properties(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertAlmostEqual(properties["pressureDropUtilization_pct"], 96.0)
+        self.assertAlmostEqual(
+            properties["velocityUtilization_pct"],
+            96.66666666666667,
+        )
+
+    def test_saved_metadata_accepts_only_exact_pipeline_capacity_schema(self):
+        valid_basis = {
+            "design_pressure_drop_capacity_bar": 0.005,
+            "design_velocity_capacity_m_per_s": 0.60,
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "neqsimweb2/studio_metadata.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "equipment_design_bases": {
+                            "transport pipeline": valid_basis,
+                        },
+                    }
+                ),
+            )
+        buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as archive:
+            self.assertEqual(
+                NeqSimProcessModel._read_studio_metadata(archive),
+                {"transport pipeline": valid_basis},
+            )
+
+        for invalid_basis in (
+            {"design_pressure_drop_capacity_bar": 0.005},
+            {**valid_basis, "design_velocity_capacity_m_per_s": 0.0},
+            {**valid_basis, "motor_rating_kw": 100.0},
+        ):
+            with self.subTest(invalid_basis=invalid_basis):
+                invalid_buffer = io.BytesIO()
+                with zipfile.ZipFile(invalid_buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "transport pipeline": invalid_basis,
+                                },
+                            }
+                        ),
+                    )
+                invalid_buffer.seek(0)
+                with zipfile.ZipFile(invalid_buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
+
 class NativePipelineHydraulicsTest(unittest.TestCase):
     """Benchmark adiabatic native pipeline hydraulics and closure."""
 
