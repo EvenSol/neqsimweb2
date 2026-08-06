@@ -960,6 +960,34 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
     log = []
     proc = model.get_process()
 
+    # Validate reporting-only valve metadata before topology mutation. These
+    # fields do not have native Java setters and must follow the same strict
+    # contract as builder-created valves.
+    from .process_builder import ProcessBuilder
+
+    requested_valve_design_bases: Dict[str, Dict[str, float]] = {}
+    for add_op in add_units:
+        try:
+            requested_valve_design_bases.update(
+                ProcessBuilder._requested_valve_design_bases(
+                    [
+                        {
+                            "name": add_op.name,
+                            "type": add_op.equipment_type,
+                            "params": add_op.params,
+                        }
+                    ]
+                )
+            )
+        except ValueError as exc:
+            return [
+                {
+                    "key": f"add_unit.{add_op.name}.design_basis",
+                    "status": "FAILED",
+                    "error": str(exc),
+                }
+            ]
+
     # Collect all current units in order
     # For ProcessModel, apply_add_units works per ProcessSystem; find the
     # right child system for the first add_op's insert_after target.
@@ -1048,6 +1076,11 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
             params = dict(add_op.params)
             for pkey, pval in params.items():
                 pk = pkey.lower()
+                if eq_type == "valve" and pk in (
+                    "use_design_basis",
+                    "design_cv_capacity_us",
+                ):
+                    continue
                 try:
                     if "outlet_temperature" in pk or "out_temperature" in pk or "outtemperature" in pk:
                         new_unit.setOutTemperature(float(pval), "C")
@@ -1139,6 +1172,7 @@ def apply_add_units(model: NeqSimProcessModel, add_units: List[AddUnitOp]) -> Li
 
     # Re-index the model objects so introspection sees the new units/streams
     model._index_model_objects()
+    model._equipment_design_bases.update(requested_valve_design_bases)
 
     return log
 
@@ -1315,6 +1349,41 @@ def apply_patch_to_model(model: NeqSimProcessModel, patch: InputPatch) -> List[D
         if len(parts) == 2:
             return parts[0], parts[1]
         return remainder, ""
+
+    # Preflight the complete patch so a fixed-Cv request cannot partially
+    # mutate a case whose active screen requires NeqSim to auto-size Cv.
+    for key in patch.changes:
+        if key.startswith("streams."):
+            continue
+        if key.startswith("units."):
+            obj_name, prop = _split_key(key, "units.")
+        else:
+            parts = key.rsplit(".", 1)
+            if len(parts) != 2:
+                continue
+            obj_name, prop = parts
+        if prop.lower() not in ("cv", "valve_cv", "flow_coefficient"):
+            continue
+        design_basis = getattr(
+            model,
+            "_equipment_design_bases",
+            {},
+        ).get(obj_name)
+        if (
+            isinstance(design_basis, dict)
+            and set(design_basis) == {"design_cv_capacity_us"}
+        ):
+            return [
+                {
+                    "key": key,
+                    "status": "FAILED",
+                    "error": (
+                        "A fixed valve Cv cannot be applied while required-Cv "
+                        "design screening is active. Disable the screen or "
+                        "omit the fixed Cv."
+                    ),
+                }
+            ]
 
     for key, raw_value in patch.changes.items():
         # Resolve relative operations

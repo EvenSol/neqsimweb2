@@ -36,6 +36,8 @@ from process_chat.chat_tools import (
     _classify_build_change,
 )
 from process_chat.process_model import NeqSimProcessModel
+from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario
+from process_chat.scenario_engine import run_scenarios
 from process_chat.solver_diagnostics import (
     aggregate_energy_balance,
     aggregate_unit_balances,
@@ -2783,6 +2785,80 @@ class NativeValveDesignPerformanceTest(unittest.TestCase):
             original_cv,
         )
         self.assertEqual(model._equipment_design_bases, original_basis)
+
+    def test_scenario_fixed_cv_patch_is_rejected_without_mutation(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+        original_cv = float(model.get_unit("metering valve").getCv())
+
+        comparison = run_scenarios(
+            model,
+            [
+                Scenario(
+                    name="invalid fixed Cv",
+                    description="Reject fixed Cv while required-Cv screen is active",
+                    patch=InputPatch(
+                        changes={"units.metering valve.cv": 25.0}
+                    ),
+                )
+            ],
+            timeout_ms=180_000,
+        )
+
+        self.assertFalse(comparison.cases[0].success)
+        self.assertIn("fixed valve Cv", comparison.cases[0].error)
+        self.assertEqual(
+            float(model.get_unit("metering valve").getCv()),
+            original_cv,
+        )
+        self.assertEqual(comparison.patch_log[-1]["status"], "FAILED")
+
+    def test_scenario_added_valve_registers_rated_cv_metadata(self):
+        builder = ProcessBuilder()
+        model = builder.build_from_spec(self._specification(1.0))
+        model.run(timeout_ms=180_000)
+
+        comparison = run_scenarios(
+            model,
+            [
+                Scenario(
+                    name="add trim valve",
+                    description="Add a screened trim valve",
+                    patch=InputPatch(
+                        changes={},
+                        add_units=[
+                            AddUnitOp(
+                                name="trim valve",
+                                equipment_type="valve",
+                                insert_after="metering valve",
+                                params={
+                                    "outlet_pressure_bara": 20.0,
+                                    "use_design_basis": True,
+                                    "design_cv_capacity_us": 50.0,
+                                },
+                            )
+                        ],
+                    ),
+                )
+            ],
+            timeout_ms=180_000,
+        )
+
+        case = comparison.cases[0]
+        self.assertTrue(case.success, case.error)
+        self.assertEqual(
+            case.result.kpis["trim valve.designCvCapacity_US"].value,
+            50.0,
+        )
+        self.assertIn(
+            next(
+                constraint.status
+                for constraint in case.result.constraints
+                if constraint.name == "valve_design.trim valve"
+            ),
+            ("OK", "VIOLATION"),
+        )
 
 
 class PumpDesignBasisApplicationTest(unittest.TestCase):
