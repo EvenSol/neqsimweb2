@@ -2048,7 +2048,7 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
         )
         units = [
             {
-                "name": "export pump",
+                "name": " export pump ",
                 "type": "pump",
                 "params": {
                     "use_design_basis": True,
@@ -2066,7 +2066,7 @@ class PumpDesignBasisApplicationTest(unittest.TestCase):
         self.assertEqual(
             ProcessBuilder._requested_pump_design_bases(units),
             {
-                "export pump": {
+                " export pump ": {
                     "design_flow_capacity_m3_per_hr": 40.0,
                     "design_head_capacity_m": 400.0,
                     "motor_rating_kw": 35.0,
@@ -2618,7 +2618,7 @@ class NativePumpPerformanceTest(unittest.TestCase):
         add_specification = {
             "add": [
                 {
-                    "name": "export pump",
+                    "name": " export pump ",
                     "type": "pump",
                     "insert_after": "feed",
                     "params": {
@@ -2655,28 +2655,28 @@ class NativePumpPerformanceTest(unittest.TestCase):
 
         self.assertEqual(response, "updated")
         self.assertEqual(
-            model._equipment_design_bases["export pump"][
+            model._equipment_design_bases[" export pump "][
                 "motor_rating_kw"
             ],
             60.0,
         )
         self.assertEqual(
             builder.spec["process"][-1]["name"],
-            "export pump",
+            " export pump ",
         )
 
         saved_bytes = builder.save_neqsim_bytes()
         reloaded = NeqSimProcessModel.from_bytes(saved_bytes)
         reloaded_result = reloaded.run(timeout_ms=180_000)
         self.assertEqual(
-            reloaded_result.kpis["export pump.motorRating_kW"].value,
+            reloaded_result.kpis[" export pump .motorRating_kW"].value,
             60.0,
         )
         self.assertEqual(
             next(
                 constraint.status
                 for constraint in reloaded_result.constraints
-                if constraint.name == "pump_design.export pump"
+                if constraint.name == "pump_design. export pump "
             ),
             "OK",
         )
