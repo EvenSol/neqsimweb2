@@ -4229,6 +4229,11 @@ class NeqSimProcessModel:
                         ).get(name),
                     )
                 )
+                props.update(
+                    self._heat_exchanger_design_properties(name, u)
+                )
+
+            props.update(self._valve_design_properties(name, u))
 
             if "Splitter" in java_class:
                 props.update(self._splitter_operating_properties(u))
