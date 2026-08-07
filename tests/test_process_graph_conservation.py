@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 87719)
-Total output lines: 9943
+Warning: truncated output (original token count: 88070)
+Total output lines: 9980
 
 """Native conservation benchmark for the generic ProcessBuilder graph executor."""
 
@@ -4658,6 +4658,14 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
             103.33333333333333,
         )
         self.assertAlmostEqual(properties["velocityMargin_m_s"], -0.02)
+        self.assertAlmostEqual(
+            properties["governingHydraulicUtilization_pct"],
+            103.33333333333333,
+        )
+        self.assertAlmostEqual(
+            properties["governingHydraulicMargin_pct"],
+            -3.3333333333333286,
+        )
         self.assertEqual(properties["velocityCriticalSegment_index"], 2.0)
         self.assertEqual(properties["velocityCriticalLength_m"], 1_000.0)
         self.assertEqual(
@@ -4676,6 +4684,7 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
         )
         self.assertEqual(constraint.status, "VIOLATION")
         self.assertIn("velocity", constraint.detail)
+        self.assertIn("governing=velocity", constraint.detail)
 
         kpis = {}
         model._extract_unit_properties(kpis)
@@ -4692,17 +4701,7 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
 
     def test_saved_metadata_accepts_only_exact_pipeline_capacity_schema(self):
         valid_basis = {
-            "design_pressure_drop_capacity_bar": 0.005,
-            "design_velocity_capacity_m_per_s": 0.60,
-        }
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr(
-                "neqsimweb2/studio_metadata.json",
-                json.dumps(
-                    {
-                        "schema_version": 1,
-…7719 tokens truncated….95, "ethane": 0.05},
+            "design_pressure_drop_capacity_bar": 0.…8070 tokens truncated….95, "ethane": 0.05},
                 ),
             )
         ]

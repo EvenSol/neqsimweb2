@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 73583)
-Total output lines: 7461
+Warning: truncated output (original token count: 73830)
+Total output lines: 7486
 
 """
 Process Model Adapter — wraps a loaded NeqSim ProcessSystem or ProcessModel.
@@ -3167,6 +3167,19 @@ class NeqSimProcessModel:
         ):
             if provenance_key in operating:
                 properties[provenance_key] = operating[provenance_key]
+        utilization_values = [
+            properties[utilization_key]
+            for _, _, utilization_key, _ in comparisons
+            if utilization_key in properties
+        ]
+        if len(utilization_values) == len(comparisons):
+            governing_utilization = max(utilization_values)
+            properties["governingHydraulicUtilization_pct"] = (
+                governing_utilization
+            )
+            properties["governingHydraulicMargin_pct"] = (
+                100.0 - governing_utilization
+            )
         return properties
 
     @staticmethod
@@ -3181,25 +3194,8 @@ class NeqSimProcessModel:
             "velocityMargin_m_s": "m/s",
             "velocityCriticalSegment_index": "[-]",
             "velocityCriticalLength_m": "m",
-        }[property_name]
-
-    def _pipeline_design_constraint(
-        self,
-        unit_name: str,
-        unit: Any,
-    ) -> ConstraintStatus:
-        """Return fail-loud pressure-drop and velocity capacity status."""
-        properties = self._pipeline_design_properties(unit_name, unit)
-        utilization_names = (
-            (
-                "pressure drop",
-                "pressureDropUtilization_pct",
-                "pressureDropMargin_bar",
-            ),
-            (
-                "velocity",
-                "velocityUtilization_pct",
-                "velocityMargin…13583 tokens truncated… process_run_succeeded
+            "governingHydraulicUtilization_pct": "%",
+   …13830 tokens truncated… process_run_succeeded
                 and self._enforce_acyclic_mixer_energy
             ):
                 direct_closure_ran = (
