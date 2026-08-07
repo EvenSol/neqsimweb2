@@ -4634,6 +4634,68 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
             96.66666666666667,
         )
 
+    def test_screens_maximum_finite_native_velocity_profile(self):
+        class _ProfilePipeline(self._Pipeline):
+            def getMixtureSuperficialVelocityProfile(self):
+                return [0.58, math.nan, -0.62, 0.59]
+
+            def getLengthProfile(self):
+                return [0.0, 500.0, 1_000.0, 1_500.0]
+
+        pipeline = _ProfilePipeline(velocity_m_s=0.58)
+        model = self._model(pipeline)
+
+        properties = model._pipeline_design_properties(
+            "transport pipeline",
+            pipeline,
+        )
+
+        self.assertAlmostEqual(
+            properties["velocityUtilization_pct"],
+            103.33333333333333,
+        )
+        self.assertAlmostEqual(properties["velocityMargin_m_s"], -0.02)
+        self.assertAlmostEqual(
+            properties["governingHydraulicUtilization_pct"],
+            103.33333333333333,
+        )
+        self.assertAlmostEqual(
+            properties["governingHydraulicMargin_pct"],
+            -3.3333333333333286,
+        )
+        self.assertEqual(properties["velocityCriticalSegment_index"], 2.0)
+        self.assertEqual(properties["velocityCriticalLength_m"], 1_000.0)
+        self.assertEqual(
+            model._pipeline_design_property_unit(
+                "velocityCriticalSegment_index"
+            ),
+            "[-]",
+        )
+        self.assertEqual(
+            model._pipeline_design_property_unit("velocityCriticalLength_m"),
+            "m",
+        )
+        constraint = model._pipeline_design_constraint(
+            "transport pipeline",
+            pipeline,
+        )
+        self.assertEqual(constraint.status, "VIOLATION")
+        self.assertIn("velocity", constraint.detail)
+        self.assertIn("governing=velocity", constraint.detail)
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis[
+                "transport pipeline.velocityCriticalSegment_index"
+            ].value,
+            2.0,
+        )
+        self.assertEqual(
+            kpis["transport pipeline.velocityCriticalLength_m"].unit,
+            "m",
+        )
+
     def test_saved_metadata_accepts_only_exact_pipeline_capacity_schema(self):
         valid_basis = {
             "design_pressure_drop_capacity_bar": 0.005,
@@ -4807,6 +4869,24 @@ class NativePipelineHydraulicsTest(unittest.TestCase):
                         result.kpis[balance_name].value,
                         1.0e-6,
                     )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        "transport pipeline."
+                        "governingHydraulicMargin_pct"
+                    ].value,
+                    min(
+                        result.kpis[
+                            "transport pipeline.pressureDropMargin_bar"
+                        ].value
+                        / 0.005
+                        * 100.0,
+                        result.kpis[
+                            "transport pipeline.velocityMargin_m_s"
+                        ].value
+                        / 0.60
+                        * 100.0,
+                    ),
+                )
 
         baseline, baseline_constraint = results[1.0]
         nearby, nearby_constraint = results[1.05]
@@ -4844,6 +4924,12 @@ class NativePipelineHydraulicsTest(unittest.TestCase):
             ].unit,
             "m/s",
         )
+        baseline_governing = baseline.kpis[
+            "transport pipeline.governingHydraulicUtilization_pct"
+        ].value
+        nearby_governing = nearby.kpis[
+            "transport pipeline.governingHydraulicUtilization_pct"
+        ].value
         print(
             "native pipeline design screen:",
             "baseline=OK",
@@ -4856,6 +4942,10 @@ class NativePipelineHydraulicsTest(unittest.TestCase):
             f"{baseline.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
             "nearby_velocity_margin="
             f"{nearby.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+            "baseline_governing="
+            f"{baseline_governing:.9f}%",
+            "nearby_governing="
+            f"{nearby_governing:.9f}%",
         )
 
     def test_native_pipeline_conserves_and_trends_at_nearby_points(self):

@@ -3057,12 +3057,55 @@ class NeqSimProcessModel:
             java_class = str(unit.getClass().getSimpleName())
         except Exception:
             java_class = ""
+        profile_getter = (
+            "getMixtureSuperficialVelocityProfile"
+            if java_class == "PipeBeggsAndBrills"
+            else "getVelocityProfile"
+            if java_class == "OnePhasePipeLine"
+            else ""
+        )
+        profile_velocity: Optional[float] = None
+        profile_critical_index: Optional[int] = None
+        if profile_getter and hasattr(unit, profile_getter):
+            try:
+                profile_values = []
+                for index, raw_value in enumerate(
+                    getattr(unit, profile_getter)()
+                ):
+                    value = abs(float(raw_value))
+                    if math.isfinite(value):
+                        profile_values.append((index, value))
+            except Exception:
+                profile_values = []
+            if profile_values:
+                profile_critical_index, profile_velocity = max(
+                    profile_values,
+                    key=lambda item: item[1],
+                )
+
         velocity_getter = (
             "getMixtureVelocity"
             if java_class == "PipeBeggsAndBrills"
             else "getVelocity"
         )
-        if hasattr(unit, velocity_getter):
+        if profile_velocity is not None:
+            properties["velocity_m_s"] = profile_velocity
+            properties["velocityCriticalSegment_index"] = float(
+                profile_critical_index
+            )
+            if hasattr(unit, "getLengthProfile"):
+                try:
+                    length_profile = list(unit.getLengthProfile())
+                    critical_length = float(
+                        length_profile[profile_critical_index]
+                    )
+                except Exception:
+                    critical_length = math.nan
+                if math.isfinite(critical_length):
+                    properties["velocityCriticalLength_m"] = (
+                        critical_length
+                    )
+        elif hasattr(unit, velocity_getter):
             try:
                 velocity = abs(float(getattr(unit, velocity_getter)()))
             except Exception:
@@ -3115,6 +3158,25 @@ class NeqSimProcessModel:
             capacity = properties[capacity_key]
             properties[utilization_key] = 100.0 * actual_value / capacity
             properties[margin_key] = capacity - actual_value
+        for provenance_key in (
+            "velocityCriticalSegment_index",
+            "velocityCriticalLength_m",
+        ):
+            if provenance_key in operating:
+                properties[provenance_key] = operating[provenance_key]
+        utilization_values = [
+            properties[utilization_key]
+            for _, _, utilization_key, _ in comparisons
+            if utilization_key in properties
+        ]
+        if len(utilization_values) == len(comparisons):
+            governing_utilization = max(utilization_values)
+            properties["governingHydraulicUtilization_pct"] = (
+                governing_utilization
+            )
+            properties["governingHydraulicMargin_pct"] = (
+                100.0 - governing_utilization
+            )
         return properties
 
     @staticmethod
@@ -3127,6 +3189,10 @@ class NeqSimProcessModel:
             "velocityUtilization_pct": "%",
             "pressureDropMargin_bar": "bar",
             "velocityMargin_m_s": "m/s",
+            "velocityCriticalSegment_index": "[-]",
+            "velocityCriticalLength_m": "m",
+            "governingHydraulicUtilization_pct": "%",
+            "governingHydraulicMargin_pct": "%",
         }[property_name]
 
     def _pipeline_design_constraint(
@@ -3167,16 +3233,26 @@ class NeqSimProcessModel:
             f"{label}={properties[key]:.6g}%"
             for label, key, _ in utilization_names
         )
+        governing_label, governing_key, _ = max(
+            utilization_names,
+            key=lambda item: properties[item[1]],
+        )
+        governing_detail = (
+            f"governing={governing_label} "
+            f"({properties[governing_key]:.6g}%)"
+        )
         return ConstraintStatus(
             f"pipeline_design.{unit_name}",
             "VIOLATION" if violations else "OK",
             (
                 "Pipeline exceeds " + ", ".join(violations)
-                + f" capacity; utilization: {utilization}."
+                + f" capacity; utilization: {utilization}; "
+                + governing_detail
+                + "."
                 if violations
                 else (
                     "Pipeline is inside hydraulic capacities; "
-                    f"utilization: {utilization}."
+                    f"utilization: {utilization}; {governing_detail}."
                 )
             ),
         )
