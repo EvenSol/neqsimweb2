@@ -2272,6 +2272,166 @@ def _equipment_dataframe(model: Any) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _equipment_design_dataframe(
+    equipment_table: pd.DataFrame,
+    constraint_table: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build normalized operating-versus-design rows with explicit units."""
+    columns = [
+        "Equipment",
+        "Type",
+        "Design check",
+        "Operating value",
+        "Design capacity",
+        "Margin",
+        "Utilization [%]",
+        "Unit",
+        "Status",
+        "Constraint detail",
+        "Critical segment [-]",
+        "Critical length [m]",
+    ]
+    if equipment_table.empty or "Equipment" not in equipment_table.columns:
+        return pd.DataFrame(columns=columns)
+
+    definitions = (
+        (
+            "Pump flow",
+            "designFlowCapacity_m3_per_hr",
+            "flowMargin_m3_per_hr",
+            "flowUtilization_pct",
+            "m3/hr",
+            "pump_design",
+        ),
+        (
+            "Pump head",
+            "designHeadCapacity_m",
+            "headMargin_m",
+            "headUtilization_pct",
+            "m",
+            "pump_design",
+        ),
+        (
+            "Pump motor",
+            "motorRating_kW",
+            "motorMargin_kW",
+            "motorUtilization_pct",
+            "kW",
+            "pump_design",
+        ),
+        (
+            "Heat-exchanger duty",
+            "designDutyCapacity_kW",
+            "dutyMargin_kW",
+            "dutyUtilization_pct",
+            "kW",
+            "heat_exchanger_design",
+        ),
+        (
+            "Heat-exchanger UA",
+            "designUACapacity_W_K",
+            "uaMargin_W_K",
+            "uaUtilization_pct",
+            "W/K",
+            "heat_exchanger_design",
+        ),
+        (
+            "Valve Cv",
+            "designCvCapacity_US",
+            "cvMargin_US",
+            "cvUtilization_pct",
+            "US Cv",
+            "valve_design",
+        ),
+        (
+            "Pipeline pressure drop",
+            "designPressureDropCapacity_bar",
+            "pressureDropMargin_bar",
+            "pressureDropUtilization_pct",
+            "bar",
+            "pipeline_design",
+        ),
+        (
+            "Pipeline velocity",
+            "designVelocityCapacity_m_s",
+            "velocityMargin_m_s",
+            "velocityUtilization_pct",
+            "m/s",
+            "pipeline_design",
+        ),
+    )
+    constraint_lookup: dict[str, tuple[str, str]] = {}
+    if {"name", "status", "detail"}.issubset(constraint_table.columns):
+        for _, constraint in constraint_table.iterrows():
+            constraint_lookup[str(constraint["name"]).casefold()] = (
+                str(constraint["status"]),
+                str(constraint["detail"]),
+            )
+
+    def finite_number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    records: list[dict[str, Any]] = []
+    for _, equipment in equipment_table.iterrows():
+        equipment_name = str(equipment["Equipment"])
+        equipment_type = str(equipment.get("Type", ""))
+        critical_segment = finite_number(
+            equipment.get("velocityCriticalSegment_index")
+        )
+        critical_length = finite_number(
+            equipment.get("velocityCriticalLength_m")
+        )
+        for (
+            label,
+            capacity_key,
+            margin_key,
+            utilization_key,
+            unit,
+            constraint_prefix,
+        ) in definitions:
+            capacity = finite_number(equipment.get(capacity_key))
+            if capacity is None:
+                continue
+            margin = finite_number(equipment.get(margin_key))
+            utilization = finite_number(equipment.get(utilization_key))
+            operating = (
+                capacity - margin if margin is not None else None
+            )
+            status, detail = constraint_lookup.get(
+                f"{constraint_prefix}.{equipment_name}".casefold(),
+                (
+                    "UNKNOWN",
+                    "No matching solved design constraint was reported.",
+                ),
+            )
+            is_pipeline = constraint_prefix == "pipeline_design"
+            records.append(
+                {
+                    "Equipment": equipment_name,
+                    "Type": equipment_type,
+                    "Design check": label,
+                    "Operating value": operating,
+                    "Design capacity": capacity,
+                    "Margin": margin,
+                    "Utilization [%]": utilization,
+                    "Unit": unit,
+                    "Status": status,
+                    "Constraint detail": detail,
+                    "Critical segment [-]": (
+                        critical_segment if is_pipeline else None
+                    ),
+                    "Critical length [m]": (
+                        critical_length if is_pipeline else None
+                    ),
+                }
+            )
+    return pd.DataFrame(records, columns=columns)
+
+
 def _selected_object_result_tables(
     selected_object: str,
     stream_table: pd.DataFrame,
