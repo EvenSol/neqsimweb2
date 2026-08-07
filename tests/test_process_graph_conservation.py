@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 88070)
-Total output lines: 9980
-
 """Native conservation benchmark for the generic ProcessBuilder graph executor."""
 
 from __future__ import annotations
@@ -4701,7 +4698,874 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
 
     def test_saved_metadata_accepts_only_exact_pipeline_capacity_schema(self):
         valid_basis = {
-            "design_pressure_drop_capacity_bar": 0.…8070 tokens truncated….95, "ethane": 0.05},
+            "design_pressure_drop_capacity_bar": 0.005,
+            "design_velocity_capacity_m_per_s": 0.60,
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "neqsimweb2/studio_metadata.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "equipment_design_bases": {
+                            "transport pipeline": valid_basis,
+                        },
+                    }
+                ),
+            )
+        buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as archive:
+            self.assertEqual(
+                NeqSimProcessModel._read_studio_metadata(archive),
+                {"transport pipeline": valid_basis},
+            )
+
+        for invalid_basis in (
+            {"design_pressure_drop_capacity_bar": 0.005},
+            {**valid_basis, "design_velocity_capacity_m_per_s": 0.0},
+            {**valid_basis, "motor_rating_kw": 100.0},
+        ):
+            with self.subTest(invalid_basis=invalid_basis):
+                invalid_buffer = io.BytesIO()
+                with zipfile.ZipFile(invalid_buffer, "w") as archive:
+                    archive.writestr(
+                        "neqsimweb2/studio_metadata.json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "equipment_design_bases": {
+                                    "transport pipeline": invalid_basis,
+                                },
+                            }
+                        ),
+                    )
+                invalid_buffer.seek(0)
+                with zipfile.ZipFile(invalid_buffer, "r") as archive:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "equipment design metadata",
+                    ):
+                        NeqSimProcessModel._read_studio_metadata(archive)
+
+
+class NativePipelineHydraulicsTest(unittest.TestCase):
+    """Benchmark adiabatic native pipeline hydraulics and closure."""
+
+    @staticmethod
+    def _run_case(
+        flow_scale: float,
+        roughness_m: float,
+        *,
+        design_pressure_drop_capacity_bar: float | None = None,
+        design_velocity_capacity_m_per_s: float | None = None,
+    ):
+        units, pipeline_id = add_catalog_unit(
+            [],
+            "pipeline",
+            "transport pipeline",
+        )
+        units[0]["params"]["roughness"] = roughness_m
+        if design_pressure_drop_capacity_bar is not None:
+            units[0]["params"].update(
+                {
+                    "use_design_basis": True,
+                    "design_pressure_drop_capacity_bar": (
+                        design_pressure_drop_capacity_bar
+                    ),
+                    "design_velocity_capacity_m_per_s": (
+                        design_velocity_capacity_m_per_s
+                    ),
+                }
+            )
+        graph_spec = {
+            "name": "Native adiabatic pipeline benchmark",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-transport-pipeline",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": pipeline_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        expected_flow = 10_000.0 * flow_scale
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 20.0,
+                    "pressure_bara": 80.0,
+                    "total_flow": expected_flow,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", pipeline_id],
+        )
+        result = model.run(timeout_ms=180_000)
+
+        return builder, graph_spec, model, result, expected_flow
+
+    def test_native_design_screen_crosses_limits_at_nearby_point(self):
+        results = {}
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                _, _, model, result, expected_flow = self._run_case(
+                    flow_scale,
+                    1.0e-5,
+                    design_pressure_drop_capacity_bar=0.005,
+                    design_velocity_capacity_m_per_s=0.60,
+                )
+                constraint = next(
+                    item
+                    for item in result.constraints
+                    if item.name == "pipeline_design.transport pipeline"
+                )
+                results[flow_scale] = (result, constraint)
+                self.assertEqual(
+                    model._equipment_design_bases,
+                    {
+                        "transport pipeline": {
+                            "design_pressure_drop_capacity_bar": 0.005,
+                            "design_velocity_capacity_m_per_s": 0.60,
+                        }
+                    },
+                )
+                self.assertAlmostEqual(
+                    result.kpis["material_product_flow_kg_hr"].value,
+                    expected_flow,
+                    delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                )
+                for balance_name in (
+                    "mass_balance_pct",
+                    "component_balance_max_pct",
+                    "energy_balance_pct",
+                    "unit_mass_balance_max_pct",
+                    "unit_energy_balance_max_pct",
+                ):
+                    self.assertLess(
+                        result.kpis[balance_name].value,
+                        1.0e-6,
+                    )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        "transport pipeline."
+                        "governingHydraulicMargin_pct"
+                    ].value,
+                    min(
+                        result.kpis[
+                            "transport pipeline.pressureDropMargin_bar"
+                        ].value
+                        / 0.005
+                        * 100.0,
+                        result.kpis[
+                            "transport pipeline.velocityMargin_m_s"
+                        ].value
+                        / 0.60
+                        * 100.0,
+                    ),
+                )
+
+        baseline, baseline_constraint = results[1.0]
+        nearby, nearby_constraint = results[1.05]
+        self.assertEqual(baseline_constraint.status, "OK")
+        self.assertEqual(nearby_constraint.status, "VIOLATION")
+        self.assertGreater(
+            baseline.kpis[
+                "transport pipeline.pressureDropMargin_bar"
+            ].value,
+            0.0,
+        )
+        self.assertGreater(
+            baseline.kpis["transport pipeline.velocityMargin_m_s"].value,
+            0.0,
+        )
+        self.assertLess(
+            nearby.kpis[
+                "transport pipeline.pressureDropMargin_bar"
+            ].value,
+            0.0,
+        )
+        self.assertLess(
+            nearby.kpis["transport pipeline.velocityMargin_m_s"].value,
+            0.0,
+        )
+        self.assertEqual(
+            nearby.kpis[
+                "transport pipeline.designPressureDropCapacity_bar"
+            ].unit,
+            "bar",
+        )
+        self.assertEqual(
+            nearby.kpis[
+                "transport pipeline.designVelocityCapacity_m_s"
+            ].unit,
+            "m/s",
+        )
+        baseline_governing = baseline.kpis[
+            "transport pipeline.governingHydraulicUtilization_pct"
+        ].value
+        nearby_governing = nearby.kpis[
+            "transport pipeline.governingHydraulicUtilization_pct"
+        ].value
+        print(
+            "native pipeline design screen:",
+            "baseline=OK",
+            "nearby=VIOLATION",
+            "baseline_drop_margin="
+            f"{baseline.kpis['transport pipeline.pressureDropMargin_bar'].value:.9f} bar",
+            "nearby_drop_margin="
+            f"{nearby.kpis['transport pipeline.pressureDropMargin_bar'].value:.9f} bar",
+            "baseline_velocity_margin="
+            f"{baseline.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+            "nearby_velocity_margin="
+            f"{nearby.kpis['transport pipeline.velocityMargin_m_s'].value:.9f} m/s",
+            "baseline_governing="
+            f"{baseline_governing:.9f}%",
+            "nearby_governing="
+            f"{nearby_governing:.9f}%",
+        )
+
+    def test_native_pipeline_conserves_and_trends_at_nearby_points(self):
+        pressure_drop = {}
+        velocity = {}
+        reynolds = {}
+
+        for flow_scale in (1.0, 1.05):
+            for roughness_m in (1.0e-5, 1.0e-4):
+                with self.subTest(
+                    flow_scale=flow_scale,
+                    roughness_m=roughness_m,
+                ):
+                    builder, graph_spec, model, result, expected_flow = (
+                        self._run_case(flow_scale, roughness_m)
+                    )
+                    pipeline = model.get_unit("transport pipeline")
+                    drop = result.kpis[
+                        "transport pipeline.pressureDrop_bar"
+                    ]
+                    speed = result.kpis[
+                        "transport pipeline.velocity_m_s"
+                    ]
+                    reynolds_number = result.kpis[
+                        "transport pipeline.reynoldsNumber"
+                    ]
+                    pressure_drop[(flow_scale, roughness_m)] = drop.value
+                    velocity[(flow_scale, roughness_m)] = speed.value
+                    reynolds[(flow_scale, roughness_m)] = (
+                        reynolds_number.value
+                    )
+
+                    self.assertEqual(
+                        str(pipeline.getClass().getSimpleName()),
+                        "PipeBeggsAndBrills",
+                    )
+                    self.assertEqual(
+                        str(pipeline.getHeatTransferMode()),
+                        "ADIABATIC",
+                    )
+                    self.assertEqual(drop.unit, "bar")
+                    self.assertEqual(speed.unit, "m/s")
+                    self.assertEqual(reynolds_number.unit, "[-]")
+                    self.assertGreater(drop.value, 0.0)
+                    self.assertLess(drop.value, 0.02)
+                    self.assertGreater(speed.value, 0.0)
+                    self.assertGreater(reynolds_number.value, 100_000.0)
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "material_product_flow_kg_hr"
+                        ].value,
+                        expected_flow,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                    for balance_name in (
+                        "mass_balance_pct",
+                        "component_balance_max_pct",
+                        "energy_balance_pct",
+                        "unit_mass_balance_max_pct",
+                        "unit_energy_balance_max_pct",
+                    ):
+                        self.assertLess(
+                            result.kpis[balance_name].value,
+                            1.0e-6,
+                        )
+                    self.assertFalse(
+                        [
+                            constraint
+                            for constraint in result.constraints
+                            if constraint.status == "VIOLATION"
+                        ]
+                    )
+                    self.assertIn(
+                        "Acyclic graph built and converged successfully.",
+                        builder.build_log,
+                    )
+                    self.assertEqual(
+                        json.loads(json.dumps(graph_spec, allow_nan=False)),
+                        graph_spec,
+                    )
+                    print(
+                        "native pipeline benchmark:",
+                        f"scale={flow_scale:.2f}",
+                        f"roughness={roughness_m:.1e} m",
+                        f"drop={drop.value:.9f} bar",
+                        f"velocity={speed.value:.9f} m/s",
+                        f"Re={reynolds_number.value:.3f}",
+                        f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                        "components="
+                        f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                        f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                    )
+
+        for roughness_m in (1.0e-5, 1.0e-4):
+            self.assertGreater(
+                pressure_drop[(1.05, roughness_m)],
+                pressure_drop[(1.0, roughness_m)],
+            )
+            self.assertGreater(
+                velocity[(1.05, roughness_m)],
+                velocity[(1.0, roughness_m)],
+            )
+            self.assertGreater(
+                reynolds[(1.05, roughness_m)],
+                reynolds[(1.0, roughness_m)],
+            )
+        for flow_scale in (1.0, 1.05):
+            self.assertGreater(
+                pressure_drop[(flow_scale, 1.0e-4)],
+                pressure_drop[(flow_scale, 1.0e-5)],
+            )
+
+
+class NativeExpanderConservationTest(unittest.TestCase):
+    """Benchmark native expander recovery and nearby-point closure."""
+
+    @staticmethod
+    def _run_case(flow_scale: float, efficiency: float):
+        units, expander_id = add_catalog_unit(
+            [],
+            "expander",
+            "turbo expander",
+        )
+        units[0]["params"].update(
+            {
+                "outlet_pressure_bara": 30.0,
+                "isentropic_efficiency": efficiency,
+            }
+        )
+        graph_spec = {
+            "name": "Native expander recovery benchmark",
+            "units": units,
+            "connections": [
+                {
+                    "id": "feed-to-turbo-expander",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": expander_id,
+                        "port": "in",
+                    },
+                }
+            ],
+        }
+        expected_flow = 10_000.0 * flow_scale
+        inlet_specs = [
+            {
+                "inlet_id": "feed",
+                "name": "feed",
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": {
+                        "methane": 0.90,
+                        "ethane": 0.10,
+                    },
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": 30.0,
+                    "pressure_bara": 80.0,
+                    "total_flow": expected_flow,
+                    "flow_unit": "kg/hr",
+                },
+            }
+        ]
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            ["feed", expander_id],
+        )
+        result = model.run(timeout_ms=180_000)
+
+        return builder, graph_spec, result, expected_flow
+
+    def test_native_recovery_conserves_and_trends_at_nearby_points(self):
+        recovered_power = {}
+        outlet_temperature = {}
+
+        for flow_scale in (1.0, 1.05):
+            for efficiency in (0.80, 0.70):
+                with self.subTest(
+                    flow_scale=flow_scale,
+                    efficiency=efficiency,
+                ):
+                    builder, graph_spec, result, expected_flow = (
+                        self._run_case(flow_scale, efficiency)
+                    )
+                    signed_power = result.kpis[
+                        "turbo expander.power_kW"
+                    ]
+                    recovery = result.kpis[
+                        "turbo expander.recoveredPower_kW"
+                    ]
+                    temperature = result.kpis[
+                        "turbo expander.outletTemperature_K"
+                    ]
+                    recovered_power[(flow_scale, efficiency)] = (
+                        recovery.value
+                    )
+                    outlet_temperature[(flow_scale, efficiency)] = (
+                        temperature.value
+                    )
+
+                    self.assertEqual(signed_power.unit, "kW")
+                    self.assertEqual(recovery.unit, "kW")
+                    self.assertLess(signed_power.value, 0.0)
+                    self.assertGreater(recovery.value, 0.0)
+                    self.assertAlmostEqual(
+                        recovery.value,
+                        -signed_power.value,
+                        delta=1.0e-9,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "turbo expander.outletPressure_bara"
+                        ].value,
+                        30.0,
+                        delta=0.05,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "turbo expander.isentropicEfficiency"
+                        ].value,
+                        efficiency,
+                        delta=1.0e-12,
+                    )
+                    self.assertAlmostEqual(
+                        result.kpis[
+                            "material_product_flow_kg_hr"
+                        ].value,
+                        expected_flow,
+                        delta=max(1.0e-6 * expected_flow, 1.0e-3),
+                    )
+                    for balance_name in (
+                        "mass_balance_pct",
+                        "component_balance_max_pct",
+                        "energy_balance_pct",
+                        "unit_mass_balance_max_pct",
+                        "unit_energy_balance_max_pct",
+                    ):
+                        self.assertLess(
+                            result.kpis[balance_name].value,
+                            1.0e-6,
+                        )
+                    self.assertFalse(
+                        [
+                            constraint
+                            for constraint in result.constraints
+                            if constraint.status == "VIOLATION"
+                        ]
+                    )
+                    self.assertIn(
+                        "Acyclic graph built and converged successfully.",
+                        builder.build_log,
+                    )
+                    self.assertEqual(
+                        json.loads(json.dumps(graph_spec, allow_nan=False)),
+                        graph_spec,
+                    )
+                    print(
+                        "native expander benchmark:",
+                        f"scale={flow_scale:.2f}",
+                        f"efficiency={efficiency:.2f}",
+                        f"recovery={recovery.value:.6f} kW",
+                        f"outlet={temperature.value:.6f} K",
+                        f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                        "components="
+                        f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                        f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                    )
+
+        for flow_scale in (1.0, 1.05):
+            self.assertGreater(
+                recovered_power[(flow_scale, 0.80)],
+                recovered_power[(flow_scale, 0.70)],
+            )
+            self.assertLess(
+                outlet_temperature[(flow_scale, 0.80)],
+                outlet_temperature[(flow_scale, 0.70)],
+            )
+        for efficiency in (0.80, 0.70):
+            self.assertAlmostEqual(
+                recovered_power[(1.05, efficiency)]
+                / recovered_power[(1.0, efficiency)],
+                1.05,
+                delta=1.0e-8,
+            )
+            self.assertAlmostEqual(
+                outlet_temperature[(1.05, efficiency)],
+                outlet_temperature[(1.0, efficiency)],
+                delta=0.05,
+            )
+
+
+class MultiInletMixerConservationTest(unittest.TestCase):
+    """Validate material and energy closure for independent graph inlets."""
+
+    def test_resolves_explicit_heat_exchanger_output_sides(self):
+        hot_out = object()
+        cold_out = object()
+
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "HeatExchanger"
+
+        class _HeatExchanger:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getOutStream(index):
+                return [hot_out, cold_out][index]
+
+        builder = ProcessBuilder()
+        units = {"cross-exchanger": _HeatExchanger()}
+        for port, expected in (
+            ("hot_out", hot_out),
+            ("cold_out", cold_out),
+            ("out_0", hot_out),
+            ("out_1", cold_out),
+        ):
+            with self.subTest(port=port):
+                self.assertIs(
+                    builder.resolve_material_output(
+                        {
+                            "kind": "unit",
+                            "id": "cross-exchanger",
+                            "port": port,
+                        },
+                        {},
+                        units,
+                    ),
+                    expected,
+                )
+
+    @staticmethod
+    def _build_two_sided_heat_exchanger_case(
+        flow_scale: float,
+        declared_input_ports=None,
+        declared_output_ports=None,
+        downstream_source_port=None,
+        design_basis=None,
+    ):
+        inlet_specs = []
+        for inlet_id, name, temperature_C, total_flow, components in (
+            (
+                "hot-feed",
+                "hot feed",
+                120.0,
+                50_000.0,
+                {"methane": 0.90, "ethane": 0.10},
+            ),
+            (
+                "cold-feed",
+                "cold feed",
+                20.0,
+                40_000.0,
+                {"methane": 0.95, "ethane": 0.05},
+            ),
+        ):
+            inlet_specs.append(
+                {
+                    "inlet_id": inlet_id,
+                    "name": name,
+                    "fluid_spec": {
+                        "eos_model": "srk",
+                        "mixing_rule": 2,
+                        "components": components,
+                        "composition_basis": "mole_fraction",
+                        "temperature_C": temperature_C,
+                        "pressure_bara": 50.0,
+                        "total_flow": total_flow * flow_scale,
+                        "flow_unit": "kg/hr",
+                    },
+                }
+            )
+        graph_spec = {
+            "name": "Native two-sided heat exchanger benchmark",
+            "units": [
+                {
+                    "id": "cross-exchanger",
+                    "name": "cross exchanger",
+                    "type": "heat_exchanger",
+                    "ports": {
+                        "material_in": list(
+                            declared_input_ports
+                            or ("hot_in", "cold_in")
+                        ),
+                        "material_out": list(
+                            declared_output_ports
+                            or ("hot_out", "cold_out")
+                        ),
+                    },
+                    "params": {
+                        "ua_w_per_k": 100_000.0,
+                        **(
+                            {
+                                "use_design_basis": True,
+                                **design_basis,
+                            }
+                            if design_basis is not None
+                            else {}
+                        ),
+                    },
+                }
+            ],
+            "connections": [
+                {
+                    "id": "hot-side-feed",
+                    "name": "hot side feed",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "hot-feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "hot_in",
+                    },
+                },
+                {
+                    "id": "cold-side-feed",
+                    "name": "cold side feed",
+                    "type": "material",
+                    "source": {
+                        "kind": "inlet",
+                        "id": "cold-feed",
+                        "port": "out",
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": "cold_in",
+                    },
+                },
+            ],
+        }
+        execution_order = ["hot-feed", "cold-feed", "cross-exchanger"]
+        if downstream_source_port is not None:
+            graph_spec["units"].append(
+                {
+                    "id": "hot-side-heater",
+                    "name": "hot side heater",
+                    "type": "heater",
+                    "ports": {
+                        "material_in": ["in"],
+                        "material_out": ["out"],
+                    },
+                    "params": {"out_temperature_C": 60.0},
+                }
+            )
+            graph_spec["connections"].append(
+                {
+                    "id": "hot-side-product",
+                    "name": "hot side product",
+                    "type": "material",
+                    "source": {
+                        "kind": "unit",
+                        "id": "cross-exchanger",
+                        "port": downstream_source_port,
+                    },
+                    "target": {
+                        "kind": "unit",
+                        "id": "hot-side-heater",
+                        "port": "in",
+                    },
+                }
+            )
+            execution_order.append("hot-side-heater")
+        builder = ProcessBuilder()
+        model = builder.build_acyclic_graph(
+            graph_spec,
+            inlet_specs,
+            execution_order,
+        )
+        return builder, model
+
+    def test_native_exchanger_design_basis_round_trips_nearby_points(self):
+        design_basis = {
+            "design_duty_capacity_kw": 100_000.0,
+            "design_ua_capacity_w_per_k": 125_000.0,
+        }
+        duties = {}
+        for flow_scale in (1.0, 1.05):
+            with self.subTest(flow_scale=flow_scale):
+                builder, model = self._build_two_sided_heat_exchanger_case(
+                    flow_scale,
+                    design_basis=design_basis,
+                )
+                result = model.run(timeout_ms=180_000)
+                duties[flow_scale] = result.kpis[
+                    "cross exchanger.heatTransferDuty_kW"
+                ].value
+                self.assertEqual(
+                    result.kpis[
+                        "cross exchanger.designDutyCapacity_kW"
+                    ].unit,
+                    "kW",
+                )
+                self.assertEqual(
+                    result.kpis[
+                        "cross exchanger.designUACapacity_W_K"
+                    ].unit,
+                    "W/K",
+                )
+                self.assertAlmostEqual(
+                    result.kpis[
+                        "cross exchanger.uaUtilization_pct"
+                    ].value,
+                    80.0,
+                    delta=1.0e-12,
+                )
+                constraint = next(
+                    constraint
+                    for constraint in result.constraints
+                    if constraint.name
+                    == "heat_exchanger_design.cross exchanger"
+                )
+                self.assertEqual(constraint.status, "OK")
+                for balance_name in (
+                    "mass_balance_pct",
+                    "component_balance_max_pct",
+                    "energy_balance_pct",
+                    "unit_mass_balance_max_pct",
+                    "unit_energy_balance_max_pct",
+                ):
+                    self.assertLess(
+                        result.kpis[balance_name].value,
+                        1.0e-6,
+                    )
+
+                saved_model = builder.save_neqsim_bytes()
+                reloaded = NeqSimProcessModel.from_bytes(saved_model)
+                reloaded_result = reloaded.run(timeout_ms=180_000)
+                self.assertEqual(
+                    reloaded_result.kpis[
+                        "cross exchanger.designDutyCapacity_kW"
+                    ].value,
+                    100_000.0,
+                )
+                self.assertEqual(
+                    next(
+                        item.status
+                        for item in reloaded_result.constraints
+                        if item.name
+                        == "heat_exchanger_design.cross exchanger"
+                    ),
+                    "OK",
+                )
+                self.assertIn(
+                    "Registered equipment design basis for: "
+                    "cross exchanger",
+                    builder.build_log,
+                )
+                print(
+                    "native exchanger design benchmark:",
+                    f"scale={flow_scale:.2f}",
+                    f"duty={duties[flow_scale]:.6f} kW",
+                    "ua=100000.000000 W/K",
+                    "ua_utilization=80.000000%",
+                    f"mass={result.kpis['mass_balance_pct'].value:.3e}%",
+                    "components="
+                    f"{result.kpis['component_balance_max_pct'].value:.3e}%",
+                    f"energy={result.kpis['energy_balance_pct'].value:.3e}%",
+                )
+        self.assertGreater(duties[1.05], duties[1.0])
+
+    @staticmethod
+    def _build_mixer_heat_exchanger_case():
+        inlet_specs = [
+            {
+                "inlet_id": inlet_id,
+                "name": name,
+                "fluid_spec": {
+                    "eos_model": "srk",
+                    "mixing_rule": 2,
+                    "components": components,
+                    "composition_basis": "mole_fraction",
+                    "temperature_C": temperature_C,
+                    "pressure_bara": 50.0,
+                    "total_flow": flow_kg_hr,
+                    "flow_unit": "kg/hr",
+                },
+            }
+            for (
+                inlet_id,
+                name,
+                temperature_C,
+                flow_kg_hr,
+                components,
+            ) in (
+                (
+                    "hot-feed-a",
+                    "hot feed a",
+                    100.0,
+                    25_000.0,
+                    {"methane": 0.90, "ethane": 0.10},
+                ),
+                (
+                    "hot-feed-b",
+                    "hot feed b",
+                    140.0,
+                    25_000.0,
+                    {"methane": 0.90, "ethane": 0.10},
+                ),
+                (
+                    "cold-feed",
+                    "cold feed",
+                    20.0,
+                    40_000.0,
+                    {"methane": 0.95, "ethane": 0.05},
                 ),
             )
         ]

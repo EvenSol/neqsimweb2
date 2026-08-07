@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 73830)
-Total output lines: 7486
-
 """
 Process Model Adapter — wraps a loaded NeqSim ProcessSystem or ProcessModel.
 
@@ -3195,7 +3192,1467 @@ class NeqSimProcessModel:
             "velocityCriticalSegment_index": "[-]",
             "velocityCriticalLength_m": "m",
             "governingHydraulicUtilization_pct": "%",
-   …13830 tokens truncated… process_run_succeeded
+            "governingHydraulicMargin_pct": "%",
+        }[property_name]
+
+    def _pipeline_design_constraint(
+        self,
+        unit_name: str,
+        unit: Any,
+    ) -> ConstraintStatus:
+        """Return fail-loud pressure-drop and velocity capacity status."""
+        properties = self._pipeline_design_properties(unit_name, unit)
+        utilization_names = (
+            (
+                "pressure drop",
+                "pressureDropUtilization_pct",
+                "pressureDropMargin_bar",
+            ),
+            (
+                "velocity",
+                "velocityUtilization_pct",
+                "velocityMargin_m_s",
+            ),
+        )
+        if any(
+            utilization not in properties or margin not in properties
+            for _, utilization, margin in utilization_names
+        ):
+            return ConstraintStatus(
+                f"pipeline_design.{unit_name}",
+                "UNKNOWN",
+                "Pipeline design basis is active, but complete finite native "
+                "pressure-drop and velocity results are unavailable.",
+            )
+        violations = [
+            label
+            for label, _, margin in utilization_names
+            if properties[margin] < -1.0e-9
+        ]
+        utilization = ", ".join(
+            f"{label}={properties[key]:.6g}%"
+            for label, key, _ in utilization_names
+        )
+        governing_label, governing_key, _ = max(
+            utilization_names,
+            key=lambda item: properties[item[1]],
+        )
+        governing_detail = (
+            f"governing={governing_label} "
+            f"({properties[governing_key]:.6g}%)"
+        )
+        return ConstraintStatus(
+            f"pipeline_design.{unit_name}",
+            "VIOLATION" if violations else "OK",
+            (
+                "Pipeline exceeds " + ", ".join(violations)
+                + f" capacity; utilization: {utilization}; "
+                + governing_detail
+                + "."
+                if violations
+                else (
+                    "Pipeline is inside hydraulic capacities; "
+                    f"utilization: {utilization}; {governing_detail}."
+                )
+            ),
+        )
+
+    @staticmethod
+    def _compressor_map_properties(unit: Any) -> Dict[str, Any]:
+        """Return finite native map state and operating-limit margins.
+
+        Properties are exposed only when the compressor is actively solving
+        speed against a chart with at least three corrected-speed curves.
+        Positive surge and stonewall distances indicate an operating point
+        inside the respective map boundary.
+        """
+        try:
+            if not bool(unit.isSolveSpeed()):
+                return {}
+            chart = unit.getCompressorChart()
+            corrected_speeds = [float(value) for value in chart.getSpeeds()]
+        except Exception:
+            return {}
+        if (
+            len(corrected_speeds) < 3
+            or any(
+                not math.isfinite(value) or value <= 0.0
+                for value in corrected_speeds
+            )
+        ):
+            return {}
+
+        properties: Dict[str, Any] = {
+            "mapEnabled": True,
+            "mapSpeedCurveCount": len(corrected_speeds),
+            "mapMinimumSpeed_rpm": min(corrected_speeds),
+            "mapMaximumSpeed_rpm": max(corrected_speeds),
+        }
+        numeric_getters = (
+            ("mapOperatingSpeed_rpm", "getSpeed"),
+            ("mapSpeedRatioToMinimum", "getRatioToMinSpeed"),
+            ("mapSpeedRatioToMaximum", "getRatioToMaxSpeed"),
+            ("mapDistanceToSurgeFraction", "getDistanceToSurge"),
+            (
+                "mapDistanceToStoneWallFraction",
+                "getDistanceToStoneWall",
+            ),
+            ("mapSurgeFlowRate_m3_per_hr", "getSurgeFlowRate"),
+            (
+                "mapSurgeFlowMargin_m3_per_hr",
+                "getSurgeFlowRateMargin",
+            ),
+        )
+        for property_name, getter_name in numeric_getters:
+            if not hasattr(unit, getter_name):
+                continue
+            try:
+                value = float(getattr(unit, getter_name)())
+            except Exception:
+                continue
+            if math.isfinite(value):
+                properties[property_name] = value
+
+        try:
+            below_minimum = bool(unit.isLowerThanMinSpeed())
+            above_maximum = bool(unit.isHigherThanMaxSpeed())
+            properties["mapWithinSpeedRange"] = not (
+                below_minimum or above_maximum
+            )
+        except Exception:
+            pass
+        for property_name, getter_name in (
+            ("mapInSurge", "isSurge"),
+            ("mapInStoneWall", "isStoneWall"),
+        ):
+            try:
+                properties[property_name] = bool(
+                    getattr(unit, getter_name)()
+                )
+            except Exception:
+                pass
+        return properties
+
+    @staticmethod
+    def _compressor_map_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for compressor-map data."""
+        if property_name.endswith("_rpm"):
+            return "rpm"
+        if property_name.endswith("_m3_per_hr"):
+            return "m3/hr"
+        if property_name.endswith("Fraction"):
+            return "-"
+        if property_name == "mapSpeedCurveCount":
+            return "curves"
+        return "-"
+
+    @staticmethod
+    def _heat_exchanger_operating_properties(
+        unit: Any,
+        direct_run_provenance: Optional[
+            Tuple[str, Tuple[str, str], Tuple[str, str]]
+        ] = None,
+        solved_state_snapshot: Optional[Tuple[Any, ...]] = None,
+    ) -> Dict[str, float]:
+        """Return explicit solved hot/cold-side heat-exchanger properties.
+
+        Native stream indices preserve insertion order, so the hot and cold
+        sides are classified from solved inlet temperatures. Side duties are
+        positive heat-transfer magnitudes. Properties are withheld unless both
+        sides have complete, nonzero, finite solved states and the native unit
+        records a completed calculation.
+        """
+        try:
+            calculation_identifier = unit.getCalculationIdentifier()
+        except Exception:
+            return {}
+        if calculation_identifier is None:
+            return {}
+        if solved_state_snapshot is not None:
+            if (
+                not solved_state_snapshot
+                or str(calculation_identifier)
+                != solved_state_snapshot[0]
+            ):
+                return {}
+            current_snapshot = (
+                NeqSimProcessModel._heat_exchanger_boundary_state_signature(
+                    unit
+                )
+            )
+            if current_snapshot != solved_state_snapshot:
+                return {}
+
+        indexed_sides: List[Dict[str, Any]] = []
+        inlet_identifiers_match_exchanger: List[bool] = []
+        inlet_calculation_identifiers: List[str] = []
+        outlet_calculation_identifiers: List[str] = []
+        for index in (0, 1):
+            streams: Dict[str, Any] = {}
+            for boundary, getter_name in (
+                ("inlet", "getInStream"),
+                ("outlet", "getOutStream"),
+            ):
+                try:
+                    streams[boundary] = getattr(unit, getter_name)(index)
+                except Exception:
+                    return {}
+
+            side_state: Dict[str, Any] = {"index": index}
+            for boundary, stream in streams.items():
+                try:
+                    stream_calculation_identifier = (
+                        stream.getCalculationIdentifier()
+                    )
+                    if stream_calculation_identifier is None:
+                        return {}
+                    if (
+                        boundary == "outlet"
+                        and str(stream_calculation_identifier)
+                        != str(calculation_identifier)
+                    ):
+                        return {}
+                    if boundary == "inlet":
+                        inlet_calculation_identifiers.append(
+                            str(stream_calculation_identifier)
+                        )
+                        inlet_identifiers_match_exchanger.append(
+                            str(stream_calculation_identifier)
+                            == str(calculation_identifier)
+                        )
+                    else:
+                        outlet_calculation_identifiers.append(
+                            str(stream_calculation_identifier)
+                        )
+                    temperature_C = float(stream.getTemperature("C"))
+                    pressure_bara = float(stream.getPressure("bara"))
+                    flow_kg_hr = float(stream.getFlowRate("kg/hr"))
+                    fluid = stream.getFluid()
+                    fluid.init(3)
+                    enthalpy_flow_kW = (
+                        float(fluid.getEnthalpy()) / 1000.0
+                    )
+                except Exception:
+                    return {}
+                values = (
+                    temperature_C,
+                    pressure_bara,
+                    flow_kg_hr,
+                    enthalpy_flow_kW,
+                )
+                if not all(math.isfinite(value) for value in values):
+                    return {}
+                if abs(flow_kg_hr) <= _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR:
+                    return {}
+                side_state[boundary] = {
+                    "temperature_C": temperature_C,
+                    "pressure_bara": pressure_bara,
+                    "flow_kg_hr": flow_kg_hr,
+                    "enthalpy_flow_kW": enthalpy_flow_kW,
+                }
+            indexed_sides.append(side_state)
+
+        if not all(inlet_identifiers_match_exchanger):
+            current_provenance = (
+                str(calculation_identifier),
+                tuple(inlet_calculation_identifiers),
+                tuple(outlet_calculation_identifiers),
+            )
+            if direct_run_provenance != current_provenance:
+                return {}
+
+        indexed_sides.sort(
+            key=lambda side: side["inlet"]["temperature_C"],
+            reverse=True,
+        )
+        properties: Dict[str, float] = {}
+        named_sides = {
+            "hot": indexed_sides[0],
+            "cold": indexed_sides[1],
+        }
+        for side_name, side_state in named_sides.items():
+            for boundary_name in ("inlet", "outlet"):
+                state = side_state[boundary_name]
+                property_boundary = boundary_name.capitalize()
+                properties[
+                    f"{side_name}{property_boundary}Temperature_C"
+                ] = state["temperature_C"]
+                properties[
+                    f"{side_name}{property_boundary}Pressure_bara"
+                ] = state["pressure_bara"]
+                properties[
+                    f"{side_name}{property_boundary}Flow_kg_hr"
+                ] = state["flow_kg_hr"]
+
+        try:
+            flow_arrangement = str(
+                unit.getFlowArrangement()
+            ).strip().casefold()
+        except Exception:
+            flow_arrangement = ""
+        is_co_current = any(
+            marker in flow_arrangement
+            for marker in (
+                "co-current",
+                "co current",
+                "cocurrent",
+                "parallel",
+            )
+        )
+        if is_co_current:
+            terminal_differences_K = (
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"],
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"],
+            )
+        else:
+            terminal_differences_K = (
+                named_sides["hot"]["inlet"]["temperature_C"]
+                - named_sides["cold"]["outlet"]["temperature_C"],
+                named_sides["hot"]["outlet"]["temperature_C"]
+                - named_sides["cold"]["inlet"]["temperature_C"],
+            )
+        properties["approachTemperature_K"] = min(
+            terminal_differences_K
+        )
+
+        for property_name, getter_name, scale in (
+            ("UA_W_K", "getUAvalue", 1.0),
+            ("heatTransferDuty_kW", "getDuty", 1.0 / 1000.0),
+            ("thermalEffectiveness", "getThermalEffectiveness", 1.0),
+        ):
+            try:
+                value = float(getattr(unit, getter_name)()) * scale
+            except Exception:
+                continue
+            if math.isfinite(value) and abs(value) < 1.0e300:
+                if property_name == "heatTransferDuty_kW":
+                    value = abs(value)
+                properties[property_name] = value
+
+        hot_side_transfer_kW = (
+            named_sides["hot"]["inlet"]["enthalpy_flow_kW"]
+            - named_sides["hot"]["outlet"]["enthalpy_flow_kW"]
+        )
+        cold_side_transfer_kW = (
+            named_sides["cold"]["outlet"]["enthalpy_flow_kW"]
+            - named_sides["cold"]["inlet"]["enthalpy_flow_kW"]
+        )
+        hot_side_duty_kW = abs(hot_side_transfer_kW)
+        cold_side_duty_kW = abs(cold_side_transfer_kW)
+        duty_closure_kW = (
+            hot_side_transfer_kW - cold_side_transfer_kW
+        )
+        duty_closure_pct = (
+            abs(duty_closure_kW)
+            / max(
+                hot_side_duty_kW,
+                cold_side_duty_kW,
+                _UNIT_BALANCE_SCALE_FLOOR_KW,
+            )
+            * 100.0
+        )
+        properties["hotSideDuty_kW"] = hot_side_duty_kW
+        properties["coldSideDuty_kW"] = cold_side_duty_kW
+        properties["dutyClosure_kW"] = duty_closure_kW
+        properties["dutyClosure_pct"] = duty_closure_pct
+        return properties
+
+    @staticmethod
+    def _native_scalar_field_signature(
+        native_object: Any,
+    ) -> Optional[Tuple[Any, ...]]:
+        """Capture deterministic primitive/string/enum native fields."""
+        if native_object is None:
+            return None
+        try:
+            object_class = native_object.getClass()
+            class_name = str(object_class.getName())
+        except Exception:
+            return None
+        field_values: List[Tuple[str, Any]] = []
+        declaring_class = object_class
+        while declaring_class is not None:
+            try:
+                declared_fields = list(
+                    declaring_class.getDeclaredFields()
+                )
+            except Exception:
+                break
+            for field in declared_fields:
+                try:
+                    if int(field.getModifiers()) & 8:
+                        continue
+                    field.setAccessible(True)
+                    field_name = str(field.getName())
+                    field_type = field.getType()
+                    type_name = str(field_type.getName())
+                    if type_name == "boolean":
+                        value = bool(
+                            field.getBoolean(native_object)
+                        )
+                    elif type_name in (
+                        "byte",
+                        "short",
+                        "int",
+                        "long",
+                    ):
+                        value = int(field.get(native_object))
+                    elif type_name in ("float", "double"):
+                        value = float(field.get(native_object))
+                        if not math.isfinite(value):
+                            return None
+                    elif type_name == "java.lang.String" or bool(
+                        field_type.isEnum()
+                    ):
+                        raw_value = field.get(native_object)
+                        value = (
+                            None
+                            if raw_value is None
+                            else str(raw_value).strip().casefold()
+                        )
+                    else:
+                        continue
+                except Exception:
+                    continue
+                field_values.append((field_name, value))
+            try:
+                declaring_class = declaring_class.getSuperclass()
+            except Exception:
+                break
+        return (
+            class_name,
+            tuple(sorted(field_values)),
+        )
+
+    @staticmethod
+    def _heat_exchanger_boundary_state_signature(
+        unit: Any,
+    ) -> Optional[Tuple[Any, ...]]:
+        """Return a deterministic native boundary-state signature."""
+        try:
+            calculation_identifier = unit.getCalculationIdentifier()
+        except Exception:
+            return None
+        if calculation_identifier is None:
+            return None
+        stream_states: List[Tuple[Any, ...]] = []
+        for index in (0, 1):
+            for getter_name in ("getInStream", "getOutStream"):
+                try:
+                    stream = getattr(unit, getter_name)(index)
+                    stream_identifier = stream.getCalculationIdentifier()
+                    if stream_identifier is None:
+                        return None
+                    fluid = stream.getFluid()
+                    fluid.init(3)
+                    state = (
+                        str(stream_identifier),
+                        float(stream.getTemperature("C")),
+                        float(stream.getPressure("bara")),
+                        float(stream.getFlowRate("kg/hr")),
+                        float(fluid.getEnthalpy()) / 1000.0,
+                    )
+                except Exception:
+                    return None
+                if not all(
+                    math.isfinite(value)
+                    for value in state[1:]
+                ):
+                    return None
+                stream_states.append(state)
+        try:
+            flow_arrangement = str(
+                unit.getFlowArrangement()
+            ).strip().casefold()
+        except Exception:
+            flow_arrangement = ""
+        solution_settings: List[Tuple[str, Any]] = []
+        for getter_name in (
+            "isActive",
+            "isLockedInactive",
+            "getUAvalue",
+            "getThermalEffectiveness",
+            "getDeltaT",
+            "getDuty",
+            "getEnergyInput",
+            "getOutletTemperature",
+            "getApproachTemperature",
+            "getMinApproachTemperature",
+            "getHotColdDutyBalance",
+            "getDesignDuty",
+            "getDesignUAValue",
+            "getMaxDesignDuty",
+            "getDesignMode",
+            "getRatingArea",
+            "getRatingU",
+            "getShellPasses",
+            "getMinOutletTemperature",
+            "getMaxOutletTemperature",
+            "hasMinOutletTemperatureLimit",
+            "hasMaxOutletTemperatureLimit",
+        ):
+            try:
+                raw_value = getattr(unit, getter_name)()
+            except Exception:
+                value = None
+            else:
+                if isinstance(raw_value, bool):
+                    value = raw_value
+                else:
+                    try:
+                        numeric_value = float(raw_value)
+                    except (TypeError, ValueError):
+                        value = str(raw_value).strip().casefold()
+                    else:
+                        if not math.isfinite(numeric_value):
+                            return None
+                        value = numeric_value
+            solution_settings.append((getter_name, value))
+        use_delta_T: Optional[bool] = None
+        for getter_name in ("isUseDeltaT", "getUseDeltaT"):
+            try:
+                use_delta_T = bool(getattr(unit, getter_name)())
+                break
+            except Exception:
+                continue
+        if use_delta_T is None:
+            try:
+                declaring_class = unit.getClass()
+                while declaring_class is not None:
+                    try:
+                        field = declaring_class.getDeclaredField(
+                            "useDeltaT"
+                        )
+                        field.setAccessible(True)
+                        use_delta_T = bool(field.getBoolean(unit))
+                        break
+                    except Exception:
+                        declaring_class = (
+                            declaring_class.getSuperclass()
+                        )
+            except Exception:
+                pass
+        solution_settings.append(("useDeltaT", use_delta_T))
+        try:
+            rating_calculator = unit.getRatingCalculator()
+        except Exception:
+            rating_calculator = None
+        solution_settings.append(
+            (
+                "ratingCalculator",
+                NeqSimProcessModel._native_scalar_field_signature(
+                    rating_calculator
+                ),
+            )
+        )
+        configuration = (
+            flow_arrangement,
+            tuple(solution_settings),
+        )
+        return (
+            str(calculation_identifier),
+            tuple(stream_states),
+            configuration,
+        )
+
+    @staticmethod
+    def _splitter_operating_properties(unit: Any) -> Dict[str, float]:
+        """Return solved splitter allocation and flow-closure properties.
+
+        Native ``Splitter`` exposes its exact outlet count and configured
+        factors. Solved outlet flow is used for the reported allocation so
+        fixed-flow and remainder specifications are represented correctly.
+        Legacy objects without a readable count retain bounded branch-flow
+        probing, but completeness-dependent totals and closure are withheld.
+        """
+        properties: Dict[str, float] = {}
+        split_count = _native_split_stream_count(unit)
+        topology_count_known = split_count is not None
+        probe_count = (
+            split_count
+            if topology_count_known
+            else _split_stream_probe_count(unit, 10)
+        )
+
+        try:
+            inlet_flow_kg_hr = float(
+                unit.getInletStream().getFlowRate("kg/hr")
+            )
+        except Exception:
+            inlet_flow_kg_hr = math.nan
+        if math.isfinite(inlet_flow_kg_hr):
+            properties["inletFlow_kg_hr"] = inlet_flow_kg_hr
+
+        outlet_flow_total_kg_hr = 0.0
+        solved_outlet_flows_kg_hr: Dict[int, float] = {}
+        solved_outlet_count = 0
+        for index in range(probe_count):
+            try:
+                configured_fraction = float(unit.getSplitFactor(index))
+            except Exception:
+                configured_fraction = math.nan
+            if math.isfinite(configured_fraction):
+                properties[
+                    f"configuredBranch{index}Fraction"
+                ] = configured_fraction
+            try:
+                split_stream = unit.getSplitStream(index)
+                outlet_flow_kg_hr = float(
+                    split_stream.getFlowRate("kg/hr")
+                )
+            except Exception:
+                continue
+            if not math.isfinite(outlet_flow_kg_hr):
+                continue
+            properties[f"branch{index}Flow_kg_hr"] = outlet_flow_kg_hr
+            solved_outlet_flows_kg_hr[index] = outlet_flow_kg_hr
+            outlet_flow_total_kg_hr += outlet_flow_kg_hr
+            solved_outlet_count += 1
+
+        if topology_count_known:
+            properties["branchCount"] = float(split_count)
+        properties["solvedBranchCount"] = float(solved_outlet_count)
+        if (
+            topology_count_known
+            and split_count is not None
+            and solved_outlet_count == split_count
+        ):
+            properties["outletFlowTotal_kg_hr"] = outlet_flow_total_kg_hr
+        if (
+            topology_count_known
+            and split_count is not None
+            and solved_outlet_count == split_count
+            and math.isfinite(inlet_flow_kg_hr)
+        ):
+            flow_closure_kg_hr = (
+                outlet_flow_total_kg_hr - inlet_flow_kg_hr
+            )
+            properties["flowClosure_kg_hr"] = flow_closure_kg_hr
+            properties["flowClosure_pct"] = (
+                abs(flow_closure_kg_hr)
+                / max(
+                    abs(inlet_flow_kg_hr),
+                    abs(outlet_flow_total_kg_hr),
+                    _UNIT_BALANCE_SCALE_FLOOR_KG_HR,
+                )
+                * 100.0
+            )
+            if abs(inlet_flow_kg_hr) > _UNIT_BALANCE_SCALE_FLOOR_KG_HR:
+                solved_fraction_sum = 0.0
+                for index, outlet_flow_kg_hr in solved_outlet_flows_kg_hr.items():
+                    solved_fraction = outlet_flow_kg_hr / inlet_flow_kg_hr
+                    properties[f"branch{index}Fraction"] = solved_fraction
+                    solved_fraction_sum += solved_fraction
+                properties["splitFractionSum"] = solved_fraction_sum
+        return properties
+
+    @staticmethod
+    def _mixer_operating_properties(unit: Any) -> Dict[str, float]:
+        """Return solved mixer inlet allocations and mass-flow closure."""
+        properties: Dict[str, float] = {}
+        try:
+            inlet_count = int(unit.getNumberOfInputStreams())
+        except Exception:
+            return properties
+        if (
+            inlet_count < 0
+            or inlet_count > _MAX_NATIVE_SPLIT_STREAM_COUNT
+        ):
+            return properties
+
+        properties["inletCount"] = float(inlet_count)
+        inlet_flow_total_kg_hr = 0.0
+        solved_inlet_count = 0
+        inlet_flows: Dict[int, float] = {}
+        for index in range(inlet_count):
+            try:
+                inlet_flow_kg_hr = float(
+                    unit.getStream(index).getFlowRate("kg/hr")
+                )
+            except Exception:
+                continue
+            if not math.isfinite(inlet_flow_kg_hr):
+                continue
+            properties[f"inlet{index}Flow_kg_hr"] = inlet_flow_kg_hr
+            inlet_flows[index] = inlet_flow_kg_hr
+            inlet_flow_total_kg_hr += inlet_flow_kg_hr
+            solved_inlet_count += 1
+
+        properties["solvedInletCount"] = float(solved_inlet_count)
+        if solved_inlet_count == inlet_count:
+            properties["inletFlowTotal_kg_hr"] = inlet_flow_total_kg_hr
+            if (
+                abs(inlet_flow_total_kg_hr)
+                > _UNIT_BALANCE_SCALE_FLOOR_KG_HR
+            ):
+                for index, inlet_flow_kg_hr in inlet_flows.items():
+                    properties[f"inlet{index}Fraction"] = (
+                        inlet_flow_kg_hr / inlet_flow_total_kg_hr
+                    )
+
+        try:
+            outlet_flow_kg_hr = float(
+                unit.getOutletStream().getFlowRate("kg/hr")
+            )
+        except Exception:
+            outlet_flow_kg_hr = math.nan
+        if math.isfinite(outlet_flow_kg_hr):
+            properties["outletFlow_kg_hr"] = outlet_flow_kg_hr
+        if (
+            math.isfinite(outlet_flow_kg_hr)
+            and solved_inlet_count == inlet_count
+        ):
+            flow_closure_kg_hr = (
+                outlet_flow_kg_hr - inlet_flow_total_kg_hr
+            )
+            properties["flowClosure_kg_hr"] = flow_closure_kg_hr
+            properties["flowClosure_pct"] = (
+                abs(flow_closure_kg_hr)
+                / max(
+                    abs(inlet_flow_total_kg_hr),
+                    abs(outlet_flow_kg_hr),
+                    _UNIT_BALANCE_SCALE_FLOOR_KG_HR,
+                )
+                * 100.0
+            )
+        return properties
+
+    @staticmethod
+    def _separator_design_properties(unit: Any) -> Dict[str, Any]:
+        """Return explicit native sizing results only after opt-in auto-size."""
+        try:
+            if not bool(unit.isAutoSized()):
+                return {}
+        except Exception:
+            return {}
+
+        properties: Dict[str, Any] = {"designAutoSized": True}
+        for key, getter in (
+            ("designGasLoadFactor_m_per_s", "getDesignGasLoadFactor"),
+            ("designLiquidLevelFraction", "getDesignLiquidLevelFraction"),
+            ("designInternalDiameter_m", "getInternalDiameter"),
+            ("designSeparatorLength_m", "getSeparatorLength"),
+        ):
+            if not hasattr(unit, getter):
+                continue
+            try:
+                value = float(getattr(unit, getter)())
+            except Exception:
+                continue
+            if math.isfinite(value) and value > 0.0:
+                properties[key] = value
+
+        try:
+            mechanical_design = unit.getMechanicalDesign()
+        except Exception:
+            mechanical_design = None
+        if mechanical_design is not None:
+            for key, getter in (
+                ("designRetentionTime_s", "getRetentionTime"),
+                ("designVolume_m3", "getVolumeTotal"),
+            ):
+                if not hasattr(mechanical_design, getter):
+                    continue
+                try:
+                    value = float(getattr(mechanical_design, getter)())
+                except Exception:
+                    continue
+                if math.isfinite(value) and value > 0.0:
+                    properties[key] = value
+        return properties
+
+    @staticmethod
+    def _separator_design_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for separator design data."""
+        if property_name.endswith("_m_per_s"):
+            return "m/s"
+        if property_name.endswith("_m3"):
+            return "m3"
+        if property_name.endswith("_m"):
+            return "m"
+        if property_name.endswith("_s"):
+            return "s"
+        if property_name == "designAutoSized":
+            return "boolean"
+        return "[-]"
+
+    @staticmethod
+    def _routing_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for routing properties."""
+        if property_name.endswith("_kg_hr"):
+            return "kg/hr"
+        if property_name.endswith("_pct"):
+            return "%"
+        return "[-]"
+
+    @staticmethod
+    def _heat_exchanger_property_unit(property_name: str) -> str:
+        """Return the explicit engineering unit for exchanger properties."""
+        if property_name.endswith("Temperature_C"):
+            return "°C"
+        if property_name.endswith("Temperature_K"):
+            return "K"
+        if property_name.endswith("Pressure_bara"):
+            return "bara"
+        if property_name.endswith("Flow_kg_hr"):
+            return "kg/hr"
+        if property_name.endswith("Duty_kW") or property_name.endswith(
+            "Closure_kW"
+        ):
+            return "kW"
+        if property_name.endswith("Closure_pct"):
+            return "%"
+        if property_name == "UA_W_K":
+            return "W/K"
+        return "[-]"
+
+    @staticmethod
+    def _is_inactive_heat_exchanger(unit: Any, java_class: str) -> bool:
+        """Return whether a native exchanger must suppress solved outputs."""
+        if java_class != "HeatExchanger":
+            return False
+        try:
+            if bool(unit.isLockedInactive()):
+                return True
+        except Exception:
+            pass
+        try:
+            if not bool(unit.isActive()):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _heat_exchanger_solution_is_trusted(
+        self,
+        unit_name: str,
+        unit: Any,
+        java_class: str,
+    ) -> bool:
+        """Return whether current exchanger outputs match an observed solve."""
+        if java_class != "HeatExchanger" or self._is_inactive_heat_exchanger(
+            unit,
+            java_class,
+        ):
+            return False
+        current_snapshot = self._heat_exchanger_boundary_state_signature(unit)
+        if current_snapshot is None:
+            return False
+        snapshots = getattr(
+            self,
+            "_heat_exchanger_state_snapshots",
+            {},
+        )
+        if unit_name in snapshots:
+            return snapshots[unit_name] == current_snapshot
+        unit_name_casefold = unit_name.casefold()
+        matching_names = {
+            snapshot_name
+            for snapshot_name in snapshots
+            if snapshot_name.casefold() == unit_name_casefold
+            or snapshot_name.casefold().endswith(
+                f"/{unit_name_casefold}"
+            )
+        }
+        if len(matching_names) != 1:
+            return False
+        matching_name = next(iter(matching_names))
+        return snapshots[matching_name] == current_snapshot
+
+    def _indexed_unit_name_for_native(
+        self,
+        unit: Any,
+        preferred_name: str,
+    ) -> str:
+        """Resolve one indexed unit name by exact native object identity."""
+        identity = _NativeObjectIdentitySet()
+        identity.add(unit)
+        matching_names = [
+            indexed_name
+            for indexed_name, indexed_unit in self._units.items()
+            if identity.contains(indexed_unit)
+        ]
+        if preferred_name in matching_names:
+            return preferred_name
+        if len(matching_names) == 1:
+            return matching_names[0]
+        return preferred_name
+
+    def _indexed_unit_name_for_process_system(
+        self,
+        process_system: Any,
+        report_name: str,
+        process_system_name: str,
+    ) -> Optional[str]:
+        """Resolve a module report entry through its native unit identity.
+
+        ``None`` identifies a current native unit that is not indexed by this
+        wrapper.  Callers must treat that identity as untrusted rather than
+        transferring solved provenance from a removed, same-named unit.
+        """
+        try:
+            units = list(process_system.getUnitOperations())
+        except Exception:
+            units = []
+        for unit in units:
+            try:
+                raw_name = str(unit.getName())
+            except Exception:
+                continue
+            if report_name not in (
+                raw_name,
+                f"{process_system_name}/{raw_name}",
+            ):
+                continue
+            indexed_name = self._indexed_unit_name_for_native(
+                unit,
+                f"{process_system_name}/{raw_name}",
+            )
+            identity = _NativeObjectIdentitySet()
+            identity.add(unit)
+            if not any(
+                identity.contains(indexed_unit)
+                for indexed_unit in self._units.values()
+            ):
+                return None
+            return indexed_name
+        return (
+            f"{process_system_name}/{report_name}"
+            if process_system_name
+            else report_name
+        )
+
+    def list_units(self) -> List[UnitInfo]:
+        """List all unit operations with type info and key properties."""
+        result = []
+        report_duty_lookup = self._report_unit_duty_lookup()
+        for name, u in self._units.items():
+            try:
+                java_class = str(u.getClass().getSimpleName())
+            except Exception:
+                java_class = "Unknown"
+
+            ps_name = self._unit_ps_name.get(name, "")
+
+            props = {}
+            exchanger_solution_is_trusted = (
+                java_class != "HeatExchanger"
+                or self._report_unit_duty_suppression(
+                    name,
+                    report_duty_lookup,
+                )
+                is False
+            )
+            # Try to extract common properties
+            for prop, getter in [
+                ("power_kW", "getPower"),
+                ("duty_kW", "getDuty"),
+                ("isentropicEfficiency", "getIsentropicEfficiency"),
+                ("polytropicEfficiency", "getPolytropicEfficiency"),
+                ("outletPressure_bara", "getOutletPressure"),
+            ]:
+                if (
+                    prop == "duty_kW"
+                    and java_class == "HeatExchanger"
+                    and not exchanger_solution_is_trusted
+                ):
+                    continue
+                if hasattr(u, getter):
+                    try:
+                        val = getattr(u, getter)()
+                        if val is None:
+                            continue
+                        fval = float(val)
+                        if prop in ("power_kW", "duty_kW"):
+                            fval = fval / 1000.0  # W -> kW
+                        if (
+                            prop == "isentropicEfficiency"
+                            and java_class == "ESPPump"
+                        ):
+                            fval /= 100.0
+                        # Fallback: if duty is 0 for a heat-exchange unit, try getEnergyInput
+                        if fval == 0.0 and prop == "duty_kW" and java_class in self._DUTY_UNITS:
+                            if hasattr(u, "getEnergyInput"):
+                                try:
+                                    fval = float(u.getEnergyInput()) / 1000.0
+                                except Exception:
+                                    pass
+                        # Skip zero power/duty for units that don't produce them
+                        if fval == 0.0 and prop == "power_kW" and java_class not in self._POWER_UNITS:
+                            continue
+                        if fval == 0.0 and prop == "duty_kW" and java_class not in self._DUTY_UNITS:
+                            continue
+                        props[prop] = fval
+                    except Exception:
+                        pass
+
+            # Outlet temperature for heaters/coolers/heat exchangers
+            if java_class in self._HEAT_EXCHANGE_UNITS:
+                for m in ("getOutletStream", "getOutStream"):
+                    if hasattr(u, m):
+                        try:
+                            s = getattr(u, m)()
+                            if s is not None:
+                                props["outTemperature_C"] = float(s.getTemperature("C"))
+                                break
+                        except Exception:
+                            pass
+
+            if java_class in ("Pump", "ESPPump"):
+                props.update(self._pump_operating_properties(u))
+                props.update(self._pump_design_properties(name, u))
+
+            if java_class in (
+                "Pipeline",
+                "AdiabaticPipe",
+                "PipeBeggsAndBrills",
+                "OnePhasePipeLine",
+            ):
+                props.update(self._pipeline_design_properties(name, u))
+
+            if java_class == "Compressor":
+                props.update(self._compressor_map_properties(u))
+
+            if (
+                java_class == "HeatExchanger"
+                and exchanger_solution_is_trusted
+            ):
+                props.update(
+                    self._heat_exchanger_operating_properties(
+                        u,
+                        getattr(
+                            self,
+                            "_direct_unit_run_provenance",
+                            {},
+                        ).get(name),
+                    )
+                )
+
+            if "Splitter" in java_class:
+                props.update(self._splitter_operating_properties(u))
+
+            if _is_native_mixer_class(java_class):
+                props.update(self._mixer_operating_properties(u))
+
+            if "Separator" in java_class or "Scrubber" in java_class:
+                props.update(self._separator_design_properties(u))
+
+            # Flow rate, T, P for Stream-type units
+            if java_class == "Stream":
+                try:
+                    props["flow_kg_hr"] = float(u.getFlowRate("kg/hr"))
+                except Exception:
+                    pass
+                try:
+                    props["temperature_C"] = float(u.getTemperature("C"))
+                except Exception:
+                    pass
+                try:
+                    props["pressure_bara"] = float(u.getPressure("bara"))
+                except Exception:
+                    pass
+
+            result.append(UnitInfo(name=name, unit_type=java_class, java_class=java_class, process_system=ps_name, properties=props))
+        return result
+
+    def list_streams(self) -> List[StreamInfo]:
+        """List exact streams in topology order with stable display aliases."""
+        result = []
+        stream_groups = []
+        for name, s in self._streams.items():
+            for identity, _grouped_stream, aliases in stream_groups:
+                if identity.contains(s):
+                    aliases.append(name)
+                    break
+            else:
+                identity = _NativeObjectIdentitySet()
+                identity.add(s)
+                stream_groups.append((identity, s, [name]))
+
+        for _identity, s, aliases in stream_groups:
+            name = min(
+                aliases,
+                key=lambda alias: (
+                    str(alias).count("."),
+                    len(str(alias)),
+                    str(alias).casefold(),
+                    str(alias),
+                ),
+            )
+            ps_name = self._stream_ps_name.get(name, "")
+            owner_name = next(
+                (
+                    str(alias).split(".", 1)[0]
+                    for alias in aliases
+                    if "." in str(alias)
+                ),
+                "",
+            )
+            info = StreamInfo(
+                name=name,
+                process_system=ps_name,
+                owner_name=owner_name,
+            )
+            try:
+                info.temperature_C = float(s.getTemperature("C"))
+            except Exception:
+                pass
+            try:
+                info.pressure_bara = float(s.getPressure("bara"))
+            except Exception:
+                try:
+                    info.pressure_bara = float(s.getPressure())
+                except Exception:
+                    pass
+            try:
+                info.flow_rate_kg_hr = float(s.getFlowRate("kg/hr"))
+            except Exception:
+                pass
+            try:
+                info.flow_rate_mol_sec = float(s.getFlowRate("mol/sec"))
+            except Exception:
+                pass
+            result.append(info)
+        return result
+
+    def list_tags(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Return a tag dictionary for LLM intent resolution.
+        Maps canonical paths to type + aliases.
+        """
+        tags = {}
+        for info in self.list_units():
+            tags[f"units.{info.name}"] = {
+                "type": info.unit_type,
+                "aliases": [info.name],
+                "properties": info.properties,
+            }
+        for info in self.list_streams():
+            tags[f"streams.{info.name}"] = {
+                "type": "Stream",
+                "aliases": [info.name],
+                "conditions": {
+                    "temperature_C": info.temperature_C,
+                    "pressure_bara": info.pressure_bara,
+                    "flow_rate_kg_hr": info.flow_rate_kg_hr,
+                },
+            }
+        return tags
+
+    # ----- Value access for scenarios -----
+
+    def get_unit(self, name: str):
+        """Get a unit operation by name. Raises KeyError if not found."""
+        if name in self._units:
+            return self._units[name]
+        # Case-insensitive fallback
+        name_lower = name.lower()
+        for key, u in self._units.items():
+            if key.lower() == name_lower:
+                return u
+        # For ProcessModel, units might be qualified with process-system name
+        for key, u in self._units.items():
+            if key.endswith(f"/{name}") or key.endswith(f"/{name_lower}"):
+                return u
+        # Also try via process.getUnit() (ProcessSystem only)
+        if not self._is_process_model:
+            try:
+                u = self._proc.getUnit(name)
+                if u is not None:
+                    return u
+            except Exception:
+                pass
+        else:
+            # ProcessModel: search each child ProcessSystem
+            for ps in self.get_process_systems():
+                try:
+                    u = ps.getUnit(name)
+                    if u is not None:
+                        return u
+                except Exception:
+                    pass
+        raise KeyError(f"Unit not found: {name}")
+
+    def record_direct_unit_run(self, unit_name: str) -> None:
+        """Record explicit provenance for a completed direct exchanger run.
+
+        NeqSim 3.16 assigns separate UUIDs to exchanger inlets during
+        ``HeatExchanger.run(UUID)``. Call this immediately after that direct
+        run so solved workbook and Process Chat properties can distinguish it
+        from inlet streams recalculated after an older ProcessSystem solve.
+        ProcessSystem runs do not need this marker because every boundary uses
+        the process calculation UUID.
+        """
+        canonical_name = None
+        name_lower = unit_name.lower()
+        for candidate_name in self._units:
+            if candidate_name == unit_name or (
+                candidate_name.lower() == name_lower
+            ) or candidate_name.lower().endswith(
+                f"/{name_lower}"
+            ):
+                canonical_name = candidate_name
+                break
+        if canonical_name is None:
+            raise KeyError(f"Unit not found: {unit_name}")
+        unit = self._units[canonical_name]
+        try:
+            java_class = str(unit.getClass().getSimpleName())
+        except Exception as exc:
+            raise ValueError(
+                f"Cannot inspect direct-run unit '{unit_name}'."
+            ) from exc
+        if java_class != "HeatExchanger":
+            raise ValueError(
+                "Direct-run provenance is currently supported only for "
+                "native HeatExchanger units."
+            )
+        try:
+            calculation_identifier = str(
+                unit.getCalculationIdentifier()
+            )
+            inlet_identifiers = tuple(
+                str(unit.getInStream(index).getCalculationIdentifier())
+                for index in (0, 1)
+            )
+            outlet_identifiers = tuple(
+                str(unit.getOutStream(index).getCalculationIdentifier())
+                for index in (0, 1)
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Direct-run provenance for '{unit_name}' is incomplete."
+            ) from exc
+        if (
+            calculation_identifier == "None"
+            or "None" in inlet_identifiers
+            or "None" in outlet_identifiers
+        ):
+            raise ValueError(
+                f"Direct-run provenance for '{unit_name}' is incomplete."
+            )
+        if outlet_identifiers != (
+            calculation_identifier,
+            calculation_identifier,
+        ):
+            raise ValueError(
+                f"Direct-run outlets for '{unit_name}' do not share the "
+                "exchanger calculation identifier."
+            )
+        inlet_matches = tuple(
+            identifier == calculation_identifier
+            for identifier in inlet_identifiers
+        )
+        if any(inlet_matches):
+            raise ValueError(
+                f"'{unit_name}' does not have the direct-run identifier "
+                "pattern; use the normal ProcessSystem result path."
+            )
+        self._direct_unit_run_provenance[canonical_name] = (
+            calculation_identifier,
+            inlet_identifiers,
+            outlet_identifiers,
+        )
+        state_snapshot = self._heat_exchanger_boundary_state_signature(
+            unit
+        )
+        if state_snapshot is None:
+            raise ValueError(
+                f"Direct-run state for '{unit_name}' is incomplete."
+            )
+        self._heat_exchanger_state_snapshots[
+            canonical_name
+        ] = state_snapshot
+
+    def _capture_heat_exchanger_state_snapshots(
+        self,
+        allow_direct_runs: bool = False,
+    ) -> None:
+        """Capture solved exchanger boundaries owned by the wrapper run."""
+        self._direct_unit_run_provenance.clear()
+        self._heat_exchanger_state_snapshots.clear()
+        for name, unit in self._units.items():
+            try:
+                if str(unit.getClass().getSimpleName()) != "HeatExchanger":
+                    continue
+                if self._is_inactive_heat_exchanger(unit, "HeatExchanger"):
+                    continue
+                calculation_identifier = unit.getCalculationIdentifier()
+                if calculation_identifier is None:
+                    continue
+                inlet_identifiers = tuple(
+                    unit.getInStream(index).getCalculationIdentifier()
+                    for index in (0, 1)
+                )
+                outlet_identifiers = tuple(
+                    unit.getOutStream(index).getCalculationIdentifier()
+                    for index in (0, 1)
+                )
+            except Exception:
+                continue
+            if any(identifier is None for identifier in inlet_identifiers):
+                continue
+            if any(identifier is None for identifier in outlet_identifiers):
+                continue
+            calculation_identifier_str = str(calculation_identifier)
+            inlet_identifier_strings = tuple(
+                str(identifier) for identifier in inlet_identifiers
+            )
+            outlet_identifier_strings = tuple(
+                str(identifier) for identifier in outlet_identifiers
+            )
+            if outlet_identifier_strings != (
+                calculation_identifier_str,
+                calculation_identifier_str,
+            ):
+                continue
+            inlet_matches = tuple(
+                identifier == calculation_identifier_str
+                for identifier in inlet_identifier_strings
+            )
+            if not all(inlet_matches):
+                if not allow_direct_runs or any(inlet_matches):
+                    continue
+                self._direct_unit_run_provenance[name] = (
+                    calculation_identifier_str,
+                    inlet_identifier_strings,
+                    outlet_identifier_strings,
+                )
+            snapshot = self._heat_exchanger_boundary_state_signature(unit)
+            if snapshot is not None:
+                self._heat_exchanger_state_snapshots[name] = snapshot
+
+    def get_stream(self, name: str):
+        """Get a stream by name (supports qualified, unqualified, and case-insensitive names)."""
+        # Exact match
+        if name in self._streams:
+            return self._streams[name]
+        # Suffix match (e.g. "outStream" -> "intercooler.outStream")
+        for key, s in self._streams.items():
+            if key.endswith(f".{name}"):
+                return s
+        # Case-insensitive match
+        name_lower = name.lower()
+        for key, s in self._streams.items():
+            if key.lower() == name_lower or key.lower().endswith(f".{name_lower}"):
+                return s
+        # Try Java getUnit — Stream units are both units and streams
+        if not self._is_process_model:
+            try:
+                u = self._proc.getUnit(name)
+                if u is not None:
+                    return u
+            except Exception:
+                pass
+        else:
+            for ps in self.get_process_systems():
+                try:
+                    u = ps.getUnit(name)
+                    if u is not None:
+                        return u
+                except Exception:
+                    pass
+        raise KeyError(f"Stream not found: '{name}'. Available: {list(self._streams.keys())[:20]}")
+
+    # ----- Run and report -----
+
+    def _invalidate_auto_sized_valve_cv(self) -> None:
+        """Force active required-Cv screens to use the next solved state.
+
+        NeqSim marks both explicitly configured and automatically calculated
+        valve coefficients as set. Studio forbids explicit Cv together with
+        this screen, so every matching basis identifies an auto-sized value
+        that must be recalculated after scenario or Process Chat changes.
+        """
+        for unit_name, basis in getattr(
+            self,
+            "_equipment_design_bases",
+            {},
+        ).items():
+            if set(basis) != set(_VALVE_DESIGN_CAPACITY_LIMITS):
+                continue
+            unit = self._units.get(unit_name)
+            if unit is None or not hasattr(unit, "setValveKvSet"):
+                continue
+            try:
+                java_class = str(unit.getClass().getSimpleName())
+            except Exception:
+                continue
+            if java_class not in ("ThrottlingValve", "ControlValve", "Valve"):
+                continue
+            try:
+                unit.setValveKvSet(False)
+            except Exception:
+                continue
+
+    def run(self, timeout_ms: int = 120000) -> ModelRunResult:
+        """
+        Run the process and extract KPIs and constraints.
+        
+        Uses multiple-pass convergence for processes with recycles.
+        
+        Args:
+            timeout_ms: Timeout in milliseconds. If >0, runs in a thread.
+        """
+        self._invalidate_auto_sized_valve_cv()
+        self._direct_unit_run_provenance.clear()
+        self._heat_exchanger_state_snapshots.clear()
+        direct_closure_ran = False
+        if self._is_process_model:
+            # ProcessModel has its own run() that iterates all children
+            process_run_succeeded = self._run_process_model(
+                self._proc,
+                timeout_ms=timeout_ms,
+            )
+        else:
+            process_run_succeeded = self._run_until_converged(
+                self._proc,
+                max_runs=5,
+                timeout_ms=timeout_ms,
+            )
+            if (
+                process_run_succeeded
+                and self._enforce_acyclic_mixer_energy
+            ):
+                direct_closure_ran = (
+                    self._run_acyclic_mixer_energy_closure(self._proc)
+                )
+
+        # Re-index model objects after running so references are fresh
+        self._index_model_objects()
+        if process_run_succeeded:
+            self._capture_heat_exchanger_state_snapshots(
+                allow_direct_runs=direct_closure_ran
+            )
+
+        return self._extract_results()
+
+    def rerun(self, timeout_ms: int = 120000):
+        """Re-run the process without extracting results.
+
+        Convenience method for callers that just need to re-execute the
+        simulation (e.g. after modifying parameters) and then re-index.
+        Handles both ProcessSystem and ProcessModel transparently.
+        """
+        self._invalidate_auto_sized_valve_cv()
+        self._direct_unit_run_provenance.clear()
+        self._heat_exchanger_state_snapshots.clear()
+        direct_closure_ran = False
+        if self._is_process_model:
+            process_run_succeeded = self._run_process_model(
+                self._proc,
+                timeout_ms=timeout_ms,
+            )
+        else:
+            process_run_succeeded = self._run_until_converged(
+                self._proc,
+                max_runs=5,
+                timeout_ms=timeout_ms,
+            )
+            if (
+                process_run_succeeded
                 and self._enforce_acyclic_mixer_energy
             ):
                 direct_closure_ran = (
