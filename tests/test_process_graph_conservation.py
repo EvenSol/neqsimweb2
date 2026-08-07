@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 87497)
-Total output lines: 9915
+Warning: truncated output (original token count: 87719)
+Total output lines: 9943
 
 """Native conservation benchmark for the generic ProcessBuilder graph executor."""
 
@@ -4642,6 +4642,9 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
             def getMixtureSuperficialVelocityProfile(self):
                 return [0.58, math.nan, -0.62, 0.59]
 
+            def getLengthProfile(self):
+                return [0.0, 500.0, 1_000.0, 1_500.0]
+
         pipeline = _ProfilePipeline(velocity_m_s=0.58)
         model = self._model(pipeline)
 
@@ -4655,12 +4658,37 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
             103.33333333333333,
         )
         self.assertAlmostEqual(properties["velocityMargin_m_s"], -0.02)
+        self.assertEqual(properties["velocityCriticalSegment_index"], 2.0)
+        self.assertEqual(properties["velocityCriticalLength_m"], 1_000.0)
+        self.assertEqual(
+            model._pipeline_design_property_unit(
+                "velocityCriticalSegment_index"
+            ),
+            "[-]",
+        )
+        self.assertEqual(
+            model._pipeline_design_property_unit("velocityCriticalLength_m"),
+            "m",
+        )
         constraint = model._pipeline_design_constraint(
             "transport pipeline",
             pipeline,
         )
         self.assertEqual(constraint.status, "VIOLATION")
         self.assertIn("velocity", constraint.detail)
+
+        kpis = {}
+        model._extract_unit_properties(kpis)
+        self.assertEqual(
+            kpis[
+                "transport pipeline.velocityCriticalSegment_index"
+            ].value,
+            2.0,
+        )
+        self.assertEqual(
+            kpis["transport pipeline.velocityCriticalLength_m"].unit,
+            "m",
+        )
 
     def test_saved_metadata_accepts_only_exact_pipeline_capacity_schema(self):
         valid_basis = {
@@ -4674,29 +4702,7 @@ class PipelineDesignBasisModelTest(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": 1,
-                        "equipment_design_bases": {
-                            "transport pipeline": valid_basis,
-                        },
-                    }
-                ),
-            )
-        buffer.seek(0)
-        with zipfile.ZipFile(buffer, "r") as archive:
-            self.assertEqual(
-                NeqSimProcessModel._read_studio_metadata(archive),
-                {"transport pipeline": valid_basis},
-            )
-
-        for invalid_basis in (
-            {"design_pressure_drop_capacity_bar": 0.005},
-            {**valid_basis, "design_velocity_capacity_m_per_s": 0.0},
-            {**valid_basis, "motor_rating_kw": 100.0},
-        ):
-            with self.subTest(invalid_basis=invalid_basis):
-                invalid_buffer = io.BytesIO()
-                with zipfile.ZipFile(invalid_buffer, "w") as archive:
-                    archive.writestr(
-           …7497 tokens truncated….95, "ethane": 0.05},
+…7719 tokens truncated….95, "ethane": 0.05},
                 ),
             )
         ]

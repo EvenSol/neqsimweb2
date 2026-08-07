@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 73270)
-Total output lines: 7432
+Warning: truncated output (original token count: 73583)
+Total output lines: 7461
 
 """
 Process Model Adapter — wraps a loaded NeqSim ProcessSystem or ProcessModel.
@@ -3068,17 +3068,23 @@ class NeqSimProcessModel:
             else ""
         )
         profile_velocity: Optional[float] = None
+        profile_critical_index: Optional[int] = None
         if profile_getter and hasattr(unit, profile_getter):
             try:
-                profile_values = [
-                    abs(float(value))
-                    for value in getattr(unit, profile_getter)()
-                    if math.isfinite(float(value))
-                ]
+                profile_values = []
+                for index, raw_value in enumerate(
+                    getattr(unit, profile_getter)()
+                ):
+                    value = abs(float(raw_value))
+                    if math.isfinite(value):
+                        profile_values.append((index, value))
             except Exception:
                 profile_values = []
             if profile_values:
-                profile_velocity = max(profile_values)
+                profile_critical_index, profile_velocity = max(
+                    profile_values,
+                    key=lambda item: item[1],
+                )
 
         velocity_getter = (
             "getMixtureVelocity"
@@ -3087,6 +3093,21 @@ class NeqSimProcessModel:
         )
         if profile_velocity is not None:
             properties["velocity_m_s"] = profile_velocity
+            properties["velocityCriticalSegment_index"] = float(
+                profile_critical_index
+            )
+            if hasattr(unit, "getLengthProfile"):
+                try:
+                    length_profile = list(unit.getLengthProfile())
+                    critical_length = float(
+                        length_profile[profile_critical_index]
+                    )
+                except Exception:
+                    critical_length = math.nan
+                if math.isfinite(critical_length):
+                    properties["velocityCriticalLength_m"] = (
+                        critical_length
+                    )
         elif hasattr(unit, velocity_getter):
             try:
                 velocity = abs(float(getattr(unit, velocity_getter)()))
@@ -3140,6 +3161,12 @@ class NeqSimProcessModel:
             capacity = properties[capacity_key]
             properties[utilization_key] = 100.0 * actual_value / capacity
             properties[margin_key] = capacity - actual_value
+        for provenance_key in (
+            "velocityCriticalSegment_index",
+            "velocityCriticalLength_m",
+        ):
+            if provenance_key in operating:
+                properties[provenance_key] = operating[provenance_key]
         return properties
 
     @staticmethod
@@ -3152,6 +3179,8 @@ class NeqSimProcessModel:
             "velocityUtilization_pct": "%",
             "pressureDropMargin_bar": "bar",
             "velocityMargin_m_s": "m/s",
+            "velocityCriticalSegment_index": "[-]",
+            "velocityCriticalLength_m": "m",
         }[property_name]
 
     def _pipeline_design_constraint(
@@ -3170,44 +3199,7 @@ class NeqSimProcessModel:
             (
                 "velocity",
                 "velocityUtilization_pct",
-                "velocityMargin_m_s",
-            ),
-        )
-        if any(
-            utilization not in properties or margin not in properties
-            for _, utilization, margin in utilization_names
-        ):
-            return ConstraintStatus(
-                f"pipeline_design.{unit_name}",
-                "UNKNOWN",
-                "Pipeline design basis is active, but complete finite native "
-                "pressure-drop and velocity results are unavailable.",
-            )
-        violations = [
-            label
-            for label, _, margin in utilization_names
-            if properties[margin] < -1.0e-9
-        ]
-        utilization = ", ".join(
-            f"{label}={properties[key]:.6g}%"
-            for label, key, _ in utilization_names
-        )
-        return ConstraintStatus(
-            f"pipeline_design.{unit_name}",
-            "VIOLATION" if violations else "OK",
-            (
-                "Pipeline exceeds " + ", ".join(violations)
-                + f" capacity; utilization: {utilization}."
-                if violations
-                else (
-                    "Pipeline is inside hydraulic capacities; "
-                    f"utilization: {utilization}."
-                )
-            ),
-        )
-
-    @staticmethod
-    def _…13270 tokens truncated… process_run_succeeded
+                "velocityMargin…13583 tokens truncated… process_run_succeeded
                 and self._enforce_acyclic_mixer_energy
             ):
                 direct_closure_ran = (
