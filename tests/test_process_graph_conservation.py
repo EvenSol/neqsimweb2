@@ -2108,6 +2108,17 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
             )
 
     def test_reports_duty_and_ua_margins_with_explicit_units(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "HeatExchanger"
+
+        class _HeatExchanger:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+        exchanger = _HeatExchanger()
         model = NeqSimProcessModel.__new__(NeqSimProcessModel)
         model._equipment_design_bases = {
             "cross exchanger": {
@@ -2119,6 +2130,8 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
         model._heat_exchanger_state_snapshots = {
             "cross exchanger": ("trusted",)
         }
+        model._units = {"cross exchanger": exchanger}
+        model._unit_ps_name = {"cross exchanger": "main"}
         operating = {
             "heatTransferDuty_kW": 2_400.0,
             "UA_W_K": 100_000.0,
@@ -2127,15 +2140,20 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
             NeqSimProcessModel,
             "_heat_exchanger_operating_properties",
             return_value=operating,
+        ), patch.object(
+            model,
+            "_report_unit_duty_suppression",
+            return_value=False,
         ):
             properties = model._heat_exchanger_design_properties(
                 "cross exchanger",
-                object(),
+                exchanger,
             )
             constraint = model._heat_exchanger_design_constraint(
                 "cross exchanger",
-                object(),
+                exchanger,
             )
+            workbook = model.list_units()[0].properties
 
         self.assertEqual(properties["designDutyCapacity_kW"], 2_500.0)
         self.assertEqual(properties["designUACapacity_W_K"], 125_000.0)
@@ -2144,6 +2162,8 @@ class HeatExchangerDesignBasisModelTest(unittest.TestCase):
         self.assertAlmostEqual(properties["dutyMargin_kW"], 100.0)
         self.assertAlmostEqual(properties["uaMargin_W_K"], 25_000.0)
         self.assertEqual(constraint.status, "OK")
+        self.assertEqual(workbook["designDutyCapacity_kW"], 2_500.0)
+        self.assertEqual(workbook["dutyMargin_kW"], 100.0)
         expected_units = {
             "designDutyCapacity_kW": "kW",
             "designUACapacity_W_K": "W/K",
@@ -2429,6 +2449,10 @@ class ValveDesignBasisModelTest(unittest.TestCase):
             "%",
         )
         self.assertEqual(kpis["metering valve.cvMargin_US"].unit, "US Cv")
+        workbook = model.list_units()[0].properties
+        self.assertEqual(workbook["designCvCapacity_US"], 20.0)
+        self.assertAlmostEqual(workbook["cvUtilization_pct"], 90.0)
+        self.assertAlmostEqual(workbook["cvMargin_US"], 2.0)
 
         model._equipment_design_bases["metering valve"][
             "design_cv_capacity_us"
