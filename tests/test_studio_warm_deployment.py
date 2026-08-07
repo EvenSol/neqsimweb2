@@ -1763,11 +1763,26 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             }
         )
         result = types.SimpleNamespace(constraints=[])
+        equipment_design_table = pandas.DataFrame(
+            [
+                {
+                    "Equipment": "transport pipeline",
+                    "Design check": "Pipeline velocity",
+                    "Operating value": 0.58,
+                    "Design capacity": 0.60,
+                    "Margin": 0.02,
+                    "Utilization [%]": 96.6666667,
+                    "Unit": "m/s",
+                    "Status": "OK",
+                }
+            ]
+        )
         workbook = workbook_bytes(
             spec,
             result,
             empty_table,
             empty_table,
+            equipment_design_table,
             empty_table,
             empty_table,
             {},
@@ -1782,6 +1797,8 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         self.assertNotIn("Compressor stage 2", workbook_xml)
         self.assertIn("Intercooler", workbook_xml)
         self.assertNotIn("Export cooler", workbook_xml)
+        self.assertIn("Equipment Design", workbook_xml)
+        self.assertIn("Pipeline velocity", workbook_xml)
 
         history_record.__globals__.update(
             {

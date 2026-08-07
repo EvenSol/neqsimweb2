@@ -3042,6 +3042,7 @@ def _engineering_workbook_bytes(
     result: Any,
     stream_table: pd.DataFrame,
     equipment_table: pd.DataFrame,
+    equipment_design_table: pd.DataFrame,
     constraint_table: pd.DataFrame,
     pressure_profile_table: pd.DataFrame,
     run_record: dict[str, Any],
@@ -3432,6 +3433,7 @@ def _engineering_workbook_bytes(
         "Unit Balances": unit_balance_table,
         "Streams": stream_table,
         "Equipment": equipment_table,
+        "Equipment Design": equipment_design_table,
         "Validation": constraint_table,
         "Pressure Profile": pressure_profile_table,
         "Assumptions": assumptions_table,
@@ -6963,12 +6965,24 @@ if results_are_current and has_stored_result:
     )
 
     pressure_profile_table = _pressure_profile_dataframe(spec, equipment_table)
+    constraint_table = _constraint_dataframe(result)
+    equipment_design_table = _equipment_design_dataframe(
+        equipment_table,
+        constraint_table,
+    )
 
-    diagram_tab, streams_tab, equipment_tab, validation_tab = st.tabs(
+    (
+        diagram_tab,
+        streams_tab,
+        equipment_tab,
+        design_tab,
+        validation_tab,
+    ) = st.tabs(
         [
             "Flowsheet",
             "Workbook · Streams",
             "Workbook · Equipment",
+            "Workbook · Design",
             "Solver & Validation",
         ]
     )
@@ -7043,7 +7057,30 @@ if results_are_current and has_stored_result:
                 hide_index=True,
             )
 
-    constraint_table = _constraint_dataframe(result)
+    with design_tab:
+        if equipment_design_table.empty:
+            st.info(
+                "No active equipment design capacities were reported. "
+                "Enable a design basis in the equipment properties to "
+                "compare operating values with capacities."
+            )
+        else:
+            st.dataframe(
+                equipment_design_table.style.format(
+                    {
+                        "Operating value": "{:,.6g}",
+                        "Design capacity": "{:,.6g}",
+                        "Margin": "{:+,.6g}",
+                        "Utilization [%]": "{:.6g}",
+                        "Critical segment [-]": "{:.0f}",
+                        "Critical length [m]": "{:,.3f}",
+                    },
+                    na_rep="—",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
     material_boundary_table = _material_boundary_dataframe(result)
     component_balance_table = _component_balance_dataframe(result)
     energy_balance_table = _energy_balance_dataframe(result)
@@ -7369,6 +7406,7 @@ if results_are_current and has_stored_result:
             result,
             stream_table,
             equipment_table,
+            equipment_design_table,
             constraint_table,
             pressure_profile_table,
             run_record,
