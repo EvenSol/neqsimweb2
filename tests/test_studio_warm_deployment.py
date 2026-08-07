@@ -131,6 +131,107 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         )
         self.assertEqual(table["Owner"].tolist(), ["", "compressor stage 1"])
 
+    def test_equipment_design_rows_normalize_all_supported_capacities(self):
+        design_dataframe = self._load_studio_function(
+            "_equipment_design_dataframe"
+        )
+        equipment = pd.DataFrame(
+            [
+                {
+                    "Equipment": "export pump",
+                    "Type": "Pump",
+                    "designFlowCapacity_m3_per_hr": 40.0,
+                    "flowMargin_m3_per_hr": 4.0,
+                    "flowUtilization_pct": 90.0,
+                    "designHeadCapacity_m": 300.0,
+                    "headMargin_m": 30.0,
+                    "headUtilization_pct": 90.0,
+                    "motorRating_kW": 100.0,
+                    "motorMargin_kW": 5.0,
+                    "motorUtilization_pct": 95.0,
+                },
+                {
+                    "Equipment": "cross exchanger",
+                    "Type": "HeatExchanger",
+                    "designDutyCapacity_kW": 2_500.0,
+                    "dutyMargin_kW": 100.0,
+                    "dutyUtilization_pct": 96.0,
+                    "designUACapacity_W_K": 125_000.0,
+                    "uaMargin_W_K": 25_000.0,
+                    "uaUtilization_pct": 80.0,
+                },
+                {
+                    "Equipment": "metering valve",
+                    "Type": "ThrottlingValve",
+                    "designCvCapacity_US": 20.0,
+                    "cvMargin_US": -1.0,
+                    "cvUtilization_pct": 105.0,
+                },
+                {
+                    "Equipment": "transport pipeline",
+                    "Type": "PipeBeggsAndBrills",
+                    "designPressureDropCapacity_bar": 0.005,
+                    "pressureDropMargin_bar": 0.0003,
+                    "pressureDropUtilization_pct": 94.0,
+                    "designVelocityCapacity_m_s": 0.60,
+                    "velocityMargin_m_s": 0.02,
+                    "velocityUtilization_pct": 96.6666667,
+                    "velocityCriticalSegment_index": 4.0,
+                    "velocityCriticalLength_m": 2_000.0,
+                },
+            ]
+        )
+        constraints = pd.DataFrame(
+            [
+                {
+                    "name": "pump_design.export pump",
+                    "status": "OK",
+                    "detail": "Pump is inside design capacities.",
+                },
+                {
+                    "name": "heat_exchanger_design.cross exchanger",
+                    "status": "OK",
+                    "detail": "Heat exchanger is inside design capacities.",
+                },
+                {
+                    "name": "valve_design.metering valve",
+                    "status": "VIOLATION",
+                    "detail": "Valve exceeds rated Cv capacity.",
+                },
+                {
+                    "name": "pipeline_design.transport pipeline",
+                    "status": "OK",
+                    "detail": "Pipeline is inside hydraulic capacities.",
+                },
+            ]
+        )
+
+        table = design_dataframe(equipment, constraints)
+
+        self.assertEqual(len(table), 8)
+        self.assertEqual(
+            table["Design check"].tolist(),
+            [
+                "Pump flow",
+                "Pump head",
+                "Pump motor",
+                "Heat-exchanger duty",
+                "Heat-exchanger UA",
+                "Valve Cv",
+                "Pipeline pressure drop",
+                "Pipeline velocity",
+            ],
+        )
+        valve = table[table["Design check"] == "Valve Cv"].iloc[0]
+        self.assertEqual(valve["Operating value"], 21.0)
+        self.assertEqual(valve["Status"], "VIOLATION")
+        pipeline = table[
+            table["Design check"] == "Pipeline velocity"
+        ].iloc[0]
+        self.assertAlmostEqual(pipeline["Operating value"], 0.58)
+        self.assertEqual(pipeline["Critical segment [-]"], 4.0)
+        self.assertEqual(pipeline["Critical length [m]"], 2_000.0)
+
     def test_selected_equipment_keeps_qualified_outlet_results(self):
         selected_tables = self._load_studio_function(
             "_selected_object_result_tables"
