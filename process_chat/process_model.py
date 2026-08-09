@@ -304,7 +304,37 @@ def _patch_jvm_startup():
         if jpype.isJVMStarted():
             return                                     # too late – JVM already up
 
-        _real = jpype.startJVM
+        current_start = jpype.startJVM
+        if getattr(
+            current_start,
+            "_neqsimweb2_add_opens_wrapper",
+            False,
+        ):
+            return
+
+        # Warm Streamlit deployments used to wrap ``startJVM`` again on every
+        # forced module reload. Unwrap that legacy closure chain before
+        # installing the single marked wrapper so an already-warm process is
+        # repaired without requiring a restart.
+        seen = set()
+        while (
+            getattr(current_start, "__module__", None) == __name__
+            and getattr(current_start, "__name__", None)
+            == "_start_with_opens"
+            and id(current_start) not in seen
+        ):
+            seen.add(id(current_start))
+            closure = getattr(current_start, "__closure__", None) or ()
+            wrapped = [
+                cell.cell_contents
+                for cell in closure
+                if callable(cell.cell_contents)
+            ]
+            if len(wrapped) != 1:
+                break
+            current_start = wrapped[0]
+
+        _real = current_start
 
         def _start_with_opens(*args, **kwargs):
             opens = [
@@ -315,6 +345,8 @@ def _patch_jvm_startup():
             ]
             _real(*args, *opens, **kwargs)
 
+        _start_with_opens._neqsimweb2_add_opens_wrapper = True
+        _start_with_opens._neqsimweb2_original_start_jvm = _real
         jpype.startJVM = _start_with_opens
     except Exception:
         pass  # best-effort; the converter workaround below handles the rest

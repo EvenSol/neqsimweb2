@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import process_chat.flowsheet_editor as flowsheet_editor
+import process_chat.process_model as process_model
 from process_chat.dexpi_integration import _supports_neqsim_model_export
 from process_chat.runtime_imports import import_local_symbols
 
@@ -121,6 +122,35 @@ class LocalSymbolImportTest(unittest.TestCase):
             )
 
         self.assertIs(getattr(flowsheet_editor, removed_name), stale_export)
+
+    def test_repeated_model_reload_keeps_one_jvm_startup_wrapper(self):
+        import jpype
+
+        if jpype.isJVMStarted():
+            self.skipTest("JVM startup wrapper is inactive after JVM start")
+
+        for _ in range(25):
+            import_local_symbols(
+                "process_chat.process_model",
+                ("ProcessRunTimeoutError",),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        wrapper = jpype.startJVM
+        self.assertTrue(
+            getattr(wrapper, "_neqsimweb2_add_opens_wrapper", False)
+        )
+        original = getattr(
+            wrapper,
+            "_neqsimweb2_original_start_jvm",
+            None,
+        )
+        self.assertTrue(callable(original))
+        self.assertFalse(
+            getattr(original, "_neqsimweb2_add_opens_wrapper", False)
+        )
+        self.assertIsNot(wrapper, original)
 
     def test_serializes_concurrent_refreshes_for_one_module(self):
         del flowsheet_editor.connect_graph_ports
