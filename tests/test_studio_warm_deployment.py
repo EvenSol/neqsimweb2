@@ -1094,6 +1094,65 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 reserved_names=reserved_names,
             )
 
+    def test_graph_edit_activates_retained_subflowsheet_contract(self):
+        record_graph_revision = self._load_studio_function(
+            "_record_graph_revision"
+        )
+        activated = {}
+        spec = {
+            "inlets": [{"id": "feed", "name": "Feed"}],
+            "subflowsheets": [
+                {
+                    "id": "train",
+                    "name": "Train",
+                    "unit_ids": ["compressor"],
+                    "boundary_ports": [],
+                }
+            ],
+        }
+        incomplete_edit = {
+            "schema_version": 2,
+            "units": [{"id": "compressor", "name": "Compressor"}],
+            "connections": [],
+        }
+
+        def record_history(
+            history,
+            units,
+            connections,
+            inlets,
+            *,
+            subflowsheets,
+        ):
+            entry = {
+                "schema_version": 2,
+                "units": units,
+                "connections": connections,
+                "inlets": inlets,
+                "subflowsheets": subflowsheets,
+            }
+            return {"entries": [entry], "cursor": 0}
+
+        record_graph_revision.__globals__.update(
+            {
+                "_graph_history_for_spec": lambda candidate: {},
+                "record_graph_history": record_history,
+                "_activate_graph_revision": (
+                    lambda candidate, history, draft, notice: activated.update(
+                        {"draft": draft, "notice": notice}
+                    )
+                ),
+            }
+        )
+
+        record_graph_revision(spec, incomplete_edit, "Edited")
+
+        self.assertEqual(
+            activated["draft"]["subflowsheets"],
+            spec["subflowsheets"],
+        )
+        self.assertEqual(activated["draft"]["inlets"], spec["inlets"])
+
     def test_import_rejects_restorable_starter_product_feed_name(self):
         validate_case_graph = self._load_studio_function(
             "_validate_case_graph"
