@@ -880,9 +880,10 @@ class NeqSimProcessModel:
         2. Run the process (threaded or synchronous).
         3. If total |power| + |duty| across energy-consuming units is still
            effectively zero, reset Recycles again and retry.
-        4. On the 3rd attempt, try ``runSequential()`` as a fallback —
-           it runs each unit block in strict order which sometimes helps
-           complex topologies converge.
+        4. Beginning with the fourth pass, try ``runSequential()`` as a
+           fallback.  It runs each unit block in strict order, which
+           sometimes helps complex topologies converge.  Bounded callers run
+           this fallback behind the remaining-budget watchdog.
         """
         _POWER_UNITS = {"Compressor", "Pump", "ESPPump", "Expander", "GasTurbine"}
         _DUTY_UNITS  = {"Cooler", "Heater", "HeatExchanger", "AirCooler", "WaterCooler",
@@ -972,13 +973,15 @@ class NeqSimProcessModel:
             # partially overwritten.
             completed_run = False
             try:
-                if (
-                    attempt >= 3
-                    and timeout_ms <= 0
-                    and hasattr(proc, "runSequential")
-                ):
-                    # Unbounded-run fallback: strict sequential execution.
-                    proc.runSequential()
+                if attempt >= 3 and hasattr(proc, "runSequential"):
+                    if timeout_ms > 0:
+                        NeqSimProcessModel._run_bounded_call(
+                            proc.runSequential,
+                            _remaining_timeout_ms(),
+                            operation="sequential convergence fallback",
+                        )
+                    else:
+                        proc.runSequential()
                 elif timeout_ms > 0:
                     if not NeqSimProcessModel._run_native_thread(
                         proc,

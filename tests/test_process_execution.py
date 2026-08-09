@@ -121,6 +121,62 @@ class ProcessRunTimeoutTest(unittest.TestCase):
 
         self.assertEqual(process.run_count, 1)
 
+    def test_sequential_convergence_fallback_uses_remaining_budget(self):
+        class _JavaClass:
+            @staticmethod
+            def getSimpleName():
+                return "Heater"
+
+        class _Unit:
+            @staticmethod
+            def getClass():
+                return _JavaClass()
+
+            @staticmethod
+            def getDuty():
+                return 0.0
+
+        class _CompletedThread:
+            @staticmethod
+            def join(timeout_ms):
+                return None
+
+            @staticmethod
+            def isAlive():
+                return False
+
+        class _Process:
+            def __init__(self):
+                self.units = [_Unit(), _Unit(), _Unit()]
+                self.threaded_runs = 0
+                self.sequential_runs = 0
+
+            def getUnitOperations(self):
+                return self.units
+
+            def runAsThread(self):
+                self.threaded_runs += 1
+                return _CompletedThread()
+
+            def runSequential(self):
+                self.sequential_runs += 1
+
+        process = _Process()
+        with patch(
+            "process_chat.process_model.monotonic",
+            side_effect=(100.0, 100.1, 100.2, 100.3, 100.4),
+        ):
+            self.assertTrue(
+                NeqSimProcessModel._run_until_converged(
+                    process,
+                    max_runs=4,
+                    timeout_ms=1_000,
+                )
+            )
+
+        self.assertEqual(process.threaded_runs, 3)
+        self.assertEqual(process.sequential_runs, 1)
+
     def test_process_model_fallback_shares_one_total_budget(self):
         class _ProcessModel:
             @staticmethod
