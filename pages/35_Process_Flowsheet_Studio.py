@@ -57,6 +57,15 @@ globals().update(
     )
 )
 
+_SUBFLOWSHEET_SYMBOL_NAMES = ("validate_subflowsheets",)
+globals().update(
+    import_local_symbols(
+        "process_chat.subflowsheet_schema",
+        _SUBFLOWSHEET_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+    )
+)
+
 
 _EDITOR_SYMBOL_NAMES = (
     "MAX_MULTI_INLET_PORTS",
@@ -127,7 +136,8 @@ GRAPH_HISTORY_STATE_KEY = "flowsheet_studio_graph_history"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
 LEGACY_CASE_SCHEMA_VERSION = 1
 SHARED_FLUID_CASE_SCHEMA_VERSION = 2
-CASE_SCHEMA_VERSION = 3
+GRAPH_CASE_SCHEMA_VERSION = 3
+CASE_SCHEMA_VERSION = 4
 BASE_FLUID_PACKAGE_ID = "base-fluid"
 PRIMARY_INLET_ID = "feed-gas"
 MAX_CASE_FILE_BYTES = 1_000_000
@@ -1238,6 +1248,11 @@ def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
 
     _validate_fluid_package_integrity(fluid_packages, inlets)
     _validate_graph_integrity(inlets, units, connections)
+    validate_subflowsheets(
+        spec.get("subflowsheets", []),
+        units,
+        connections,
+    )
 
     indexed_inlets = _index_graph_objects(inlets, "inlets")
     indexed_units = _index_graph_objects(units, "units")
@@ -1334,6 +1349,9 @@ def _build_graph_process_spec(
         "connections": json.loads(
             json.dumps(spec["connections"], allow_nan=False)
         ),
+        "subflowsheets": json.loads(
+            json.dumps(spec.get("subflowsheets", []), allow_nan=False)
+        ),
     }
     execution_order = [
         str(step["Object ID"]).strip()
@@ -1352,7 +1370,7 @@ def _validate_case_graph(
     process: list[dict[str, Any]],
 ) -> None:
     """Validate schema-v3 graph integrity and starter-template compatibility."""
-    if case_data["schema_version"] < CASE_SCHEMA_VERSION:
+    if case_data["schema_version"] < GRAPH_CASE_SCHEMA_VERSION:
         return
 
     inlets = case_data.get("inlets")
@@ -1366,6 +1384,11 @@ def _validate_case_graph(
         raise ValueError("Schema v3 requires a connections array.")
 
     _validate_graph_integrity(inlets, units, connections)
+    validate_subflowsheets(
+        case_data.get("subflowsheets", []),
+        units,
+        connections,
+    )
     conflicting_graph_names = _terminal_name_conflicts(
         [*inlets, *units],
         _terminal_material_stream_names(units, connections),
@@ -1440,13 +1463,14 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
     supported_schema_versions = (
         LEGACY_CASE_SCHEMA_VERSION,
         SHARED_FLUID_CASE_SCHEMA_VERSION,
+        GRAPH_CASE_SCHEMA_VERSION,
         CASE_SCHEMA_VERSION,
     )
     if type(schema_version) is not int or schema_version not in (
         supported_schema_versions
     ):
         raise ValueError(
-            "Unsupported schema_version. Expected version 1, 2, or 3."
+            "Unsupported schema_version. Expected version 1, 2, 3, or 4."
         )
 
     case_name = str(case_data.get("name", "")).strip()
@@ -1655,16 +1679,19 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
         stage_2_isentropic_efficiency=efficiency_2,
     )
     graph_draft = None
-    if schema_version >= CASE_SCHEMA_VERSION:
+    if schema_version >= GRAPH_CASE_SCHEMA_VERSION:
         imported_draft = create_graph_draft(
             case_data["units"],
             case_data["connections"],
             case_data["inlets"],
+            case_data.get("subflowsheets", []),
         )
         if (
             imported_draft["inlets"] != canonical_spec["inlets"]
             or imported_draft["units"] != canonical_spec["units"]
             or imported_draft["connections"] != canonical_spec["connections"]
+            or imported_draft.get("subflowsheets", [])
+            != canonical_spec["subflowsheets"]
         ):
             graph_draft = imported_draft
             canonical_spec = _apply_studio_graph_draft(
@@ -1675,7 +1702,7 @@ def _load_case_controls(case_data: Any) -> tuple[dict[str, Any], pd.DataFrame, l
     if schema_version < CASE_SCHEMA_VERSION:
         warnings.insert(
             0,
-            f"Schema-v{schema_version} case migrated to graph schema v3.",
+            f"Schema-v{schema_version} case migrated to Studio schema v4.",
         )
     controls = {
         "flowsheet_case_name": case_name,
@@ -1982,6 +2009,7 @@ def _build_case_spec(
         "inlets": [inlet],
         "units": units,
         "connections": connections,
+        "subflowsheets": [],
         "fluid": fluid_spec,
         "process": process,
     }
@@ -3797,16 +3825,19 @@ def _graph_history_for_spec(spec: dict[str, Any]) -> dict[str, Any]:
         starter_units,
         starter_connections,
         spec["inlets"],
+        [],
     )
     if (
         spec["units"] != starter_units
         or spec["connections"] != starter_connections
+        or bool(spec.get("subflowsheets"))
     ):
         history = record_graph_history(
             history,
             spec["units"],
             spec["connections"],
             spec["inlets"],
+            subflowsheets=spec.get("subflowsheets", []),
         )
         st.session_state[GRAPH_HISTORY_STATE_KEY] = history
     return history
@@ -3964,10 +3995,12 @@ def _activate_graph_revision(
         and str(inlet.get("id", "")).strip() != PRIMARY_INLET_ID
         for inlet in draft_inlets
     )
+    has_subflowsheets = bool(draft.get("subflowsheets"))
     if (
         draft["units"] == starter_units
         and draft["connections"] == starter_connections
         and not has_secondary_inlets
+        and not has_subflowsheets
     ):
         st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
     else:
@@ -3989,6 +4022,10 @@ def _record_graph_revision(
         draft["units"],
         draft["connections"],
         draft.get("inlets"),
+        subflowsheets=draft.get(
+            "subflowsheets",
+            spec.get("subflowsheets", []),
+        ),
     )
     _activate_graph_revision(spec, history, draft, notice)
 

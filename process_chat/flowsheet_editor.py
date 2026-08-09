@@ -15,7 +15,8 @@ from .graph_schema import (
 )
 
 
-GRAPH_DRAFT_SCHEMA_VERSION = 1
+LEGACY_GRAPH_DRAFT_SCHEMA_VERSION = 1
+GRAPH_DRAFT_SCHEMA_VERSION = 2
 GRAPH_HISTORY_SCHEMA_VERSION = 1
 MAX_GRAPH_HISTORY_ENTRIES = 50
 MAX_MULTI_INLET_PORTS = 64
@@ -3541,6 +3542,7 @@ def create_graph_draft(
     units: list[Any],
     connections: list[Any],
     inlets: list[Any] | None = None,
+    subflowsheets: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Create an isolated, versioned draft from case graph arrays."""
     if not isinstance(units, list):
@@ -3551,6 +3553,7 @@ def create_graph_draft(
     copied_units = copy.deepcopy(units)
     copied_connections = copy.deepcopy(connections)
     copied_inlets = copy.deepcopy(inlets)
+    copied_subflowsheets = copy.deepcopy(subflowsheets)
     inlet_ids: set[str] = set()
     if copied_inlets is not None:
         if not isinstance(copied_inlets, list):
@@ -3570,6 +3573,27 @@ def create_graph_draft(
                     f"Graph draft inlet id '{inlet_id}' is duplicated."
                 )
             inlet_ids.add(inlet_id)
+
+    if copied_subflowsheets is not None:
+        if not isinstance(copied_subflowsheets, list):
+            raise ValueError("Graph draft subflowsheets must be an array.")
+        subflowsheet_ids: set[str] = set()
+        for index, subflowsheet in enumerate(copied_subflowsheets):
+            if not isinstance(subflowsheet, dict):
+                raise ValueError(
+                    f"Graph draft subflowsheet {index} must be an object."
+                )
+            subflowsheet_id = str(subflowsheet.get("id", "")).strip()
+            if not subflowsheet_id:
+                raise ValueError(
+                    f"Graph draft subflowsheet {index} requires an id."
+                )
+            if subflowsheet_id in subflowsheet_ids:
+                raise ValueError(
+                    "Graph draft subflowsheet id "
+                    f"'{subflowsheet_id}' is duplicated."
+                )
+            subflowsheet_ids.add(subflowsheet_id)
 
     unit_ids: set[str] = set()
     for index, unit in enumerate(copied_units):
@@ -3632,6 +3656,8 @@ def create_graph_draft(
     }
     if copied_inlets is not None:
         draft["inlets"] = copied_inlets
+    if copied_subflowsheets is not None:
+        draft["subflowsheets"] = copied_subflowsheets
     return draft
 
 
@@ -3644,9 +3670,13 @@ def apply_graph_draft(
         raise ValueError("Case specification must be an object.")
     if not isinstance(draft, dict):
         raise ValueError("Graph draft must be an object.")
-    if draft.get("schema_version") != GRAPH_DRAFT_SCHEMA_VERSION:
+    draft_schema_version = draft.get("schema_version")
+    if draft_schema_version not in (
+        LEGACY_GRAPH_DRAFT_SCHEMA_VERSION,
+        GRAPH_DRAFT_SCHEMA_VERSION,
+    ):
         raise ValueError(
-            "Unsupported graph draft schema version. Expected version 1."
+            "Unsupported graph draft schema version. Expected version 1 or 2."
         )
     if "inlets" in draft and draft["inlets"] is None:
         raise ValueError("Graph draft inlets must be an array.")
@@ -3655,16 +3685,24 @@ def apply_graph_draft(
         if "inlets" in draft
         else case_spec.get("inlets")
     )
+    retained_or_draft_subflowsheets = (
+        draft.get("subflowsheets")
+        if "subflowsheets" in draft
+        else case_spec.get("subflowsheets")
+    )
     validated = create_graph_draft(
         draft.get("units"),
         draft.get("connections"),
         retained_or_draft_inlets,
+        retained_or_draft_subflowsheets,
     )
     updated_case = copy.deepcopy(case_spec)
     updated_case["units"] = validated["units"]
     updated_case["connections"] = validated["connections"]
     if "inlets" in validated:
         updated_case["inlets"] = validated["inlets"]
+    if "subflowsheets" in validated:
+        updated_case["subflowsheets"] = validated["subflowsheets"]
     return updated_case
 
 
@@ -3684,7 +3722,10 @@ def _validated_graph_history(history: Any) -> dict[str, Any]:
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise ValueError(f"Graph history entry {index} must be an object.")
-        if entry.get("schema_version") != GRAPH_DRAFT_SCHEMA_VERSION:
+        if entry.get("schema_version") not in (
+            LEGACY_GRAPH_DRAFT_SCHEMA_VERSION,
+            GRAPH_DRAFT_SCHEMA_VERSION,
+        ):
             raise ValueError(
                 f"Graph history entry {index} has an unsupported draft version."
             )
@@ -3693,6 +3734,11 @@ def _validated_graph_history(history: Any) -> dict[str, Any]:
                 entry.get("units"),
                 entry.get("connections"),
                 entry.get("inlets") if "inlets" in entry else None,
+                (
+                    entry.get("subflowsheets")
+                    if "subflowsheets" in entry
+                    else None
+                ),
             )
         )
 
@@ -3712,11 +3758,19 @@ def create_graph_history(
     units: list[Any],
     connections: list[Any],
     inlets: list[Any] | None = None,
+    subflowsheets: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Create a history timeline containing one isolated graph revision."""
     return {
         "schema_version": GRAPH_HISTORY_SCHEMA_VERSION,
-        "entries": [create_graph_draft(units, connections, inlets)],
+        "entries": [
+            create_graph_draft(
+                units,
+                connections,
+                inlets,
+                subflowsheets,
+            )
+        ],
         "cursor": 0,
     }
 
@@ -3727,6 +3781,7 @@ def record_graph_history(
     connections: list[Any],
     inlets: list[Any] | None = None,
     max_entries: int = MAX_GRAPH_HISTORY_ENTRIES,
+    subflowsheets: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Append one graph revision and discard any abandoned redo branch."""
     if (
@@ -3737,7 +3792,12 @@ def record_graph_history(
         raise ValueError("Graph history limit must be an integer of at least 2.")
 
     updated = _validated_graph_history(history)
-    candidate = create_graph_draft(units, connections, inlets)
+    candidate = create_graph_draft(
+        units,
+        connections,
+        inlets,
+        subflowsheets,
+    )
     if updated["entries"][updated["cursor"]] == candidate:
         return updated
 
