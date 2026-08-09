@@ -62,6 +62,7 @@ globals().update(
         "process_chat.process_model",
         _PROCESS_MODEL_SYMBOL_NAMES,
         project_root=_PROJECT_ROOT,
+        force_reload=True,
     )
 )
 
@@ -6852,7 +6853,8 @@ if run_case:
             )
             if remaining_ms <= 0:
                 raise ProcessRunTimeoutError(
-                    "Studio build and solve exceeded the 180000 ms total "
+                    "Studio build and solve exceeded the "
+                    f"{STUDIO_SOLVE_TIMEOUT_MS} ms total "
                     "execution budget; discard this process model."
                 )
             return remaining_ms

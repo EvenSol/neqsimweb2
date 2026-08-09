@@ -233,6 +233,10 @@ class LocalSymbolImportTest(unittest.TestCase):
         model_import = studio_source.index('"process_chat.process_model"')
         builder_import = studio_source.index('"process_chat.process_builder"')
         self.assertLess(model_import, builder_import)
+        self.assertIn(
+            "force_reload=True",
+            studio_source[model_import:builder_import],
+        )
         self.assertIn("force_reload=True", studio_source[builder_import:])
         self.assertNotIn(
             "from process_chat.process_builder import ProcessBuilder",
