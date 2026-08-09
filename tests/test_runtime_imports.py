@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import process_chat.flowsheet_editor as flowsheet_editor
+from process_chat.dexpi_integration import _supports_neqsim_model_export
 from process_chat.runtime_imports import import_local_symbols
 
 
@@ -242,6 +243,21 @@ class LocalSymbolImportTest(unittest.TestCase):
             "from process_chat.process_builder import ProcessBuilder",
             studio_source,
         )
+
+    def test_dexpi_fallback_accepts_warm_reload_model_generation(self):
+        class PreviousModelGeneration:
+            @staticmethod
+            def list_units():
+                return []
+
+            @staticmethod
+            def list_streams():
+                return []
+
+        self.assertTrue(
+            _supports_neqsim_model_export(PreviousModelGeneration())
+        )
+        self.assertFalse(_supports_neqsim_model_export(object()))
 
 
 if __name__ == "__main__":

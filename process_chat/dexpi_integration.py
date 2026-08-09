@@ -1224,6 +1224,14 @@ def _ensure_pydexpi_equipment_map():
         pass
 
 
+def _supports_neqsim_model_export(process_model) -> bool:
+    """Accept compatible model adapters across warm-reload class generations."""
+    return all(
+        callable(getattr(process_model, method_name, None))
+        for method_name in ("list_units", "list_streams")
+    )
+
+
 def _export_to_dexpi_pydexpi(process_model) -> Optional[bytes]:
     """Export NeqSim model to DEXPI XML via pyDEXPI Pydantic model.
 
@@ -1232,8 +1240,7 @@ def _export_to_dexpi_pydexpi(process_model) -> Optional[bytes]:
     by pyDEXPI).  Falls back to None so the XML generator is used.
     """
     try:
-        from .process_model import NeqSimProcessModel
-        if not isinstance(process_model, NeqSimProcessModel):
+        if not _supports_neqsim_model_export(process_model):
             return None
 
         from pydexpi.dexpi_classes.dexpiModel import DexpiModel, ConceptualModel
@@ -1309,12 +1316,9 @@ def _export_to_dexpi_python(process_model) -> Optional[bytes]:
     and design data extracted from the simulation state.
     """
     try:
-        from .process_model import NeqSimProcessModel
-
-        if isinstance(process_model, NeqSimProcessModel):
-            model = process_model
-        else:
+        if not _supports_neqsim_model_export(process_model):
             return None
+        model = process_model
 
         units = model.list_units()
         streams = model.list_streams()
