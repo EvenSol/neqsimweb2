@@ -4822,6 +4822,20 @@ class NeqSimProcessModel:
             operation="process solve and result extraction",
         )
 
+    def run_bounded_operation(
+        self,
+        callback: Callable[[], Any],
+        *,
+        timeout_ms: int,
+        operation: str,
+    ) -> Any:
+        """Run model-dependent post-processing within a caller wait budget."""
+        return self._run_bounded_call(
+            callback,
+            timeout_ms,
+            operation=operation,
+        )
+
     def rerun(self, timeout_ms: int = 120000):
         """Re-run the process without extracting results.
 

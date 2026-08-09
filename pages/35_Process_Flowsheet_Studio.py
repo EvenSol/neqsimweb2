@@ -6872,13 +6872,16 @@ if run_case:
             model_bytes = builder.save_neqsim_bytes_bounded(
                 timeout_ms=remaining_execution_budget_ms(),
             )
-        execution_seconds = perf_counter() - execution_started
-        run_record = _solver_run_record(
-            result,
-            model,
-            current_case_signature,
-            execution_seconds,
-        )
+            run_record = model.run_bounded_operation(
+                lambda: _solver_run_record(
+                    result,
+                    model,
+                    current_case_signature,
+                    perf_counter() - execution_started,
+                ),
+                timeout_ms=remaining_execution_budget_ms(),
+                operation="solver provenance collection",
+            )
 
         state = {
             "spec": case_spec,

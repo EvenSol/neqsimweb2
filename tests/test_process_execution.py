@@ -296,6 +296,26 @@ class ProcessRunTimeoutTest(unittest.TestCase):
         finally:
             release.set()
 
+    def test_model_post_processing_wait_is_bounded(self):
+        release = threading.Event()
+        model = object.__new__(NeqSimProcessModel)
+
+        def blocking_provenance():
+            release.wait(timeout=1)
+
+        try:
+            with self.assertRaisesRegex(
+                ProcessRunTimeoutError,
+                "solver provenance collection exceeded 1 ms",
+            ):
+                model.run_bounded_operation(
+                    blocking_provenance,
+                    timeout_ms=1,
+                    operation="solver provenance collection",
+                )
+        finally:
+            release.set()
+
 
 class ProcessRunFailureTest(unittest.TestCase):
     """Prevent failed native workers from publishing partial solved state."""
@@ -401,6 +421,8 @@ class StudioExecutionContractTest(unittest.TestCase):
         self.assertIn("builder.build_from_spec_bounded(", source)
         self.assertIn("model.run_bounded(", source)
         self.assertIn("builder.save_neqsim_bytes_bounded(", source)
+        self.assertIn("model.run_bounded_operation(", source)
+        self.assertIn('operation="solver provenance collection"', source)
         self.assertIn("execution_deadline", source)
         self.assertIn("except TimeoutError as exc:", source)
         self.assertTrue(issubclass(ProcessRunTimeoutError, TimeoutError))
