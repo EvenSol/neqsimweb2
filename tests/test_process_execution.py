@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from process_chat.process_model import (
@@ -161,6 +162,27 @@ class ProcessRunFailureTest(unittest.TestCase):
                 model.rerun(timeout_ms=30)
 
         reindex.assert_not_called()
+
+
+class StudioExecutionContractTest(unittest.TestCase):
+    """Keep the page wired to the bounded adapter execution contract."""
+
+    def test_studio_uses_explicit_budget_and_separate_timeout_state(self):
+        studio_path = (
+            Path(__file__).resolve().parents[1]
+            / "pages"
+            / "35_Process_Flowsheet_Studio.py"
+        )
+        source = studio_path.read_text(encoding="utf-8")
+
+        self.assertIn("STUDIO_SOLVE_TIMEOUT_MS = 180_000", source)
+        self.assertIn(
+            "result = model.run(timeout_ms=STUDIO_SOLVE_TIMEOUT_MS)",
+            source,
+        )
+        self.assertIn("except ProcessRunTimeoutError as exc:", source)
+        self.assertIn('solver_status = "Timed out"', source)
+        self.assertIn("no results were published", source)
 
 
 if __name__ == "__main__":

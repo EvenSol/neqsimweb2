@@ -57,6 +57,15 @@ globals().update(
     )
 )
 
+_PROCESS_MODEL_SYMBOL_NAMES = ("ProcessRunTimeoutError",)
+globals().update(
+    import_local_symbols(
+        "process_chat.process_model",
+        _PROCESS_MODEL_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+    )
+)
+
 _SUBFLOWSHEET_SYMBOL_NAMES = (
     "subflowsheet_boundary_rows",
     "subflowsheet_membership",
@@ -139,6 +148,7 @@ CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
 GRAPH_DRAFT_STATE_KEY = "flowsheet_studio_graph_draft"
 GRAPH_HISTORY_STATE_KEY = "flowsheet_studio_graph_history"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
+STUDIO_SOLVE_TIMEOUT_MS = 180_000
 LEGACY_CASE_SCHEMA_VERSION = 1
 SHARED_FLUID_CASE_SCHEMA_VERSION = 2
 GRAPH_CASE_SCHEMA_VERSION = 3
@@ -6823,7 +6833,7 @@ if run_case:
             model = builder.build_from_spec(
                 graph_process_spec,
             )
-            result = model.run()
+            result = model.run(timeout_ms=STUDIO_SOLVE_TIMEOUT_MS)
             model_bytes = builder.save_neqsim_bytes()
         execution_seconds = perf_counter() - execution_started
         run_record = _solver_run_record(
@@ -6866,6 +6876,18 @@ if run_case:
 
         solver_status_placeholder.write("**Solver:** Solved")
         st.success("The NeqSim flowsheet solved and is ready for review.")
+    except ProcessRunTimeoutError as exc:
+        if current_case_signature is not None:
+            st.session_state[FAILURE_SIGNATURE_STATE_KEY] = current_case_signature
+        results_are_current = False
+        solver_status = "Timed out"
+        solver_status_placeholder.write("**Solver:** Timed out")
+        st.error(
+            "Flowsheet calculation exceeded the 180 s execution budget. "
+            "The partial native model was discarded; no results were published."
+        )
+        with st.expander("Technical error details", expanded=False):
+            st.code(str(exc))
     except Exception as exc:
         if current_case_signature is not None:
             st.session_state[FAILURE_SIGNATURE_STATE_KEY] = current_case_signature
@@ -6883,6 +6905,8 @@ has_stored_result = bool(
 if has_stored_result and not results_are_current:
     if solver_status == "Failed":
         stale_reason = "The current calculation failed."
+    elif solver_status == "Timed out":
+        stale_reason = "The current calculation timed out."
     elif solver_status == "Invalid inputs":
         stale_reason = "The current inputs are invalid."
     else:
