@@ -6866,7 +6866,7 @@ if run_case:
                 graph_process_spec,
                 timeout_ms=remaining_execution_budget_ms(),
             )
-            result = model.run(
+            result = model.run_bounded(
                 timeout_ms=remaining_execution_budget_ms(),
             )
             model_bytes = builder.save_neqsim_bytes()
@@ -6912,7 +6912,7 @@ if run_case:
 
         solver_status_placeholder.write("**Solver:** Solved")
         st.success("The NeqSim flowsheet solved and is ready for review.")
-    except ProcessRunTimeoutError as exc:
+    except TimeoutError as exc:
         if current_case_signature is not None:
             st.session_state[FAILURE_SIGNATURE_STATE_KEY] = (
                 current_case_signature
@@ -6922,7 +6922,8 @@ if run_case:
         solver_status = "Timed out"
         solver_status_placeholder.write("**Solver:** Timed out")
         st.error(
-            "Flowsheet calculation exceeded the 180 s execution budget. "
+            "Flowsheet calculation exceeded the "
+            f"{STUDIO_SOLVE_TIMEOUT_MS / 1000:.0f} s execution budget. "
             "The partial native model was discarded; no results were published."
         )
         with st.expander("Technical error details", expanded=False):

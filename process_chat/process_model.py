@@ -4806,6 +4806,14 @@ class NeqSimProcessModel:
 
         return self._extract_results()
 
+    def run_bounded(self, timeout_ms: int = 120000) -> ModelRunResult:
+        """Run execution and result extraction within one caller deadline."""
+        return self._run_bounded_call(
+            lambda: self.run(timeout_ms=timeout_ms),
+            timeout_ms,
+            operation="process solve and result extraction",
+        )
+
     def rerun(self, timeout_ms: int = 120000):
         """Re-run the process without extracting results.
 

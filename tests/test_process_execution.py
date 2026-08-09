@@ -258,6 +258,25 @@ class ProcessRunTimeoutTest(unittest.TestCase):
         finally:
             release.set()
 
+    def test_complete_model_run_and_result_extraction_wait_is_bounded(self):
+        release = threading.Event()
+        model = object.__new__(NeqSimProcessModel)
+
+        def blocking_run(*args, **kwargs):
+            release.wait(timeout=1)
+
+        try:
+            with (
+                patch.object(model, "run", side_effect=blocking_run),
+                self.assertRaisesRegex(
+                    ProcessRunTimeoutError,
+                    "process solve and result extraction exceeded 1 ms",
+                ),
+            ):
+                model.run_bounded(timeout_ms=1)
+        finally:
+            release.set()
+
 
 class ProcessRunFailureTest(unittest.TestCase):
     """Prevent failed native workers from publishing partial solved state."""
@@ -361,8 +380,15 @@ class StudioExecutionContractTest(unittest.TestCase):
             source,
         )
         self.assertIn("builder.build_from_spec_bounded(", source)
+        self.assertIn("model.run_bounded(", source)
         self.assertIn("execution_deadline", source)
-        self.assertIn("except ProcessRunTimeoutError as exc:", source)
+        self.assertIn("except TimeoutError as exc:", source)
+        self.assertTrue(issubclass(ProcessRunTimeoutError, TimeoutError))
+        self.assertIn(
+            'f"{STUDIO_SOLVE_TIMEOUT_MS / 1000:.0f} s execution budget. "',
+            source,
+        )
+        self.assertNotIn("exceeded the 180 s execution budget", source)
         self.assertIn('solver_status = "Timed out"', source)
         self.assertIn(
             'st.session_state[FAILURE_KIND_STATE_KEY] = "timeout"',
