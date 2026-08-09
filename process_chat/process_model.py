@@ -3408,13 +3408,6 @@ class NeqSimProcessModel:
                     )
                     if stream_calculation_identifier is None:
                         return {}
-                    if (
-                        boundary == "outlet"
-                        and str(stream_calculation_identifier)
-                        != str(calculation_identifier)
-                        and not snapshot_is_trusted
-                    ):
-                        return {}
                     if boundary == "inlet":
                         inlet_calculation_identifiers.append(
                             str(stream_calculation_identifier)
@@ -3455,17 +3448,22 @@ class NeqSimProcessModel:
                 }
             indexed_sides.append(side_state)
 
+        current_provenance = (
+            str(calculation_identifier),
+            tuple(inlet_calculation_identifiers),
+            tuple(outlet_calculation_identifiers),
+        )
+        identifiers_match_exchanger = (
+            all(inlet_identifiers_match_exchanger)
+            and tuple(outlet_calculation_identifiers)
+            == (str(calculation_identifier), str(calculation_identifier))
+        )
         if (
             not snapshot_is_trusted
-            and not all(inlet_identifiers_match_exchanger)
+            and not identifiers_match_exchanger
+            and direct_run_provenance != current_provenance
         ):
-            current_provenance = (
-                str(calculation_identifier),
-                tuple(inlet_calculation_identifiers),
-                tuple(outlet_calculation_identifiers),
-            )
-            if direct_run_provenance != current_provenance:
-                return {}
+            return {}
 
         indexed_sides.sort(
             key=lambda side: side["inlet"]["temperature_C"],
@@ -4233,11 +4231,6 @@ class NeqSimProcessModel:
                             "_direct_unit_run_provenance",
                             {},
                         ).get(name),
-                        getattr(
-                            self,
-                            "_heat_exchanger_state_snapshots",
-                            {},
-                        ).get(name),
                     )
                 )
                 props.update(
@@ -4522,12 +4515,6 @@ class NeqSimProcessModel:
                 continue
             if any(identifier is None for identifier in outlet_identifiers):
                 continue
-            snapshot = self._heat_exchanger_boundary_state_signature(unit)
-            if snapshot is None:
-                continue
-            if trust_completed_process_run:
-                self._heat_exchanger_state_snapshots[name] = snapshot
-                continue
             calculation_identifier_str = str(calculation_identifier)
             inlet_identifier_strings = tuple(
                 str(identifier) for identifier in inlet_identifiers
@@ -4535,23 +4522,35 @@ class NeqSimProcessModel:
             outlet_identifier_strings = tuple(
                 str(identifier) for identifier in outlet_identifiers
             )
-            if outlet_identifier_strings != (
+            outlet_identifiers_match = outlet_identifier_strings == (
                 calculation_identifier_str,
                 calculation_identifier_str,
-            ):
-                continue
+            )
             inlet_matches = tuple(
                 identifier == calculation_identifier_str
                 for identifier in inlet_identifier_strings
             )
-            if not all(inlet_matches):
-                if not allow_direct_runs or any(inlet_matches):
+            identifiers_match_exchanger = (
+                outlet_identifiers_match and all(inlet_matches)
+            )
+            is_direct_run_pattern = (
+                outlet_identifiers_match and not any(inlet_matches)
+            )
+            if not identifiers_match_exchanger:
+                if not (
+                    trust_completed_process_run
+                    or (allow_direct_runs and is_direct_run_pattern)
+                ):
                     continue
                 self._direct_unit_run_provenance[name] = (
                     calculation_identifier_str,
                     inlet_identifier_strings,
                     outlet_identifier_strings,
                 )
+            snapshot = self._heat_exchanger_boundary_state_signature(unit)
+            if snapshot is None:
+                self._direct_unit_run_provenance.pop(name, None)
+                continue
             self._heat_exchanger_state_snapshots[name] = snapshot
 
     def get_stream(self, name: str):
@@ -6041,11 +6040,6 @@ class NeqSimProcessModel:
                             getattr(
                                 self,
                                 "_direct_unit_run_provenance",
-                                {},
-                            ).get(name),
-                            getattr(
-                                self,
-                                "_heat_exchanger_state_snapshots",
                                 {},
                             ).get(name),
                         ).items()
