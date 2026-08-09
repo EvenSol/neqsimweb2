@@ -83,8 +83,13 @@ def import_local_symbols(
             previous_symbols = {
                 name: module.__dict__.get(name, _MISSING) for name in names
             }
-            for name in names:
-                module.__dict__.pop(name, None)
+            # When a missing export triggered the refresh, clear requested
+            # names so importlib.reload() cannot retain a removed stale export.
+            # A forced refresh of present symbols must keep them visible to
+            # concurrent callers throughout the in-place module reload.
+            if missing:
+                for name in names:
+                    module.__dict__.pop(name, None)
             try:
                 module = importlib.reload(module)
             except BaseException:

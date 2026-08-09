@@ -79,6 +79,28 @@ class LocalSymbolImportTest(unittest.TestCase):
         self.assertTrue(callable(symbols["connect_graph_ports"]))
         reload_module.assert_called_once_with(flowsheet_editor)
 
+    def test_force_reload_keeps_present_symbol_visible_during_refresh(self):
+        actual_reload = importlib.reload
+        symbol_was_visible = []
+
+        def observing_reload(module):
+            symbol_was_visible.append(hasattr(module, "connect_graph_ports"))
+            return actual_reload(module)
+
+        with mock.patch(
+            "process_chat.runtime_imports.importlib.reload",
+            side_effect=observing_reload,
+        ):
+            symbols = import_local_symbols(
+                "process_chat.flowsheet_editor",
+                ("connect_graph_ports",),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        self.assertEqual(symbol_was_visible, [True])
+        self.assertTrue(callable(symbols["connect_graph_ports"]))
+
     def test_serializes_concurrent_refreshes_for_one_module(self):
         del flowsheet_editor.connect_graph_ports
         reload_started = threading.Event()
