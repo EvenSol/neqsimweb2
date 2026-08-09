@@ -2294,12 +2294,12 @@ def _solver_status(
     )
     if current_signature is None:
         return "Invalid inputs", False
-    if results_are_current:
-        return "Solved", True
     if failure_signature == current_signature:
         if failure_kind == "timeout":
             return "Timed out", False
         return "Failed", False
+    if results_are_current:
+        return "Solved", True
     if has_stored_result:
         return "Needs rerun", False
     return "Not run", False
@@ -6869,7 +6869,9 @@ if run_case:
             result = model.run_bounded(
                 timeout_ms=remaining_execution_budget_ms(),
             )
-            model_bytes = builder.save_neqsim_bytes()
+            model_bytes = builder.save_neqsim_bytes_bounded(
+                timeout_ms=remaining_execution_budget_ms(),
+            )
         execution_seconds = perf_counter() - execution_started
         run_record = _solver_run_record(
             result,

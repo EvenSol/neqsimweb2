@@ -2736,6 +2736,16 @@ class ProcessBuilder:
             return None
         return self._model.save_bytes()
 
+    def save_neqsim_bytes_bounded(
+        self,
+        *,
+        timeout_ms: int = 120000,
+    ) -> Optional[bytes]:
+        """Serialize the current model within a bounded caller wait."""
+        if self._model is None:
+            return None
+        return self._model.save_bytes_bounded(timeout_ms=timeout_ms)
+
     # -- Build summary (for LLM context) ------------------------------------
 
     def get_build_summary(self) -> str:

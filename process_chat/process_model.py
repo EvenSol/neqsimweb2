@@ -1204,6 +1204,14 @@ class NeqSimProcessModel:
         self.refresh_source_bytes()
         return self._source_bytes
 
+    def save_bytes_bounded(self, timeout_ms: int = 120000) -> Optional[bytes]:
+        """Serialize the complete model within one caller wait budget."""
+        return self._run_bounded_call(
+            self.save_bytes,
+            timeout_ms,
+            operation="process serialization",
+        )
+
     def clone(self) -> "NeqSimProcessModel":
         """
         Create an independent copy by re-deserializing from the original bytes.

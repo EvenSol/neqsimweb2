@@ -277,6 +277,25 @@ class ProcessRunTimeoutTest(unittest.TestCase):
         finally:
             release.set()
 
+    def test_complete_model_serialization_wait_is_bounded(self):
+        release = threading.Event()
+        model = object.__new__(NeqSimProcessModel)
+
+        def blocking_save():
+            release.wait(timeout=1)
+
+        try:
+            with (
+                patch.object(model, "save_bytes", side_effect=blocking_save),
+                self.assertRaisesRegex(
+                    ProcessRunTimeoutError,
+                    "process serialization exceeded 1 ms",
+                ),
+            ):
+                model.save_bytes_bounded(timeout_ms=1)
+        finally:
+            release.set()
+
 
 class ProcessRunFailureTest(unittest.TestCase):
     """Prevent failed native workers from publishing partial solved state."""
@@ -381,6 +400,7 @@ class StudioExecutionContractTest(unittest.TestCase):
         )
         self.assertIn("builder.build_from_spec_bounded(", source)
         self.assertIn("model.run_bounded(", source)
+        self.assertIn("builder.save_neqsim_bytes_bounded(", source)
         self.assertIn("execution_deadline", source)
         self.assertIn("except TimeoutError as exc:", source)
         self.assertTrue(issubclass(ProcessRunTimeoutError, TimeoutError))
@@ -428,6 +448,17 @@ class StudioExecutionContractTest(unittest.TestCase):
             current_signature="case-a",
             stored_state=None,
             has_result=False,
+            failure_signature="case-a",
+            failure_kind="timeout",
+        )
+
+        self.assertEqual(status, "Timed out")
+        self.assertFalse(is_current)
+
+        status, is_current = namespace["_solver_status"](
+            current_signature="case-a",
+            stored_state={"signature": "case-a"},
+            has_result=True,
             failure_signature="case-a",
             failure_kind="timeout",
         )
