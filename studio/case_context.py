@@ -290,6 +290,63 @@ def save_case_as(
     return deepcopy(cloned)
 
 
+def mark_active_runtime_changed(
+    session_state: MutableMapping[str, Any],
+    *,
+    model_name: str | None,
+    reason: str,
+    source: str = "Process Chat",
+) -> dict[str, Any] | None:
+    """Mark that a downstream workflow changed the active runtime model.
+
+    The portable flowsheet specification is retained as the last reproducible
+    input.  It is deliberately marked dirty until the downstream change is
+    reconciled with that specification.
+    """
+
+    context = get_active_case(session_state)
+    if context is None:
+        return None
+    clean_reason = _clean_text(reason)
+    warnings = list(context.get("warnings", []))
+    if clean_reason and clean_reason not in warnings:
+        warnings.append(clean_reason)
+    return set_active_case(
+        session_state,
+        context["case_spec"],
+        status=STATUS_DIRTY,
+        warnings=warnings,
+        model_available=True,
+        model_name=model_name,
+        source=source,
+    )
+
+
+def detach_active_runtime_model(
+    session_state: MutableMapping[str, Any],
+    *,
+    reason: str,
+    source: str = "Process Chat",
+) -> dict[str, Any] | None:
+    """Record that the active case no longer has a live runtime model."""
+
+    context = get_active_case(session_state)
+    if context is None:
+        return None
+    clean_reason = _clean_text(reason)
+    warnings = list(context.get("warnings", []))
+    if clean_reason and clean_reason not in warnings:
+        warnings.append(clean_reason)
+    return set_active_case(
+        session_state,
+        context["case_spec"],
+        status=STATUS_DIRTY,
+        warnings=warnings,
+        model_available=False,
+        source=source,
+    )
+
+
 def queue_new_case(session_state: MutableMapping[str, Any]) -> None:
     """Request the existing flowsheet page to initialize its validated template."""
 

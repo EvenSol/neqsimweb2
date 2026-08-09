@@ -88,10 +88,14 @@ Stack evidence:
 
 ### S3 — Integrate mature Process Flowsheet Studio
 
-Status: planned integration, existing simulation functionality already substantial.
+Status: **initial handoff in stack; existing simulation functionality already substantial**.
 
 Repackage the existing editor/builder/diagnostics/workbook functionality behind the
 Studio shell while preserving the existing direct Classic-compatible page.
+
+The active Studio case now hands its established solved `process_model` directly
+to Process Chat. The existing flowsheet page and Process Chat page remain usable
+through their original Classic routes.
 
 ### S4 — Professional results, design and engineering studies
 
@@ -111,10 +115,16 @@ The web layer owns interactive engineering workflow, not standards semantics.
 
 ### S6 — Process Chat engineering copilot
 
-Status: planned.
+Status: **initial case-aware integration in stack**.
 
 Make Process Chat case-aware and tool-oriented while keeping deterministic NeqSim
 calculations as the source of truth.
+
+The first integration exposes Process Chat as an available Studio workflow,
+identifies the active case and its thermodynamic/lifecycle state, and reuses the
+existing solved-model session handoff. If Process Chat replaces or resets the live
+model, the shared context is marked dirty and the portable flowsheet specification
+remains visible as the last reproducible input rather than being silently promoted.
 
 ### S7 — Dynamics and controls
 
@@ -152,3 +162,7 @@ targets that exact Studio branch and is not independently mergeable to `main`.
 S2 advances the complete case-workspace handoff while reusing the existing v4
 schema validation, migration, graph draft, native solve and Process Chat state.
 Its work is recorded as **in stack**, not merged completion.
+
+The next stacked child adds the case-aware Process Chat handoff on top of S2. It
+does not expand chat permissions or duplicate simulation tools; it makes the
+already-validated model transfer and lifecycle boundary explicit.
