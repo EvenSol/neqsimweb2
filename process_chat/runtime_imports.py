@@ -59,6 +59,7 @@ def import_local_symbols(
     symbol_names: Iterable[str],
     *,
     project_root: str | Path,
+    force_reload: bool = False,
 ) -> dict[str, Any]:
     """Import symbols, refreshing a stale local module cache once if needed.
 
@@ -66,7 +67,8 @@ def import_local_symbols(
     imported project module remains cached from the preceding deployment.
     When newly deployed symbols are missing, reload that local module once
     from the current checkout and then fail explicitly if it is still
-    incompatible.
+    incompatible. ``force_reload`` also refreshes a dependent module whose
+    existing exports may still reference classes from a reloaded dependency.
     """
     if not isinstance(module_name, str) or not module_name.strip():
         raise ValueError("module_name must be a non-empty string")
@@ -75,7 +77,7 @@ def import_local_symbols(
     module = importlib.import_module(module_name)
     with _module_lock(module_name):
         missing = [name for name in names if not hasattr(module, name)]
-        if missing:
+        if missing or force_reload:
             _assert_local_module(module, Path(project_root))
             importlib.invalidate_caches()
             previous_symbols = {

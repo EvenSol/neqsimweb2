@@ -63,6 +63,21 @@ class LocalSymbolImportTest(unittest.TestCase):
         self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
         reload_module.assert_called_once_with(flowsheet_editor)
 
+    def test_force_reload_refreshes_dependent_module_with_existing_symbols(self):
+        with mock.patch(
+            "process_chat.runtime_imports.importlib.reload",
+            wraps=importlib.reload,
+        ) as reload_module:
+            symbols = import_local_symbols(
+                "process_chat.flowsheet_editor",
+                ("connect_graph_ports",),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        self.assertTrue(callable(symbols["connect_graph_ports"]))
+        reload_module.assert_called_once_with(flowsheet_editor)
+
     def test_serializes_concurrent_refreshes_for_one_module(self):
         del flowsheet_editor.connect_graph_ports
         reload_started = threading.Event()
@@ -206,6 +221,21 @@ class LocalSymbolImportTest(unittest.TestCase):
         )
         self.assertNotIn(
             "from process_chat.flowsheet_editor import",
+            studio_source,
+        )
+
+    def test_studio_refreshes_builder_after_process_model(self):
+        studio_path = (
+            self.project_root / "pages" / "35_Process_Flowsheet_Studio.py"
+        )
+        studio_source = studio_path.read_text(encoding="utf-8")
+
+        model_import = studio_source.index('"process_chat.process_model"')
+        builder_import = studio_source.index('"process_chat.process_builder"')
+        self.assertLess(model_import, builder_import)
+        self.assertIn("force_reload=True", studio_source[builder_import:])
+        self.assertNotIn(
+            "from process_chat.process_builder import ProcessBuilder",
             studio_source,
         )
 

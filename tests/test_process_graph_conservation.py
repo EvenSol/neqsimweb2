@@ -6757,11 +6757,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         execution_order = ["feed"]
         expected_model = object()
 
-        with patch.object(
-            builder,
-            "build_acyclic_graph",
-            return_value=expected_model,
-        ) as graph_builder:
+        with (
+            patch(
+                "process_chat.process_builder.monotonic",
+                return_value=10.0,
+            ),
+            patch.object(
+                builder,
+                "build_acyclic_graph",
+                return_value=expected_model,
+            ) as graph_builder,
+        ):
             model = builder.build_from_spec(
                 {
                     "name": "Generic graph",
@@ -6776,6 +6782,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             graph_spec,
             inlet_specs,
             execution_order,
+            timeout_ms=180000,
+            _deadline=190.0,
         )
 
     def test_build_from_spec_preserves_generic_wrapper_name(self):

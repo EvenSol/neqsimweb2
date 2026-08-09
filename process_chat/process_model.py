@@ -17,7 +17,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -828,6 +830,43 @@ class NeqSimProcessModel:
         )
 
     @staticmethod
+    def _run_bounded_call(
+        callback: Callable[[], Any],
+        timeout_ms: int,
+        *,
+        operation: str,
+    ) -> Any:
+        """Run a Python-orchestrated native call without unbounded waiting."""
+        if timeout_ms <= 0:
+            return callback()
+
+        outcome: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+        def _worker() -> None:
+            try:
+                outcome.put((True, callback()))
+            except BaseException as exc:
+                outcome.put((False, exc))
+
+        worker = threading.Thread(
+            target=_worker,
+            name=f"neqsim-{operation}",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout_ms / 1000.0)
+        if worker.is_alive():
+            raise ProcessRunTimeoutError(
+                f"Native NeqSim {operation} exceeded {int(timeout_ms)} ms; "
+                "discard this process model."
+            )
+
+        succeeded, value = outcome.get_nowait()
+        if not succeeded:
+            raise value
+        return value
+
+    @staticmethod
     def _run_until_converged(proc, max_runs: int = 5, timeout_ms: int = 180000):
         """
         Run the process repeatedly until convergence or *max_runs*.
@@ -938,7 +977,7 @@ class NeqSimProcessModel:
                     and timeout_ms <= 0
                     and hasattr(proc, "runSequential")
                 ):
-                    # Fallback: strict sequential execution
+                    # Unbounded-run fallback: strict sequential execution.
                     proc.runSequential()
                 elif timeout_ms > 0:
                     if not NeqSimProcessModel._run_native_thread(
@@ -967,6 +1006,24 @@ class NeqSimProcessModel:
 
     @staticmethod
     def _run_acyclic_mixer_energy_closure(
+        proc,
+        relative_tolerance: float = 1.0e-7,
+        timeout_ms: int = 180000,
+    ) -> bool:
+        """Run the ordered mixer closure within the remaining run budget."""
+        return bool(
+            NeqSimProcessModel._run_bounded_call(
+                lambda: NeqSimProcessModel._run_acyclic_mixer_energy_closure_unbounded(
+                    proc,
+                    relative_tolerance=relative_tolerance,
+                ),
+                timeout_ms,
+                operation="mixer energy closure",
+            )
+        )
+
+    @staticmethod
+    def _run_acyclic_mixer_energy_closure_unbounded(
         proc,
         relative_tolerance: float = 1.0e-7,
     ) -> bool:
@@ -4691,24 +4748,44 @@ class NeqSimProcessModel:
         self._direct_unit_run_provenance.clear()
         self._heat_exchanger_state_snapshots.clear()
         direct_closure_ran = False
+        deadline = (
+            monotonic() + timeout_ms / 1000.0
+            if timeout_ms > 0
+            else None
+        )
+
+        def _remaining_timeout_ms() -> int:
+            if deadline is None:
+                return 0
+            remaining_ms = int((deadline - monotonic()) * 1000.0)
+            if remaining_ms <= 0:
+                raise ProcessRunTimeoutError(
+                    f"Native NeqSim model run exceeded {timeout_ms} ms; "
+                    "discard this process model."
+                )
+            return remaining_ms
+
         if self._is_process_model:
             # ProcessModel has its own run() that iterates all children
             process_run_succeeded = self._run_process_model(
                 self._proc,
-                timeout_ms=timeout_ms,
+                timeout_ms=_remaining_timeout_ms(),
             )
         else:
             process_run_succeeded = self._run_until_converged(
                 self._proc,
                 max_runs=5,
-                timeout_ms=timeout_ms,
+                timeout_ms=_remaining_timeout_ms(),
             )
             if (
                 process_run_succeeded
                 and self._enforce_acyclic_mixer_energy
             ):
                 direct_closure_ran = (
-                    self._run_acyclic_mixer_energy_closure(self._proc)
+                    self._run_acyclic_mixer_energy_closure(
+                        self._proc,
+                        timeout_ms=_remaining_timeout_ms(),
+                    )
                 )
 
         if not process_run_succeeded:
@@ -4719,11 +4796,10 @@ class NeqSimProcessModel:
 
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
-        if process_run_succeeded:
-            self._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=direct_closure_ran,
-                trust_completed_process_run=True,
-            )
+        self._capture_heat_exchanger_state_snapshots(
+            allow_direct_runs=direct_closure_ran,
+            trust_completed_process_run=True,
+        )
 
         return self._extract_results()
 
@@ -4738,23 +4814,43 @@ class NeqSimProcessModel:
         self._direct_unit_run_provenance.clear()
         self._heat_exchanger_state_snapshots.clear()
         direct_closure_ran = False
+        deadline = (
+            monotonic() + timeout_ms / 1000.0
+            if timeout_ms > 0
+            else None
+        )
+
+        def _remaining_timeout_ms() -> int:
+            if deadline is None:
+                return 0
+            remaining_ms = int((deadline - monotonic()) * 1000.0)
+            if remaining_ms <= 0:
+                raise ProcessRunTimeoutError(
+                    f"Native NeqSim model rerun exceeded {timeout_ms} ms; "
+                    "discard this process model."
+                )
+            return remaining_ms
+
         if self._is_process_model:
             process_run_succeeded = self._run_process_model(
                 self._proc,
-                timeout_ms=timeout_ms,
+                timeout_ms=_remaining_timeout_ms(),
             )
         else:
             process_run_succeeded = self._run_until_converged(
                 self._proc,
                 max_runs=5,
-                timeout_ms=timeout_ms,
+                timeout_ms=_remaining_timeout_ms(),
             )
             if (
                 process_run_succeeded
                 and self._enforce_acyclic_mixer_energy
             ):
                 direct_closure_ran = (
-                    self._run_acyclic_mixer_energy_closure(self._proc)
+                    self._run_acyclic_mixer_energy_closure(
+                        self._proc,
+                        timeout_ms=_remaining_timeout_ms(),
+                    )
                 )
         if not process_run_succeeded:
             raise ProcessExecutionError(
@@ -4762,11 +4858,10 @@ class NeqSimProcessModel:
                 "discard this process model."
             )
         self._index_model_objects()
-        if process_run_succeeded:
-            self._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=direct_closure_ran,
-                trust_completed_process_run=True,
-            )
+        self._capture_heat_exchanger_state_snapshots(
+            allow_direct_runs=direct_closure_ran,
+            trust_completed_process_run=True,
+        )
 
     @staticmethod
     def _run_process_model(proc_model, timeout_ms: int = 180000):

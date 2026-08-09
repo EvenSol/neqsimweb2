@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -157,6 +158,25 @@ class ProcessRunTimeoutTest(unittest.TestCase):
             [("first", 800), ("second", 599)],
         )
 
+    def test_python_orchestrated_native_closure_wait_is_bounded(self):
+        release = threading.Event()
+
+        def blocking_call():
+            release.wait(timeout=1)
+
+        try:
+            with self.assertRaisesRegex(
+                ProcessRunTimeoutError,
+                "mixer closure exceeded 1 ms",
+            ):
+                NeqSimProcessModel._run_bounded_call(
+                    blocking_call,
+                    1,
+                    operation="mixer closure",
+                )
+        finally:
+            release.set()
+
 
 class ProcessRunFailureTest(unittest.TestCase):
     """Prevent failed native workers from publishing partial solved state."""
@@ -210,6 +230,33 @@ class ProcessRunFailureTest(unittest.TestCase):
 
         reindex.assert_not_called()
 
+    def test_model_run_shares_budget_with_mixer_closure(self):
+        model = self._model()
+        model._enforce_acyclic_mixer_energy = True
+        with (
+            patch(
+                "process_chat.process_model.monotonic",
+                side_effect=(10.0, 10.1, 10.4),
+            ),
+            patch.object(
+                NeqSimProcessModel,
+                "_run_until_converged",
+                return_value=True,
+            ) as run_process,
+            patch.object(
+                NeqSimProcessModel,
+                "_run_acyclic_mixer_energy_closure",
+                return_value=True,
+            ) as close_mixer,
+            patch.object(model, "_index_model_objects"),
+            patch.object(model, "_capture_heat_exchanger_state_snapshots"),
+            patch.object(model, "_extract_results", return_value=object()),
+        ):
+            model.run(timeout_ms=1_000)
+
+        self.assertEqual(run_process.call_args.kwargs["timeout_ms"], 900)
+        self.assertEqual(close_mixer.call_args.kwargs["timeout_ms"], 599)
+
 
 class StudioExecutionContractTest(unittest.TestCase):
     """Keep the page wired to the bounded adapter execution contract."""
@@ -224,11 +271,16 @@ class StudioExecutionContractTest(unittest.TestCase):
 
         self.assertIn("STUDIO_SOLVE_TIMEOUT_MS = 180_000", source)
         self.assertIn(
-            "result = model.run(timeout_ms=STUDIO_SOLVE_TIMEOUT_MS)",
+            "timeout_ms=remaining_execution_budget_ms()",
             source,
         )
+        self.assertIn("execution_deadline", source)
         self.assertIn("except ProcessRunTimeoutError as exc:", source)
         self.assertIn('solver_status = "Timed out"', source)
+        self.assertIn(
+            'st.session_state[FAILURE_KIND_STATE_KEY] = "timeout"',
+            source,
+        )
         self.assertIn("no results were published", source)
 
 

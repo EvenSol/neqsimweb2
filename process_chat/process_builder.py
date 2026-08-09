@@ -14,13 +14,14 @@ import math
 import os
 import re
 import tempfile
+from time import monotonic
 from typing import Any, Dict, List, Optional
 
 from .graph_schema import (
     canonical_material_output_port,
     material_connection_name,
 )
-from .process_model import NeqSimProcessModel
+from .process_model import NeqSimProcessModel, ProcessRunTimeoutError
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +111,31 @@ def _is_truthy(val) -> bool:
     if isinstance(val, (int, float)):
         return bool(val)
     return str(val).lower().strip() in ("true", "yes", "1")
+
+
+def _execution_deadline(timeout_ms: int) -> Optional[float]:
+    """Return one absolute deadline for a complete builder operation."""
+    if timeout_ms < 0:
+        raise ValueError("timeout_ms cannot be negative")
+    if timeout_ms == 0:
+        return None
+    return monotonic() + timeout_ms / 1000.0
+
+
+def _remaining_execution_timeout_ms(
+    deadline: Optional[float],
+    total_timeout_ms: int,
+) -> int:
+    """Return remaining builder budget or fail before starting another pass."""
+    if deadline is None:
+        return 0
+    remaining_ms = int((deadline - monotonic()) * 1000.0)
+    if remaining_ms <= 0:
+        raise ProcessRunTimeoutError(
+            f"Native NeqSim process build exceeded {total_timeout_ms} ms; "
+            "discard this process model."
+        )
+    return remaining_ms
 
 
 def _build_mixer(base, name, stream):
@@ -833,6 +859,9 @@ class ProcessBuilder:
         graph_spec: dict,
         inlet_specs: List[dict],
         execution_order: List[str],
+        *,
+        timeout_ms: int = 180000,
+        _deadline: Optional[float] = None,
     ) -> NeqSimProcessModel:
         """Build and solve a validated acyclic material-flow graph.
 
@@ -843,6 +872,12 @@ class ProcessBuilder:
         links and recycles remain explicit later solver stages and are rejected.
         """
         from neqsim import jneqsim
+
+        deadline = (
+            _deadline
+            if _deadline is not None
+            else _execution_deadline(timeout_ms)
+        )
 
         if not isinstance(graph_spec, dict):
             raise ValueError("Graph specification must be an object.")
@@ -1342,7 +1377,11 @@ class ProcessBuilder:
         )
         self._build_log.append("Running acyclic graph simulation...")
         process_run_succeeded = NeqSimProcessModel._run_until_converged(
-            process_system
+            process_system,
+            timeout_ms=_remaining_execution_timeout_ms(
+                deadline,
+                timeout_ms,
+            ),
         )
         if not process_run_succeeded:
             raise RuntimeError(
@@ -1350,7 +1389,11 @@ class ProcessBuilder:
             )
         direct_closure_ran = (
             NeqSimProcessModel._run_acyclic_mixer_energy_closure(
-                process_system
+                process_system,
+                timeout_ms=_remaining_execution_timeout_ms(
+                    deadline,
+                    timeout_ms,
+                ),
             )
         )
         mapped_units = self._apply_requested_compressor_charts(
@@ -1363,7 +1406,11 @@ class ProcessBuilder:
                 + ", ".join(mapped_units)
             )
             process_run_succeeded = NeqSimProcessModel._run_until_converged(
-                process_system
+                process_system,
+                timeout_ms=_remaining_execution_timeout_ms(
+                    deadline,
+                    timeout_ms,
+                ),
             )
             if not process_run_succeeded:
                 raise RuntimeError(
@@ -1372,7 +1419,11 @@ class ProcessBuilder:
                 )
             post_map_closure_ran = (
                 NeqSimProcessModel._run_acyclic_mixer_energy_closure(
-                    process_system
+                    process_system,
+                    timeout_ms=_remaining_execution_timeout_ms(
+                        deadline,
+                        timeout_ms,
+                    ),
                 )
             )
             direct_closure_ran = direct_closure_ran or post_map_closure_ran
@@ -1391,7 +1442,11 @@ class ProcessBuilder:
                 + ", ".join(designed_units)
             )
             process_run_succeeded = NeqSimProcessModel._run_until_converged(
-                process_system
+                process_system,
+                timeout_ms=_remaining_execution_timeout_ms(
+                    deadline,
+                    timeout_ms,
+                ),
             )
             if not process_run_succeeded:
                 raise RuntimeError(
@@ -1400,7 +1455,11 @@ class ProcessBuilder:
                 )
             post_design_closure_ran = (
                 NeqSimProcessModel._run_acyclic_mixer_energy_closure(
-                    process_system
+                    process_system,
+                    timeout_ms=_remaining_execution_timeout_ms(
+                        deadline,
+                        timeout_ms,
+                    ),
                 )
             )
             direct_closure_ran = (
@@ -2039,7 +2098,12 @@ class ProcessBuilder:
 
     # -- Build from spec ----------------------------------------------------
 
-    def build_from_spec(self, spec: dict) -> NeqSimProcessModel:
+    def build_from_spec(
+        self,
+        spec: dict,
+        *,
+        timeout_ms: int = 180000,
+    ) -> NeqSimProcessModel:
         """Build a complete process from a specification dict.
 
         Generic graph specs contain ``graph``, ``inlet_specs``, and
@@ -2053,6 +2117,7 @@ class ProcessBuilder:
         """
         if not isinstance(spec, dict):
             raise ValueError("Process specification must be an object.")
+        deadline = _execution_deadline(timeout_ms)
         if "graph" in spec:
             graph_spec = spec.get("graph")
             raw_wrapper_name = spec.get("name")
@@ -2067,6 +2132,8 @@ class ProcessBuilder:
                 graph_spec,
                 spec.get("inlet_specs"),
                 spec.get("execution_order"),
+                timeout_ms=timeout_ms,
+                _deadline=deadline,
             )
 
         self._spec = spec
@@ -2153,7 +2220,11 @@ class ProcessBuilder:
         # 3. Run the process
         self._build_log.append("Running simulation...")
         process_run_succeeded = NeqSimProcessModel._run_until_converged(
-            proc
+            proc,
+            timeout_ms=_remaining_execution_timeout_ms(
+                deadline,
+                timeout_ms,
+            ),
         )
         if not process_run_succeeded:
             raise RuntimeError(
@@ -2169,7 +2240,11 @@ class ProcessBuilder:
                 + ", ".join(mapped_units)
             )
             process_run_succeeded = NeqSimProcessModel._run_until_converged(
-                proc
+                proc,
+                timeout_ms=_remaining_execution_timeout_ms(
+                    deadline,
+                    timeout_ms,
+                ),
             )
             if not process_run_succeeded:
                 raise RuntimeError(
@@ -2186,7 +2261,11 @@ class ProcessBuilder:
                 + ", ".join(designed_units)
             )
             process_run_succeeded = NeqSimProcessModel._run_until_converged(
-                proc
+                proc,
+                timeout_ms=_remaining_execution_timeout_ms(
+                    deadline,
+                    timeout_ms,
+                ),
             )
             if not process_run_succeeded:
                 raise RuntimeError(
