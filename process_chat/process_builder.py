@@ -115,9 +115,7 @@ def _is_truthy(val) -> bool:
 
 def _execution_deadline(timeout_ms: int) -> Optional[float]:
     """Return one absolute deadline for a complete builder operation."""
-    if timeout_ms < 0:
-        raise ValueError("timeout_ms cannot be negative")
-    if timeout_ms == 0:
+    if timeout_ms <= 0:
         return None
     return monotonic() + timeout_ms / 1000.0
 

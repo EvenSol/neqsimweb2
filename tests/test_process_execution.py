@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from process_chat.process_builder import ProcessBuilder
+from process_chat.process_builder import ProcessBuilder, _execution_deadline
 from process_chat.process_model import (
     NeqSimProcessModel,
     ProcessExecutionError,
@@ -18,6 +18,12 @@ from process_chat.process_model import (
 
 class ProcessRunTimeoutTest(unittest.TestCase):
     """Keep worker cancellation and the total convergence budget bounded."""
+
+    def test_non_positive_builder_timeout_retains_unbounded_contract(self):
+        self.assertIsNone(_execution_deadline(0))
+        self.assertIsNone(_execution_deadline(-1))
+        with patch("process_chat.process_builder.monotonic", return_value=10.0):
+            self.assertEqual(_execution_deadline(1_000), 11.0)
 
     def test_interrupt_wait_is_bounded_and_model_is_discarded(self):
         class _Thread:
