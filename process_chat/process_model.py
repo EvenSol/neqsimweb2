@@ -836,7 +836,7 @@ class NeqSimProcessModel:
         *,
         operation: str,
     ) -> Any:
-        """Run a Python-orchestrated native call without unbounded waiting."""
+        """Run a native call with bounded waiting when ``timeout_ms`` is positive."""
         if timeout_ms <= 0:
             return callback()
 
