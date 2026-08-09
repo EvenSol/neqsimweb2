@@ -2048,6 +2048,60 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
+    def test_repeated_warm_model_refresh_starts_native_jvm(self):
+        script = """
+from pathlib import Path
+
+import jpype
+
+from process_chat.runtime_imports import import_local_symbols
+
+
+project_root = Path.cwd()
+for _ in range(1_100):
+    import_local_symbols(
+        "process_chat.process_model",
+        ("ProcessRunTimeoutError",),
+        project_root=project_root,
+        force_reload=True,
+    )
+
+wrapper = jpype.startJVM
+assert getattr(wrapper, "_neqsimweb2_add_opens_wrapper", False)
+original = wrapper._neqsimweb2_original_start_jvm
+assert not getattr(original, "_neqsimweb2_add_opens_wrapper", False)
+
+import neqsim  # noqa: F401
+
+assert jpype.isJVMStarted()
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=self.project_root,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    filter(
+                        None,
+                        (
+                            str(self.project_root),
+                            os.environ.get("PYTHONPATH"),
+                        ),
+                    )
+                ),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_standalone_flush_continues_after_broken_pipe(self):
         flushed = []
 
