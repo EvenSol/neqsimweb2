@@ -18,6 +18,7 @@ from google import genai
 from google.genai import types
 from theme import apply_theme, theme_toggle
 
+
 def get_gemini_api_key():
     """Get Gemini API key from secrets or session state."""
     # First check Streamlit secrets (for deployed app)
@@ -28,6 +29,7 @@ def get_gemini_api_key():
         pass
     # Fall back to session state (for user-provided key)
     return st.session_state.get('gemini_api_key', '')
+
 
 def make_request(question_input: str):
     # Only attempt request if AI is enabled and API key is available
@@ -45,6 +47,7 @@ def make_request(question_input: str):
         return response.text
     except Exception:
         return ""
+
 
 st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.png')
 apply_theme()
@@ -82,6 +85,32 @@ with col_title:
     st.markdown("# NeqSim")
     st.caption("Process Simulation Tool")
 
+st.write("## Choose your workspace")
+
+workspace_studio, workspace_classic = st.columns(2)
+with workspace_studio:
+    st.markdown("### 🧭 NeqSim Studio")
+    st.caption(
+        "New professional engineering workspace. Studio is in beta and reuses "
+        "the validated NeqSim process-simulation foundation."
+    )
+    if st.button(
+        "Open NeqSim Studio",
+        type="primary",
+        use_container_width=True,
+        key="open_neqsim_studio",
+    ):
+        st.switch_page("pages/00_NeqSim_Studio.py")
+
+with workspace_classic:
+    st.markdown("### 🧰 NeqSim Classic")
+    st.caption(
+        "Continue with the existing NeqSim Web pages, calculators and workflows. "
+        "Nothing below has moved."
+    )
+    st.info("You are already in Classic. Use the existing sidebar as before.")
+
+st.divider()
 st.write("## Welcome! 👋")
 
 """
@@ -121,13 +150,13 @@ This web application is open source and built with Python. To develop and extend
 - A code editor (e.g., VS Code)
 
 **Quick start:**
-1. Clone the repository: `git clone https://github.com/equinor/neqsimweb2.git`
+1. Clone the repository: `git clone https://github.com/EvenSol/neqsimweb2.git`
 2. Create a virtual environment: `python -m venv .venv`
 3. Activate it and install dependencies: `pip install -r requirements.txt`
 4. Run locally: `streamlit run welcome.py`
 
 **Resources:**
-- [NeqSim Web App Repository](https://github.com/equinor/neqsimweb2)
+- [NeqSim Web App Repository](https://github.com/EvenSol/neqsimweb2)
 - [NeqSim Python Package](https://github.com/equinor/neqsim-python)
 - [Streamlit Documentation](https://docs.streamlit.io/)
 """
