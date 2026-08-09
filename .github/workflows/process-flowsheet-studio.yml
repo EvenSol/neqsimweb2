@@ -53,6 +53,7 @@ jobs:
             welcome.py \
             pages/00_NeqSim_Studio.py \
             pages/35_Process_Flowsheet_Studio.py \
+            studio/case_context.py \
             studio/navigation.py \
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
@@ -61,6 +62,7 @@ jobs:
             process_chat/solver_diagnostics.py \
             process_chat/subflowsheet_schema.py \
             process_chat/process_model.py \
+            tests/test_studio_case_context.py \
             tests/test_studio_navigation.py \
             tests/test_studio_shell.py \
             tests/test_workspace_http_health.py \
@@ -74,6 +76,8 @@ jobs:
             tests/test_subflowsheet_schema.py
       - name: Run Studio workspace navigation regressions
         run: python tests/test_studio_navigation.py -v
+      - name: Run shared Studio case lifecycle regressions
+        run: python tests/test_studio_case_context.py -v
       - name: Run Studio shell smoke test
         run: python tests/test_studio_shell.py -v
       - name: Run Classic and Studio HTTP health regressions

@@ -68,6 +68,20 @@ class StudioNavigationTest(unittest.TestCase):
             studio_source,
         )
 
+    def test_shared_case_context_connects_dashboard_and_existing_flowsheet(self):
+        studio_source = (
+            PROJECT_ROOT / "pages" / "00_NeqSim_Studio.py"
+        ).read_text(encoding="utf-8")
+        flowsheet_source = (
+            PROJECT_ROOT / "pages" / "35_Process_Flowsheet_Studio.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("from studio.case_context import", studio_source)
+        self.assertIn("queue_open_case", studio_source)
+        self.assertIn("from studio.case_context import", flowsheet_source)
+        self.assertIn("set_active_case(", flowsheet_source)
+        self.assertIn("consume_pending_case(", flowsheet_source)
+
 
 if __name__ == "__main__":
     unittest.main()

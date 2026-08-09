@@ -66,10 +66,25 @@ Acceptance:
 
 ### S2 — Shared case context and lifecycle
 
-Status: planned.
+Status: **in stack on top of S0/S1**.
 
 Create/open/save/save-as/reset, metadata, units, thermodynamic package, provenance
 and solved/dirty/error state shared across Studio pages without corrupting Classic cases.
+
+Stack evidence:
+
+- a UI-independent `studio.case_context` owns only Studio session lifecycle metadata;
+- schema-v1–v4 Process Flowsheet Studio JSON remains the authoritative portable
+  case contract and is not wrapped or silently rewritten;
+- New, Open, Download, Save As, Reset and session-local Recent Cases are available
+  from the Studio home and hand off to the existing detailed v4 importer;
+- the active case carries stable identity, units, thermodynamic summary,
+  provenance, portable specification and explicit draft/dirty/solved/warning/
+  failed/timed-out/invalid state across Studio pages;
+- solved native model availability and signature are recorded as runtime evidence,
+  while Java/Python model objects remain in the established session adapter;
+- lifecycle keys are Studio-owned and regression-tested not to alter unrelated
+  Classic session data.
 
 ### S3 — Integrate mature Process Flowsheet Studio
 
@@ -129,3 +144,11 @@ simulation functionality:
    Studio destination contract.
 
 Only merged pull requests count as completed roadmap evidence.
+
+## Active stacked work
+
+The S0/S1 Studio shell remains the root PR targeting `main`. The S2 child PR
+targets that exact Studio branch and is not independently mergeable to `main`.
+S2 advances the complete case-workspace handoff while reusing the existing v4
+schema validation, migration, graph draft, native solve and Process Chat state.
+Its work is recorded as **in stack**, not merged completion.

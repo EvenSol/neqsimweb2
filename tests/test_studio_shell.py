@@ -22,10 +22,14 @@ class StudioShellTest(unittest.TestCase):
             self.fail(f"Studio shell raised exceptions:\n{details}")
 
         button_labels = [button.label for button in app.button]
+        self.assertIn("＋ New process case", button_labels)
+        self.assertIn("Open uploaded case", button_labels)
         self.assertIn("⚙️ Open Process Flowsheet", button_labels)
         self.assertIn("Open Classic", button_labels)
         self.assertIn("Open Process Flowsheet", button_labels)
         self.assertIn("Coming soon", button_labels)
+        uploader_labels = [uploader.label for uploader in app.file_uploader]
+        self.assertIn("Open portable case JSON", uploader_labels)
 
 
 if __name__ == "__main__":

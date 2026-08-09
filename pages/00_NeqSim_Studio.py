@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 import os
 import sys
 
@@ -16,6 +17,17 @@ from studio.navigation import (  # noqa: E402
     STATUS_AVAILABLE,
     STATUS_CORE_IN_PROGRESS,
     STUDIO_DESTINATIONS,
+)
+from studio.case_context import (  # noqa: E402
+    clear_active_case,
+    decode_portable_case,
+    encode_portable_case,
+    get_active_case,
+    queue_new_case,
+    queue_open_case,
+    queue_recent_case,
+    recent_cases,
+    save_case_as,
 )
 from theme import apply_theme, theme_toggle  # noqa: E402
 
@@ -113,6 +125,12 @@ st.markdown(
         margin-top: 1.8rem;
         margin-bottom: 0.35rem;
     }
+    .case-summary {
+        padding: 1rem 1.15rem;
+        border: 1px solid rgba(49, 91, 160, 0.20);
+        border-radius: 14px;
+        background: rgba(247, 250, 255, 0.90);
+    }
     @media (max-width: 720px) {
         .studio-hero {
             padding: 1.35rem 1.25rem;
@@ -126,6 +144,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+active_case = get_active_case(st.session_state)
+active_case_name_html = escape(active_case["name"]) if active_case else ""
+
 with st.sidebar:
     st.markdown("### Workspace")
     st.success("NeqSim Studio · Beta")
@@ -135,6 +156,15 @@ with st.sidebar:
         "Studio is being built alongside the existing application. "
         "Classic calculations and workflows remain available."
     )
+    if active_case:
+        st.divider()
+        st.markdown("**Active case**")
+        st.write(active_case["name"])
+        st.caption(
+            f"{active_case['status'].replace('-', ' ').title()} · "
+            f"{active_case['thermodynamics']['eos_model']} · "
+            f"schema v{active_case['case_schema_version']}"
+        )
 
 st.markdown(
     """
@@ -155,6 +185,128 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
+st.subheader("Case workspace")
+st.caption(
+    "The active case follows you across Studio pages. Downloads remain the same "
+    "portable Process Flowsheet Studio JSON format used today."
+)
+
+if active_case:
+    summary, actions = st.columns([1.55, 1.0])
+    with summary:
+        st.markdown(
+            f"""
+<div class="case-summary">
+    <strong>{active_case_name_html}</strong><br/>
+    <span>{active_case['status'].replace('-', ' ').title()} ·
+    {active_case['thermodynamics']['eos_model']} ·
+    {active_case['units']['system']} units</span><br/>
+    <small>Updated {active_case['provenance']['modified_at']}</small>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+        if active_case.get("error"):
+            st.error(active_case["error"])
+        for warning in active_case.get("warnings", []):
+            st.warning(warning)
+    with actions:
+        st.download_button(
+            "Download active case",
+            data=encode_portable_case(active_case["case_spec"]),
+            file_name="neqsim_studio_case.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        if st.button("Continue active case", type="primary", use_container_width=True):
+            queue_open_case(
+                st.session_state,
+                active_case["case_spec"],
+                preserve_identity=True,
+            )
+            st.switch_page("pages/35_Process_Flowsheet_Studio.py")
+
+    with st.expander("Save As or reset active case"):
+        save_as_name = st.text_input(
+            "New case name",
+            value=f"{active_case['name']} copy",
+            key="studio_save_as_name",
+        )
+        save_as_col, reset_col = st.columns(2)
+        if save_as_col.button("Save As", use_container_width=True):
+            try:
+                cloned_case = save_case_as(st.session_state, save_as_name)
+            except ValueError as save_error:
+                st.error(str(save_error))
+            else:
+                queue_open_case(
+                    st.session_state,
+                    cloned_case["case_spec"],
+                    preserve_identity=True,
+                )
+                st.switch_page("pages/35_Process_Flowsheet_Studio.py")
+        confirm_reset = st.checkbox(
+            "Confirm reset",
+            help=(
+                "Clears the active Studio context; Classic session data is not "
+                "changed."
+            ),
+        )
+        if reset_col.button(
+            "Reset active case",
+            disabled=not confirm_reset,
+            use_container_width=True,
+        ):
+            clear_active_case(st.session_state)
+            st.rerun()
+else:
+    st.info(
+        "No active Studio case yet. Start the validated flowsheet template or open "
+        "an existing portable case."
+    )
+
+new_col, open_col = st.columns(2)
+with new_col:
+    if st.button("＋ New process case", type="primary", use_container_width=True):
+        queue_new_case(st.session_state)
+        st.switch_page("pages/35_Process_Flowsheet_Studio.py")
+with open_col:
+    uploaded_case = st.file_uploader(
+        "Open portable case JSON",
+        type=["json"],
+        key="studio_workspace_case_upload",
+    )
+    if st.button(
+        "Open uploaded case",
+        disabled=uploaded_case is None,
+        use_container_width=True,
+    ):
+        try:
+            portable_case = decode_portable_case(uploaded_case.getvalue())
+        except ValueError as open_error:
+            st.error(str(open_error))
+        else:
+            queue_open_case(st.session_state, portable_case)
+            st.switch_page("pages/35_Process_Flowsheet_Studio.py")
+
+available_recent_cases = recent_cases(st.session_state)
+if available_recent_cases:
+    with st.expander("Recent cases", expanded=False):
+        for recent_case in available_recent_cases[:5]:
+            label_col, open_recent_col = st.columns([3.0, 1.0])
+            label_col.write(
+                f"**{recent_case['name']}**  \n"
+                f"{recent_case['status'].replace('-', ' ').title()} · "
+                f"{recent_case['thermodynamics']['eos_model']}"
+            )
+            if open_recent_col.button(
+                "Open",
+                key=f"open_recent_{recent_case['case_id']}",
+                use_container_width=True,
+            ):
+                queue_recent_case(st.session_state, recent_case["case_id"])
+                st.switch_page("pages/35_Process_Flowsheet_Studio.py")
 
 primary, secondary, spacer = st.columns([1.15, 1.0, 3.2])
 with primary:
