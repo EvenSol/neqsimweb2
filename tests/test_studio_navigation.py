@@ -1,8 +1,7 @@
 """Regression tests for the new Studio shell and Classic-preservation contract."""
 
 from pathlib import Path
-
-import pytest
+import unittest
 
 from studio.navigation import (
     STATUS_AVAILABLE,
@@ -15,42 +14,60 @@ from studio.navigation import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_destination_keys_and_routes_are_stable_and_unique():
-    keys = [destination.key for destination in STUDIO_DESTINATIONS]
+class StudioNavigationTest(unittest.TestCase):
+    """Protect the boundary between the existing Classic app and new Studio shell."""
 
-    assert len(keys) == len(set(keys))
-    assert all(destination.status in VALID_STATUSES for destination in STUDIO_DESTINATIONS)
+    def test_destination_keys_and_routes_are_stable_and_unique(self):
+        keys = [destination.key for destination in STUDIO_DESTINATIONS]
 
-    for destination in STUDIO_DESTINATIONS:
-        if destination.status == STATUS_AVAILABLE:
-            assert destination.page
-            assert destination.page.startswith("pages/")
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertTrue(
+            all(
+                destination.status in VALID_STATUSES
+                for destination in STUDIO_DESTINATIONS
+            )
+        )
+
+        for destination in STUDIO_DESTINATIONS:
+            if destination.status == STATUS_AVAILABLE:
+                self.assertTrue(destination.page)
+                self.assertTrue(destination.page.startswith("pages/"))
+
+    def test_existing_flowsheet_studio_is_first_available_workflow(self):
+        destination = destination_by_key("flowsheet")
+
+        self.assertTrue(destination.available)
+        self.assertEqual(
+            destination.page,
+            "pages/35_Process_Flowsheet_Studio.py",
+        )
+
+    def test_unknown_destination_fails_loudly(self):
+        with self.assertRaisesRegex(KeyError, "Unknown Studio destination"):
+            destination_by_key("not-a-real-workflow")
+
+    def test_classic_home_and_studio_entry_remain_separate(self):
+        welcome_source = (PROJECT_ROOT / "welcome.py").read_text(encoding="utf-8")
+        studio_source = (
+            PROJECT_ROOT / "pages" / "00_NeqSim_Studio.py"
+        ).read_text(encoding="utf-8")
+
+        # Classic information and its existing sidebar-driven workflow remain.
+        self.assertIn("### About NeqSim", welcome_source)
+        self.assertIn("### Getting Started", welcome_source)
+        self.assertIn("Enable AI Features", welcome_source)
+
+        # Studio is added without moving the mature flowsheet page or Classic home.
+        self.assertIn(
+            'st.switch_page("pages/00_NeqSim_Studio.py")',
+            welcome_source,
+        )
+        self.assertIn('st.switch_page("welcome.py")', studio_source)
+        self.assertIn(
+            'st.switch_page("pages/35_Process_Flowsheet_Studio.py")',
+            studio_source,
+        )
 
 
-def test_existing_flowsheet_studio_is_first_available_studio_workflow():
-    destination = destination_by_key("flowsheet")
-
-    assert destination.available
-    assert destination.page == "pages/35_Process_Flowsheet_Studio.py"
-
-
-def test_unknown_destination_fails_loudly():
-    with pytest.raises(KeyError, match="Unknown Studio destination"):
-        destination_by_key("not-a-real-workflow")
-
-
-def test_classic_home_and_studio_entry_remain_separate():
-    welcome_source = (PROJECT_ROOT / "welcome.py").read_text(encoding="utf-8")
-    studio_source = (
-        PROJECT_ROOT / "pages" / "00_NeqSim_Studio.py"
-    ).read_text(encoding="utf-8")
-
-    # Classic information and its existing sidebar-driven workflow remain in welcome.py.
-    assert "### About NeqSim" in welcome_source
-    assert "### Getting Started" in welcome_source
-    assert "Enable AI Features" in welcome_source
-
-    # The gateway adds Studio without moving the mature flowsheet page or replacing Classic.
-    assert 'st.switch_page("pages/00_NeqSim_Studio.py")' in welcome_source
-    assert 'st.switch_page("welcome.py")' in studio_source
-    assert 'st.switch_page("pages/35_Process_Flowsheet_Studio.py")' in studio_source
+if __name__ == "__main__":
+    unittest.main()
