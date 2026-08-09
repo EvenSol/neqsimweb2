@@ -9,6 +9,12 @@ from process_chat.subflowsheet_schema import (
     subflowsheet_membership,
     validate_subflowsheets,
 )
+from process_chat.flowsheet_editor import (
+    apply_graph_draft,
+    create_graph_draft,
+    create_graph_history,
+    record_graph_history,
+)
 
 
 class SubflowsheetSchemaTest(unittest.TestCase):
@@ -127,6 +133,67 @@ class SubflowsheetSchemaTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "not an active graph boundary"):
             validate_subflowsheets(candidate, self.units, self.connections)
+
+    def test_graph_draft_round_trip_preserves_subflowsheet_contract(self):
+        draft = create_graph_draft(
+            self.units,
+            self.connections,
+            [{"id": "feed", "name": "Feed"}],
+            self.subflowsheets,
+        )
+        case = {
+            "units": [],
+            "connections": [],
+            "inlets": [],
+            "subflowsheets": [],
+        }
+
+        restored = apply_graph_draft(case, draft)
+
+        self.assertEqual(draft["schema_version"], 2)
+        self.assertEqual(restored["subflowsheets"], self.subflowsheets)
+        self.assertIsNot(restored["subflowsheets"], self.subflowsheets)
+
+    def test_legacy_graph_draft_keeps_case_subflowsheets(self):
+        legacy_draft = {
+            "schema_version": 1,
+            "units": copy.deepcopy(self.units),
+            "connections": copy.deepcopy(self.connections),
+        }
+        case = {
+            "units": copy.deepcopy(self.units),
+            "connections": copy.deepcopy(self.connections),
+            "inlets": [{"id": "feed", "name": "Feed"}],
+            "subflowsheets": copy.deepcopy(self.subflowsheets),
+        }
+
+        restored = apply_graph_draft(case, legacy_draft)
+
+        self.assertEqual(restored["subflowsheets"], self.subflowsheets)
+
+    def test_graph_history_keeps_hierarchical_metadata(self):
+        history = create_graph_history(
+            self.units,
+            self.connections,
+            [{"id": "feed", "name": "Feed"}],
+            self.subflowsheets,
+        )
+        renamed_groups = copy.deepcopy(self.subflowsheets)
+        renamed_groups[0]["name"] = "Compression system"
+
+        history = record_graph_history(
+            history,
+            self.units,
+            self.connections,
+            [{"id": "feed", "name": "Feed"}],
+            subflowsheets=renamed_groups,
+        )
+
+        self.assertEqual(len(history["entries"]), 2)
+        self.assertEqual(
+            history["entries"][1]["subflowsheets"][0]["name"],
+            "Compression system",
+        )
 
 
 if __name__ == "__main__":
