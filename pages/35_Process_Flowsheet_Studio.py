@@ -4028,17 +4028,28 @@ def _record_graph_revision(
 ) -> None:
     """Record and activate one accepted graph edit."""
     history = _graph_history_for_spec(spec)
+    retained_or_draft_inlets = draft.get(
+        "inlets",
+        spec.get("inlets"),
+    )
+    retained_or_draft_subflowsheets = draft.get(
+        "subflowsheets",
+        spec.get("subflowsheets", []),
+    )
     history = record_graph_history(
         history,
         draft["units"],
         draft["connections"],
-        draft.get("inlets"),
-        subflowsheets=draft.get(
-            "subflowsheets",
-            spec.get("subflowsheets", []),
-        ),
+        retained_or_draft_inlets,
+        subflowsheets=retained_or_draft_subflowsheets,
     )
-    _activate_graph_revision(spec, history, draft, notice)
+    activated_draft = history["entries"][history["cursor"]]
+    _activate_graph_revision(
+        spec,
+        history,
+        activated_draft,
+        notice,
+    )
 
 
 def _render_graph_palette(spec: dict[str, Any]) -> None:
