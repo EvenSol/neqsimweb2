@@ -57,6 +57,14 @@ class ProcessRunTimeoutTest(unittest.TestCase):
                 self.assertTrue(thread.interrupted)
                 self.assertEqual(thread.join_timeouts, [25, 10])
 
+    def test_cancellation_grace_must_not_use_unbounded_zero_join(self):
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            NeqSimProcessModel._run_native_thread(
+                object(),
+                25,
+                cancellation_grace_ms=0,
+            )
+
     def test_convergence_timeout_is_one_total_budget(self):
         class _JavaClass:
             @staticmethod
@@ -109,6 +117,45 @@ class ProcessRunTimeoutTest(unittest.TestCase):
                 )
 
         self.assertEqual(process.run_count, 1)
+
+    def test_process_model_fallback_shares_one_total_budget(self):
+        class _ProcessModel:
+            @staticmethod
+            def runAsThread():
+                raise RuntimeError("parallel dispatch unavailable")
+
+            @staticmethod
+            def getAllProcesses():
+                return ("first", "second")
+
+        observed_timeouts = []
+
+        def run_child(process_system, *, timeout_ms, **kwargs):
+            observed_timeouts.append((process_system, timeout_ms))
+            return True
+
+        with (
+            patch(
+                "process_chat.process_model.monotonic",
+                side_effect=(10.0, 10.1, 10.2, 10.4),
+            ),
+            patch.object(
+                NeqSimProcessModel,
+                "_run_until_converged",
+                side_effect=run_child,
+            ),
+        ):
+            self.assertTrue(
+                NeqSimProcessModel._run_process_model(
+                    _ProcessModel(),
+                    timeout_ms=1_000,
+                )
+            )
+
+        self.assertEqual(
+            observed_timeouts,
+            [("first", 800), ("second", 599)],
+        )
 
 
 class ProcessRunFailureTest(unittest.TestCase):

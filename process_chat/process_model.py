@@ -806,8 +806,8 @@ class NeqSimProcessModel:
         """
         if timeout_ms <= 0:
             raise ValueError("timeout_ms must be positive for threaded runs")
-        if cancellation_grace_ms < 0:
-            raise ValueError("cancellation_grace_ms cannot be negative")
+        if cancellation_grace_ms <= 0:
+            raise ValueError("cancellation_grace_ms must be positive")
 
         thread = proc.runAsThread()
         thread.join(int(timeout_ms))
@@ -4771,11 +4771,28 @@ class NeqSimProcessModel:
     @staticmethod
     def _run_process_model(proc_model, timeout_ms: int = 180000):
         """Run a ProcessModel (which iterates all child ProcessSystems)."""
+        deadline = (
+            monotonic() + timeout_ms / 1000.0
+            if timeout_ms > 0
+            else None
+        )
+
+        def _remaining_timeout_ms() -> int:
+            if deadline is None:
+                return 0
+            remaining_ms = int((deadline - monotonic()) * 1000.0)
+            if remaining_ms <= 0:
+                raise ProcessRunTimeoutError(
+                    f"Native NeqSim ProcessModel execution exceeded "
+                    f"{timeout_ms} ms; discard this process model."
+                )
+            return remaining_ms
+
         try:
             if timeout_ms > 0:
                 if not NeqSimProcessModel._run_native_thread(
                     proc_model,
-                    timeout_ms,
+                    _remaining_timeout_ms(),
                 ):
                     return False
             else:
@@ -4791,10 +4808,18 @@ class NeqSimProcessModel:
                 return False
             if not process_systems:
                 return False
-            return all(
-                NeqSimProcessModel._run_until_converged(ps)
-                for ps in process_systems
-            )
+            for process_system in process_systems:
+                child_timeout_ms = (
+                    _remaining_timeout_ms()
+                    if timeout_ms > 0
+                    else 0
+                )
+                if not NeqSimProcessModel._run_until_converged(
+                    process_system,
+                    timeout_ms=child_timeout_ms,
+                ):
+                    return False
+            return True
 
     @staticmethod
     def _optional_nonnegative_number(unit: Any, getter: str) -> Optional[float]:

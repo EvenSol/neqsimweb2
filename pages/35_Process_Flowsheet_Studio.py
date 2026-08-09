@@ -6878,7 +6878,9 @@ if run_case:
         st.success("The NeqSim flowsheet solved and is ready for review.")
     except ProcessRunTimeoutError as exc:
         if current_case_signature is not None:
-            st.session_state[FAILURE_SIGNATURE_STATE_KEY] = current_case_signature
+            st.session_state[FAILURE_SIGNATURE_STATE_KEY] = (
+                current_case_signature
+            )
         results_are_current = False
         solver_status = "Timed out"
         solver_status_placeholder.write("**Solver:** Timed out")
