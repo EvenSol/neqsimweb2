@@ -2787,6 +2787,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
 
     def test_stream_fluid_properties_survive_native_hash_collisions(self):
         from neqsim import jneqsim
+        from jpype import JClass
 
         first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
         second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
@@ -2809,10 +2810,14 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         }
         kpis = {}
 
+        JavaString = JClass("java.lang.String")
+        first_collision = JavaString("Aa")
+        second_collision = JavaString("BB")
         self.assertEqual(
-            int(first_stream.hashCode()),
-            int(second_stream.hashCode()),
+            int(first_collision.hashCode()),
+            int(second_collision.hashCode()),
         )
+        self.assertFalse(first_collision.equals(second_collision))
         model._extract_stream_fluid_properties(kpis)
 
         self.assertIn("first native feed.temperature_C", kpis)
@@ -2820,6 +2825,7 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
 
     def test_model_index_preserves_distinct_native_hash_collisions(self):
         from neqsim import jneqsim
+        from jpype import JClass
 
         first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
         second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
@@ -2843,10 +2849,14 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
         ):
             process.add(unit)
 
+        JavaString = JClass("java.lang.String")
+        first_collision = JavaString("Aa")
+        second_collision = JavaString("BB")
         self.assertEqual(
-            int(first_heater.getOutletStream().hashCode()),
-            int(second_heater.getOutletStream().hashCode()),
+            int(first_collision.hashCode()),
+            int(second_collision.hashCode()),
         )
+        self.assertFalse(first_collision.equals(second_collision))
         model = NeqSimProcessModel.from_process_system(process)
 
         self.assertIsNotNone(model.get_stream("Aa"))
@@ -2856,19 +2866,12 @@ class MaterialBoundaryDiagnosticsTest(unittest.TestCase):
 
     def test_native_reference_tracking_ignores_value_hash_equality(self):
         from neqsim import jneqsim
+        from jpype import JClass
 
-        first_fluid = jneqsim.thermo.system.SystemSrkEos(293.15, 45.0)
-        second_fluid = jneqsim.thermo.system.SystemSrkEos(308.15, 45.0)
-        first_fluid.addComponent("methane", 1.0)
-        second_fluid.addComponent("methane", 1.0)
-        first_stream = jneqsim.process.equipment.stream.Stream(
-            "feed",
-            first_fluid,
-        )
-        second_stream = jneqsim.process.equipment.stream.Stream(
-            "feed",
-            second_fluid,
-        )
+        del jneqsim
+        JavaString = JClass("java.lang.String")
+        first_stream = JavaString("feed")
+        second_stream = JavaString("feed")
         tracker = _MaterialBoundaryIdentityTracker()
 
         self.assertEqual(
