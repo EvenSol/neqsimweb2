@@ -24,3 +24,12 @@ The downloadable engineering workbook contains the same review-ready data in
 the **Equipment Design** worksheet together with streams, equipment,
 constraints, convergence, and conservation evidence. These results support
 screening and engineering studies; they are not design certification.
+
+Schema v4 adds execution-neutral **subflowsheets** on top of the authoritative
+flat process graph. A subflowsheet owns a non-overlapping set of units and
+declares every material or energy port used where a connection crosses its
+boundary. Terminal product ports may also be exposed explicitly. Studio
+validates these contracts during import, draft history, execution planning,
+and solve readiness; the draft diagram renders each group as a labeled dashed
+container and lists its boundary-port mappings. Schema-v1–v3 cases migrate to
+v4 with an empty subflowsheet list, so existing calculations remain unchanged.

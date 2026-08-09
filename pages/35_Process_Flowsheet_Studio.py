@@ -57,7 +57,12 @@ globals().update(
     )
 )
 
-_SUBFLOWSHEET_SYMBOL_NAMES = ("validate_subflowsheets",)
+_SUBFLOWSHEET_SYMBOL_NAMES = (
+    "subflowsheet_boundary_rows",
+    "subflowsheet_membership",
+    "subflowsheet_rows",
+    "validate_subflowsheets",
+)
 globals().update(
     import_local_symbols(
         "process_chat.subflowsheet_schema",
@@ -1253,6 +1258,9 @@ def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
         units,
         connections,
     )
+    unit_subflowsheets = subflowsheet_membership(
+        spec.get("subflowsheets", [])
+    )
 
     indexed_inlets = _index_graph_objects(inlets, "inlets")
     indexed_units = _index_graph_objects(units, "units")
@@ -1326,6 +1334,9 @@ def _build_execution_plan(spec: dict[str, Any]) -> list[dict[str, Any]]:
                 "Object ID": node_id,
                 "Name": str(node.get("name", node_id)).strip() or node_id,
                 "Type": "stream" if is_inlet else str(node.get("type", "")),
+                "Subflowsheet": (
+                    "" if is_inlet else unit_subflowsheets.get(node_id, "")
+                ),
                 "Dependencies": ", ".join(node_dependencies),
                 "Incoming connections": ", ".join(incoming[node_id]),
                 "Outgoing connections": ", ".join(outgoing[node_id]),
@@ -4099,6 +4110,7 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
                 spec["inlets"],
                 spec["units"],
                 spec["connections"],
+                spec.get("subflowsheets", []),
             )
         except ValueError as preview_error:
             st.error(f"Draft flowsheet preview failed: {preview_error}")
@@ -4109,8 +4121,28 @@ def _render_graph_palette(spec: dict[str, Any]) -> None:
             )
             st.caption(
                 "Blue solid paths are material streams; amber dashed paths "
-                "are energy links. Oval nodes mark inlet and product boundaries."
+                "are energy links. Oval nodes mark inlet and product boundaries; "
+                "dashed containers mark explicit subflowsheets."
             )
+            active_subflowsheets = spec.get("subflowsheets", [])
+            if active_subflowsheets:
+                st.markdown("#### Subflowsheet interfaces")
+                st.dataframe(
+                    pd.DataFrame(subflowsheet_rows(active_subflowsheets)),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.dataframe(
+                    pd.DataFrame(
+                        subflowsheet_boundary_rows(active_subflowsheets)
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(
+                    "Each boundary maps a named subflowsheet interface to one "
+                    "declared unit material or energy port."
+                )
 
         st.divider()
         graph_history = _graph_history_for_spec(spec)

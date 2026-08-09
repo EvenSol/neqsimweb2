@@ -13,6 +13,7 @@ from .graph_schema import (
     canonical_material_output_port,
     material_connection_name,
 )
+from .subflowsheet_schema import validate_subflowsheets
 
 
 LEGACY_GRAPH_DRAFT_SCHEMA_VERSION = 1
@@ -3856,6 +3857,7 @@ def build_graph_draft_dot(
     inlets: list[Any],
     units: list[Any],
     connections: list[Any],
+    subflowsheets: list[Any] | None = None,
 ) -> str:
     """Render a validated draft graph as deterministic auto-layout DOT.
 
@@ -3869,6 +3871,12 @@ def build_graph_draft_dot(
     validated_inlets = validated_draft["inlets"]
     validated_units = validated_draft["units"]
     validated_connections = validated_draft["connections"]
+    validated_subflowsheets = copy.deepcopy(subflowsheets or [])
+    validate_subflowsheets(
+        validated_subflowsheets,
+        validated_units,
+        validated_connections,
+    )
 
     node_ids: dict[tuple[str, str], str] = {}
     inlet_records: list[tuple[str, dict[str, Any], str]] = []
@@ -3997,6 +4005,7 @@ def build_graph_draft_dot(
             'fillcolor="#dcfce7", color="#16a34a"];'
         )
 
+    unit_node_lines: dict[str, str] = {}
     for unit_id, unit, dot_id in unit_records:
         unit_name = str(unit.get("name", unit_id)).strip() or unit_id
         unit_type = str(unit.get("type", "unit")).strip().lower() or "unit"
@@ -4005,10 +4014,27 @@ def build_graph_draft_dot(
             ("#f8fafc", "#64748b"),
         )
         label = f"{unit_name}\n{unit_type.upper()}"
-        lines.append(
+        unit_node_lines[unit_id] = (
             f"  {dot_id} [label={_dot_text(label)}, "
             f"fillcolor=\"{fill_color}\", color=\"{line_color}\"];"
         )
+
+    grouped_unit_ids: set[str] = set()
+    for group_index, subflowsheet in enumerate(validated_subflowsheets):
+        group_id = str(subflowsheet["id"]).strip()
+        group_name = str(subflowsheet.get("name", group_id)).strip()
+        lines.append(f"  subgraph cluster_subflowsheet_{group_index} {{")
+        lines.append(f"    label={_dot_text(group_name)};")
+        lines.append('    color="#94a3b8"; style="rounded,dashed";')
+        lines.append('    penwidth="1.4"; bgcolor="#f8fafc";')
+        for unit_id in subflowsheet["unit_ids"]:
+            clean_unit_id = str(unit_id).strip()
+            grouped_unit_ids.add(clean_unit_id)
+            lines.append("  " + unit_node_lines[clean_unit_id])
+        lines.append("  }")
+    for unit_id, _, _ in unit_records:
+        if unit_id not in grouped_unit_ids:
+            lines.append(unit_node_lines[unit_id])
 
     for (
         connection,

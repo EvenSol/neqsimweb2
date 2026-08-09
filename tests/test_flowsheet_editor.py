@@ -2931,7 +2931,7 @@ class GraphDraftLifecycleTest(unittest.TestCase):
         invalid_drafts = (
             (
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "units": self.units,
                     "connections": self.connections,
                 },
