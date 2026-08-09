@@ -19,6 +19,7 @@ import math
 import os
 import tempfile
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
@@ -49,6 +50,7 @@ _PIPELINE_DESIGN_CAPACITY_LIMITS = {
     "design_pressure_drop_capacity_bar": (0.000001, 1_000.0),
     "design_velocity_capacity_m_per_s": (0.001, 100.0),
 }
+_RUN_CANCELLATION_GRACE_MS = 1_000
 _EQUIPMENT_DESIGN_CAPACITY_LIMITS = (
     _PUMP_DESIGN_CAPACITY_LIMITS,
     _HEAT_EXCHANGER_DESIGN_CAPACITY_LIMITS,
@@ -343,6 +345,10 @@ class ModelRunResult:
     constraints: List[ConstraintStatus]
     json_report: Optional[dict] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+class ProcessRunTimeoutError(TimeoutError):
+    """Raised when a native NeqSim worker exceeds its execution budget."""
 
 
 # ---------------------------------------------------------------------------
@@ -781,6 +787,43 @@ class NeqSimProcessModel:
             return True
 
     @staticmethod
+    def _run_native_thread(
+        proc: Any,
+        timeout_ms: int,
+        *,
+        cancellation_grace_ms: int = _RUN_CANCELLATION_GRACE_MS,
+    ) -> bool:
+        """Run one native worker within a bounded execution budget.
+
+        A timed-out Java worker is interrupted and observed only for the
+        bounded cancellation grace period. The adapter always raises after
+        the primary timeout, even when interruption succeeds, because the
+        process state may have been partially mutated.
+        """
+        if timeout_ms <= 0:
+            raise ValueError("timeout_ms must be positive for threaded runs")
+        if cancellation_grace_ms < 0:
+            raise ValueError("cancellation_grace_ms cannot be negative")
+
+        thread = proc.runAsThread()
+        thread.join(int(timeout_ms))
+        if not thread.isAlive():
+            return NeqSimProcessModel._async_run_status_succeeded(proc)
+
+        thread.interrupt()
+        thread.join(int(cancellation_grace_ms))
+        still_running = bool(thread.isAlive())
+        detail = (
+            " and did not stop during the bounded cancellation grace period; "
+            "discard this process model"
+            if still_running
+            else "; the interrupted process model must be discarded"
+        )
+        raise ProcessRunTimeoutError(
+            f"Native NeqSim execution exceeded {int(timeout_ms)} ms{detail}."
+        )
+
+    @staticmethod
     def _run_until_converged(proc, max_runs: int = 5, timeout_ms: int = 180000):
         """
         Run the process repeatedly until convergence or *max_runs*.
@@ -836,6 +879,23 @@ class NeqSimProcessModel:
                         pass
             return has, total
 
+        deadline = (
+            monotonic() + timeout_ms / 1000.0
+            if timeout_ms > 0
+            else None
+        )
+
+        def _remaining_timeout_ms() -> int:
+            if deadline is None:
+                return 0
+            remaining_ms = int((deadline - monotonic()) * 1000.0)
+            if remaining_ms <= 0:
+                raise ProcessRunTimeoutError(
+                    f"Native NeqSim execution exceeded {timeout_ms} ms; "
+                    "discard this process model."
+                )
+            return remaining_ms
+
         try:
             units = list(proc.getUnitOperations())
         except Exception:
@@ -845,18 +905,15 @@ class NeqSimProcessModel:
         if len(units) <= 2:
             try:
                 if timeout_ms > 0:
-                    thread = proc.runAsThread()
-                    thread.join(timeout_ms)
-                    if thread.isAlive():
-                        thread.interrupt()
-                        thread.join()
-                        return False
-                    if not NeqSimProcessModel._async_run_status_succeeded(
-                        proc
+                    if not NeqSimProcessModel._run_native_thread(
+                        proc,
+                        _remaining_timeout_ms(),
                     ):
                         return False
                 else:
                     proc.run()
+            except ProcessRunTimeoutError:
+                raise
             except Exception:
                 return False
             return True
@@ -872,22 +929,23 @@ class NeqSimProcessModel:
             # partially overwritten.
             completed_run = False
             try:
-                if attempt >= 3 and hasattr(proc, "runSequential"):
+                if (
+                    attempt >= 3
+                    and timeout_ms <= 0
+                    and hasattr(proc, "runSequential")
+                ):
                     # Fallback: strict sequential execution
                     proc.runSequential()
                 elif timeout_ms > 0:
-                    thread = proc.runAsThread()
-                    thread.join(timeout_ms)
-                    if thread.isAlive():
-                        thread.interrupt()
-                        thread.join()
-                        return False
-                    if not NeqSimProcessModel._async_run_status_succeeded(
-                        proc
+                    if not NeqSimProcessModel._run_native_thread(
+                        proc,
+                        _remaining_timeout_ms(),
                     ):
                         continue
                 else:
                     proc.run()
+            except ProcessRunTimeoutError:
+                raise
             except Exception:
                 continue
             completed_run = True
@@ -4700,19 +4758,16 @@ class NeqSimProcessModel:
         """Run a ProcessModel (which iterates all child ProcessSystems)."""
         try:
             if timeout_ms > 0:
-                thread = proc_model.runAsThread()
-                thread.join(timeout_ms)
-                if thread.isAlive():
-                    thread.interrupt()
-                    thread.join()
-                    return False
-                if not NeqSimProcessModel._async_run_status_succeeded(
-                    proc_model
+                if not NeqSimProcessModel._run_native_thread(
+                    proc_model,
+                    timeout_ms,
                 ):
                     return False
             else:
                 proc_model.run()
             return True
+        except ProcessRunTimeoutError:
+            raise
         except Exception:
             # Fallback: run each ProcessSystem individually
             try:
