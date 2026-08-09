@@ -351,6 +351,10 @@ class ProcessRunTimeoutError(TimeoutError):
     """Raised when a native NeqSim worker exceeds its execution budget."""
 
 
+class ProcessExecutionError(RuntimeError):
+    """Raised when native NeqSim execution does not complete successfully."""
+
+
 # ---------------------------------------------------------------------------
 # Unit / stream info for display and LLM tag resolution
 # ---------------------------------------------------------------------------
@@ -4707,6 +4711,12 @@ class NeqSimProcessModel:
                     self._run_acyclic_mixer_energy_closure(self._proc)
                 )
 
+        if not process_run_succeeded:
+            raise ProcessExecutionError(
+                "Native NeqSim execution did not complete successfully; "
+                "no solved results were published."
+            )
+
         # Re-index model objects after running so references are fresh
         self._index_model_objects()
         if process_run_succeeded:
@@ -4746,6 +4756,11 @@ class NeqSimProcessModel:
                 direct_closure_ran = (
                     self._run_acyclic_mixer_energy_closure(self._proc)
                 )
+        if not process_run_succeeded:
+            raise ProcessExecutionError(
+                "Native NeqSim execution did not complete successfully; "
+                "discard this process model."
+            )
         self._index_model_objects()
         if process_run_succeeded:
             self._capture_heat_exchanger_state_snapshots(

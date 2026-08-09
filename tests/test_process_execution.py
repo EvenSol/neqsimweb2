@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from process_chat.process_model import (
     NeqSimProcessModel,
+    ProcessExecutionError,
     ProcessRunTimeoutError,
 )
 
@@ -107,6 +108,59 @@ class ProcessRunTimeoutTest(unittest.TestCase):
                 )
 
         self.assertEqual(process.run_count, 1)
+
+
+class ProcessRunFailureTest(unittest.TestCase):
+    """Prevent failed native workers from publishing partial solved state."""
+
+    @staticmethod
+    def _model():
+        model = object.__new__(NeqSimProcessModel)
+        model._proc = object()
+        model._is_process_model = False
+        model._enforce_acyclic_mixer_energy = False
+        model._equipment_design_bases = {}
+        model._direct_unit_run_provenance = {}
+        model._heat_exchanger_state_snapshots = {}
+        return model
+
+    def test_run_rejects_failed_worker_before_result_extraction(self):
+        model = self._model()
+        with (
+            patch.object(
+                NeqSimProcessModel,
+                "_run_until_converged",
+                return_value=False,
+            ),
+            patch.object(model, "_index_model_objects") as reindex,
+            patch.object(model, "_extract_results") as extract,
+        ):
+            with self.assertRaisesRegex(
+                ProcessExecutionError,
+                "no solved results were published",
+            ):
+                model.run(timeout_ms=30)
+
+        reindex.assert_not_called()
+        extract.assert_not_called()
+
+    def test_rerun_rejects_failed_worker_before_reindexing(self):
+        model = self._model()
+        with (
+            patch.object(
+                NeqSimProcessModel,
+                "_run_until_converged",
+                return_value=False,
+            ),
+            patch.object(model, "_index_model_objects") as reindex,
+        ):
+            with self.assertRaisesRegex(
+                ProcessExecutionError,
+                "discard this process model",
+            ):
+                model.rerun(timeout_ms=30)
+
+        reindex.assert_not_called()
 
 
 if __name__ == "__main__":
