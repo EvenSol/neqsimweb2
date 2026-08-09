@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import unittest
 import threading
 from pathlib import Path
@@ -282,6 +283,45 @@ class StudioExecutionContractTest(unittest.TestCase):
             source,
         )
         self.assertIn("no results were published", source)
+
+    def test_timeout_classification_survives_streamlit_rerun(self):
+        studio_path = (
+            Path(__file__).resolve().parents[1]
+            / "pages"
+            / "35_Process_Flowsheet_Studio.py"
+        )
+        parsed = ast.parse(studio_path.read_text(encoding="utf-8"))
+        solver_status_node = next(
+            node
+            for node in parsed.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_solver_status"
+        )
+        namespace = {}
+        function_module = ast.Module(
+            body=[
+                ast.ImportFrom(
+                    module="__future__",
+                    names=[ast.alias(name="annotations")],
+                    level=0,
+                ),
+                solver_status_node,
+            ],
+            type_ignores=[],
+        )
+        ast.fix_missing_locations(function_module)
+        exec(compile(function_module, str(studio_path), "exec"), namespace)
+
+        status, is_current = namespace["_solver_status"](
+            current_signature="case-a",
+            stored_state=None,
+            has_result=False,
+            failure_signature="case-a",
+            failure_kind="timeout",
+        )
+
+        self.assertEqual(status, "Timed out")
+        self.assertFalse(is_current)
 
 
 if __name__ == "__main__":
