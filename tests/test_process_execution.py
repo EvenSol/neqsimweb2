@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+from process_chat.process_builder import ProcessBuilder
 from process_chat.process_model import (
     NeqSimProcessModel,
     ProcessExecutionError,
@@ -178,6 +179,29 @@ class ProcessRunTimeoutTest(unittest.TestCase):
         finally:
             release.set()
 
+    def test_complete_process_construction_wait_is_bounded(self):
+        release = threading.Event()
+        builder = ProcessBuilder()
+
+        def blocking_build(*args, **kwargs):
+            release.wait(timeout=1)
+
+        try:
+            with (
+                patch.object(
+                    builder,
+                    "build_from_spec",
+                    side_effect=blocking_build,
+                ),
+                self.assertRaisesRegex(
+                    ProcessRunTimeoutError,
+                    "process construction exceeded 1 ms",
+                ),
+            ):
+                builder.build_from_spec_bounded({}, timeout_ms=1)
+        finally:
+            release.set()
+
 
 class ProcessRunFailureTest(unittest.TestCase):
     """Prevent failed native workers from publishing partial solved state."""
@@ -275,6 +299,7 @@ class StudioExecutionContractTest(unittest.TestCase):
             "timeout_ms=remaining_execution_budget_ms()",
             source,
         )
+        self.assertIn("builder.build_from_spec_bounded(", source)
         self.assertIn("execution_deadline", source)
         self.assertIn("except ProcessRunTimeoutError as exc:", source)
         self.assertIn('solver_status = "Timed out"', source)

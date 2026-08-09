@@ -6860,7 +6860,7 @@ if run_case:
         with st.spinner("Building and solving the NeqSim process..."):
             builder = ProcessBuilder()
             graph_process_spec = _build_graph_process_spec(case_spec)
-            model = builder.build_from_spec(
+            model = builder.build_from_spec_bounded(
                 graph_process_spec,
                 timeout_ms=remaining_execution_budget_ms(),
             )

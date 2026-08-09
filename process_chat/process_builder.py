@@ -2098,6 +2098,25 @@ class ProcessBuilder:
 
     # -- Build from spec ----------------------------------------------------
 
+    def build_from_spec_bounded(
+        self,
+        spec: dict,
+        *,
+        timeout_ms: int = 180000,
+    ) -> NeqSimProcessModel:
+        """Build a process behind an outer construction watchdog.
+
+        The inner builder propagates the same deadline through all process
+        runs and mixer closures. This outer wait also bounds synchronous Java
+        fluid, equipment-construction, and configuration calls that occur
+        before the first native process run.
+        """
+        return NeqSimProcessModel._run_bounded_call(
+            lambda: self.build_from_spec(spec, timeout_ms=timeout_ms),
+            timeout_ms,
+            operation="process construction",
+        )
+
     def build_from_spec(
         self,
         spec: dict,
