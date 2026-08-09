@@ -3,7 +3,10 @@ name: Process Flowsheet Studio
 on:
   pull_request:
     paths:
+      - "welcome.py"
+      - "pages/00_NeqSim_Studio.py"
       - "pages/35_Process_Flowsheet_Studio.py"
+      - "studio/**"
       - "process_chat/process_builder.py"
       - "process_chat/flowsheet_editor.py"
       - "process_chat/graph_schema.py"
@@ -11,6 +14,8 @@ on:
       - "process_chat/solver_diagnostics.py"
       - "process_chat/subflowsheet_schema.py"
       - "process_chat/process_model.py"
+      - "tests/test_studio_navigation.py"
+      - "tests/test_studio_shell.py"
       - "tests/test_flowsheet_editor.py"
       - "tests/test_material_stream_identity.py"
       - "tests/test_process_graph_conservation.py"
@@ -44,7 +49,10 @@ jobs:
       - name: Compile affected Python sources
         run: |
           python -m py_compile \
+            welcome.py \
+            pages/00_NeqSim_Studio.py \
             pages/35_Process_Flowsheet_Studio.py \
+            studio/navigation.py \
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
             process_chat/graph_schema.py \
@@ -52,6 +60,8 @@ jobs:
             process_chat/solver_diagnostics.py \
             process_chat/subflowsheet_schema.py \
             process_chat/process_model.py \
+            tests/test_studio_navigation.py \
+            tests/test_studio_shell.py \
             tests/test_flowsheet_editor.py \
             tests/test_material_stream_identity.py \
             tests/test_process_graph_conservation.py \
@@ -60,6 +70,10 @@ jobs:
             tests/test_solver_diagnostics.py \
             tests/test_studio_warm_deployment.py \
             tests/test_subflowsheet_schema.py
+      - name: Run Studio workspace navigation regressions
+        run: python tests/test_studio_navigation.py -v
+      - name: Run Studio shell smoke test
+        run: python tests/test_studio_shell.py -v
       - name: Run deployment-safe import regression tests
         run: python tests/test_runtime_imports.py -v
       - name: Run warm-deployment Streamlit smoke test
