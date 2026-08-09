@@ -14,6 +14,7 @@ on:
       - "tests/test_flowsheet_editor.py"
       - "tests/test_material_stream_identity.py"
       - "tests/test_process_graph_conservation.py"
+      - "tests/test_process_execution.py"
       - "tests/test_runtime_imports.py"
       - "tests/test_solver_diagnostics.py"
       - "tests/test_studio_warm_deployment.py"
@@ -54,6 +55,7 @@ jobs:
             tests/test_flowsheet_editor.py \
             tests/test_material_stream_identity.py \
             tests/test_process_graph_conservation.py \
+            tests/test_process_execution.py \
             tests/test_runtime_imports.py \
             tests/test_solver_diagnostics.py \
             tests/test_studio_warm_deployment.py \
@@ -72,3 +74,5 @@ jobs:
         run: python tests/test_subflowsheet_schema.py -v
       - name: Run native multi-inlet conservation benchmark
         run: python tests/test_process_graph_conservation.py -v
+      - name: Run bounded execution regressions
+        run: python tests/test_process_execution.py -v

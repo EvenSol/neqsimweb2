@@ -59,6 +59,7 @@ def import_local_symbols(
     symbol_names: Iterable[str],
     *,
     project_root: str | Path,
+    force_reload: bool = False,
 ) -> dict[str, Any]:
     """Import symbols, refreshing a stale local module cache once if needed.
 
@@ -66,7 +67,8 @@ def import_local_symbols(
     imported project module remains cached from the preceding deployment.
     When newly deployed symbols are missing, reload that local module once
     from the current checkout and then fail explicitly if it is still
-    incompatible.
+    incompatible. ``force_reload`` also refreshes a dependent module whose
+    existing exports may still reference classes from a reloaded dependency.
     """
     if not isinstance(module_name, str) or not module_name.strip():
         raise ValueError("module_name must be a non-empty string")
@@ -75,14 +77,19 @@ def import_local_symbols(
     module = importlib.import_module(module_name)
     with _module_lock(module_name):
         missing = [name for name in names if not hasattr(module, name)]
-        if missing:
+        if missing or force_reload:
             _assert_local_module(module, Path(project_root))
             importlib.invalidate_caches()
             previous_symbols = {
                 name: module.__dict__.get(name, _MISSING) for name in names
             }
-            for name in names:
-                module.__dict__.pop(name, None)
+            # When a missing export triggered the refresh, clear requested
+            # names so importlib.reload() cannot retain a removed stale export.
+            # A forced refresh of present symbols must keep them visible to
+            # concurrent callers throughout the in-place module reload.
+            if missing:
+                for name in names:
+                    module.__dict__.pop(name, None)
             try:
                 module = importlib.reload(module)
             except BaseException:
@@ -92,6 +99,21 @@ def import_local_symbols(
                         module.__dict__[name] = value
                 raise
             missing = [name for name in names if not hasattr(module, name)]
+            if force_reload:
+                # importlib.reload() reuses the module dictionary. A requested
+                # export removed by the new source therefore survives with its
+                # old identity unless we detect it explicitly. Keep that old
+                # value visible to concurrent users, but reject this import as
+                # incompatible instead of returning the stale export.
+                stale = [
+                    name
+                    for name, previous in previous_symbols.items()
+                    if previous is not _MISSING
+                    and getattr(module, name, _MISSING) is previous
+                ]
+                missing.extend(
+                    name for name in stale if name not in missing
+                )
 
         if missing:
             missing_text = ", ".join(sorted(missing))

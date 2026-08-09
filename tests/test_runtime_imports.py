@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import process_chat.flowsheet_editor as flowsheet_editor
+from process_chat.dexpi_integration import _supports_neqsim_model_export
 from process_chat.runtime_imports import import_local_symbols
 
 
@@ -62,6 +63,64 @@ class LocalSymbolImportTest(unittest.TestCase):
         self.assertTrue(callable(symbols["connect_graph_ports"]))
         self.assertTrue(callable(flowsheet_editor.connect_graph_ports))
         reload_module.assert_called_once_with(flowsheet_editor)
+
+    def test_force_reload_refreshes_dependent_module_with_existing_symbols(self):
+        with mock.patch(
+            "process_chat.runtime_imports.importlib.reload",
+            wraps=importlib.reload,
+        ) as reload_module:
+            symbols = import_local_symbols(
+                "process_chat.flowsheet_editor",
+                ("connect_graph_ports",),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        self.assertTrue(callable(symbols["connect_graph_ports"]))
+        reload_module.assert_called_once_with(flowsheet_editor)
+
+    def test_force_reload_keeps_present_symbol_visible_during_refresh(self):
+        actual_reload = importlib.reload
+        symbol_was_visible = []
+
+        def observing_reload(module):
+            symbol_was_visible.append(hasattr(module, "connect_graph_ports"))
+            return actual_reload(module)
+
+        with mock.patch(
+            "process_chat.runtime_imports.importlib.reload",
+            side_effect=observing_reload,
+        ):
+            symbols = import_local_symbols(
+                "process_chat.flowsheet_editor",
+                ("connect_graph_ports",),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        self.assertEqual(symbol_was_visible, [True])
+        self.assertTrue(callable(symbols["connect_graph_ports"]))
+
+    def test_force_reload_rejects_removed_export_without_deleting_it(self):
+        removed_name = "_removed_forced_reload_export"
+        stale_export = object()
+        setattr(flowsheet_editor, removed_name, stale_export)
+        self.addCleanup(
+            lambda: flowsheet_editor.__dict__.pop(removed_name, None)
+        )
+
+        with self.assertRaisesRegex(
+            ImportError,
+            f"after refresh: {removed_name}",
+        ):
+            import_local_symbols(
+                "process_chat.flowsheet_editor",
+                (removed_name,),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        self.assertIs(getattr(flowsheet_editor, removed_name), stale_export)
 
     def test_serializes_concurrent_refreshes_for_one_module(self):
         del flowsheet_editor.connect_graph_ports
@@ -208,6 +267,40 @@ class LocalSymbolImportTest(unittest.TestCase):
             "from process_chat.flowsheet_editor import",
             studio_source,
         )
+
+    def test_studio_refreshes_builder_after_process_model(self):
+        studio_path = (
+            self.project_root / "pages" / "35_Process_Flowsheet_Studio.py"
+        )
+        studio_source = studio_path.read_text(encoding="utf-8")
+
+        model_import = studio_source.index('"process_chat.process_model"')
+        builder_import = studio_source.index('"process_chat.process_builder"')
+        self.assertLess(model_import, builder_import)
+        self.assertIn(
+            "force_reload=True",
+            studio_source[model_import:builder_import],
+        )
+        self.assertIn("force_reload=True", studio_source[builder_import:])
+        self.assertNotIn(
+            "from process_chat.process_builder import ProcessBuilder",
+            studio_source,
+        )
+
+    def test_dexpi_fallback_accepts_warm_reload_model_generation(self):
+        class PreviousModelGeneration:
+            @staticmethod
+            def list_units():
+                return []
+
+            @staticmethod
+            def list_streams():
+                return []
+
+        self.assertTrue(
+            _supports_neqsim_model_export(PreviousModelGeneration())
+        )
+        self.assertFalse(_supports_neqsim_model_export(object()))
 
 
 if __name__ == "__main__":

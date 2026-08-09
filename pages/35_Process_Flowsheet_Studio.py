@@ -33,7 +33,6 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJECT_ROOT)
 
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
-from process_chat.process_builder import ProcessBuilder  # noqa: E402
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -54,6 +53,26 @@ globals().update(
         "process_chat.solver_diagnostics",
         _SOLVER_DIAGNOSTIC_SYMBOL_NAMES,
         project_root=_PROJECT_ROOT,
+    )
+)
+
+_PROCESS_MODEL_SYMBOL_NAMES = ("ProcessRunTimeoutError",)
+globals().update(
+    import_local_symbols(
+        "process_chat.process_model",
+        _PROCESS_MODEL_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+        force_reload=True,
+    )
+)
+
+_PROCESS_BUILDER_SYMBOL_NAMES = ("ProcessBuilder",)
+globals().update(
+    import_local_symbols(
+        "process_chat.process_builder",
+        _PROCESS_BUILDER_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+        force_reload=True,
     )
 )
 
@@ -133,12 +152,14 @@ TEMPLATE_NAME = "Inlet separation and two-stage gas compression"
 CASE_STATE_KEY = "flowsheet_studio_case"
 RESULT_STATE_KEY = "flowsheet_studio_result"
 FAILURE_SIGNATURE_STATE_KEY = "flowsheet_studio_failure_signature"
+FAILURE_KIND_STATE_KEY = "flowsheet_studio_failure_kind"
 CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
 CASE_HISTORY_BASELINE_STATE_KEY = "flowsheet_case_history_baseline"
 CASE_NOTICE_STATE_KEY = "flowsheet_case_notice"
 GRAPH_DRAFT_STATE_KEY = "flowsheet_studio_graph_draft"
 GRAPH_HISTORY_STATE_KEY = "flowsheet_studio_graph_history"
 STUDIO_PROCESS_MODEL_NAME = "process_flowsheet_studio.neqsim"
+STUDIO_SOLVE_TIMEOUT_MS = 180_000
 LEGACY_CASE_SCHEMA_VERSION = 1
 SHARED_FLUID_CASE_SCHEMA_VERSION = 2
 GRAPH_CASE_SCHEMA_VERSION = 3
@@ -293,6 +314,7 @@ def _clear_studio_runtime(clear_history: bool) -> None:
         CASE_STATE_KEY,
         RESULT_STATE_KEY,
         FAILURE_SIGNATURE_STATE_KEY,
+        FAILURE_KIND_STATE_KEY,
     ):
         st.session_state.pop(key, None)
     if clear_history:
@@ -2258,6 +2280,7 @@ def _solver_status(
     stored_state: Any,
     has_result: bool,
     failure_signature: str | None,
+    failure_kind: str | None = None,
 ) -> tuple[str, bool]:
     """Classify solver state and whether the stored result matches the inputs."""
     stored_signature = (
@@ -2271,10 +2294,12 @@ def _solver_status(
     )
     if current_signature is None:
         return "Invalid inputs", False
+    if failure_signature == current_signature:
+        if failure_kind == "timeout":
+            return "Timed out", False
+        return "Failed", False
     if results_are_current:
         return "Solved", True
-    if failure_signature == current_signature:
-        return "Failed", False
     if has_stored_result:
         return "Needs rerun", False
     return "Not run", False
@@ -6751,6 +6776,7 @@ solver_status, results_are_current = _solver_status(
     stored_state=stored_state,
     has_result=bool(st.session_state.get(RESULT_STATE_KEY)),
     failure_signature=st.session_state.get(FAILURE_SIGNATURE_STATE_KEY),
+    failure_kind=st.session_state.get(FAILURE_KIND_STATE_KEY),
 )
 solver_status_placeholder.write(f"**Solver:** {solver_status}")
 
@@ -6817,21 +6843,45 @@ if run_case:
 
         solver_status_placeholder.write("**Solver:** Solving")
         execution_started = perf_counter()
+        execution_deadline = (
+            execution_started + STUDIO_SOLVE_TIMEOUT_MS / 1000.0
+        )
+
+        def remaining_execution_budget_ms() -> int:
+            remaining_ms = int(
+                (execution_deadline - perf_counter()) * 1000.0
+            )
+            if remaining_ms <= 0:
+                raise ProcessRunTimeoutError(
+                    "Studio build and solve exceeded the "
+                    f"{STUDIO_SOLVE_TIMEOUT_MS} ms total "
+                    "execution budget; discard this process model."
+                )
+            return remaining_ms
+
         with st.spinner("Building and solving the NeqSim process..."):
             builder = ProcessBuilder()
             graph_process_spec = _build_graph_process_spec(case_spec)
-            model = builder.build_from_spec(
+            model = builder.build_from_spec_bounded(
                 graph_process_spec,
+                timeout_ms=remaining_execution_budget_ms(),
             )
-            result = model.run()
-            model_bytes = builder.save_neqsim_bytes()
-        execution_seconds = perf_counter() - execution_started
-        run_record = _solver_run_record(
-            result,
-            model,
-            current_case_signature,
-            execution_seconds,
-        )
+            result = model.run_bounded(
+                timeout_ms=remaining_execution_budget_ms(),
+            )
+            model_bytes = builder.save_neqsim_bytes_bounded(
+                timeout_ms=remaining_execution_budget_ms(),
+            )
+            run_record = model.run_bounded_operation(
+                lambda: _solver_run_record(
+                    result,
+                    model,
+                    current_case_signature,
+                    perf_counter() - execution_started,
+                ),
+                timeout_ms=remaining_execution_budget_ms(),
+                operation="solver provenance collection",
+            )
 
         state = {
             "spec": case_spec,
@@ -6846,6 +6896,7 @@ if run_case:
         st.session_state[CASE_STATE_KEY] = state
         st.session_state[RESULT_STATE_KEY] = True
         st.session_state.pop(FAILURE_SIGNATURE_STATE_KEY, None)
+        st.session_state.pop(FAILURE_KIND_STATE_KEY, None)
         solved_case_record = _case_history_record(
             case_spec,
             result,
@@ -6866,9 +6917,26 @@ if run_case:
 
         solver_status_placeholder.write("**Solver:** Solved")
         st.success("The NeqSim flowsheet solved and is ready for review.")
+    except TimeoutError as exc:
+        if current_case_signature is not None:
+            st.session_state[FAILURE_SIGNATURE_STATE_KEY] = (
+                current_case_signature
+            )
+            st.session_state[FAILURE_KIND_STATE_KEY] = "timeout"
+        results_are_current = False
+        solver_status = "Timed out"
+        solver_status_placeholder.write("**Solver:** Timed out")
+        st.error(
+            "Flowsheet calculation exceeded the "
+            f"{STUDIO_SOLVE_TIMEOUT_MS / 1000:.0f} s execution budget. "
+            "The partial native model was discarded; no results were published."
+        )
+        with st.expander("Technical error details", expanded=False):
+            st.code(str(exc))
     except Exception as exc:
         if current_case_signature is not None:
             st.session_state[FAILURE_SIGNATURE_STATE_KEY] = current_case_signature
+            st.session_state[FAILURE_KIND_STATE_KEY] = "failure"
         results_are_current = False
         solver_status = "Failed"
         solver_status_placeholder.write("**Solver:** Failed")
@@ -6883,6 +6951,8 @@ has_stored_result = bool(
 if has_stored_result and not results_are_current:
     if solver_status == "Failed":
         stale_reason = "The current calculation failed."
+    elif solver_status == "Timed out":
+        stale_reason = "The current calculation timed out."
     elif solver_status == "Invalid inputs":
         stale_reason = "The current inputs are invalid."
     else:

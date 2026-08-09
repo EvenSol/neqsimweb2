@@ -33,3 +33,13 @@ validates these contracts during import, draft history, execution planning,
 and solve readiness; the draft diagram renders each group as a labeled dashed
 container and lists its boundary-port mappings. Schema-v1–v3 cases migrate to
 v4 with an empty subflowsheet list, so existing calculations remain unchanged.
+
+Studio runs each native flowsheet build, convergence pass, mixer-energy
+closure, design rerun, and final solve within one 180-second execution budget.
+Workers that exceed the budget are interrupted or abandoned after a bounded
+cancellation wait, and failed or timed-out native models are discarded instead
+of being published as solved results. Timeout classification survives normal
+Streamlit reruns while the last trustworthy result stays hidden.
+
+The current UniSim-parity assessment and production-readiness gaps are tracked
+in [docs/process_flowsheet_unisim_parity.md](docs/process_flowsheet_unisim_parity.md).

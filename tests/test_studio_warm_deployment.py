@@ -457,7 +457,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
             and node.func.value.id == "builder"
         }
         self.assertIn(
-            "build_from_spec",
+            "build_from_spec_bounded",
             builder_calls,
         )
         self.assertNotIn(

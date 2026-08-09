@@ -36,7 +36,10 @@ from process_chat.chat_tools import (
     ProcessChatSession,
     _classify_build_change,
 )
-from process_chat.process_model import NeqSimProcessModel
+from process_chat.process_model import (
+    NeqSimProcessModel,
+    ProcessExecutionError,
+)
 from process_chat.patch_schema import AddUnitOp, InputPatch, Scenario, TargetSpec
 from process_chat.scenario_engine import (
     apply_add_units,
@@ -6640,18 +6643,22 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             model._direct_unit_run_provenance,
         )
 
-        with patch.object(
-            model,
-            "_run_until_converged",
-            return_value=False,
-        ), patch.object(
-            model,
-            "_run_acyclic_mixer_energy_closure",
-            side_effect=AssertionError(
-                "failed process run must not start direct closure"
-            ),
+        with self.assertRaisesRegex(
+            ProcessExecutionError,
+            "discard this process model",
         ):
-            model.rerun(timeout_ms=180_000)
+            with patch.object(
+                model,
+                "_run_until_converged",
+                return_value=False,
+            ), patch.object(
+                model,
+                "_run_acyclic_mixer_energy_closure",
+                side_effect=AssertionError(
+                    "failed process run must not start direct closure"
+                ),
+            ):
+                model.rerun(timeout_ms=180_000)
 
         self.assertNotIn(
             "cross exchanger",
@@ -6680,18 +6687,22 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         exchanger = model.get_unit("cross exchanger")
         exchanger.getInStream(0).setTemperature(110.0, "C")
 
-        with patch.object(
-            model,
-            "_run_until_converged",
-            return_value=False,
-        ), patch.object(
-            model,
-            "_run_acyclic_mixer_energy_closure",
-            side_effect=AssertionError(
-                "failed process run must not start direct closure"
-            ),
+        with self.assertRaisesRegex(
+            ProcessExecutionError,
+            "no solved results were published",
         ):
-            result = model.run(timeout_ms=180_000)
+            with patch.object(
+                model,
+                "_run_until_converged",
+                return_value=False,
+            ), patch.object(
+                model,
+                "_run_acyclic_mixer_energy_closure",
+                side_effect=AssertionError(
+                    "failed process run must not start direct closure"
+                ),
+            ):
+                model.run(timeout_ms=180_000)
 
         properties = next(
             unit.properties
@@ -6701,7 +6712,7 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         self.assertNotIn("heatTransferDuty_kW", properties)
         self.assertNotIn(
             "cross exchanger.heatTransferDuty_kW",
-            result.kpis,
+            model._extract_results().kpis,
         )
 
     def test_clone_recaptures_mixer_heat_exchanger_provenance(self):
@@ -6746,11 +6757,17 @@ class MultiInletMixerConservationTest(unittest.TestCase):
         execution_order = ["feed"]
         expected_model = object()
 
-        with patch.object(
-            builder,
-            "build_acyclic_graph",
-            return_value=expected_model,
-        ) as graph_builder:
+        with (
+            patch(
+                "process_chat.process_builder.monotonic",
+                return_value=10.0,
+            ),
+            patch.object(
+                builder,
+                "build_acyclic_graph",
+                return_value=expected_model,
+            ) as graph_builder,
+        ):
             model = builder.build_from_spec(
                 {
                     "name": "Generic graph",
@@ -6765,6 +6782,8 @@ class MultiInletMixerConservationTest(unittest.TestCase):
             graph_spec,
             inlet_specs,
             execution_order,
+            timeout_ms=180000,
+            _deadline=190.0,
         )
 
     def test_build_from_spec_preserves_generic_wrapper_name(self):
