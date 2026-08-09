@@ -435,7 +435,8 @@ class NeqSimProcessModel:
         self._index_model_objects()
         if trusted_solved:
             self._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=allow_direct_runs
+                allow_direct_runs=allow_direct_runs,
+                trust_completed_process_run=True,
             )
 
     # ----- ProcessModel detection -----
@@ -3368,6 +3369,7 @@ class NeqSimProcessModel:
             return {}
         if calculation_identifier is None:
             return {}
+        snapshot_is_trusted = solved_state_snapshot is not None
         if solved_state_snapshot is not None:
             if (
                 not solved_state_snapshot
@@ -3410,6 +3412,7 @@ class NeqSimProcessModel:
                         boundary == "outlet"
                         and str(stream_calculation_identifier)
                         != str(calculation_identifier)
+                        and not snapshot_is_trusted
                     ):
                         return {}
                     if boundary == "inlet":
@@ -3452,7 +3455,10 @@ class NeqSimProcessModel:
                 }
             indexed_sides.append(side_state)
 
-        if not all(inlet_identifiers_match_exchanger):
+        if (
+            not snapshot_is_trusted
+            and not all(inlet_identifiers_match_exchanger)
+        ):
             current_provenance = (
                 str(calculation_identifier),
                 tuple(inlet_calculation_identifiers),
@@ -4227,6 +4233,11 @@ class NeqSimProcessModel:
                             "_direct_unit_run_provenance",
                             {},
                         ).get(name),
+                        getattr(
+                            self,
+                            "_heat_exchanger_state_snapshots",
+                            {},
+                        ).get(name),
                     )
                 )
                 props.update(
@@ -4474,8 +4485,18 @@ class NeqSimProcessModel:
     def _capture_heat_exchanger_state_snapshots(
         self,
         allow_direct_runs: bool = False,
+        trust_completed_process_run: bool = False,
     ) -> None:
-        """Capture solved exchanger boundaries owned by the wrapper run."""
+        """Capture solved exchanger boundaries owned by the wrapper run.
+
+        NeqSim 3.17 may assign distinct calculation identifiers to a
+        ``HeatExchanger`` and each of its inlet and outlet streams during a
+        successful ``ProcessSystem`` run.  ``trust_completed_process_run`` is
+        therefore reserved for callers that have just observed a successful
+        whole-process run; the captured boundary-state signature still
+        invalidates the result after any setting or stream-state edit.  Direct
+        unit runs retain the stricter identifier-pattern check below.
+        """
         self._direct_unit_run_provenance.clear()
         self._heat_exchanger_state_snapshots.clear()
         for name, unit in self._units.items():
@@ -4501,6 +4522,12 @@ class NeqSimProcessModel:
                 continue
             if any(identifier is None for identifier in outlet_identifiers):
                 continue
+            snapshot = self._heat_exchanger_boundary_state_signature(unit)
+            if snapshot is None:
+                continue
+            if trust_completed_process_run:
+                self._heat_exchanger_state_snapshots[name] = snapshot
+                continue
             calculation_identifier_str = str(calculation_identifier)
             inlet_identifier_strings = tuple(
                 str(identifier) for identifier in inlet_identifiers
@@ -4525,9 +4552,7 @@ class NeqSimProcessModel:
                     inlet_identifier_strings,
                     outlet_identifier_strings,
                 )
-            snapshot = self._heat_exchanger_boundary_state_signature(unit)
-            if snapshot is not None:
-                self._heat_exchanger_state_snapshots[name] = snapshot
+            self._heat_exchanger_state_snapshots[name] = snapshot
 
     def get_stream(self, name: str):
         """Get a stream by name (supports qualified, unqualified, and case-insensitive names)."""
@@ -4629,7 +4654,8 @@ class NeqSimProcessModel:
         self._index_model_objects()
         if process_run_succeeded:
             self._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=direct_closure_ran
+                allow_direct_runs=direct_closure_ran,
+                trust_completed_process_run=True,
             )
 
         return self._extract_results()
@@ -4666,7 +4692,8 @@ class NeqSimProcessModel:
         self._index_model_objects()
         if process_run_succeeded:
             self._capture_heat_exchanger_state_snapshots(
-                allow_direct_runs=direct_closure_ran
+                allow_direct_runs=direct_closure_ran,
+                trust_completed_process_run=True,
             )
 
     @staticmethod
@@ -6014,6 +6041,11 @@ class NeqSimProcessModel:
                             getattr(
                                 self,
                                 "_direct_unit_run_provenance",
+                                {},
+                            ).get(name),
+                            getattr(
+                                self,
+                                "_heat_exchanger_state_snapshots",
                                 {},
                             ).get(name),
                         ).items()

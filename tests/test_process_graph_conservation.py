@@ -1025,6 +1025,52 @@ class HeatExchangerPropertyExtractionTest(unittest.TestCase):
             auto_capture_model.list_units()[0].properties,
         )
 
+        class _ProcessRunHeatExchanger(_HeatExchanger):
+            inlet_streams = [
+                _Stream(
+                    stream.temperature_c,
+                    stream.pressure_bara,
+                    stream.flow_kg_hr,
+                    stream.fluid.enthalpy_w,
+                    calculation_identifier=f"process-inlet-{index}",
+                )
+                for index, stream in enumerate(_HeatExchanger.inlet_streams)
+            ]
+            outlet_streams = [
+                _Stream(
+                    stream.temperature_c,
+                    stream.pressure_bara,
+                    stream.flow_kg_hr,
+                    stream.fluid.enthalpy_w,
+                    calculation_identifier=f"process-outlet-{index}",
+                )
+                for index, stream in enumerate(_HeatExchanger.outlet_streams)
+            ]
+
+        process_run_model = NeqSimProcessModel.__new__(NeqSimProcessModel)
+        process_run_model._units = {
+            "process exchanger": _ProcessRunHeatExchanger()
+        }
+        process_run_model._unit_ps_name = {
+            "process exchanger": "main"
+        }
+        process_run_model._direct_unit_run_provenance = {}
+        process_run_model._heat_exchanger_state_snapshots = {}
+        process_run_model._capture_heat_exchanger_state_snapshots()
+        self.assertNotIn(
+            "heatTransferDuty_kW",
+            process_run_model.list_units()[0].properties,
+        )
+        process_run_model._capture_heat_exchanger_state_snapshots(
+            trust_completed_process_run=True
+        )
+        self.assertEqual(
+            process_run_model.list_units()[0].properties[
+                "heatTransferDuty_kW"
+            ],
+            2_400.0,
+        )
+
         class _MutableSolvedHeatExchanger(_HeatExchanger):
             inlet_streams = [
                 _Stream(120.0, 50.0, 50_000.0, 3_300_000.0),
