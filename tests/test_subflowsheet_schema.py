@@ -6,11 +6,14 @@ import copy
 import unittest
 
 from process_chat.subflowsheet_schema import (
+    subflowsheet_boundary_rows,
     subflowsheet_membership,
+    subflowsheet_rows,
     validate_subflowsheets,
 )
 from process_chat.flowsheet_editor import (
     apply_graph_draft,
+    build_graph_draft_dot,
     create_graph_draft,
     create_graph_history,
     record_graph_history,
@@ -193,6 +196,25 @@ class SubflowsheetSchemaTest(unittest.TestCase):
         self.assertEqual(
             history["entries"][1]["subflowsheets"][0]["name"],
             "Compression system",
+        )
+
+    def test_draft_diagram_groups_units_and_reports_boundaries(self):
+        dot = build_graph_draft_dot(
+            [{"id": "feed", "name": "Feed"}],
+            self.units,
+            self.connections,
+            self.subflowsheets,
+        )
+        groups = subflowsheet_rows(self.subflowsheets)
+        boundaries = subflowsheet_boundary_rows(self.subflowsheets)
+
+        self.assertIn("subgraph cluster_subflowsheet_0", dot)
+        self.assertIn('label="Compression train"', dot)
+        self.assertEqual(groups[0]["Unit count"], 2)
+        self.assertEqual(groups[0]["Boundary port count"], 2)
+        self.assertEqual(
+            [row["Direction"] for row in boundaries],
+            ["inlet", "outlet"],
         )
 
 

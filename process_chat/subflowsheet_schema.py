@@ -338,3 +338,67 @@ def subflowsheet_membership(
                 )
             membership[unit_id] = group_id
     return membership
+
+
+def subflowsheet_rows(
+    subflowsheets: list[Any],
+) -> list[dict[str, Any]]:
+    """Return deterministic workbook rows for hierarchical graph groups."""
+    subflowsheet_membership(subflowsheets)
+    rows: list[dict[str, Any]] = []
+    for group in subflowsheets:
+        group_id = str(group["id"]).strip()
+        unit_ids = [str(unit_id).strip() for unit_id in group["unit_ids"]]
+        boundaries = group.get("boundary_ports")
+        if not isinstance(boundaries, list):
+            raise ValueError(
+                f"Subflowsheet '{group_id}' boundary_ports must be an array."
+            )
+        rows.append(
+            {
+                "Subflowsheet ID": group_id,
+                "Subflowsheet": str(group.get("name", group_id)).strip(),
+                "Unit count": len(unit_ids),
+                "Units": ", ".join(unit_ids),
+                "Boundary port count": len(boundaries),
+            }
+        )
+    return rows
+
+
+def subflowsheet_boundary_rows(
+    subflowsheets: list[Any],
+) -> list[dict[str, str]]:
+    """Return explicit boundary-port contracts for Studio presentation."""
+    subflowsheet_membership(subflowsheets)
+    rows: list[dict[str, str]] = []
+    for group in subflowsheets:
+        group_id = str(group["id"]).strip()
+        group_name = str(group.get("name", group_id)).strip()
+        boundaries = group.get("boundary_ports")
+        if not isinstance(boundaries, list):
+            raise ValueError(
+                f"Subflowsheet '{group_id}' boundary_ports must be an array."
+            )
+        for boundary in boundaries:
+            if not isinstance(boundary, dict):
+                raise ValueError(
+                    f"Subflowsheet '{group_id}' boundary port must be an object."
+                )
+            endpoint = boundary.get("endpoint")
+            if not isinstance(endpoint, dict):
+                raise ValueError(
+                    f"Subflowsheet '{group_id}' boundary requires an endpoint."
+                )
+            rows.append(
+                {
+                    "Subflowsheet": group_name,
+                    "Boundary ID": str(boundary.get("id", "")).strip(),
+                    "Boundary": str(boundary.get("name", "")).strip(),
+                    "Type": str(boundary.get("type", "")).strip(),
+                    "Direction": str(boundary.get("direction", "")).strip(),
+                    "Unit": str(endpoint.get("id", "")).strip(),
+                    "Port": str(endpoint.get("port", "")).strip(),
+                }
+            )
+    return rows

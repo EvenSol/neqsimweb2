@@ -429,6 +429,7 @@ class StudioWarmDeploymentTest(unittest.TestCase):
                 "name": "Shared graph handoff",
                 "units": case_spec["units"],
                 "connections": case_spec["connections"],
+                "subflowsheets": [],
             },
         )
         self.assertEqual(
@@ -1112,8 +1113,9 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ]
         validate_case_graph.__globals__.update(
             {
-                "CASE_SCHEMA_VERSION": 3,
+                "GRAPH_CASE_SCHEMA_VERSION": 3,
                 "_validate_graph_integrity": lambda *args: None,
+                "validate_subflowsheets": lambda *args: None,
                 "_terminal_name_conflicts": terminal_name_conflicts,
                 "_terminal_material_stream_names": (
                     terminal_material_stream_names
@@ -1162,11 +1164,12 @@ class StudioWarmDeploymentTest(unittest.TestCase):
         ]
         validate_case_graph.__globals__.update(
             {
-                "CASE_SCHEMA_VERSION": 3,
+                "GRAPH_CASE_SCHEMA_VERSION": 3,
                 "MAX_MULTI_INLET_PORTS": (
                     flowsheet_editor.MAX_MULTI_INLET_PORTS
                 ),
                 "_validate_graph_integrity": lambda *args: None,
+                "validate_subflowsheets": lambda *args: None,
                 "_terminal_name_conflicts": lambda *args: [],
                 "_terminal_material_stream_names": lambda *args: set(),
                 "_index_graph_objects": lambda units, label: {
