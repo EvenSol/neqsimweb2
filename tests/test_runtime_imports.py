@@ -101,6 +101,27 @@ class LocalSymbolImportTest(unittest.TestCase):
         self.assertEqual(symbol_was_visible, [True])
         self.assertTrue(callable(symbols["connect_graph_ports"]))
 
+    def test_force_reload_rejects_removed_export_without_deleting_it(self):
+        removed_name = "_removed_forced_reload_export"
+        stale_export = object()
+        setattr(flowsheet_editor, removed_name, stale_export)
+        self.addCleanup(
+            lambda: flowsheet_editor.__dict__.pop(removed_name, None)
+        )
+
+        with self.assertRaisesRegex(
+            ImportError,
+            f"after refresh: {removed_name}",
+        ):
+            import_local_symbols(
+                "process_chat.flowsheet_editor",
+                (removed_name,),
+                project_root=self.project_root,
+                force_reload=True,
+            )
+
+        self.assertIs(getattr(flowsheet_editor, removed_name), stale_export)
+
     def test_serializes_concurrent_refreshes_for_one_module(self):
         del flowsheet_editor.connect_graph_ports
         reload_started = threading.Event()

@@ -99,6 +99,21 @@ def import_local_symbols(
                         module.__dict__[name] = value
                 raise
             missing = [name for name in names if not hasattr(module, name)]
+            if force_reload:
+                # importlib.reload() reuses the module dictionary. A requested
+                # export removed by the new source therefore survives with its
+                # old identity unless we detect it explicitly. Keep that old
+                # value visible to concurrent users, but reject this import as
+                # incompatible instead of returning the stale export.
+                stale = [
+                    name
+                    for name, previous in previous_symbols.items()
+                    if previous is not _MISSING
+                    and getattr(module, name, _MISSING) is previous
+                ]
+                missing.extend(
+                    name for name in stale if name not in missing
+                )
 
         if missing:
             missing_text = ", ".join(sorted(missing))
