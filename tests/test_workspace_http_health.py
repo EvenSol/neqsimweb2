@@ -41,6 +41,7 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
                     "streamlit",
                     "run",
                     str(page),
+                    "--global.developmentMode=false",
                     "--server.headless=true",
                     "--server.address=127.0.0.1",
                     f"--server.port={port}",
@@ -104,6 +105,9 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
 
     def test_studio_http_health(self):
         self._probe_streamlit_page("pages/00_NeqSim_Studio.py")
+
+    def test_studio_results_http_health(self):
+        self._probe_streamlit_page("pages/10_Studio_Results.py")
 
     def test_process_chat_http_health(self):
         self._probe_streamlit_page("pages/90_Process_Chat.py")

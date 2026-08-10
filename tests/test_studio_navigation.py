@@ -42,6 +42,12 @@ class StudioNavigationTest(unittest.TestCase):
             "pages/35_Process_Flowsheet_Studio.py",
         )
 
+    def test_results_and_existing_studies_share_one_solved_model_adapter(self):
+        for key in ("equipment", "studies"):
+            destination = destination_by_key(key)
+            self.assertTrue(destination.available)
+            self.assertEqual(destination.page, "pages/10_Studio_Results.py")
+
     def test_unknown_destination_fails_loudly(self):
         with self.assertRaisesRegex(KeyError, "Unknown Studio destination"):
             destination_by_key("not-a-real-workflow")

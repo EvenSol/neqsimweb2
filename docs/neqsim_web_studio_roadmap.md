@@ -45,65 +45,69 @@ diagram engine.
 
 ### S0 — Classic preservation and architecture baseline
 
-Status: **in progress**
-
-Acceptance:
+Status: **completed foundation on `main`**.
 
 - Classic homepage content and existing page navigation remain usable.
 - Studio is introduced side-by-side rather than replacing existing pages.
 - Shared services are extracted only when behavior is preserved by regression tests.
 
+Merged evidence: Studio shell stack PR #93 and its Classic/Studio navigation and
+health regressions.
+
 ### S1 — Studio shell and workspace choice
 
-Status: **in progress**
-
-Acceptance:
+Status: **completed foundation on `main`**.
 
 - A professional Studio dashboard is available as a separate Streamlit page.
 - Users can move explicitly between Studio and Classic.
 - The mature Process Flowsheet Studio is the first enabled Studio engineering workflow.
 - Planned workflows remain visible with honest availability state.
 
+Merged evidence: Studio shell stack PR #93.
+
 ### S2 — Shared case context and lifecycle
 
-Status: **in stack on top of S0/S1**.
+Status: **completed foundation on `main`**.
 
 Create/open/save/save-as/reset, metadata, units, thermodynamic package, provenance
-and solved/dirty/error state shared across Studio pages without corrupting Classic cases.
+and solved/dirty/error state are shared across Studio pages without corrupting
+Classic cases.
 
-Stack evidence:
+Merged evidence from Studio stack PR #94:
 
-- a UI-independent `studio.case_context` owns only Studio session lifecycle metadata;
-- schema-v1–v4 Process Flowsheet Studio JSON remains the authoritative portable
-  case contract and is not wrapped or silently rewritten;
-- New, Open, Download, Save As, Reset and session-local Recent Cases are available
-  from the Studio home and hand off to the existing detailed v4 importer;
-- the active case carries stable identity, units, thermodynamic summary,
-  provenance, portable specification and explicit draft/dirty/solved/warning/
-  failed/timed-out/invalid state across Studio pages;
-- solved native model availability and signature are recorded as runtime evidence,
-  while Java/Python model objects remain in the established session adapter;
-- lifecycle keys are Studio-owned and regression-tested not to alter unrelated
-  Classic session data.
+- UI-independent `studio.case_context` owns only Studio session lifecycle metadata;
+- schema-v1–v4 Process Flowsheet Studio JSON remains the authoritative portable case contract;
+- New, Open, Download, Save As, Reset and session-local Recent Cases are available;
+- stable identity, explicit units, thermodynamic summary, provenance and lifecycle state span Studio pages;
+- native model availability/signature are runtime evidence while Java/Python objects remain in the established adapter;
+- lifecycle regressions prove unrelated Classic session data is not altered.
 
 ### S3 — Integrate mature Process Flowsheet Studio
 
-Status: **initial handoff in stack; existing simulation functionality already substantial**.
+Status: **initial integration completed on `main`; broader workspace integration continues**.
 
-Repackage the existing editor/builder/diagnostics/workbook functionality behind the
-Studio shell while preserving the existing direct Classic-compatible page.
+The active Studio case hands its established solved `process_model` directly to
+Process Chat. The generic editor, builder, diagnostics, workbooks, studies and
+direct Classic-compatible flowsheet route remain the inherited implementation.
 
-The active Studio case now hands its established solved `process_model` directly
-to Process Chat. The existing flowsheet page and Process Chat page remain usable
-through their original Classic routes.
+Merged evidence: Studio stack PRs #94 and #95.
 
 ### S4 — Professional results, design and engineering studies
 
-Status: planned integration.
+Status: **professional results and design review in current root PR**.
 
-Expose solved/warning/failed state, conservation, assumptions, provenance,
-case comparisons, design limits, sensitivity, adjust/specification and optimization
-through the active Studio case.
+The current tranche adds a shared, UI-independent exact-result handoff and a
+professional results workspace over the existing solved model. It exposes:
+
+- explicit solved/warning/attention state without presenting stale or dirty results;
+- KPIs, units, thermodynamics, assumptions and solver provenance;
+- streams, equipment, design capacities, margins, utilization and limit status;
+- system/component/unit conservation and recycle/adjuster convergence evidence;
+- display-safe session case comparison while retaining sensitivity, adjust and
+  bounded optimization execution in the inherited flowsheet tools.
+
+This is validated-but-unmerged stack evidence and is not counted as completed
+until its root PR is merged.
 
 ### S5 — Engineering Drawings
 
@@ -115,22 +119,15 @@ The web layer owns interactive engineering workflow, not standards semantics.
 
 ### S6 — Process Chat engineering copilot
 
-Status: **initial case-aware integration in stack**.
+Status: **initial case-aware integration completed on `main`**.
 
-Make Process Chat case-aware and tool-oriented while keeping deterministic NeqSim
-calculations as the source of truth.
-
-The first integration exposes Process Chat as an available Studio workflow,
-identifies the active case and its thermodynamic/lifecycle state, and reuses the
-existing solved-model session handoff. If Process Chat replaces or resets the live
-model, the shared context is marked dirty and the portable flowsheet specification
-remains visible as the last reproducible input rather than being silently promoted.
-Process Chat also receives a bounded, whitelisted projection of the active case ID,
-lifecycle, units, thermodynamic package, runtime-model evidence and provenance. The
-projection excludes the portable case body and arbitrary session state, treats every
-user-authored value as untrusted data, and tells the assistant never to present a
-draft/dirty/failed case as solved. Numeric results remain sourced from the live model
-or an executed deterministic NeqSim calculation.
+Merged Studio stack PR #95 exposes Process Chat as an available Studio workflow,
+identifies the active case and thermodynamic/lifecycle state, and reuses the
+existing solved-model handoff. It also supplies a bounded whitelisted case
+projection that excludes the portable case body and arbitrary session state,
+treats user-authored text as untrusted data and never promotes dirty/failed state
+to solved evidence. Numeric answers remain sourced from the live model or an
+executed deterministic NeqSim calculation.
 
 ### S7 — Dynamics and controls
 
@@ -149,26 +146,22 @@ migration/interoperability evidence and deployment validation are release gates.
 
 ## Current tranche
 
-The first Studio campaign tranche establishes S0/S1 without rewriting existing
-simulation functionality:
+S4 professional active-case results is the next root tranche after the S0–S3/S6
+foundation merged to `main`. It reuses the exact `flowsheet_studio_case` solved
+state, `NeqSimProcessModel`, shared solver-diagnostic adapters, equipment design
+properties and solved case history. It adds no calculation engine and changes no
+Classic route.
 
-1. preserve the Classic homepage and add a small explicit workspace choice;
-2. add the separate professional `NeqSim Studio (Beta)` dashboard;
-3. route the first available Studio workflow to the existing validated Process
-   Flowsheet Studio;
-4. add regression coverage for the Classic/Studio separation and declarative
-   Studio destination contract.
-
-Only merged pull requests count as completed roadmap evidence.
+Acceptance requires fail-closed exact-signature validation, explicit units and
+provenance, honest engineering status, focused result-projection regressions,
+Classic + Studio application health and the existing native conservation gate.
 
 ## Active stacked work
 
-The S0/S1 Studio shell remains the root PR targeting `main`. The S2 child PR
-targets that exact Studio branch and is not independently mergeable to `main`.
-S2 advances the complete case-workspace handoff while reusing the existing v4
-schema validation, migration, graph draft, native solve and Process Chat state.
-Its work is recorded as **in stack**, not merged completion.
+The current S4 results/design tranche is a new root PR targeting `main`. There are
+no child Studio implementation PRs above it. It is recorded as **in stack**, not
+merged completion.
 
-The next stacked child adds the case-aware Process Chat handoff on top of S2. It
-does not expand chat permissions or duplicate simulation tools; it makes the
-already-validated model transfer and lifecycle boundary explicit.
+The next dependency-ready tranche is deeper studies integration through the same
+shared case service, followed by a core-API-aligned Engineering Drawings adapter
+when the #1332/#2899 contracts are merged and stable.

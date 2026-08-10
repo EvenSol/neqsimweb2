@@ -5,6 +5,7 @@ on:
     paths:
       - "welcome.py"
       - "pages/00_NeqSim_Studio.py"
+      - "pages/10_Studio_Results.py"
       - "pages/35_Process_Flowsheet_Studio.py"
       - "pages/90_Process_Chat.py"
       - "studio/**"
@@ -19,6 +20,8 @@ on:
       - "tests/test_process_chat_studio_handoff.py"
       - "tests/test_process_chat_studio_context.py"
       - "tests/test_studio_navigation.py"
+      - "tests/test_studio_results_context.py"
+      - "tests/test_studio_results_shell.py"
       - "tests/test_studio_shell.py"
       - "tests/test_workspace_http_health.py"
       - "tests/test_flowsheet_editor.py"
@@ -56,10 +59,12 @@ jobs:
           python -m py_compile \
             welcome.py \
             pages/00_NeqSim_Studio.py \
+            pages/10_Studio_Results.py \
             pages/35_Process_Flowsheet_Studio.py \
             pages/90_Process_Chat.py \
             studio/case_context.py \
             studio/navigation.py \
+            studio/results_context.py \
             process_chat/process_builder.py \
             process_chat/flowsheet_editor.py \
             process_chat/graph_schema.py \
@@ -72,6 +77,8 @@ jobs:
             tests/test_process_chat_studio_context.py \
             tests/test_studio_case_context.py \
             tests/test_studio_navigation.py \
+            tests/test_studio_results_context.py \
+            tests/test_studio_results_shell.py \
             tests/test_studio_shell.py \
             tests/test_workspace_http_health.py \
             tests/test_flowsheet_editor.py \
@@ -86,6 +93,10 @@ jobs:
         run: python tests/test_studio_navigation.py -v
       - name: Run shared Studio case lifecycle regressions
         run: python tests/test_studio_case_context.py -v
+      - name: Run professional Studio result regressions
+        run: |
+          python tests/test_studio_results_context.py -v
+          python tests/test_studio_results_shell.py -v
       - name: Run Process Chat Studio handoff regressions
         run: |
           python tests/test_process_chat_studio_handoff.py -v
