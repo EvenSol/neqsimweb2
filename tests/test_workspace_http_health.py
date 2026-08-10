@@ -108,6 +108,9 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
     def test_process_chat_http_health(self):
         self._probe_streamlit_page("pages/90_Process_Chat.py")
 
+    def test_pipeline_http_health(self):
+        self._probe_streamlit_page("pages/25_Pipeline.py")
+
 
 if __name__ == "__main__":
     unittest.main()
