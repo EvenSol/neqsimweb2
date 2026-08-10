@@ -173,6 +173,7 @@ class ChatSession:
         comparison=None,
         emissions=None,
         energy_audit=None,
+        solved_signature="sha-a",
     ):
         self.model = model
         self._sensitivity = sensitivity
@@ -180,6 +181,9 @@ class ChatSession:
         self._comparison = comparison
         self._emissions = emissions
         self._energy_audit = energy_audit
+        self._studio_case_context = {
+            "runtime": {"solved_signature": solved_signature}
+        }
 
     def get_last_sensitivity(self):
         return self._sensitivity
@@ -261,6 +265,19 @@ class StudioStudyContextTest(unittest.TestCase):
         self.assertFalse(evidence["available"])
         self.assertIn("different runtime model", evidence["reason"])
         self.assertNotIn("sensitivity", evidence)
+
+    def test_different_solved_signature_rejects_cached_getters(self):
+        self.session["chat_session"] = ChatSession(
+            self.model,
+            emissions=Emissions(),
+            solved_signature="sha-before-resolve",
+        )
+
+        evidence = current_study_evidence(self.session)
+
+        self.assertFalse(evidence["available"])
+        self.assertIn("different solved signature", evidence["reason"])
+        self.assertNotIn("emissions", evidence)
 
     def test_retained_message_studies_survive_later_chat_turns(self):
         sensitivity = Sensitivity(

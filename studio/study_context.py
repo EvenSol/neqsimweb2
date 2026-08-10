@@ -491,6 +491,25 @@ def current_study_evidence(session_state: Mapping[str, Any]) -> dict[str, Any]:
                 "Reopen Process Chat from the active solved case and rerun the study."
             ),
         }
+    chat_case_context = getattr(chat_session, "_studio_case_context", None)
+    chat_runtime = (
+        chat_case_context.get("runtime")
+        if isinstance(chat_case_context, Mapping)
+        else None
+    )
+    chat_signature = (
+        chat_runtime.get("solved_signature")
+        if isinstance(chat_runtime, Mapping)
+        else None
+    )
+    if chat_signature != context.signature:
+        return {
+            "available": False,
+            "reason": (
+                "Process Chat evidence belongs to a different solved signature. "
+                "Reopen Process Chat from the active solved case and rerun the study."
+            ),
+        }
 
     sensitivity_result = _getter(chat_session, "get_last_sensitivity")
     if sensitivity_result is None:
