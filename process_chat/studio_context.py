@@ -20,8 +20,9 @@ CHAT_MESSAGES_STATE_KEY = "chat_messages"
 def reset_chat_session_if_model_changed(
     session_state: MutableMapping[str, Any],
     model: Any,
+    solved_signature: str | None = None,
 ) -> bool:
-    """Reset chat-owned state when its session targets another runtime model.
+    """Reset chat-owned state when its session targets another solved runtime.
 
     Process Flowsheet Studio may replace the solved model while Streamlit keeps
     the existing Process Chat session alive.  Reusing that session would run a
@@ -32,7 +33,21 @@ def reset_chat_session_if_model_changed(
     """
 
     chat_session = session_state.get(CHAT_SESSION_STATE_KEY)
-    if chat_session is None or getattr(chat_session, "model", None) is model:
+    if chat_session is None:
+        return False
+    model_matches = getattr(chat_session, "model", None) is model
+    previous_context = getattr(chat_session, "_studio_case_context", None)
+    previous_signature = None
+    if isinstance(previous_context, Mapping):
+        runtime = previous_context.get("runtime")
+        if isinstance(runtime, Mapping):
+            previous_signature = runtime.get("solved_signature")
+    signature_matches = (
+        solved_signature is None
+        or previous_signature is None
+        or previous_signature == solved_signature
+    )
+    if model_matches and signature_matches:
         return False
     session_state.pop(CHAT_SESSION_STATE_KEY, None)
     session_state[CHAT_MESSAGES_STATE_KEY] = []

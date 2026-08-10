@@ -118,6 +118,13 @@ NeqSim-backed tools. Retained study evidence survives ordinary follow-up turns,
 while Process Chat resets its chat-owned session and attachments if a newly solved
 flowsheet replaces the live runtime model.
 
+The third stack tranche extends the same presentation adapter to completed
+scenario comparison, emissions and energy-audit attachments. Successful and
+failed scenarios, KPI units, constraint/patch evidence, source-level emissions,
+utility consumers, benchmark status and screening recommendations remain visible
+for the exact active native model. Studio does not rerun or duplicate these
+calculations, and estimation/benchmark methods remain explicitly labelled.
+
 ### S5 — Engineering Drawings
 
 Status: dependent on merged core capabilities.
@@ -168,9 +175,10 @@ Classic + Studio application health and the existing native conservation gate.
 ## Active stacked work
 
 The S4 results/design root PR targets `main`. The exact-model studies child targets
-that root branch and is not independently mergeable to `main`. Both are recorded
-as **in stack**, not merged completion.
+that root branch; the engineering-evidence child targets the studies branch. The
+three-PR stack is full, and neither child is independently mergeable to `main`.
+All three are recorded as **in stack**, not merged completion.
 
-The next dependency-ready tranche is deeper studies integration through the same
-shared case service, followed by a core-API-aligned Engineering Drawings adapter
-when the #1332/#2899 contracts are merged and stable.
+The next work is validation, review feedback and conflict/integration repair until
+an earlier Studio PR merges or closes. Engineering Drawings remains gated on the
+merged and stable #1332/#2899 core contracts.

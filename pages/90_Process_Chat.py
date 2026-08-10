@@ -2377,10 +2377,11 @@ def _show_model_built(model_result):
 _chat_model_was_reset = reset_chat_session_if_model_changed(
     st.session_state,
     model,
+    (_studio_case or {}).get("runtime", {}).get("solved_signature"),
 )
 if _chat_model_was_reset:
     st.info(
-        "Process Chat was reset because the active runtime model changed. "
+        "Process Chat was reset because the active solved runtime changed. "
         "New questions and studies will use the current model."
     )
 
@@ -2636,11 +2637,23 @@ if user_input:
                         except Exception as e:
                             st.warning(f"Could not render {key}: {e}")
 
-                if sensitivity is not None or optimization is not None:
+                if any(
+                    result is not None
+                    for result in (
+                        sensitivity,
+                        optimization,
+                        comparison,
+                        emissions,
+                        energy_audit,
+                    )
+                ):
                     # Keep a runtime-only identity marker with deterministic
-                    # study attachments.  Studio Results uses this marker to
+                    # engineering attachments. Studio Results uses this marker to
                     # reject history belonging to another native model.
                     msg_data["_study_model"] = session.model
+                    msg_data["_study_signature"] = (
+                        (_studio_case or {}).get("runtime", {}).get("solved_signature")
+                    )
 
                 st.session_state["chat_messages"].append(msg_data)
 
