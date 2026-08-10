@@ -27,7 +27,19 @@ class StudioShellTest(unittest.TestCase):
         self.assertIn("⚙️ Open Process Flowsheet", button_labels)
         self.assertIn("Open Classic", button_labels)
         self.assertIn("Open Process Flowsheet", button_labels)
-        self.assertIn("Coming soon", button_labels)
+        coming_soon_labels = [
+            label for label in button_labels if label.startswith("Coming soon · ")
+        ]
+        self.assertEqual(
+            set(coming_soon_labels),
+            {
+                "Coming soon · Thermodynamics & PVT",
+                "Coming soon · Dynamics & Controls",
+                "Coming soon · Engineering Drawings",
+                "Coming soon · Examples & Tutorials",
+            },
+        )
+        self.assertEqual(len(coming_soon_labels), len(set(coming_soon_labels)))
         uploader_labels = [uploader.label for uploader in app.file_uploader]
         self.assertIn("Open portable case JSON", uploader_labels)
 
