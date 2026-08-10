@@ -156,10 +156,14 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: ongoing across all milestones.
+Status: **ongoing; central-route health coverage in the active stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
+The active S9 child tranche adds the central Process Flowsheet page to the fresh
+Streamlit root/health/live-process gate and requires every enabled Studio
+destination to remain represented in that gate. This is in-stack evidence, not a
+merged production-readiness claim.
 
 ## Current tranche
 
@@ -170,18 +174,20 @@ portable schema behavior, and the complete hosted gate passed Classic, Studio,
 Results, Process Chat and pipeline health plus warm deployment, native
 conservation, bounded execution and pipeline hydraulics.
 
-The current documentation tranche reconciles the roadmap with that merge and
-freezes the Engineering Drawings integration boundary at verified merged core
-evidence. It introduces no calculation, schema, route or user-workflow change.
+The root documentation tranche reconciles the roadmap with that merge and freezes
+the Engineering Drawings integration boundary at verified merged core evidence.
+Its S9 child hardens deployment coverage for the inherited central Process
+Flowsheet workflow without changing calculations, schema, routes or saved cases.
 
 ## Active stacked work
 
-There are no open Studio implementation PRs. PR #100 is merged and no child branch
-depends on it. This documentation-only root tranche targets current `main` and
-does not claim that an unmerged `equinor/neqsim` capability is available.
+PR #100 is merged. The active stack contains the documentation-only drawing
+contract root targeting `main` and one S9 deployment-health child targeting that
+root's exact validated head. Neither tranche claims that an unmerged
+`equinor/neqsim` capability is available.
 
-While the drawing-set contract remains unavailable, the next largest safe
-dependency-ready implementation tranche is S9 Classic/Studio browser,
-accessibility and migration/interoperability hardening. Engineering Drawings can
-move into an interactive Studio adapter only after the required core contracts
-are merged and available in the NeqSim runtime used by the web application.
+While the drawing-set contract remains unavailable, further safe S9 work is
+Classic/Studio browser interaction, accessibility and migration/interoperability
+hardening. Engineering Drawings can move into an interactive Studio adapter only
+after the required core contracts are merged and available in the NeqSim runtime
+used by the web application.
