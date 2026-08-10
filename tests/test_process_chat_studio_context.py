@@ -73,6 +73,10 @@ class ProcessChatStudioContextTest(unittest.TestCase):
         self.assertIn("studio_case_context: Optional[Dict[str, Any]]", chat_source)
         self.assertIn("def set_studio_case_context", chat_source)
         self.assertIn("format_studio_case_evidence", chat_source)
+        self.assertIn(
+            'getattr(self, "_studio_case_context", None)',
+            chat_source,
+        )
         self.assertIn("studio_case_context=_studio_case", page_source)
         self.assertIn("session.set_studio_case_context(_studio_case)", page_source)
 

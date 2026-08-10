@@ -3232,15 +3232,18 @@ class ProcessChatSession:
     def _refresh_system_prompt(self) -> None:
         """Refresh the prompt after model or Studio lifecycle changes."""
 
+        # Older tests and persisted integrations may construct a session without
+        # running the current __init__. Keep standalone/Classic behavior intact.
+        studio_case_context = getattr(self, "_studio_case_context", None)
         if self.model is not None:
             self._system_prompt = build_system_prompt(
                 self.model,
-                self._studio_case_context,
+                studio_case_context,
             )
             return
 
         self._system_prompt = build_builder_system_prompt()
-        studio_evidence = format_studio_case_evidence(self._studio_case_context)
+        studio_evidence = format_studio_case_evidence(studio_case_context)
         if studio_evidence:
             self._system_prompt += "\n\n" + studio_evidence
 
