@@ -94,9 +94,9 @@ Merged evidence: Studio stack PRs #94 and #95.
 
 ### S4 — Professional results, design and engineering studies
 
-Status: **professional results/design merged; studies and engineering evidence in recovery PR**.
+Status: **completed professional results, design and study-evidence tranche on `main`**.
 
-The current tranche adds a shared, UI-independent exact-result handoff and a
+The merged tranche adds a shared, UI-independent exact-result handoff and a
 professional results workspace over the existing solved model. It exposes:
 
 - explicit solved/warning/attention state without presenting stale or dirty results;
@@ -106,31 +106,33 @@ professional results workspace over the existing solved model. It exposes:
 - display-safe session case comparison while retaining sensitivity, adjust and
   bounded optimization execution in the inherited flowsheet tools.
 
-Professional results and design review are merged on `main` through PR #96.
+Professional results and design review are merged through PR #96. Recovery PR
+#100 placed the reviewed exact-model engineering-study evidence from closed child
+PRs #98 and #99 onto current `main`. Completed Process Chat sensitivity sweeps,
+bounded optimization, scenario comparisons, emissions and energy-audit evidence
+are projected only when the chat session references the same native model and
+solved signature. Failed points/scenarios, units, method, constraints, bottlenecks,
+source-level emissions, utility consumers and screening limitations remain visible.
 
-The dependency-ordered child tranche adds exact-model engineering-study evidence:
-completed Process Chat sensitivity sweeps and bounded optimization results are
-projected into the active Studio case only when the chat session references the
-same native model and solved signature. Failed points, units, method, convergence,
-bottlenecks and provenance remain visible. Study execution stays in the existing
-NeqSim-backed tools. Retained study evidence survives ordinary follow-up turns,
-while Process Chat resets its chat-owned session and attachments if a newly solved
-flowsheet replaces the live runtime model.
-
-The third stack tranche extends the same presentation adapter to completed
-scenario comparison, emissions and energy-audit attachments. Successful and
-failed scenarios, KPI units, constraint/patch evidence, source-level emissions,
-utility consumers, benchmark status and screening recommendations remain visible
-for the exact active native model. Studio does not rerun or duplicate these
-calculations, and estimation/benchmark methods remain explicitly labelled.
+Study execution stays in the existing NeqSim-backed tools. Mutation-capable
+bounded optimization runs on a fail-closed isolated model clone so auto-sizing,
+chart setup and search reruns cannot alter the active solved Studio case. Studio
+does not rerun or duplicate the calculations.
 
 ### S5 — Engineering Drawings
 
-Status: dependent on merged core capabilities.
+Status: **blocked on a merged, web-consumable core drawing-set contract**.
 
-Consume the canonical PFD/P&ID/DEXPI model from `equinor/neqsim`, including stable
-semantic IDs, drawing sets/sheets, validation diagnostics and export artifacts.
-The web layer owns interactive engineering workflow, not standards semantics.
+Current `equinor/neqsim` master includes the canonical topology-backed assessed
+DEXPI 2.0 Process material projection through #2932. That is reusable core
+foundation, but it is not yet a controlled Studio drawing set: operating values
+are still proposed in draft #2934, and document/sheet identity, revision/status,
+layout ownership, off-page references and qualified SVG/PDF artifacts remain
+future core work. Studio therefore keeps Engineering Drawings honestly marked as
+core integration in progress rather than defining a competing payload or renderer.
+
+The exact activation boundary and adapter responsibilities are recorded in
+`docs/neqsim_web_studio_drawing_contract.md`.
 
 ### S6 — Process Chat engineering copilot
 
@@ -161,25 +163,25 @@ migration/interoperability evidence and deployment validation are release gates.
 
 ## Current tranche
 
-PR #96 merged the S4 professional active-case results root onto `main`. PRs #98
-and #99 were then merged into their already-merged parent branches, so GitHub
-closed them without landing their study/evidence trees on `main`. The current
-recovery tranche reapplies their previously reviewed exact-model sensitivity,
-optimization, scenario, emissions and energy-audit presentation as one clean
-commit based on the exact current `main` head.
+Recovery PR #100 merged at `90e1477ca7761c8bfe288f8b6f302380ab49aada`,
+so exact-model sensitivity, bounded optimization, scenario, emissions and
+energy-audit evidence is now on `main`. The merge preserves Classic routes and
+portable schema behavior, and the complete hosted gate passed Classic, Studio,
+Results, Process Chat and pipeline health plus warm deployment, native
+conservation, bounded execution and pipeline hydraulics.
 
-Acceptance requires byte-equivalent application/test content to validated PR #99
-head (apart from this truthful roadmap update), zero Classic route or calculation
-changes, fail-closed native-model/signature checks, and a fresh complete hosted
-Classic + Studio + native-conservation gate.
+The current documentation tranche reconciles the roadmap with that merge and
+freezes the Engineering Drawings integration boundary at verified merged core
+evidence. It introduces no calculation, schema, route or user-workflow change.
 
 ## Active stacked work
 
-PR #96 is merged on `main`. Closed PRs #98 and #99 preserve the original review,
-exact-head validation and dependency history, but their child-branch merges did
-not update `main`. One clean replacement root PR now targets current `main` with
-the combined #98/#99 tree; it is recorded as **in stack**, not merged completion.
+There are no open Studio implementation PRs. PR #100 is merged and no child branch
+depends on it. This documentation-only root tranche targets current `main` and
+does not claim that an unmerged `equinor/neqsim` capability is available.
 
-After recovery lands, the next dependency-ready tranche is a core-API-aligned
-Engineering Drawings adapter and drawing register using the merged #1332/#2899
-contracts. The web layer must not duplicate canonical diagram semantics.
+While the drawing-set contract remains unavailable, the next largest safe
+dependency-ready implementation tranche is S9 Classic/Studio browser,
+accessibility and migration/interoperability hardening. Engineering Drawings can
+move into an interactive Studio adapter only after the required core contracts
+are merged and available in the NeqSim runtime used by the web application.
