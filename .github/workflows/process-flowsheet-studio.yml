@@ -6,8 +6,10 @@ on:
       - "welcome.py"
       - "pages/00_NeqSim_Studio.py"
       - "pages/10_Studio_Results.py"
+      - "pages/25_Pipeline.py"
       - "pages/35_Process_Flowsheet_Studio.py"
       - "pages/90_Process_Chat.py"
+      - "pipeline_hydraulics.py"
       - "studio/**"
       - "process_chat/process_builder.py"
       - "process_chat/flowsheet_editor.py"
@@ -28,6 +30,7 @@ on:
       - "tests/test_material_stream_identity.py"
       - "tests/test_process_graph_conservation.py"
       - "tests/test_process_execution.py"
+      - "tests/test_pipeline_hydraulics.py"
       - "tests/test_runtime_imports.py"
       - "tests/test_solver_diagnostics.py"
       - "tests/test_studio_warm_deployment.py"
@@ -60,8 +63,10 @@ jobs:
             welcome.py \
             pages/00_NeqSim_Studio.py \
             pages/10_Studio_Results.py \
+            pages/25_Pipeline.py \
             pages/35_Process_Flowsheet_Studio.py \
             pages/90_Process_Chat.py \
+            pipeline_hydraulics.py \
             studio/case_context.py \
             studio/navigation.py \
             studio/results_context.py \
@@ -85,6 +90,7 @@ jobs:
             tests/test_material_stream_identity.py \
             tests/test_process_graph_conservation.py \
             tests/test_process_execution.py \
+            tests/test_pipeline_hydraulics.py \
             tests/test_runtime_imports.py \
             tests/test_solver_diagnostics.py \
             tests/test_studio_warm_deployment.py \
@@ -121,3 +127,5 @@ jobs:
         run: python tests/test_process_graph_conservation.py -v
       - name: Run bounded execution regressions
         run: python tests/test_process_execution.py -v
+      - name: Run native pipeline hydraulics regressions
+        run: python tests/test_pipeline_hydraulics.py -v
