@@ -46,7 +46,10 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
-from .studio_context import format_studio_case_evidence
+from .studio_context import (
+    clone_model_for_mutating_study,
+    format_studio_case_evidence,
+)
 from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi
 
 from dataclasses import dataclass, field as dc_field
@@ -4330,8 +4333,12 @@ class ProcessChatSession:
             tolerance = float(optimize_spec.get("tolerance_pct", 1.0))
             max_iter = int(optimize_spec.get("max_iterations", 25))
 
+            optimization_model = clone_model_for_mutating_study(
+                self.model,
+                "Production optimization",
+            )
             result = optimize_production(
-                model=self.model,
+                model=optimization_model,
                 feed_stream_name=feed_stream,
                 min_flow_kg_hr=min_flow,
                 max_flow_kg_hr=max_flow,

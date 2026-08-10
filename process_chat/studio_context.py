@@ -17,6 +17,31 @@ CHAT_SESSION_STATE_KEY = "chat_session"
 CHAT_MESSAGES_STATE_KEY = "chat_messages"
 
 
+def clone_model_for_mutating_study(model: Any, study_name: str) -> Any:
+    """Return an isolated model for a study that may mutate its input.
+
+    Some engineering-study implementations auto-size equipment, install
+    compressor charts, change stream conditions, or rerun the supplied model.
+    Running those tools against the active Studio model would invalidate its
+    solved signature even when the Python wrapper identity does not change.
+    """
+
+    clean_name = " ".join(str(study_name).split()) or "Engineering study"
+    if model is None:
+        raise RuntimeError(f"{clean_name} requires an active process model.")
+    clone_method = getattr(model, "clone", None)
+    if not callable(clone_method):
+        raise RuntimeError(
+            f"{clean_name} requires a process model that supports isolated cloning."
+        )
+    cloned_model = clone_method()
+    if cloned_model is model:
+        raise RuntimeError(
+            f"{clean_name} model clone is not isolated from the active case."
+        )
+    return cloned_model
+
+
 def reset_chat_session_if_model_changed(
     session_state: MutableMapping[str, Any],
     model: Any,

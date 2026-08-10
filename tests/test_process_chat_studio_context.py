@@ -4,6 +4,7 @@ from pathlib import Path
 import unittest
 
 from process_chat.studio_context import (
+    clone_model_for_mutating_study,
     format_studio_case_evidence,
     reset_chat_session_if_model_changed,
     studio_case_evidence,
@@ -14,6 +15,33 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProcessChatStudioContextTest(unittest.TestCase):
+    def test_mutating_study_uses_an_isolated_model_clone(self):
+        active_model = type(
+            "CloneableModel",
+            (),
+            {"clone": lambda self: object()},
+        )()
+
+        isolated_model = clone_model_for_mutating_study(
+            active_model,
+            "Production optimization",
+        )
+
+        self.assertIsNot(isolated_model, active_model)
+
+    def test_mutating_study_rejects_an_aliased_clone(self):
+        active_model = type(
+            "AliasedCloneModel",
+            (),
+            {"clone": lambda self: self},
+        )()
+
+        with self.assertRaisesRegex(RuntimeError, "not isolated"):
+            clone_model_for_mutating_study(
+                active_model,
+                "Production optimization",
+            )
+
     def test_chat_session_is_reset_when_runtime_model_changes(self):
         old_model = object()
         current_model = object()
@@ -163,6 +191,8 @@ class ProcessChatStudioContextTest(unittest.TestCase):
         self.assertIn("studio_case_context: Optional[Dict[str, Any]]", chat_source)
         self.assertIn("def set_studio_case_context", chat_source)
         self.assertIn("format_studio_case_evidence", chat_source)
+        self.assertIn("clone_model_for_mutating_study", chat_source)
+        self.assertIn("model=optimization_model", chat_source)
         self.assertIn(
             'getattr(self, "_studio_case_context", None)',
             chat_source,
