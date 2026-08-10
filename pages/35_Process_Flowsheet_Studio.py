@@ -33,6 +33,20 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJECT_ROOT)
 
 from process_chat.runtime_imports import import_local_symbols  # noqa: E402
+from studio.case_context import (  # noqa: E402
+    PENDING_NEW,
+    PENDING_OPEN,
+    STATUS_DIRTY,
+    STATUS_FAILED,
+    STATUS_INVALID,
+    STATUS_SOLVED,
+    STATUS_TIMED_OUT,
+    STATUS_WARNING,
+    clear_active_case,
+    consume_pending_case,
+    get_active_case,
+    set_active_case,
+)
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -345,6 +359,7 @@ def _start_new_case() -> None:
     st.session_state.pop(GRAPH_DRAFT_STATE_KEY, None)
     st.session_state.pop(GRAPH_HISTORY_STATE_KEY, None)
     _clear_studio_runtime(clear_history=True)
+    clear_active_case(st.session_state)
 
     for key in (
         "flowsheet_case_upload",
@@ -6517,6 +6532,27 @@ apply_theme()
 theme_toggle()
 _initialize_case_controls()
 
+pending_case_error = None
+pending_case = consume_pending_case(st.session_state)
+if pending_case:
+    if pending_case["action"] == PENDING_NEW:
+        _start_new_case()
+    elif pending_case["action"] == PENDING_OPEN:
+        try:
+            pending_controls, pending_composition, pending_warnings = (
+                _load_case_controls(pending_case["case_spec"])
+            )
+        except ValueError as pending_import_error:
+            pending_case_error = str(pending_import_error)
+        else:
+            if not pending_case.get("preserve_identity"):
+                clear_active_case(st.session_state)
+            _apply_imported_case(
+                pending_controls,
+                pending_composition,
+                pending_warnings,
+            )
+
 st.title("🏭 Process Flowsheet Studio")
 st.markdown(
     """
@@ -6526,8 +6562,12 @@ template. The solved process is shared with **Process Chat** for further
 what-if studies.
 """
 )
+if pending_case_error:
+    st.error(f"Studio workspace could not open the case: {pending_case_error}")
 
 with st.sidebar:
+    if st.button("← Studio home", use_container_width=True):
+        st.switch_page("pages/00_NeqSim_Studio.py")
     st.divider()
     st.subheader("🏭 Flowsheet case")
     st.caption(TEMPLATE_NAME)
@@ -6609,6 +6649,7 @@ with st.expander("Open a reusable Studio case", expanded=False):
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as import_error:
             st.error(f"Case import failed: {import_error}")
         else:
+            clear_active_case(st.session_state)
             _apply_imported_case(
                 imported_controls,
                 imported_composition,
@@ -6781,6 +6822,51 @@ solver_status, results_are_current = _solver_status(
 solver_status_placeholder.write(f"**Solver:** {solver_status}")
 
 if draft_case_spec is not None:
+    if solver_status == "Solved":
+        context_status = STATUS_WARNING if draft_warnings else STATUS_SOLVED
+    elif solver_status in {"Failed", "Timed out"}:
+        context_status = (
+            STATUS_TIMED_OUT if solver_status == "Timed out" else STATUS_FAILED
+        )
+    else:
+        context_status = STATUS_DIRTY
+    current_context = get_active_case(st.session_state)
+    context_error = None
+    if (
+        context_status in {STATUS_FAILED, STATUS_TIMED_OUT}
+        and current_context
+        and current_context.get("case_spec") == draft_case_spec
+    ):
+        context_error = current_context.get("error")
+    set_active_case(
+        st.session_state,
+        draft_case_spec,
+        status=context_status,
+        error=context_error,
+        warnings=draft_warnings,
+        solved_signature=(
+            current_case_signature if results_are_current else None
+        ),
+        model_available=bool(
+            results_are_current
+            and isinstance(stored_state, dict)
+            and stored_state.get("model") is not None
+        ),
+        model_name=(STUDIO_PROCESS_MODEL_NAME if results_are_current else None),
+        source="Process Flowsheet Studio schema v4",
+    )
+elif draft_error:
+    active_case_context = get_active_case(st.session_state)
+    if active_case_context and isinstance(active_case_context.get("case_spec"), dict):
+        set_active_case(
+            st.session_state,
+            active_case_context["case_spec"],
+            status=STATUS_INVALID,
+            error=draft_error,
+            source="Process Flowsheet Studio schema v4",
+        )
+
+if draft_case_spec is not None:
     _render_graph_palette(draft_case_spec)
     with st.expander("Graph execution plan", expanded=False):
         st.caption(
@@ -6915,6 +7001,17 @@ if run_case:
         if model_bytes:
             st.session_state["process_model_bytes"] = model_bytes
 
+        set_active_case(
+            st.session_state,
+            case_spec,
+            status=STATUS_WARNING if case_warnings else STATUS_SOLVED,
+            warnings=case_warnings,
+            solved_signature=current_case_signature,
+            model_available=True,
+            model_name=STUDIO_PROCESS_MODEL_NAME,
+            source="Process Flowsheet Studio schema v4",
+        )
+
         solver_status_placeholder.write("**Solver:** Solved")
         st.success("The NeqSim flowsheet solved and is ready for review.")
     except TimeoutError as exc:
@@ -6925,6 +7022,15 @@ if run_case:
             st.session_state[FAILURE_KIND_STATE_KEY] = "timeout"
         results_are_current = False
         solver_status = "Timed out"
+        if draft_case_spec is not None:
+            set_active_case(
+                st.session_state,
+                draft_case_spec,
+                status=STATUS_TIMED_OUT,
+                error=str(exc),
+                warnings=draft_warnings,
+                source="Process Flowsheet Studio schema v4",
+            )
         solver_status_placeholder.write("**Solver:** Timed out")
         st.error(
             "Flowsheet calculation exceeded the "
@@ -6939,6 +7045,15 @@ if run_case:
             st.session_state[FAILURE_KIND_STATE_KEY] = "failure"
         results_are_current = False
         solver_status = "Failed"
+        if draft_case_spec is not None:
+            set_active_case(
+                st.session_state,
+                draft_case_spec,
+                status=STATUS_FAILED,
+                error=str(exc),
+                warnings=draft_warnings,
+                source="Process Flowsheet Studio schema v4",
+            )
         solver_status_placeholder.write("**Solver:** Failed")
         st.error(f"Flowsheet calculation failed: {exc}")
         with st.expander("Technical error details", expanded=False):
