@@ -7,12 +7,75 @@ arbitrary session state.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 import json
 from typing import Any
 
 
 _MAX_TEXT_LENGTH = 160
+CHAT_SESSION_STATE_KEY = "chat_session"
+CHAT_MESSAGES_STATE_KEY = "chat_messages"
+
+
+def clone_model_for_mutating_study(model: Any, study_name: str) -> Any:
+    """Return an isolated model for a study that may mutate its input.
+
+    Some engineering-study implementations auto-size equipment, install
+    compressor charts, change stream conditions, or rerun the supplied model.
+    Running those tools against the active Studio model would invalidate its
+    solved signature even when the Python wrapper identity does not change.
+    """
+
+    clean_name = " ".join(str(study_name).split()) or "Engineering study"
+    if model is None:
+        raise RuntimeError(f"{clean_name} requires an active process model.")
+    clone_method = getattr(model, "clone", None)
+    if not callable(clone_method):
+        raise RuntimeError(
+            f"{clean_name} requires a process model that supports isolated cloning."
+        )
+    cloned_model = clone_method()
+    if cloned_model is model:
+        raise RuntimeError(
+            f"{clean_name} model clone is not isolated from the active case."
+        )
+    return cloned_model
+
+
+def reset_chat_session_if_model_changed(
+    session_state: MutableMapping[str, Any],
+    model: Any,
+    solved_signature: str | None = None,
+) -> bool:
+    """Reset chat-owned state when its session targets another solved runtime.
+
+    Process Flowsheet Studio may replace the solved model while Streamlit keeps
+    the existing Process Chat session alive.  Reusing that session would run a
+    new question against the old model.  Clearing both the session and its
+    result-bearing messages makes the next request construct a fresh session
+    for the current model and prevents stale study attachments from leaking
+    into the new case.
+    """
+
+    chat_session = session_state.get(CHAT_SESSION_STATE_KEY)
+    if chat_session is None:
+        return False
+    model_matches = getattr(chat_session, "model", None) is model
+    previous_context = getattr(chat_session, "_studio_case_context", None)
+    previous_signature = None
+    if isinstance(previous_context, Mapping):
+        runtime = previous_context.get("runtime")
+        if isinstance(runtime, Mapping):
+            previous_signature = runtime.get("solved_signature")
+    signature_matches = (
+        solved_signature is None
+        or previous_signature == solved_signature
+    )
+    if model_matches and signature_matches:
+        return False
+    session_state.pop(CHAT_SESSION_STATE_KEY, None)
+    session_state[CHAT_MESSAGES_STATE_KEY] = []
+    return True
 
 
 def _clean_text(value: Any) -> str:

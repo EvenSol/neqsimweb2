@@ -17,6 +17,7 @@ from studio.case_context import (
     get_active_case,
     mark_active_runtime_changed,
 )
+from process_chat.studio_context import reset_chat_session_if_model_changed
 from theme import apply_theme, theme_toggle
 
 st.set_page_config(
@@ -2370,6 +2371,20 @@ def _show_model_built(model_result):
             pass
 
 
+# A newly solved flowsheet may replace the live model while Streamlit retains
+# the previous chat session.  Reset chat-owned state before showing or running
+# another question so Process Chat always binds to the current runtime model.
+_chat_model_was_reset = reset_chat_session_if_model_changed(
+    st.session_state,
+    model,
+    (_studio_case or {}).get("runtime", {}).get("solved_signature"),
+)
+if _chat_model_was_reset:
+    st.info(
+        "Process Chat was reset because the active solved runtime changed. "
+        "New questions and studies will use the current model."
+    )
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -2621,6 +2636,24 @@ if user_input:
                             renderer(result_obj)
                         except Exception as e:
                             st.warning(f"Could not render {key}: {e}")
+
+                if any(
+                    result is not None
+                    for result in (
+                        sensitivity,
+                        optimization,
+                        comparison,
+                        emissions,
+                        energy_audit,
+                    )
+                ):
+                    # Keep a runtime-only identity marker with deterministic
+                    # engineering attachments. Studio Results uses this marker to
+                    # reject history belonging to another native model.
+                    msg_data["_study_model"] = session.model
+                    msg_data["_study_signature"] = (
+                        (_studio_case or {}).get("runtime", {}).get("solved_signature")
+                    )
 
                 st.session_state["chat_messages"].append(msg_data)
 

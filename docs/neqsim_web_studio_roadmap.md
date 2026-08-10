@@ -94,7 +94,7 @@ Merged evidence: Studio stack PRs #94 and #95.
 
 ### S4 — Professional results, design and engineering studies
 
-Status: **professional results and design review in current root PR**.
+Status: **professional results/design merged; studies and engineering evidence in recovery PR**.
 
 The current tranche adds a shared, UI-independent exact-result handoff and a
 professional results workspace over the existing solved model. It exposes:
@@ -106,8 +106,23 @@ professional results workspace over the existing solved model. It exposes:
 - display-safe session case comparison while retaining sensitivity, adjust and
   bounded optimization execution in the inherited flowsheet tools.
 
-This is validated-but-unmerged stack evidence and is not counted as completed
-until its root PR is merged.
+Professional results and design review are merged on `main` through PR #96.
+
+The dependency-ordered child tranche adds exact-model engineering-study evidence:
+completed Process Chat sensitivity sweeps and bounded optimization results are
+projected into the active Studio case only when the chat session references the
+same native model and solved signature. Failed points, units, method, convergence,
+bottlenecks and provenance remain visible. Study execution stays in the existing
+NeqSim-backed tools. Retained study evidence survives ordinary follow-up turns,
+while Process Chat resets its chat-owned session and attachments if a newly solved
+flowsheet replaces the live runtime model.
+
+The third stack tranche extends the same presentation adapter to completed
+scenario comparison, emissions and energy-audit attachments. Successful and
+failed scenarios, KPI units, constraint/patch evidence, source-level emissions,
+utility consumers, benchmark status and screening recommendations remain visible
+for the exact active native model. Studio does not rerun or duplicate these
+calculations, and estimation/benchmark methods remain explicitly labelled.
 
 ### S5 — Engineering Drawings
 
@@ -146,22 +161,25 @@ migration/interoperability evidence and deployment validation are release gates.
 
 ## Current tranche
 
-S4 professional active-case results is the next root tranche after the S0–S3/S6
-foundation merged to `main`. It reuses the exact `flowsheet_studio_case` solved
-state, `NeqSimProcessModel`, shared solver-diagnostic adapters, equipment design
-properties and solved case history. It adds no calculation engine and changes no
-Classic route.
+PR #96 merged the S4 professional active-case results root onto `main`. PRs #98
+and #99 were then merged into their already-merged parent branches, so GitHub
+closed them without landing their study/evidence trees on `main`. The current
+recovery tranche reapplies their previously reviewed exact-model sensitivity,
+optimization, scenario, emissions and energy-audit presentation as one clean
+commit based on the exact current `main` head.
 
-Acceptance requires fail-closed exact-signature validation, explicit units and
-provenance, honest engineering status, focused result-projection regressions,
-Classic + Studio application health and the existing native conservation gate.
+Acceptance requires byte-equivalent application/test content to validated PR #99
+head (apart from this truthful roadmap update), zero Classic route or calculation
+changes, fail-closed native-model/signature checks, and a fresh complete hosted
+Classic + Studio + native-conservation gate.
 
 ## Active stacked work
 
-The current S4 results/design tranche is a new root PR targeting `main`. There are
-no child Studio implementation PRs above it. It is recorded as **in stack**, not
-merged completion.
+PR #96 is merged on `main`. Closed PRs #98 and #99 preserve the original review,
+exact-head validation and dependency history, but their child-branch merges did
+not update `main`. One clean replacement root PR now targets current `main` with
+the combined #98/#99 tree; it is recorded as **in stack**, not merged completion.
 
-The next dependency-ready tranche is deeper studies integration through the same
-shared case service, followed by a core-API-aligned Engineering Drawings adapter
-when the #1332/#2899 contracts are merged and stable.
+After recovery lands, the next dependency-ready tranche is a core-API-aligned
+Engineering Drawings adapter and drawing register using the merged #1332/#2899
+contracts. The web layer must not duplicate canonical diagram semantics.

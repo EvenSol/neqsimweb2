@@ -4,7 +4,9 @@ from pathlib import Path
 import unittest
 
 from process_chat.studio_context import (
+    clone_model_for_mutating_study,
     format_studio_case_evidence,
+    reset_chat_session_if_model_changed,
     studio_case_evidence,
 )
 
@@ -13,6 +15,122 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProcessChatStudioContextTest(unittest.TestCase):
+    def test_mutating_study_uses_an_isolated_model_clone(self):
+        active_model = type(
+            "CloneableModel",
+            (),
+            {"clone": lambda self: object()},
+        )()
+
+        isolated_model = clone_model_for_mutating_study(
+            active_model,
+            "Production optimization",
+        )
+
+        self.assertIsNot(isolated_model, active_model)
+
+    def test_mutating_study_rejects_an_aliased_clone(self):
+        active_model = type(
+            "AliasedCloneModel",
+            (),
+            {"clone": lambda self: self},
+        )()
+
+        with self.assertRaisesRegex(RuntimeError, "not isolated"):
+            clone_model_for_mutating_study(
+                active_model,
+                "Production optimization",
+            )
+
+    def test_chat_session_is_reset_when_runtime_model_changes(self):
+        old_model = object()
+        current_model = object()
+        chat_session = type("ChatSession", (), {"model": old_model})()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "optimization": object()}],
+            "classic_key": "preserved",
+        }
+
+        changed = reset_chat_session_if_model_changed(state, current_model)
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
+        self.assertEqual(state["classic_key"], "preserved")
+
+    def test_chat_session_is_preserved_for_exact_runtime_model(self):
+        model = object()
+        chat_session = type(
+            "ChatSession",
+            (),
+            {
+                "model": model,
+                "_studio_case_context": {
+                    "runtime": {"solved_signature": "sha-current"}
+                },
+            },
+        )()
+        messages = [{"role": "assistant", "content": "Current model"}]
+        state = {"chat_session": chat_session, "chat_messages": messages}
+
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-current",
+        )
+
+        self.assertFalse(changed)
+        self.assertIs(state["chat_session"], chat_session)
+        self.assertIs(state["chat_messages"], messages)
+
+    def test_chat_session_is_reset_when_solved_signature_changes(self):
+        model = object()
+        chat_session = type(
+            "ChatSession",
+            (),
+            {
+                "model": model,
+                "_studio_case_context": {
+                    "runtime": {"solved_signature": "sha-before-resolve"}
+                },
+            },
+        )()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "emissions": object()}],
+            "classic_key": "preserved",
+        }
+
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-after-resolve",
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
+        self.assertEqual(state["classic_key"], "preserved")
+
+    def test_unsigned_legacy_session_is_reset_for_a_solved_studio_case(self):
+        model = object()
+        chat_session = type("ChatSession", (), {"model": model})()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "comparison": object()}],
+        }
+
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-current",
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
+
     def test_no_active_case_produces_no_prompt_evidence(self):
         self.assertEqual(studio_case_evidence(None), {})
         self.assertEqual(format_studio_case_evidence(None), "")
@@ -73,12 +191,16 @@ class ProcessChatStudioContextTest(unittest.TestCase):
         self.assertIn("studio_case_context: Optional[Dict[str, Any]]", chat_source)
         self.assertIn("def set_studio_case_context", chat_source)
         self.assertIn("format_studio_case_evidence", chat_source)
+        self.assertIn("clone_model_for_mutating_study", chat_source)
+        self.assertIn("model=optimization_model", chat_source)
         self.assertIn(
             'getattr(self, "_studio_case_context", None)',
             chat_source,
         )
         self.assertIn("studio_case_context=_studio_case", page_source)
         self.assertIn("session.set_studio_case_context(_studio_case)", page_source)
+        self.assertIn("reset_chat_session_if_model_changed", page_source)
+        self.assertIn('msg_data["_study_model"] = session.model', page_source)
 
 
 if __name__ == "__main__":
