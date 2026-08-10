@@ -13,6 +13,7 @@ from studio.results_context import (
 
 
 CHAT_SESSION_STATE_KEY = "chat_session"
+CHAT_MESSAGES_STATE_KEY = "chat_messages"
 
 
 def _finite_number(value: Any) -> float | None:
@@ -61,6 +62,34 @@ def engineering_unit(name: Any) -> str:
 def _getter(session: Any, name: str) -> Any:
     getter = getattr(session, name, None)
     return getter() if callable(getter) else None
+
+
+def _latest_message_result(
+    session_state: Mapping[str, Any],
+    key: str,
+    model: Any,
+) -> Any:
+    """Return the latest retained chat attachment for the current model.
+
+    ProcessChatSession's ``get_last_*`` values intentionally describe only the
+    most recent chat turn.  The page retains completed result objects on
+    assistant messages, so Studio can recover the latest applicable study
+    after an ordinary follow-up or after another study type has run.
+    """
+
+    messages = session_state.get(CHAT_MESSAGES_STATE_KEY, ())
+    if not isinstance(messages, (list, tuple)):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, Mapping):
+            continue
+        result = message.get(key)
+        if result is None:
+            continue
+        tagged_model = message.get("_study_model")
+        if tagged_model is None or tagged_model is model:
+            return result
+    return None
 
 
 def _sensitivity_evidence(result: Any) -> dict[str, Any] | None:
@@ -249,12 +278,22 @@ def current_study_evidence(session_state: Mapping[str, Any]) -> dict[str, Any]:
             ),
         }
 
-    sensitivity = _sensitivity_evidence(
-        _getter(chat_session, "get_last_sensitivity")
-    )
-    optimization = _optimization_evidence(
-        _getter(chat_session, "get_last_optimization")
-    )
+    sensitivity_result = _getter(chat_session, "get_last_sensitivity")
+    if sensitivity_result is None:
+        sensitivity_result = _latest_message_result(
+            session_state,
+            "sensitivity",
+            context.model,
+        )
+    optimization_result = _getter(chat_session, "get_last_optimization")
+    if optimization_result is None:
+        optimization_result = _latest_message_result(
+            session_state,
+            "optimization",
+            context.model,
+        )
+    sensitivity = _sensitivity_evidence(sensitivity_result)
+    optimization = _optimization_evidence(optimization_result)
     reason = ""
     if sensitivity is None and optimization is None:
         reason = "No sensitivity or optimization result is available yet."

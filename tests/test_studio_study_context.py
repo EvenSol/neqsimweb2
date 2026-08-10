@@ -134,6 +134,52 @@ class StudioStudyContextTest(unittest.TestCase):
         self.assertIn("different runtime model", evidence["reason"])
         self.assertNotIn("sensitivity", evidence)
 
+    def test_retained_message_studies_survive_later_chat_turns(self):
+        sensitivity = Sensitivity(
+            sweep_points=[
+                SweepPoint(
+                    {"streams.feed.flow_kg_hr": 90_000.0},
+                    {"total_power_kW": 4_500.0},
+                )
+            ]
+        )
+        self.session["chat_session"] = ChatSession(self.model)
+        self.session["chat_messages"] = [
+            {
+                "role": "assistant",
+                "sensitivity": sensitivity,
+                "_study_model": self.model,
+            },
+            {
+                "role": "assistant",
+                "optimization": Optimization(),
+                "_study_model": self.model,
+            },
+            {"role": "assistant", "content": "Ordinary follow-up answer"},
+        ]
+
+        evidence = current_study_evidence(self.session)
+
+        self.assertTrue(evidence["available"])
+        self.assertEqual(evidence["sensitivity"]["n_points"], 2)
+        self.assertTrue(evidence["optimization"]["converged"])
+
+    def test_retained_message_from_another_model_is_ignored(self):
+        self.session["chat_session"] = ChatSession(self.model)
+        self.session["chat_messages"] = [
+            {
+                "role": "assistant",
+                "sensitivity": Sensitivity(),
+                "_study_model": object(),
+            }
+        ]
+
+        evidence = current_study_evidence(self.session)
+
+        self.assertTrue(evidence["available"])
+        self.assertIsNone(evidence["sensitivity"])
+        self.assertIn("No sensitivity", evidence["reason"])
+
     def test_dirty_case_does_not_publish_study_evidence(self):
         self.session[ACTIVE_CASE_STATE_KEY]["status"] = "dirty"
         self.session["chat_session"] = ChatSession(self.model, Sensitivity())

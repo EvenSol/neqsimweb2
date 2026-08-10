@@ -7,12 +7,36 @@ arbitrary session state.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 import json
 from typing import Any
 
 
 _MAX_TEXT_LENGTH = 160
+CHAT_SESSION_STATE_KEY = "chat_session"
+CHAT_MESSAGES_STATE_KEY = "chat_messages"
+
+
+def reset_chat_session_if_model_changed(
+    session_state: MutableMapping[str, Any],
+    model: Any,
+) -> bool:
+    """Reset chat-owned state when its session targets another runtime model.
+
+    Process Flowsheet Studio may replace the solved model while Streamlit keeps
+    the existing Process Chat session alive.  Reusing that session would run a
+    new question against the old model.  Clearing both the session and its
+    result-bearing messages makes the next request construct a fresh session
+    for the current model and prevents stale study attachments from leaking
+    into the new case.
+    """
+
+    chat_session = session_state.get(CHAT_SESSION_STATE_KEY)
+    if chat_session is None or getattr(chat_session, "model", None) is model:
+        return False
+    session_state.pop(CHAT_SESSION_STATE_KEY, None)
+    session_state[CHAT_MESSAGES_STATE_KEY] = []
+    return True
 
 
 def _clean_text(value: Any) -> str:

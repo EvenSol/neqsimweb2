@@ -114,7 +114,9 @@ completed Process Chat sensitivity sweeps and bounded optimization results are
 projected into the active Studio case only when the chat session references the
 same native model and solved signature. Failed points, units, method, convergence,
 bottlenecks and provenance remain visible. Study execution stays in the existing
-NeqSim-backed tools.
+NeqSim-backed tools. Retained study evidence survives ordinary follow-up turns,
+while Process Chat resets its chat-owned session and attachments if a newly solved
+flowsheet replaces the live runtime model.
 
 ### S5 — Engineering Drawings
 
