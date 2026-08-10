@@ -240,6 +240,9 @@ if selected_section == "Case studies":
         )
         sensitivity = study_evidence["sensitivity"]
         optimization = study_evidence["optimization"]
+        scenario_comparison = study_evidence["scenario_comparison"]
+        emissions = study_evidence["emissions"]
+        energy_audit = study_evidence["energy_audit"]
         if sensitivity:
             st.markdown("#### Sensitivity / parameter sweep")
             st.caption(
@@ -319,12 +322,77 @@ if selected_section == "Case studies":
                         use_container_width=True,
                         hide_index=True,
                     )
-        if not sensitivity and not optimization:
+        if scenario_comparison:
+            st.markdown("#### Scenario comparison")
+            st.dataframe(
+                pd.DataFrame(scenario_comparison["case_rows"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            for title, key in (
+                ("KPI values", "kpi_rows"),
+                ("KPI changes", "delta_rows"),
+                ("Constraint checks", "constraint_rows"),
+                ("Applied scenario changes", "patch_rows"),
+            ):
+                if scenario_comparison[key]:
+                    st.markdown(f"##### {title}")
+                    st.dataframe(
+                        pd.DataFrame(scenario_comparison[key]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+        if emissions:
+            st.markdown("#### Emissions analysis")
+            st.caption(f"Method: {emissions['method']}")
+            if emissions["message"]:
+                st.write(emissions["message"])
+            st.dataframe(
+                pd.DataFrame(emissions["metric_rows"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            if emissions["source_rows"]:
+                st.markdown("##### Emission sources")
+                st.dataframe(
+                    pd.DataFrame(emissions["source_rows"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        if energy_audit:
+            st.markdown("#### Energy audit / utility balance")
+            product_stream = energy_audit["product_stream"] or "not reported"
+            st.caption(
+                f"Method: {energy_audit['method']} · product stream: {product_stream}"
+            )
+            if energy_audit["message"]:
+                st.write(energy_audit["message"])
+            st.dataframe(
+                pd.DataFrame(energy_audit["metric_rows"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            for title, key in (
+                ("Energy consumers", "consumer_rows"),
+                ("Benchmark screening", "benchmark_rows"),
+                ("Improvement screening", "suggestion_rows"),
+            ):
+                if energy_audit[key]:
+                    st.markdown(f"##### {title}")
+                    st.dataframe(
+                        pd.DataFrame(energy_audit[key]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+        if not any(
+            (sensitivity, optimization, scenario_comparison, emissions, energy_audit)
+        ):
             st.info(study_evidence["reason"])
     st.caption(
-        "Sensitivity and bounded optimization run through the inherited Process "
-        "Chat tools against isolated NeqSim scenarios. Adjust/specification remains "
-        "available through native Adjuster units in Process Flowsheet Studio."
+        "These views reuse completed Process Chat scenario, sensitivity, optimization, "
+        "energy and emissions evidence for the exact active native model. Estimation "
+        "and benchmark methods remain labelled; no calculation is repeated here. "
+        "Adjust/specification remains available through native Adjuster units."
     )
     chat_col, flowsheet_col = st.columns(2)
     if chat_col.button("Run study in Process Chat", type="primary"):
@@ -337,3 +405,4 @@ st.caption(
     "This page is a presentation adapter over the existing solved model. Edit, solve, "
     "export and download reproducible deliverables in Process Flowsheet Studio."
 )
+

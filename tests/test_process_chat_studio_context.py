@@ -33,15 +33,75 @@ class ProcessChatStudioContextTest(unittest.TestCase):
 
     def test_chat_session_is_preserved_for_exact_runtime_model(self):
         model = object()
-        chat_session = type("ChatSession", (), {"model": model})()
+        chat_session = type(
+            "ChatSession",
+            (),
+            {
+                "model": model,
+                "_studio_case_context": {
+                    "runtime": {"solved_signature": "sha-current"}
+                },
+            },
+        )()
         messages = [{"role": "assistant", "content": "Current model"}]
         state = {"chat_session": chat_session, "chat_messages": messages}
 
-        changed = reset_chat_session_if_model_changed(state, model)
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-current",
+        )
 
         self.assertFalse(changed)
         self.assertIs(state["chat_session"], chat_session)
         self.assertIs(state["chat_messages"], messages)
+
+    def test_chat_session_is_reset_when_solved_signature_changes(self):
+        model = object()
+        chat_session = type(
+            "ChatSession",
+            (),
+            {
+                "model": model,
+                "_studio_case_context": {
+                    "runtime": {"solved_signature": "sha-before-resolve"}
+                },
+            },
+        )()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "emissions": object()}],
+            "classic_key": "preserved",
+        }
+
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-after-resolve",
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
+        self.assertEqual(state["classic_key"], "preserved")
+
+    def test_unsigned_legacy_session_is_reset_for_a_solved_studio_case(self):
+        model = object()
+        chat_session = type("ChatSession", (), {"model": model})()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "comparison": object()}],
+        }
+
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-current",
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
 
     def test_no_active_case_produces_no_prompt_evidence(self):
         self.assertEqual(studio_case_evidence(None), {})
