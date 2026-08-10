@@ -2465,11 +2465,15 @@ if user_input:
                         model=model,     # None in builder mode
                         api_key=api_key_val,
                         ai_model="gemini-2.5-flash",
+                        studio_case_context=_studio_case,
                     )
 
                 session = st.session_state["chat_session"]
                 # Sync API key in case the user changed it
                 session.api_key = api_key_val
+                # Refresh whitelisted lifecycle/units/provenance evidence. The
+                # portable case specification is intentionally not forwarded.
+                session.set_studio_case_context(_studio_case)
                 # Inject DEXPI XML if available
                 if st.session_state.get("dexpi_xml"):
                     session.set_dexpi_xml(

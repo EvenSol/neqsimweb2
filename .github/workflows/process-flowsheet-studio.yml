@@ -15,7 +15,9 @@ on:
       - "process_chat/solver_diagnostics.py"
       - "process_chat/subflowsheet_schema.py"
       - "process_chat/process_model.py"
+      - "process_chat/studio_context.py"
       - "tests/test_process_chat_studio_handoff.py"
+      - "tests/test_process_chat_studio_context.py"
       - "tests/test_studio_navigation.py"
       - "tests/test_studio_shell.py"
       - "tests/test_workspace_http_health.py"
@@ -65,7 +67,9 @@ jobs:
             process_chat/solver_diagnostics.py \
             process_chat/subflowsheet_schema.py \
             process_chat/process_model.py \
+            process_chat/studio_context.py \
             tests/test_process_chat_studio_handoff.py \
+            tests/test_process_chat_studio_context.py \
             tests/test_studio_case_context.py \
             tests/test_studio_navigation.py \
             tests/test_studio_shell.py \
@@ -83,7 +87,9 @@ jobs:
       - name: Run shared Studio case lifecycle regressions
         run: python tests/test_studio_case_context.py -v
       - name: Run Process Chat Studio handoff regressions
-        run: python tests/test_process_chat_studio_handoff.py -v
+        run: |
+          python tests/test_process_chat_studio_handoff.py -v
+          python tests/test_process_chat_studio_context.py -v
       - name: Run Studio shell smoke test
         run: python tests/test_studio_shell.py -v
       - name: Run Classic and Studio HTTP health regressions

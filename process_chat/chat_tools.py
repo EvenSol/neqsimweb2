@@ -46,6 +46,7 @@ from .lab_import import (
 )
 from .production_scenario import run_production_scenario, format_production_scenario_result, ProductionScenarioResult
 from .signal_tracker import SignalTracker, run_signal_tracker, format_signal_tracker_result
+from .studio_context import format_studio_case_evidence
 from .dexpi_integration import run_dexpi_analysis, format_dexpi_result, DexpiAnalysisResult, parse_dexpi_xml, export_to_dexpi
 
 from dataclasses import dataclass, field as dc_field
@@ -195,7 +196,10 @@ def _build_model_built_result(model: NeqSimProcessModel) -> ModelBuiltResult:
 # System prompt builder
 # ---------------------------------------------------------------------------
 
-def build_system_prompt(model: NeqSimProcessModel) -> str:
+def build_system_prompt(
+    model: NeqSimProcessModel,
+    studio_case_context: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Build the system prompt that constrains the LLM to be a safe process assistant.
     Includes the model summary + tags so the LLM can resolve natural language to model objects.
@@ -226,6 +230,8 @@ CRITICAL RULES:
 2. For any what-if or planning question, produce a JSON scenario specification that the system will run.
 3. Always declare your assumptions.
 4. When showing results, cite: model objects changed, assumptions used, before/after KPIs.
+
+__STUDIO_CASE_CONTEXT__
 
 INTENT CLASSIFICATION:
 - READ-ONLY: Questions about current state ("What is the temperature in the first separator?", "Show me compressor power", "What are the stream conditions?")
@@ -1528,6 +1534,12 @@ When you receive simulation results, ALWAYS:
     system_prompt = system_prompt.replace("__MODEL_SUMMARY__", model_summary)
     system_prompt = system_prompt.replace("__TAG_REF__", tag_ref)
     system_prompt = system_prompt.replace("__EQUIP_TEMPLATES__", equip_templates)
+    studio_evidence = format_studio_case_evidence(studio_case_context)
+    system_prompt = system_prompt.replace(
+        "__STUDIO_CASE_CONTEXT__",
+        studio_evidence
+        or "No active Studio case. Process Chat is running in Classic/standalone context.",
+    )
 
     # The prompt was originally written with {{/}} escaping for Python
     # .format().  Since we now use .replace() for substitution, the
@@ -3172,10 +3184,12 @@ class ProcessChatSession:
         model: Optional[NeqSimProcessModel] = None,
         api_key: str = "",
         ai_model: str = "gemini-2.5-flash",
+        studio_case_context: Optional[Dict[str, Any]] = None,
     ):
         self.model = model
         self.api_key = api_key
         self.ai_model = ai_model
+        self._studio_case_context = studio_case_context
         self.history: List[Dict[str, str]] = []
         self._last_comparison = None
         self._last_optimization = None
@@ -3213,11 +3227,31 @@ class ProcessChatSession:
         self._dexpi_xml: Optional[bytes] = None  # Cached DEXPI XML bytes
         self._dexpi_filename: str = ""
 
-        # Build appropriate system prompt
-        if model is not None:
-            self._system_prompt = build_system_prompt(model)
-        else:
-            self._system_prompt = build_builder_system_prompt()
+        self._refresh_system_prompt()
+
+    def _refresh_system_prompt(self) -> None:
+        """Refresh the prompt after model or Studio lifecycle changes."""
+
+        if self.model is not None:
+            self._system_prompt = build_system_prompt(
+                self.model,
+                self._studio_case_context,
+            )
+            return
+
+        self._system_prompt = build_builder_system_prompt()
+        studio_evidence = format_studio_case_evidence(self._studio_case_context)
+        if studio_evidence:
+            self._system_prompt += "\n\n" + studio_evidence
+
+    def set_studio_case_context(
+        self,
+        studio_case_context: Optional[Dict[str, Any]],
+    ) -> None:
+        """Update bounded active-case evidence without changing chat permissions."""
+
+        self._studio_case_context = studio_case_context
+        self._refresh_system_prompt()
 
     # -- Main chat entry point ----------------------------------------------
 
@@ -3583,7 +3617,7 @@ class ProcessChatSession:
 
                     self._builder = builder
                     self.model = model
-                    self._system_prompt = build_system_prompt(model)
+                    self._refresh_system_prompt()
                     self._last_model_built = _build_model_built_result(model)
 
                     summary = model.get_model_summary()
@@ -3743,7 +3777,7 @@ class ProcessChatSession:
                 self.model.refresh_source_bytes()
 
                 # Update system prompt
-                self._system_prompt = build_system_prompt(self.model)
+                self._refresh_system_prompt()
 
                 # Build inline model overview for chat display
                 self._last_model_built = _build_model_built_result(self.model)
@@ -3995,7 +4029,7 @@ class ProcessChatSession:
             )
 
             # 6. Update system prompt
-            self._system_prompt = build_system_prompt(self.model)
+            self._refresh_system_prompt()
 
             # Build inline model overview for chat display
             self._last_model_built = _build_model_built_result(self.model)
@@ -4098,7 +4132,7 @@ class ProcessChatSession:
                     self.model.rerun()
                     self.model._index_model_objects()
                     self.model.refresh_source_bytes()
-                    self._system_prompt = build_system_prompt(self.model)
+                    self._refresh_system_prompt()
                     structural_applied = True
                     # Show updated model overview inline when structure changes
                     if has_structural:
@@ -4451,7 +4485,7 @@ class ProcessChatSession:
                     pass
 
                 # Update system prompt (chart may change compressor behaviour)
-                self._system_prompt = build_system_prompt(self.model)
+                self._refresh_system_prompt()
 
             # Store in both per-message result and persistent cache
             self._last_chart = result
@@ -4576,7 +4610,7 @@ class ProcessChatSession:
                 pass
 
             # Update system prompt (sizing changes model state)
-            self._system_prompt = build_system_prompt(self.model)
+            self._refresh_system_prompt()
 
             self.history.append({"role": "assistant", "content": assistant_text})
             self.history.append({
@@ -5542,7 +5576,7 @@ class ProcessChatSession:
                 # Clear builder state when importing DEXPI model
                 self._builder = None
                 # Switch to full model system prompt so ALL tools become available
-                self._system_prompt = build_system_prompt(self.model)
+                self._refresh_system_prompt()
                 # Build inline model overview for chat display
                 self._last_model_built = _build_model_built_result(self.model)
 

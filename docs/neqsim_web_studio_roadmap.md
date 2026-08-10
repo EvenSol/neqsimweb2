@@ -125,6 +125,12 @@ identifies the active case and its thermodynamic/lifecycle state, and reuses the
 existing solved-model session handoff. If Process Chat replaces or resets the live
 model, the shared context is marked dirty and the portable flowsheet specification
 remains visible as the last reproducible input rather than being silently promoted.
+Process Chat also receives a bounded, whitelisted projection of the active case ID,
+lifecycle, units, thermodynamic package, runtime-model evidence and provenance. The
+projection excludes the portable case body and arbitrary session state, treats every
+user-authored value as untrusted data, and tells the assistant never to present a
+draft/dirty/failed case as solved. Numeric results remain sourced from the live model
+or an executed deterministic NeqSim calculation.
 
 ### S7 — Dynamics and controls
 
