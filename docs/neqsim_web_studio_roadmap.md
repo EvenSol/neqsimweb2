@@ -109,6 +109,13 @@ professional results workspace over the existing solved model. It exposes:
 This is validated-but-unmerged stack evidence and is not counted as completed
 until its root PR is merged.
 
+The dependency-ordered child tranche adds exact-model engineering-study evidence:
+completed Process Chat sensitivity sweeps and bounded optimization results are
+projected into the active Studio case only when the chat session references the
+same native model and solved signature. Failed points, units, method, convergence,
+bottlenecks and provenance remain visible. Study execution stays in the existing
+NeqSim-backed tools.
+
 ### S5 — Engineering Drawings
 
 Status: dependent on merged core capabilities.
@@ -158,9 +165,9 @@ Classic + Studio application health and the existing native conservation gate.
 
 ## Active stacked work
 
-The current S4 results/design tranche is a new root PR targeting `main`. There are
-no child Studio implementation PRs above it. It is recorded as **in stack**, not
-merged completion.
+The S4 results/design root PR targets `main`. The exact-model studies child targets
+that root branch and is not independently mergeable to `main`. Both are recorded
+as **in stack**, not merged completion.
 
 The next dependency-ready tranche is deeper studies integration through the same
 shared case service, followed by a core-API-aligned Engineering Drawings adapter

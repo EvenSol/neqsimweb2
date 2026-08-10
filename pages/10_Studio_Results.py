@@ -26,6 +26,7 @@ from studio.results_context import (  # noqa: E402
     stream_rows,
     validation_tables,
 )
+from studio.study_context import current_study_evidence  # noqa: E402
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -226,11 +227,109 @@ if selected_section == "Case studies":
         st.info(
             "Solve more than one case to build comparison evidence in this session."
         )
+
+    st.subheader("Process Chat engineering studies")
+    study_evidence = current_study_evidence(st.session_state)
+    if not study_evidence["available"]:
+        st.warning(study_evidence["reason"])
+    else:
+        provenance = study_evidence["provenance"]
+        st.caption(
+            f"Source: {provenance['source']} · case {provenance['case_id']} · "
+            f"solved signature {provenance['solved_signature'][:16]}"
+        )
+        sensitivity = study_evidence["sensitivity"]
+        optimization = study_evidence["optimization"]
+        if sensitivity:
+            st.markdown("#### Sensitivity / parameter sweep")
+            st.caption(
+                f"{sensitivity['analysis_type'].replace('_', ' ').title()} · "
+                f"{sensitivity['method']} · {sensitivity['n_points']} evaluated points"
+            )
+            if sensitivity["message"]:
+                st.write(sensitivity["message"])
+            if sensitivity["point_rows"]:
+                st.dataframe(
+                    pd.DataFrame(sensitivity["point_rows"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            if sensitivity["tornado_rows"]:
+                st.dataframe(
+                    pd.DataFrame(sensitivity["tornado_rows"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        if optimization:
+            st.markdown("#### Bounded production optimization")
+            opt_cols = st.columns(4)
+            opt_cols[0].metric(
+                "Status",
+                "Converged" if optimization["converged"] else "Not converged",
+            )
+            opt_cols[1].metric(
+                "Original flow",
+                _metric_value(
+                    {
+                        "value": optimization["original_flow_kg_hr"],
+                        "unit": "kg/hr",
+                    }
+                    if optimization["original_flow_kg_hr"] is not None
+                    else None
+                ),
+            )
+            opt_cols[2].metric(
+                "Optimal flow",
+                _metric_value(
+                    {
+                        "value": optimization["optimal_flow_kg_hr"],
+                        "unit": "kg/hr",
+                    }
+                    if optimization["optimal_flow_kg_hr"] is not None
+                    else None
+                ),
+            )
+            opt_cols[3].metric(
+                "Increase",
+                _metric_value(
+                    {
+                        "value": optimization["max_increase_pct"],
+                        "unit": "%",
+                    }
+                    if optimization["max_increase_pct"] is not None
+                    else None
+                ),
+            )
+            st.caption(
+                f"Algorithm: {optimization['search_algorithm']} · bottleneck: "
+                f"{optimization['bottleneck_equipment'] or 'not reported'} "
+                f"({optimization['bottleneck_type'] or 'type not reported'})"
+            )
+            if optimization["message"]:
+                st.write(optimization["message"])
+            for title, key in (
+                ("Equipment utilization at optimum", "utilization_rows"),
+                ("Optimization search history", "iteration_rows"),
+                ("KPIs at optimum", "kpi_rows"),
+            ):
+                if optimization[key]:
+                    st.markdown(f"##### {title}")
+                    st.dataframe(
+                        pd.DataFrame(optimization[key]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+        if not sensitivity and not optimization:
+            st.info(study_evidence["reason"])
     st.caption(
-        "Sensitivity, adjust/specification and bounded optimization continue to run "
-        "through the inherited Process Flowsheet Studio tools and native NeqSim model."
+        "Sensitivity and bounded optimization run through the inherited Process "
+        "Chat tools against isolated NeqSim scenarios. Adjust/specification remains "
+        "available through native Adjuster units in Process Flowsheet Studio."
     )
-    if st.button("Open studies in Process Flowsheet", type="primary"):
+    chat_col, flowsheet_col = st.columns(2)
+    if chat_col.button("Run study in Process Chat", type="primary"):
+        st.switch_page("pages/90_Process_Chat.py")
+    if flowsheet_col.button("Open Process Flowsheet"):
         st.switch_page("pages/35_Process_Flowsheet_Studio.py")
 
 st.divider()
