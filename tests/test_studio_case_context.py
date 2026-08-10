@@ -20,6 +20,8 @@ from studio.case_context import (
     decode_portable_case,
     encode_portable_case,
     get_active_case,
+    detach_active_runtime_model,
+    mark_active_runtime_changed,
     queue_new_case,
     queue_open_case,
     queue_recent_case,
@@ -196,6 +198,46 @@ class StudioCaseContextTest(unittest.TestCase):
 
         self.assertNotIn(STUDIO_CASE_CONTEXT_STATE_KEY, state)
         self.assertEqual(state["classic_case"], {"keep": True})
+
+    def test_process_chat_runtime_change_marks_portable_case_dirty(self):
+        state = {}
+        set_active_case(
+            state,
+            sample_case(),
+            status=STATUS_SOLVED,
+            solved_signature="solved-input",
+            model_available=True,
+        )
+
+        changed = mark_active_runtime_changed(
+            state,
+            model_name="Chat scenario",
+            reason="Runtime differs from portable inputs.",
+        )
+
+        self.assertEqual(changed["status"], STATUS_DIRTY)
+        self.assertTrue(changed["runtime"]["model_available"])
+        self.assertIsNone(changed["runtime"]["solved_signature"])
+        self.assertIn("Runtime differs from portable inputs.", changed["warnings"])
+
+    def test_process_chat_reset_detaches_only_runtime_model(self):
+        state = {"classic_case": "untouched"}
+        original = set_active_case(
+            state,
+            sample_case(),
+            status=STATUS_SOLVED,
+            model_available=True,
+        )
+
+        detached = detach_active_runtime_model(
+            state,
+            reason="Runtime reset.",
+        )
+
+        self.assertEqual(detached["case_id"], original["case_id"])
+        self.assertFalse(detached["runtime"]["model_available"])
+        self.assertEqual(detached["case_spec"], original["case_spec"])
+        self.assertEqual(state["classic_case"], "untouched")
 
     def test_fingerprint_is_order_independent(self):
         first = sample_case()

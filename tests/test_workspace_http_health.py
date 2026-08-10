@@ -105,6 +105,9 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
     def test_studio_http_health(self):
         self._probe_streamlit_page("pages/00_NeqSim_Studio.py")
 
+    def test_process_chat_http_health(self):
+        self._probe_streamlit_page("pages/90_Process_Chat.py")
+
 
 if __name__ == "__main__":
     unittest.main()
