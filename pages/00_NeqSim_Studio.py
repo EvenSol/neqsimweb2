@@ -29,6 +29,7 @@ from studio.case_context import (  # noqa: E402
     recent_cases,
     save_case_as,
 )
+from studio.results_context import remember_result_destination  # noqa: E402
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -354,6 +355,11 @@ for row_start in range(0, len(STUDIO_DESTINATIONS), 4):
                     key=f"open_{destination.key}",
                     use_container_width=True,
                 ):
+                    if destination.page == "pages/10_Studio_Results.py":
+                        remember_result_destination(
+                            st.session_state,
+                            destination.key,
+                        )
                     st.switch_page(destination.page)
             else:
                 st.button(

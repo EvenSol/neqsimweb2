@@ -64,21 +64,23 @@ STUDIO_DESTINATIONS = (
         key="equipment",
         title="Equipment Design",
         description=(
-            "Bring existing separator, compressor, pump, exchanger, valve and "
-            "pipeline design evidence into a case-based workspace."
+            "Review solved operating values, design capacities, utilization, margins "
+            "and explicit engineering-limit evidence for the active case."
         ),
         icon="📐",
-        status=STATUS_PLANNED,
+        status=STATUS_AVAILABLE,
+        page="pages/10_Studio_Results.py",
     ),
     StudioDestination(
         key="studies",
         title="Engineering Studies",
         description=(
-            "Case comparison, sensitivity, adjust/specification, optimization, "
-            "constraints, energy and emissions."
+            "Review solved case comparisons and continue sensitivity, adjust/"
+            "specification and bounded optimization in the inherited flowsheet tools."
         ),
         icon="📊",
-        status=STATUS_PLANNED,
+        status=STATUS_AVAILABLE,
+        page="pages/10_Studio_Results.py",
     ),
     StudioDestination(
         key="dynamics",
