@@ -176,12 +176,14 @@ evidence. It introduces no calculation, schema, route or user-workflow change.
 
 ## Active stacked work
 
-There are no open Studio implementation PRs. PR #100 is merged and no child branch
-depends on it. This documentation-only root tranche targets current `main` and
-does not claim that an unmerged `equinor/neqsim` capability is available.
+PR #100 is merged. The active stack contains this documentation-only root
+targeting `main`, S9 deployment-health child PR #102 targeting this root's exact
+head, and S9 dashboard-accessibility child PR #103 targeting #102's exact head.
+All three are recorded as **in stack**, not merged completion. The stack limit is
+reached, and no tranche claims that an unmerged `equinor/neqsim` capability is
+available.
 
-While the drawing-set contract remains unavailable, the next largest safe
-dependency-ready implementation tranche is S9 Classic/Studio browser,
-accessibility and migration/interoperability hardening. Engineering Drawings can
-move into an interactive Studio adapter only after the required core contracts
-are merged and available in the NeqSim runtime used by the web application.
+While these PRs remain open, further work is limited to validation, review
+feedback, conflict repair and integration. Engineering Drawings can move into an
+interactive Studio adapter only after the required core contracts are merged and
+available in the NeqSim runtime used by the web application.
