@@ -17,6 +17,7 @@ from studio.case_context import (
     get_active_case,
     mark_active_runtime_changed,
 )
+from process_chat.studio_context import reset_chat_session_if_model_changed
 from theme import apply_theme, theme_toggle
 
 st.set_page_config(
@@ -2370,6 +2371,19 @@ def _show_model_built(model_result):
             pass
 
 
+# A newly solved flowsheet may replace the live model while Streamlit retains
+# the previous chat session.  Reset chat-owned state before showing or running
+# another question so Process Chat always binds to the current runtime model.
+_chat_model_was_reset = reset_chat_session_if_model_changed(
+    st.session_state,
+    model,
+)
+if _chat_model_was_reset:
+    st.info(
+        "Process Chat was reset because the active runtime model changed. "
+        "New questions and studies will use the current model."
+    )
+
 # Initialize chat history
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
@@ -2621,6 +2635,12 @@ if user_input:
                             renderer(result_obj)
                         except Exception as e:
                             st.warning(f"Could not render {key}: {e}")
+
+                if sensitivity is not None or optimization is not None:
+                    # Keep a runtime-only identity marker with deterministic
+                    # study attachments.  Studio Results uses this marker to
+                    # reject history belonging to another native model.
+                    msg_data["_study_model"] = session.model
 
                 st.session_state["chat_messages"].append(msg_data)
 

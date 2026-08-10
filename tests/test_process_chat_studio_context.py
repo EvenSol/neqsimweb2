@@ -5,6 +5,7 @@ import unittest
 
 from process_chat.studio_context import (
     format_studio_case_evidence,
+    reset_chat_session_if_model_changed,
     studio_case_evidence,
 )
 
@@ -13,6 +14,35 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProcessChatStudioContextTest(unittest.TestCase):
+    def test_chat_session_is_reset_when_runtime_model_changes(self):
+        old_model = object()
+        current_model = object()
+        chat_session = type("ChatSession", (), {"model": old_model})()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "optimization": object()}],
+            "classic_key": "preserved",
+        }
+
+        changed = reset_chat_session_if_model_changed(state, current_model)
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
+        self.assertEqual(state["classic_key"], "preserved")
+
+    def test_chat_session_is_preserved_for_exact_runtime_model(self):
+        model = object()
+        chat_session = type("ChatSession", (), {"model": model})()
+        messages = [{"role": "assistant", "content": "Current model"}]
+        state = {"chat_session": chat_session, "chat_messages": messages}
+
+        changed = reset_chat_session_if_model_changed(state, model)
+
+        self.assertFalse(changed)
+        self.assertIs(state["chat_session"], chat_session)
+        self.assertIs(state["chat_messages"], messages)
+
     def test_no_active_case_produces_no_prompt_evidence(self):
         self.assertEqual(studio_case_evidence(None), {})
         self.assertEqual(format_studio_case_evidence(None), "")
@@ -79,6 +109,8 @@ class ProcessChatStudioContextTest(unittest.TestCase):
         )
         self.assertIn("studio_case_context=_studio_case", page_source)
         self.assertIn("session.set_studio_case_context(_studio_case)", page_source)
+        self.assertIn("reset_chat_session_if_model_changed", page_source)
+        self.assertIn('msg_data["_study_model"] = session.model', page_source)
 
 
 if __name__ == "__main__":
