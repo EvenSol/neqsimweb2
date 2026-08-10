@@ -12,6 +12,11 @@ import traceback
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from studio.case_context import (
+    detach_active_runtime_model,
+    get_active_case,
+    mark_active_runtime_changed,
+)
 from theme import apply_theme, theme_toggle
 
 st.set_page_config(
@@ -27,6 +32,23 @@ st.markdown("""
 Chat with your NeqSim process model. Upload a `.neqsim` process file **or build a new process from scratch**.
 Ask questions, run what-if scenarios, and explore planning options.
 """)
+
+_studio_case = get_active_case(st.session_state)
+if _studio_case:
+    case_col, studio_col, flowsheet_col = st.columns([2.4, 1.0, 1.0])
+    case_col.info(
+        f"Studio case: **{_studio_case['name']}** · "
+        f"{_studio_case['status'].replace('-', ' ').title()} · "
+        f"{_studio_case['thermodynamics']['eos_model']}"
+    )
+    if studio_col.button("Studio home", use_container_width=True):
+        st.switch_page("pages/00_NeqSim_Studio.py")
+    if flowsheet_col.button("Process flowsheet", use_container_width=True):
+        st.switch_page("pages/35_Process_Flowsheet_Studio.py")
+    st.caption(
+        "Process Chat uses the live solved model from the active case. A model "
+        "changed by chat is marked dirty until reconciled with the portable case."
+    )
 
 # ─────────────────────────────────────────────
 # Sidebar: Model Upload & AI Settings
@@ -2443,11 +2465,15 @@ if user_input:
                         model=model,     # None in builder mode
                         api_key=api_key_val,
                         ai_model="gemini-2.5-flash",
+                        studio_case_context=_studio_case,
                     )
 
                 session = st.session_state["chat_session"]
                 # Sync API key in case the user changed it
                 session.api_key = api_key_val
+                # Refresh whitelisted lifecycle/units/provenance evidence. The
+                # portable case specification is intentionally not forwarded.
+                session.set_studio_case_context(_studio_case)
                 # Inject DEXPI XML if available
                 if st.session_state.get("dexpi_xml"):
                     session.set_dexpi_xml(
@@ -2483,12 +2509,23 @@ if user_input:
                 model_built = session.get_last_model_built()
 
                 # --- Sync model from session back to session_state ---
+                runtime_model_replaced = False
                 if session.model is not None:
                     if st.session_state.get("process_model") is not session.model:
+                        runtime_model_replaced = True
                         st.session_state["process_model"] = session.model
                         st.session_state["_builder_mode"] = False
                         st.session_state["process_model_name"] = (
                             st.session_state.get("process_model_name") or "Built Process"
+                        )
+                        mark_active_runtime_changed(
+                            st.session_state,
+                            model_name=st.session_state.get("process_model_name"),
+                            reason=(
+                                "Process Chat changed the live runtime model. "
+                                "Reconcile or save the scenario before treating "
+                                "the portable flowsheet case as current."
+                            ),
                         )
                         # Auto-generate DEXPI XML + real P&ID SVG for the new model
                         if not st.session_state.get("dexpi_xml"):
@@ -2505,6 +2542,20 @@ if user_input:
                                     st.session_state["dexpi_pid_svg"] = _pid_svg
                             except Exception:
                                 pass
+                if (
+                    model_built is not None
+                    and session.model is not None
+                    and not runtime_model_replaced
+                ):
+                    mark_active_runtime_changed(
+                        st.session_state,
+                        model_name=st.session_state.get("process_model_name"),
+                        reason=(
+                            "Process Chat changed the live runtime model. "
+                            "Reconcile or save the scenario before treating "
+                            "the portable flowsheet case as current."
+                        ),
+                    )
 
                 # --- Refresh operating points in old chart messages ---
                 # After any model change (scenario, build, etc.), old chart
@@ -2604,6 +2655,13 @@ with col2:
         st.session_state.pop("dexpi_xml", None)
         st.session_state.pop("dexpi_filename", None)
         st.session_state["chat_messages"] = []
+        detach_active_runtime_model(
+            st.session_state,
+            reason=(
+                "Process Chat reset the live runtime model. Run the active "
+                "flowsheet again to restore solved evidence."
+            ),
+        )
         st.rerun()
 with col3:
     if model:

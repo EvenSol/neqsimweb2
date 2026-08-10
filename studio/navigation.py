@@ -108,7 +108,8 @@ STUDIO_DESTINATIONS = (
             "calculations and evidence as its source of truth."
         ),
         icon="💬",
-        status=STATUS_PLANNED,
+        status=STATUS_AVAILABLE,
+        page="pages/90_Process_Chat.py",
     ),
     StudioDestination(
         key="examples",
