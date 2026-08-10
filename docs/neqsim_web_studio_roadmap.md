@@ -177,8 +177,8 @@ evidence. It introduces no calculation, schema, route or user-workflow change.
 ## Active stacked work
 
 PR #100 is merged. The active stack contains this documentation-only root
-targeting `main`, S9 deployment-health child PR #102 targeting this root's exact
-head, and S9 dashboard-accessibility child PR #103 targeting #102's exact head.
+targeting `main`, an S9 deployment-health child targeting this root's exact head,
+and an S9 dashboard-accessibility child targeting the health child's exact head.
 All three are recorded as **in stack**, not merged completion. The stack limit is
 reached, and no tranche claims that an unmerged `equinor/neqsim` capability is
 available.
