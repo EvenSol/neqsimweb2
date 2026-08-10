@@ -85,6 +85,24 @@ class ProcessChatStudioContextTest(unittest.TestCase):
         self.assertEqual(state["chat_messages"], [])
         self.assertEqual(state["classic_key"], "preserved")
 
+    def test_unsigned_legacy_session_is_reset_for_a_solved_studio_case(self):
+        model = object()
+        chat_session = type("ChatSession", (), {"model": model})()
+        state = {
+            "chat_session": chat_session,
+            "chat_messages": [{"role": "assistant", "comparison": object()}],
+        }
+
+        changed = reset_chat_session_if_model_changed(
+            state,
+            model,
+            "sha-current",
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("chat_session", state)
+        self.assertEqual(state["chat_messages"], [])
+
     def test_no_active_case_produces_no_prompt_evidence(self):
         self.assertEqual(studio_case_evidence(None), {})
         self.assertEqual(format_studio_case_evidence(None), "")

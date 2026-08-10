@@ -44,7 +44,6 @@ def reset_chat_session_if_model_changed(
             previous_signature = runtime.get("solved_signature")
     signature_matches = (
         solved_signature is None
-        or previous_signature is None
         or previous_signature == solved_signature
     )
     if model_matches and signature_matches:
