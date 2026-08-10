@@ -7,6 +7,34 @@ The application is in initial development and is using the [streamlit framework]
 
 The application is hosted by streamlit and can be tested at [neqsim web app link](https://neqsim.streamlit.app/).
 
+## Pipeline Hydraulics
+
+The **Pipeline** page provides two native NeqSim calculation paths:
+
+- **Steady-State (Beggs-Brill)** uses `PipeBeggsAndBrills` for liquid
+  holdup, flow regime, friction, hydrostatic pressure change, thermodynamics,
+  and optional specified-U heat transfer. The app solves inlet pressure to
+  match the requested outlet pressure and reports NeqSim's native increment
+  profiles.
+- **Dynamic Simulation (Two-Fluid Model)** uses `TwoFluidPipe` for separate
+  gas and liquid conservation equations, terrain, heat transfer, flow-regime
+  transitions, and optional slug tracking. A converged native steady state is
+  used to initialize the transient calculation.
+
+Both paths use the same normalized fluid table. The page starts with a lean
+natural-gas preset and also provides a two-phase gas-condensate regression
+fluid and a blank custom fluid. SRK is the explicit default thermodynamic
+model; PR, CPA, and NeqSim automatic model selection are available in the
+sidebar. Standard gas rate is interpreted at 1.01325 bara and 15 °C; actual
+volume rate uses the entered pressure and temperature. Pressures are absolute
+unless a result is explicitly labelled as a pressure drop.
+
+Terrain distances must be strictly increasing. The dynamic page shifts the
+first distance to zero and interpolates absolute elevations at the native
+two-fluid section centres. Zero mass flow is rejected before the Java model is
+called. Results are intended for engineering screening and require model
+validity, discretization, and time-step sensitivity checks before project use.
+
 ## Process Flowsheet Studio
 
 Process Flowsheet Studio builds and solves reusable steady-state NeqSim cases

@@ -16,7 +16,19 @@ ACTIVE_CASE_STATE_KEY = "neqsim_studio_case_context"
 FLOWSHEET_CASE_STATE_KEY = "flowsheet_studio_case"
 FLOWSHEET_RESULT_STATE_KEY = "flowsheet_studio_result"
 FLOWSHEET_CASE_HISTORY_STATE_KEY = "flowsheet_studio_case_history"
+RESULT_DESTINATION_STATE_KEY = "neqsim_studio_results_destination"
 CURRENT_RESULT_STATUSES = frozenset({"solved", "warning"})
+RESULT_SECTIONS = (
+    "Overview",
+    "Streams",
+    "Equipment & design",
+    "Validation",
+    "Case studies",
+)
+_DESTINATION_SECTION = {
+    "equipment": "Equipment & design",
+    "studies": "Case studies",
+}
 
 
 class StudioResultsUnavailable(RuntimeError):
@@ -365,4 +377,16 @@ def remember_result_destination(
 ) -> None:
     """Record why the shared results workspace was opened."""
 
-    session_state["neqsim_studio_results_destination"] = str(destination)
+    destination_key = str(destination).strip().lower()
+    if destination_key not in _DESTINATION_SECTION:
+        raise ValueError(f"Unsupported Studio result destination: {destination}")
+    session_state[RESULT_DESTINATION_STATE_KEY] = destination_key
+
+
+def selected_result_section(session_state: Mapping[str, Any]) -> str:
+    """Return the result section matching the Studio card that opened the page."""
+
+    destination = str(
+        session_state.get(RESULT_DESTINATION_STATE_KEY, "")
+    ).strip().lower()
+    return _DESTINATION_SECTION.get(destination, "Overview")

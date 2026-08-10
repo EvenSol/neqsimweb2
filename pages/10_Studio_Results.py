@@ -14,6 +14,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from studio.results_context import (  # noqa: E402
+    RESULT_SECTIONS,
     StudioResultsUnavailable,
     build_result_summary,
     case_history_rows,
@@ -21,6 +22,7 @@ from studio.results_context import (  # noqa: E402
     equipment_design_rows,
     equipment_rows,
     load_current_result_context,
+    selected_result_section,
     stream_rows,
     validation_tables,
 )
@@ -90,11 +92,15 @@ metric_cols[2].metric("Specific energy", _metric_value(metrics["specific_energy"
 metric_cols[3].metric("Mass imbalance", _metric_value(metrics["mass_imbalance"], 6))
 metric_cols[4].metric("Validation", summary["validation_status"])
 
-overview_tab, streams_tab, equipment_tab, validation_tab, studies_tab = st.tabs(
-    ["Overview", "Streams", "Equipment & design", "Validation", "Case studies"]
+default_section = selected_result_section(st.session_state)
+selected_section = st.radio(
+    "Results view",
+    RESULT_SECTIONS,
+    index=RESULT_SECTIONS.index(default_section),
+    horizontal=True,
 )
 
-with overview_tab:
+if selected_section == "Overview":
     left, right = st.columns(2)
     with left:
         st.subheader("Case basis")
@@ -133,12 +139,12 @@ with overview_tab:
         "screening evidence unless project design data and accountable review exist."
     )
 
-with streams_tab:
+if selected_section == "Streams":
     rows = stream_rows(context)
     st.subheader(f"Solved streams · {len(rows)}")
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-with equipment_tab:
+if selected_section == "Equipment & design":
     rows = equipment_rows(context)
     st.subheader(f"Solved equipment · {len(rows)}")
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -160,7 +166,7 @@ with equipment_tab:
         hide_index=True,
     )
 
-with validation_tab:
+if selected_section == "Validation":
     tables = validation_tables(context)
     energy = summary["energy_balance"]
     st.subheader("Convergence")
@@ -211,7 +217,7 @@ with validation_tab:
         else:
             st.info(f"{title} evidence is unavailable for this result.")
 
-with studies_tab:
+if selected_section == "Case studies":
     st.subheader("Solved session case comparison")
     history = case_history_rows(st.session_state)
     if history:

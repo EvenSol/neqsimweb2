@@ -10,11 +10,14 @@ from studio.results_context import (
     FLOWSHEET_CASE_HISTORY_STATE_KEY,
     FLOWSHEET_CASE_STATE_KEY,
     FLOWSHEET_RESULT_STATE_KEY,
+    RESULT_DESTINATION_STATE_KEY,
     StudioResultsUnavailable,
     build_result_summary,
     case_history_rows,
     equipment_design_rows,
     load_current_result_context,
+    remember_result_destination,
+    selected_result_section,
     stream_rows,
 )
 
@@ -182,6 +185,22 @@ class StudioResultsContextTest(unittest.TestCase):
             case_history_rows(self.session),
             [{"Case": "Case A", "Power [kW]": 1000.0}],
         )
+
+    def test_result_card_routes_to_its_advertised_workspace(self):
+        remember_result_destination(self.session, "equipment")
+        self.assertEqual(
+            selected_result_section(self.session),
+            "Equipment & design",
+        )
+        remember_result_destination(self.session, "studies")
+        self.assertEqual(selected_result_section(self.session), "Case studies")
+        self.assertEqual(
+            self.session[RESULT_DESTINATION_STATE_KEY],
+            "studies",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            remember_result_destination(self.session, "drawings")
 
 
 if __name__ == "__main__":
