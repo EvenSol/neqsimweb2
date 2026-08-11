@@ -124,12 +124,15 @@ does not rerun or duplicate the calculations.
 Status: **blocked on a merged, web-consumable core drawing-set contract**.
 
 Current `equinor/neqsim` master includes the canonical topology-backed assessed
-DEXPI 2.0 Process material projection through #2932. That is reusable core
-foundation, but it is not yet a controlled Studio drawing set: operating values
-are still proposed in draft #2934, and document/sheet identity, revision/status,
-layout ownership, off-page references and qualified SVG/PDF artifacts remain
-future core work. Studio therefore keeps Engineering Drawings honestly marked as
-core integration in progress rather than defining a competing payload or renderer.
+DEXPI 2.0 Process material projection through #2932 and the opt-in successful-run
+operating-case snapshot through #2934. The latter adds stable case/object identity,
+K, bara absolute and kg/s values, provenance and fail-closed unsuccessful-run
+diagnostics. It is reusable core foundation, but the assessed DEXPI writer does
+not yet consume those values and this is not a controlled Studio drawing set.
+Document/sheet identity, revision/status, layout ownership, off-page references
+and qualified SVG/PDF artifacts remain future core work. Studio therefore keeps
+Engineering Drawings honestly marked as core integration in progress rather than
+defining a competing payload or renderer.
 
 The exact activation boundary and adapter responsibilities are recorded in
 `docs/neqsim_web_studio_drawing_contract.md`.
@@ -172,7 +175,9 @@ conservation, bounded execution and pipeline hydraulics.
 
 The current documentation tranche reconciles the roadmap with that merge and
 freezes the Engineering Drawings integration boundary at verified merged core
-evidence. It introduces no calculation, schema, route or user-workflow change.
+evidence. It now records merged core PR #2934 without activating a runtime adapter:
+the remaining document, sheet and artifact contracts are still absent. It
+introduces no calculation, schema, route or user-workflow change.
 
 ## Active stacked work
 
