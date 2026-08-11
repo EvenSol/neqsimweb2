@@ -302,7 +302,7 @@ if available_recent_cases:
                 f"{recent_case['thermodynamics']['eos_model']}"
             )
             if open_recent_col.button(
-                "Open",
+                f"Open recent case · {recent_case['name']}",
                 key=f"open_recent_{recent_case['case_id']}",
                 use_container_width=True,
             ):
