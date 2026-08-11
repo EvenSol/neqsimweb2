@@ -139,7 +139,9 @@ Studio therefore keeps Engineering Drawings honestly marked as core integration
 in progress rather than defining a competing payload or renderer.
 
 The exact activation boundary and adapter responsibilities are recorded in
-`docs/neqsim_web_studio_drawing_contract.md`.
+`docs/neqsim_web_studio_drawing_contract.md`. Merged documentation audit #2948 /
+`b35fdb1e` confirms that the controlled drawing/document model remains a future
+core dependency; it does not activate a Studio drawing adapter.
 
 ### S6 — Process Chat engineering copilot
 
@@ -163,15 +165,19 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; validated child evidence in recovery PR #108**.
+Status: **ongoing; recovery evidence merged, interoperability gate in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
-The active recovery root restores the central Process Flowsheet fresh-process
-health gate and its requirement that every enabled Studio destination has hosted
-coverage. It also restores unique native action names for disabled workflows and
-session-local Recent Cases rows, with AppTest evidence for independent named
-cases. This remains in-stack evidence until #108 reaches `main`.
+Merged recovery PR #108 restores the central Process Flowsheet fresh-process
+health gate, hosted coverage for every enabled Studio destination, unique native
+action names and independent Recent Cases actions.
+
+Root PR #109 adds browser-level migration evidence through the real shared
+Studio-to-flowsheet handoff. It covers schema v1-v4 canonicalization and
+round-trip export, new identity for external opens, Classic session isolation and
+fail-closed rejection of unsupported future schema v5. This remains **in stack**
+until merged.
 
 ## Current tranche
 
@@ -188,20 +194,26 @@ activation boundary. Child PRs #106 and #107 were then merged into already-merge
 parent branches, so their validated health and accessibility payloads did not
 reach `main`.
 
-Recovery PR #108 reapplies those exact application/test payloads onto current
-`main` and updates this roadmap for merged core PR #2938. It changes no
-calculation, schema, saved case, Classic page or engineering claim.
+Recovery PR #108 merged at
+`073e90f56df6b20a5fadaf3b3c86b9ff7448c01b`, placing those exact
+application/test payloads on `main` without changing calculations, schemas,
+saved cases, Classic pages or engineering claims.
+
+Root PR #109 now advances the next S9 gate: supported schema v1-v4 cases traverse
+the actual shared pending-case contract and existing flowsheet importer, become
+canonical schema v4 and round-trip through the shared portable serializer.
+Unsupported future schema v5 must leave the active Studio case, Recent Cases and
+unrelated Classic state unchanged.
 
 ## Active stacked work
 
-PR #101 is merged. Merged child PRs #106 and #107 preserve their original
-dependency, review and exact-head validation history, but their child-branch
-merges did not update `main`. One clean recovery root, PR #108, now targets
-current `main` with their combined validated payload and is recorded as **in
-stack**, not merged completion.
+PR #108 is merged. Root PR #109 targets `main` from exact base
+`073e90f56df6b20a5fadaf3b3c86b9ff7448c01b` and is the only active Studio
+implementation PR. Its migration/interoperability assertions are **in stack**,
+not merged completion.
 
-After recovery lands, the next safe S9 tranche is Classic/Studio browser
-interaction and migration/interoperability hardening. Engineering Drawings can
-move into an interactive Studio adapter only after controlled drawing-set and
-artifact contracts are merged and the required NeqSim API is available in the web
-runtime.
+After #109 is validated, the next safe S9 tranche is browser interaction across
+Studio home, flowsheet and results for supported and rejected case opens.
+Engineering Drawings can move into an interactive Studio adapter only after
+controlled drawing-set and artifact contracts are merged and the required NeqSim
+API is available in the web runtime.
