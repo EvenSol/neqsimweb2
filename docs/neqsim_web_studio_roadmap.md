@@ -168,6 +168,13 @@ Streamlit root/health/live-process gate and requires every enabled Studio
 destination to remain represented in that gate. This is in-stack evidence, not a
 merged production-readiness claim.
 
+The top S9 accessibility tranche gives each disabled roadmap workflow and each
+session-local Recent Cases row a unique native button name. Screen-reader and
+keyboard users can distinguish which Thermodynamics, Dynamics, Engineering
+Drawings or Examples action is unavailable and which named recent case will open,
+without changing workflow availability or case lifecycle semantics. This is also
+in-stack evidence.
+
 ## Current tranche
 
 Recovery PR #100 merged at `90e1477ca7761c8bfe288f8b6f302380ab49aada`,
@@ -180,16 +187,18 @@ conservation, bounded execution and pipeline hydraulics.
 The root documentation tranche reconciles the roadmap with that merge and freezes
 the Engineering Drawings integration boundary at verified merged core evidence.
 It records merged core PR #2934 without activating a runtime adapter because the
-remaining document, sheet and artifact contracts are still absent. Its S9 child
-hardens deployment coverage for the inherited central Process Flowsheet workflow
-without changing calculations, schema, routes or saved cases.
+remaining document, sheet and artifact contracts are still absent. Its S9 children
+harden deployment coverage for the inherited central Process Flowsheet workflow
+and distinguish disabled dashboard plus named recent-case actions without changing
+calculations, schema, routes or saved cases.
 
 ## Active stacked work
 
 PR #100 is merged. The active stack contains the documentation-only drawing
-contract root targeting `main` and one S9 deployment-health child targeting that
-root's exact validated head. Neither tranche claims that unavailable
-`equinor/neqsim` capability is available.
+contract root targeting `main`, its S9 deployment-health child and a top S9
+dashboard-accessibility child. Each child targets its immediate parent's exact
+validated head. No tranche claims that unavailable `equinor/neqsim` capability is
+available.
 
 While the drawing-set contract remains unavailable, further safe S9 work is
 Classic/Studio browser interaction, accessibility and migration/interoperability
