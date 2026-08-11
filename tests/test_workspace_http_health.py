@@ -12,8 +12,20 @@ import unittest
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from studio.navigation import STUDIO_DESTINATIONS
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROBED_WORKSPACE_ROUTES = frozenset(
+    {
+        "welcome.py",
+        "pages/00_NeqSim_Studio.py",
+        "pages/10_Studio_Results.py",
+        "pages/25_Pipeline.py",
+        "pages/35_Process_Flowsheet_Studio.py",
+        "pages/90_Process_Chat.py",
+    }
+)
 
 
 def _free_port() -> int:
@@ -100,6 +112,16 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
                         process.kill()
                         process.wait(timeout=5.0)
 
+    def test_all_available_studio_routes_have_a_fresh_process_gate(self):
+        available_routes = {
+            destination.page
+            for destination in STUDIO_DESTINATIONS
+            if destination.available
+        }
+
+        self.assertTrue(available_routes)
+        self.assertLessEqual(available_routes, PROBED_WORKSPACE_ROUTES)
+
     def test_classic_http_health(self):
         self._probe_streamlit_page("welcome.py")
 
@@ -108,6 +130,9 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
 
     def test_studio_results_http_health(self):
         self._probe_streamlit_page("pages/10_Studio_Results.py")
+
+    def test_process_flowsheet_studio_http_health(self):
+        self._probe_streamlit_page("pages/35_Process_Flowsheet_Studio.py")
 
     def test_process_chat_http_health(self):
         self._probe_streamlit_page("pages/90_Process_Chat.py")

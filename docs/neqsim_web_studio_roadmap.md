@@ -159,10 +159,14 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: ongoing across all milestones.
+Status: **ongoing; central-route health coverage in the active stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
+The active S9 child tranche adds the central Process Flowsheet page to the fresh
+Streamlit root/health/live-process gate and requires every enabled Studio
+destination to remain represented in that gate. This is in-stack evidence, not a
+merged production-readiness claim.
 
 ## Current tranche
 
@@ -173,22 +177,22 @@ portable schema behavior, and the complete hosted gate passed Classic, Studio,
 Results, Process Chat and pipeline health plus warm deployment, native
 conservation, bounded execution and pipeline hydraulics.
 
-The current documentation tranche reconciles the roadmap with that merge and
-freezes the Engineering Drawings integration boundary at verified merged core
-evidence. It now records merged core PR #2934 without activating a runtime adapter:
-the remaining document, sheet and artifact contracts are still absent. It
-introduces no calculation, schema, route or user-workflow change.
+The root documentation tranche reconciles the roadmap with that merge and freezes
+the Engineering Drawings integration boundary at verified merged core evidence.
+It records merged core PR #2934 without activating a runtime adapter because the
+remaining document, sheet and artifact contracts are still absent. Its S9 child
+hardens deployment coverage for the inherited central Process Flowsheet workflow
+without changing calculations, schema, routes or saved cases.
 
 ## Active stacked work
 
-PR #100 is merged. The active stack contains this documentation-only root
-targeting `main`, an S9 deployment-health child targeting this root's exact head,
-and an S9 dashboard-accessibility child targeting the health child's exact head.
-All three are recorded as **in stack**, not merged completion. The stack limit is
-reached, and no tranche claims that an unmerged `equinor/neqsim` capability is
-available.
+PR #100 is merged. The active stack contains the documentation-only drawing
+contract root targeting `main` and one S9 deployment-health child targeting that
+root's exact validated head. Neither tranche claims that unavailable
+`equinor/neqsim` capability is available.
 
-While these PRs remain open, further work is limited to validation, review
-feedback, conflict repair and integration. Engineering Drawings can move into an
-interactive Studio adapter only after the required core contracts are merged and
-available in the NeqSim runtime used by the web application.
+While the drawing-set contract remains unavailable, further safe S9 work is
+Classic/Studio browser interaction, accessibility and migration/interoperability
+hardening. Engineering Drawings can move into an interactive Studio adapter only
+after the remaining core contracts are merged and available in the NeqSim runtime
+used by the web application.
