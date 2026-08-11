@@ -168,10 +168,11 @@ Streamlit root/health/live-process gate and requires every enabled Studio
 destination to remain represented in that gate. This is in-stack evidence, not a
 merged production-readiness claim.
 
-The top S9 accessibility tranche gives each disabled roadmap workflow a unique
-native button name. Screen-reader and keyboard users can distinguish which
-Thermodynamics, Dynamics, Engineering Drawings or Examples action is unavailable
-without changing its disabled state or overstating capability. This is also
+The top S9 accessibility tranche gives each disabled roadmap workflow and each
+session-local Recent Cases row a unique native button name. Screen-reader and
+keyboard users can distinguish which Thermodynamics, Dynamics, Engineering
+Drawings or Examples action is unavailable and which named recent case will open,
+without changing workflow availability or case lifecycle semantics. This is also
 in-stack evidence.
 
 ## Current tranche
@@ -188,8 +189,8 @@ the Engineering Drawings integration boundary at verified merged core evidence.
 It records merged core PR #2934 without activating a runtime adapter because the
 remaining document, sheet and artifact contracts are still absent. Its S9 children
 harden deployment coverage for the inherited central Process Flowsheet workflow
-and distinguish disabled dashboard actions without changing calculations, schema,
-routes or saved cases.
+and distinguish disabled dashboard plus named recent-case actions without changing
+calculations, schema, routes or saved cases.
 
 ## Active stacked work
 
