@@ -12,9 +12,9 @@ from studio.case_context import (
     PENDING_OPEN,
     STUDIO_CASE_CONTEXT_STATE_KEY,
     STUDIO_PENDING_CASE_STATE_KEY,
+    STUDIO_RECENT_CASES_STATE_KEY,
     decode_portable_case,
     encode_portable_case,
-    recent_cases,
 )
 
 
@@ -110,7 +110,10 @@ class StudioCaseInteroperabilityTest(unittest.TestCase):
         self.assertEqual(app.session_state["classic_case"], {"keep": True})
         self.assertNotIn(
             future_case["name"],
-            [case["name"] for case in recent_cases(app.session_state)],
+            [
+                case["name"]
+                for case in app.session_state[STUDIO_RECENT_CASES_STATE_KEY]
+            ],
         )
         error_messages = [item.value for item in app.error]
         self.assertTrue(
