@@ -143,6 +143,12 @@ The exact activation boundary and adapter responsibilities are recorded in
 `b35fdb1e` confirms that the controlled drawing/document model remains a future
 core dependency; it does not activate a Studio drawing adapter.
 
+NeqSim-Colab PR #119 is now merged on `master` as canonical executable acceptance
+evidence for the assessed DEXPI Process/PFD projection. That workflow validates
+the existing simulation-to-DEXPI path, but it does not supply the missing
+controlled drawing-set, artifact or revision contract and therefore does not
+change the Studio activation boundary.
+
 ### S6 — Process Chat engineering copilot
 
 Status: **initial case-aware integration completed on `main`**.
@@ -165,7 +171,7 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; recovery evidence merged, interoperability gate in stack**.
+Status: **ongoing; interoperability evidence merged, cross-page gate in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -173,11 +179,18 @@ Merged recovery PR #108 restores the central Process Flowsheet fresh-process
 health gate, hosted coverage for every enabled Studio destination, unique native
 action names and independent Recent Cases actions.
 
-Root PR #109 adds browser-level migration evidence through the real shared
+Root PR #109 added browser-level migration evidence through the real shared
 Studio-to-flowsheet handoff. It covers schema v1-v4 canonicalization and
 round-trip export, new identity for external opens, Classic session isolation and
-fail-closed rejection of unsupported future schema v5. This remains **in stack**
-until merged.
+fail-closed rejection of unsupported future schema v5. It is merged on `main` at
+`9e2b1d98f13d4d6df7cb75314a24a9da0a5b293d`.
+
+Root PR #110 is the current **in stack** S9 tranche. Its hosted Streamlit
+interaction gate traverses the real Classic entrypoint, Studio Home, inherited
+Process Flowsheet Studio and Engineering Results pages. It requires stable active
+case identity and untouched unrelated Classic session state across New, Continue,
+Recent Case, Equipment Design, Engineering Studies and fail-closed unsolved-result
+actions.
 
 ## Current tranche
 
@@ -199,21 +212,29 @@ Recovery PR #108 merged at
 application/test payloads on `main` without changing calculations, schemas,
 saved cases, Classic pages or engineering claims.
 
-Root PR #109 now advances the next S9 gate: supported schema v1-v4 cases traverse
-the actual shared pending-case contract and existing flowsheet importer, become
-canonical schema v4 and round-trip through the shared portable serializer.
+Root PR #109 merged the migration/interoperability gate: supported schema v1-v4
+cases traverse the actual shared pending-case contract and existing flowsheet
+importer, become canonical schema v4 and round-trip through the shared portable
+serializer.
 Unsupported future schema v5 must leave the active Studio case, Recent Cases and
 unrelated Classic state unchanged.
 
+Root PR #110 now advances browser interaction coverage without changing
+production calculations or case schemas. The test uses the actual multipage
+Streamlit entrypoint and existing shared services, including the unsolved Results
+guard that returns engineers to the active flowsheet instead of presenting stale
+evidence.
+
 ## Active stacked work
 
-PR #108 is merged. Root PR #109 targets `main` from exact base
-`073e90f56df6b20a5fadaf3b3c86b9ff7448c01b` and is the only active Studio
-implementation PR. Its migration/interoperability assertions are **in stack**,
-not merged completion.
+PR #109 is merged. Root PR #110 targets `main` from exact base
+`9e2b1d98f13d4d6df7cb75314a24a9da0a5b293d` and is the only active Studio
+implementation PR. Its cross-page interaction assertions are **in stack**, not
+merged completion.
 
-After #109 is validated, the next safe S9 tranche is browser interaction across
-Studio home, flowsheet and results for supported and rejected case opens.
+After #110 is validated and merged, the next safe S9 tranche is browser
+interaction for uploaded supported/rejected portable case payloads and
+deployment-level recovery.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
