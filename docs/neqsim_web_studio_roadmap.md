@@ -124,15 +124,19 @@ does not rerun or duplicate the calculations.
 Status: **blocked on a merged, web-consumable core drawing-set contract**.
 
 Current `equinor/neqsim` master includes the canonical topology-backed assessed
-DEXPI 2.0 Process material projection through #2932 and the opt-in successful-run
-operating-case snapshot through #2934. The latter adds stable case/object identity,
-K, bara absolute and kg/s values, provenance and fail-closed unsuccessful-run
-diagnostics. It is reusable core foundation, but the assessed DEXPI writer does
-not yet consume those values and this is not a controlled Studio drawing set.
-Document/sheet identity, revision/status, layout ownership, off-page references
-and qualified SVG/PDF artifacts remain future core work. Studio therefore keeps
-Engineering Drawings honestly marked as core integration in progress rather than
-defining a competing payload or renderer.
+DEXPI 2.0 Process material projection through #2932, the opt-in successful-run
+operating-case snapshot through #2934, and canonical-value DEXPI consumption
+through merged #2938 / `810415b0`. The five-argument assessed writer binds finite,
+case-matched calculation nodes by stable canonical owner identity, converts K to
+degree Celsius and kg/s to kg/h, preserves absolute bara, and diagnoses omitted
+values without a live-stream fallback.
+
+This is reusable simulation-result projection, not a controlled Studio drawing
+set. Document/sheet identity, revision/status, layout ownership, off-page
+references and qualified SVG/PDF artifacts remain future core work. The runtime
+used by NeqSim Web must also expose the merged API before any adapter can call it.
+Studio therefore keeps Engineering Drawings honestly marked as core integration
+in progress rather than defining a competing payload or renderer.
 
 The exact activation boundary and adapter responsibilities are recorded in
 `docs/neqsim_web_studio_drawing_contract.md`.
@@ -159,10 +163,15 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: ongoing across all milestones.
+Status: **ongoing; validated child evidence in recovery PR #108**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
+The active recovery root restores the central Process Flowsheet fresh-process
+health gate and its requirement that every enabled Studio destination has hosted
+coverage. It also restores unique native action names for disabled workflows and
+session-local Recent Cases rows, with AppTest evidence for independent named
+cases. This remains in-stack evidence until #108 reaches `main`.
 
 ## Current tranche
 
@@ -173,22 +182,26 @@ portable schema behavior, and the complete hosted gate passed Classic, Studio,
 Results, Process Chat and pipeline health plus warm deployment, native
 conservation, bounded execution and pipeline hydraulics.
 
-The current documentation tranche reconciles the roadmap with that merge and
-freezes the Engineering Drawings integration boundary at verified merged core
-evidence. It now records merged core PR #2934 without activating a runtime adapter:
-the remaining document, sheet and artifact contracts are still absent. It
-introduces no calculation, schema, route or user-workflow change.
+Documentation root PR #101 merged at
+`d6a568d9c908a737830643fa4bc341a1c061119c` and froze the Engineering Drawings
+activation boundary. Child PRs #106 and #107 were then merged into already-merged
+parent branches, so their validated health and accessibility payloads did not
+reach `main`.
+
+Recovery PR #108 reapplies those exact application/test payloads onto current
+`main` and updates this roadmap for merged core PR #2938. It changes no
+calculation, schema, saved case, Classic page or engineering claim.
 
 ## Active stacked work
 
-PR #100 is merged. The active stack contains this documentation-only root
-targeting `main`, an S9 deployment-health child targeting this root's exact head,
-and an S9 dashboard-accessibility child targeting the health child's exact head.
-All three are recorded as **in stack**, not merged completion. The stack limit is
-reached, and no tranche claims that an unmerged `equinor/neqsim` capability is
-available.
+PR #101 is merged. Merged child PRs #106 and #107 preserve their original
+dependency, review and exact-head validation history, but their child-branch
+merges did not update `main`. One clean recovery root, PR #108, now targets
+current `main` with their combined validated payload and is recorded as **in
+stack**, not merged completion.
 
-While these PRs remain open, further work is limited to validation, review
-feedback, conflict repair and integration. Engineering Drawings can move into an
-interactive Studio adapter only after the required core contracts are merged and
-available in the NeqSim runtime used by the web application.
+After recovery lands, the next safe S9 tranche is Classic/Studio browser
+interaction and migration/interoperability hardening. Engineering Drawings can
+move into an interactive Studio adapter only after controlled drawing-set and
+artifact contracts are merged and the required NeqSim API is available in the web
+runtime.
