@@ -363,7 +363,7 @@ for row_start in range(0, len(STUDIO_DESTINATIONS), 4):
                     st.switch_page(destination.page)
             else:
                 st.button(
-                    "Coming soon",
+                    f"Coming soon · {destination.title}",
                     key=f"planned_{destination.key}",
                     disabled=True,
                     use_container_width=True,
