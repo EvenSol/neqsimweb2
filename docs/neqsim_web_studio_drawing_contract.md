@@ -16,8 +16,9 @@ state or a simulation-only graph.
 ## Verified core baseline
 
 The merged baseline is pinned to NeqSim PR #2960 at
-`e8991c41163018299c0eacf8fef96e378a8fca72` and PR #2961 at
-`7402265158f18a40f6c71bf94fb033557ed263f7`:
+`e8991c41163018299c0eacf8fef96e378a8fca72`, PR #2961 at
+`7402265158f18a40f6c71bf94fb033557ed263f7`, and PR #2966 at
+`c8061c9d05022c501fc89d394be8da6d073a11fa`:
 
 - canonical `ProcessSystem` and multi-area `ProcessModel` topology projection with
   stable plant, area, equipment, port and connection identity;
@@ -38,6 +39,10 @@ The merged baseline is pinned to NeqSim PR #2960 at
 - a core `ProcessDiagramDocumentSetAdapter` for both `ProcessSystem` and
   `ProcessModel`, with multi-area sheet ownership and preserved material, energy
   and signal connector semantics;
+- immutable governed semantic-object snapshots through merged PR #2966, retaining
+  stable source identity, source designations, case-scoped calculated values,
+  explicit units, quantity basis, engineering/approval state and provenance for
+  both single-area and multi-area operating cases;
 - legacy DOT/Graphviz and compatibility DEXPI/Proteus paths preserved separately.
 
 This baseline now supplies the controlled semantic document set that Studio must
@@ -50,24 +55,23 @@ document/graphics projection.
 Studio activation still requires merged, documented and runtime-available APIs
 for the following capabilities:
 
-1. A deployed NeqSim runtime exposing the merged PR #2961 document-set API through
-   a stable Java/Python integration path.
-2. Exact solved-case binding and governed operating/design metadata sufficient to
-   prove that a drawing belongs to the active Studio solution, with explicit
-   units and provenance.
-3. Core-owned layout, routing, symbol/title-block semantics and any supported
+1. A deployed NeqSim runtime exposing the merged PR #2961 and #2966 document-set
+   APIs through a stable Java/Python integration path.
+2. Core-owned layout, routing, symbol/title-block semantics and any supported
    manual-override persistence.
-4. Core-produced SVG/PDF/DEXPI artifacts with media type, content profile,
+3. Core-produced SVG/PDF/DEXPI artifacts with media type, content profile,
    checksum/provenance and structured validation/loss diagnostics.
-5. Multi-area artifact behavior that preserves hierarchy, reciprocal off-page
+4. Multi-area artifact behavior that preserves hierarchy, reciprocal off-page
    references and material, energy and signal connections.
 
-Selected operating values with explicit units, stable case/object identity and
-provenance are merged in core PR #2934. The controlled document/sheet model is
-merged in PR #2961. Core PR #2966 is an active, unmerged metadata increment and is
-not accepted as Studio capability. Artifact generation and qualification remain
-outside the merged document-set scope. A merged core commit is also insufficient
-when the deployed web runtime still uses a NeqSim release that lacks the API.
+The controlled document/sheet model is merged in PR #2961. Governed operating
+case identity, calculated values, explicit units, quantity basis, state and
+provenance are merged in PR #2966. Source labels and carried connection names
+remain source designations, not approved equipment tags or line numbers. Studio
+must still bind those core snapshots to the exact active solved signature and
+fail closed on a mismatch. Artifact generation and qualification remain outside
+the merged document-set scope. A merged core commit is also insufficient when
+the deployed web runtime still uses a NeqSim release that lacks the API.
 
 ## Studio adapter responsibilities
 
