@@ -121,7 +121,8 @@ does not rerun or duplicate the calculations.
 
 ### S5 — Engineering Drawings
 
-Status: **blocked on a merged, web-consumable core drawing-set contract**.
+Status: **core document semantics merged; Studio activation remains blocked on
+runtime and artifact contracts**.
 
 Current `equinor/neqsim` master includes the canonical topology-backed assessed
 DEXPI 2.0 Process material projection through #2932, the opt-in successful-run
@@ -131,23 +132,28 @@ case-matched calculation nodes by stable canonical owner identity, converts K to
 degree Celsius and kg/s to kg/h, preserves absolute bara, and diagnoses omitted
 values without a live-stream fallback.
 
-This is reusable simulation-result projection, not a controlled Studio drawing
-set. Document/sheet identity, revision/status, layout ownership, off-page
-references and qualified SVG/PDF artifacts remain future core work. The runtime
-used by NeqSim Web must also expose the merged API before any adapter can call it.
-Studio therefore keeps Engineering Drawings honestly marked as core integration
-in progress rather than defining a competing payload or renderer.
+Merged core #2960 / `e8991c41` adds deterministic simple, branched and multi-area
+drawing reference cases. Merged core #2961 / `74022651` adds the immutable
+`EngineeringDiagramDocumentSet`, drawing-register and sheet identity,
+revision/status/issue-purpose metadata, stable semantic and connector IDs,
+reciprocal off-page references, structured diagnostics, deterministic
+JSON/fingerprints, and `ProcessSystem`/`ProcessModel` adapters. This resolves the
+controlled semantic document/sheet dependency without moving engineering meaning
+into the web layer.
 
-The exact activation boundary and adapter responsibilities are recorded in
-`docs/neqsim_web_studio_drawing_contract.md`. Merged documentation audit #2948 /
-`b35fdb1e` confirms that the controlled drawing/document model remains a future
-core dependency; it does not activate a Studio drawing adapter.
+Studio remains disabled because the deployed NeqSim Web runtime must expose that
+merged API and the core still deliberately excludes layout/routing, symbols and
+title blocks, manual overrides, qualified SVG/PDF artifacts, and a native DEXPI
+document/graphics projection. Core #2966 is active but unmerged, so its governed
+metadata is not accepted as Studio capability. The exact activation boundary and
+adapter responsibilities are recorded in
+`docs/neqsim_web_studio_drawing_contract.md`.
 
-NeqSim-Colab PR #119 is now merged on `master` as canonical executable acceptance
-evidence for the assessed DEXPI Process/PFD projection. That workflow validates
-the existing simulation-to-DEXPI path, but it does not supply the missing
-controlled drawing-set, artifact or revision contract and therefore does not
-change the Studio activation boundary.
+NeqSim-Colab PR #119 is merged on `master` as canonical executable acceptance
+evidence for the assessed DEXPI Process/PFD projection. It validates the existing
+simulation-to-DEXPI path, but it does not supply the remaining runtime, artifact
+or exact-solution-binding contracts and therefore does not activate a Studio
+drawing adapter.
 
 ### S6 — Process Chat engineering copilot
 
