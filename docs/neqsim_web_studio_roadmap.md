@@ -141,19 +141,25 @@ JSON/fingerprints, and `ProcessSystem`/`ProcessModel` adapters. This resolves th
 controlled semantic document/sheet dependency without moving engineering meaning
 into the web layer.
 
-Studio remains disabled because the deployed NeqSim Web runtime must expose that
-merged API and the core still deliberately excludes layout/routing, symbols and
-title blocks, manual overrides, qualified SVG/PDF artifacts, and a native DEXPI
-document/graphics projection. Core #2966 is active but unmerged, so its governed
-metadata is not accepted as Studio capability. The exact activation boundary and
-adapter responsibilities are recorded in
+Merged core #2966 / `c8061c9d` now adds immutable governed semantic-object
+snapshots for single- and multi-area operating cases. It retains stable source
+identity and designations, case-scoped calculated values, explicit units,
+quantity basis, engineering/approval state and provenance. Source names are not
+silently promoted to approved equipment tags or line numbers.
+
+Studio remains disabled because the deployed NeqSim Web runtime must expose the
+#2961/#2966 APIs and the core still deliberately excludes layout/routing, symbols
+and title blocks, manual overrides, qualified SVG/PDF artifacts, and a native
+DEXPI document/graphics projection. Studio must also prove exact active
+solved-signature binding and fail closed on mismatched snapshots. The exact
+activation boundary and adapter responsibilities are recorded in
 `docs/neqsim_web_studio_drawing_contract.md`.
 
 NeqSim-Colab PR #119 is merged on `master` as canonical executable acceptance
 evidence for the assessed DEXPI Process/PFD projection. It validates the existing
-simulation-to-DEXPI path, but it does not supply the remaining runtime, artifact
-or exact-solution-binding contracts and therefore does not activate a Studio
-drawing adapter.
+simulation-to-DEXPI path, but it does not supply the remaining runtime and
+artifact contracts or the Studio-side exact-solution binding, so it does not
+activate a Studio drawing adapter.
 
 ### S6 — Process Chat engineering copilot
 
