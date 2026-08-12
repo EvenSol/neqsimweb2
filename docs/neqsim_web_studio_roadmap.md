@@ -119,6 +119,15 @@ bounded optimization runs on a fail-closed isolated model clone so auto-sizing,
 chart setup and search reruns cannot alter the active solved Studio case. Studio
 does not rerun or duplicate the calculations.
 
+Merged core #2964 / `a0a011f2` adds explicit constraint scaling and conservative
+candidate-active diagnostics. Merged core #2975 / `7334454c` adds reversible,
+identity- and provenance-bearing continuous/discrete operating actions with
+strict candidate validation, write/read-back verification and deterministic
+restoration. These APIs are future shared-service inputs; they do not replace the
+current isolated-clone safety boundary until a deployed NeqSim runtime exposes
+them and exact-model Studio regressions prove equivalent restoration, feasibility
+and evidence behavior.
+
 ### S5 — Engineering Drawings
 
 Status: **core document semantics merged; Studio activation remains blocked on
@@ -175,7 +184,23 @@ executed deterministic NeqSim calculation.
 
 ### S7 — Dynamics and controls
 
-Status: dependent on validated NeqSim core handoff/dynamics.
+Status: **core transaction foundation merged; Studio activation remains blocked
+on complete equipment coverage and qualified adaptive stepping**.
+
+Merged core #2965 / `fb206f20` adds opt-in identity-preserving
+`ProcessSystem`/`ProcessModel` step transactions, quantitative fail-closed
+coverage diagnostics, rollback/replay and multi-area atomicity. Merged core #2969
+/ `ad66814e` adds the first built-in state-family adoption for base PID
+controllers.
+
+This is rollback architecture, not a validated dynamic workflow. Built-in
+equipment, instruments, controller subclasses, recycles and external side
+effects remain deliberately incomplete; full-step/two-half-step error estimation,
+rejected-step retry, conservation/timestep evidence and OTS or safety
+qualification are not established. Studio Dynamics therefore remains disabled
+until a deployed runtime exposes a representative fully covered process and the
+web handoff can preserve exact case identity, accepted-step evidence and restart
+state without implementing dynamics in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
