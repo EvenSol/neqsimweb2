@@ -15,8 +15,9 @@ state or a simulation-only graph.
 
 ## Verified core baseline
 
-The baseline assessed against `equinor/neqsim` master commit
-`c1cde6a1c47f34664c71ccab1ab2c53d85313860` is:
+The merged baseline is pinned to NeqSim PR #2960 at
+`e8991c41163018299c0eacf8fef96e378a8fca72` and PR #2961 at
+`7402265158f18a40f6c71bf94fb033557ed263f7`:
 
 - canonical `ProcessSystem` and multi-area `ProcessModel` topology projection with
   stable plant, area, equipment, port and connection identity;
@@ -28,35 +29,45 @@ The baseline assessed against `equinor/neqsim` master commit
 - opt-in successful-run operating-case snapshots through merged PR #2934, with
   stable case/object identity, temperature in K, absolute pressure in bara, mass
   flow in kg/s, simulation provenance and review-required status;
+- deterministic simple, branched and multi-area drawing reference cases through
+  merged PR #2960;
+- immutable `EngineeringDiagramDocumentSet` drawing-register and sheet semantics
+  through merged PR #2961, including stable drawing/sheet/object IDs,
+  revision/status/issue-purpose metadata, reciprocal off-page connectors,
+  structured diagnostics and deterministic JSON/fingerprints;
+- a core `ProcessDiagramDocumentSetAdapter` for both `ProcessSystem` and
+  `ProcessModel`, with multi-area sheet ownership and preserved material, energy
+  and signal connector semantics;
 - legacy DOT/Graphviz and compatibility DEXPI/Proteus paths preserved separately.
 
-This baseline is enough to prove a reusable semantic foundation. It is not yet a
-web-consumable professional drawing package.
+This baseline now supplies the controlled semantic document set that Studio must
+consume. It deliberately does not supply layout/routing, symbols or title blocks,
+manual layout overrides, qualified SVG/PDF artifacts, or a native DEXPI
+document/graphics projection.
 
 ## Dependencies that must remain in core
 
-Studio activation requires merged, documented and runtime-available APIs for the
-following capabilities:
+Studio activation still requires merged, documented and runtime-available APIs
+for the following capabilities:
 
-1. Controlled drawing-set and sheet identity, including area ownership and stable
-   cross-sheet references.
-2. Revision, status and approval metadata suitable for a drawing register.
-3. Stable equipment, stream and connector identifiers that map back to active
-   Studio case objects without name matching.
-4. Explicit layout ownership and off-page connector semantics.
-5. SVG/PDF/DEXPI artifacts with media type, content profile, checksum/provenance
-   and structured validation/loss diagnostics.
-6. Multi-area `ProcessModel` behavior that does not silently flatten hierarchy or
-   lose energy/signal connections.
+1. A deployed NeqSim runtime exposing the merged PR #2961 document-set API through
+   a stable Java/Python integration path.
+2. Exact solved-case binding and governed operating/design metadata sufficient to
+   prove that a drawing belongs to the active Studio solution, with explicit
+   units and provenance.
+3. Core-owned layout, routing, symbol/title-block semantics and any supported
+   manual-override persistence.
+4. Core-produced SVG/PDF/DEXPI artifacts with media type, content profile,
+   checksum/provenance and structured validation/loss diagnostics.
+5. Multi-area artifact behavior that preserves hierarchy, reciprocal off-page
+   references and material, energy and signal connections.
 
 Selected operating values with explicit units, stable case/object identity and
-provenance are now merged in core PR #2934. The opt-in adapter publishes only
-successful-run values and reports unsuccessful areas instead of exposing stale
-results. The assessed DEXPI 2.0 Process writer does not yet consume those value
-nodes, and Studio does not consume the adapter directly. Document/sheet governance
-and qualified render artifacts remain later core increments. A commit present only
-on core `master` is also insufficient when the deployed web runtime still uses a
-NeqSim release that lacks the API.
+provenance are merged in core PR #2934. The controlled document/sheet model is
+merged in PR #2961. Core PR #2966 is an active, unmerged metadata increment and is
+not accepted as Studio capability. Artifact generation and qualification remain
+outside the merged document-set scope. A merged core commit is also insufficient
+when the deployed web runtime still uses a NeqSim release that lacks the API.
 
 ## Studio adapter responsibilities
 
