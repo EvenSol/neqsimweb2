@@ -1,5 +1,6 @@
 """Hosted Streamlit smoke test for the NeqSim Studio shell."""
 
+from html import escape
 from pathlib import Path
 import unittest
 
@@ -95,7 +96,7 @@ class StudioShellTest(unittest.TestCase):
                 f'<h3 class="workflow-title" id="{title_id}">',
                 markup,
             )
-            self.assertIn(destination.title, markup)
+            self.assertIn(escape(destination.title), markup)
 
     def test_case_lifecycle_controls_keep_unique_visible_names(self):
         app = AppTest.from_file(str(self.studio_path))
