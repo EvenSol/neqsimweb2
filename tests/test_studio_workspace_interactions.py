@@ -227,8 +227,11 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
         app = self._click(
             app,
             "Open uploaded case",
-            target_page="pages/35_Process_Flowsheet_Studio.py",
             uploaded_case=payload,
+        )
+        self.assertIn(
+            "🏭 Process Flowsheet Studio",
+            [item.value for item in app.title],
         )
 
         opened = app.session_state[STUDIO_CASE_CONTEXT_STATE_KEY]
@@ -247,17 +250,15 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
         self._assert_classic_marker(app)
 
     def test_uploaded_rejected_cases_preserve_active_recent_and_classic_state(self):
-        for label, payload, target_page, expected_error in (
+        for label, payload, expected_error in (
             (
                 "invalid JSON",
                 b"{not valid JSON",
-                None,
                 "The Studio case is not valid JSON",
             ),
             (
                 "future schema",
                 None,
-                "pages/35_Process_Flowsheet_Studio.py",
                 "Unsupported schema_version. Expected version 1, 2, 3, or 4.",
             ),
         ):
@@ -276,9 +277,13 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
                 app = self._click(
                     app,
                     "Open uploaded case",
-                    target_page=target_page,
                     uploaded_case=payload,
                 )
+                if label == "future schema":
+                    self.assertIn(
+                        "🏭 Process Flowsheet Studio",
+                        [item.value for item in app.title],
+                    )
 
                 active = app.session_state[STUDIO_CASE_CONTEXT_STATE_KEY]
                 self.assertEqual(active["case_id"], baseline["case_id"])
