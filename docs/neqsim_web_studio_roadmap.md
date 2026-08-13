@@ -197,10 +197,20 @@ This is rollback architecture, not a validated dynamic workflow. Built-in
 equipment, instruments, controller subclasses, recycles and external side
 effects remain deliberately incomplete; full-step/two-half-step error estimation,
 rejected-step retry, conservation/timestep evidence and OTS or safety
-qualification are not established. Studio Dynamics therefore remains disabled
-until a deployed runtime exposes a representative fully covered process and the
-web handoff can preserve exact case identity, accepted-step evidence and restart
-state without implementing dynamics in Python.
+qualification are not established.
+
+Merged NeqSim-Colab #121 / `df7186c2` adds bounded executable acceptance evidence
+for a native SRK-CPA gas-oil-water `TwoFluidPipe` shutdown cooldown and OpenFOAM
+dead-leg boundary handoff. Its synthetic 12 km case retained 14.14 h axial
+no-touch time, 0.078% timestep difference, relative mass drift below
+`3.1e-15` and thermal-energy residual below `1.3e-12`. This is a flow-assurance
+reference, not long-duration compositional, hydrate-kinetics/pluggage, CFD,
+general dynamic-process or controls qualification.
+
+Studio Dynamics therefore remains disabled until a deployed runtime exposes a
+representative fully covered process and the web handoff can preserve exact case
+identity, accepted-step evidence and restart state without implementing dynamics
+in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
