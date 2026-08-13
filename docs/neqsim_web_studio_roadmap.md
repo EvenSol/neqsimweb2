@@ -195,7 +195,8 @@ Merged core #2965 / `fb206f20` adds opt-in identity-preserving
 `ProcessSystem`/`ProcessModel` step transactions, quantitative fail-closed
 coverage diagnostics, rollback/replay and multi-area atomicity. Merged core #2969
 / `ad66814e` adds the first built-in state-family adoption for base PID
-controllers.
+controllers. Merged core #2985 / `114209dd` extends transaction coverage to local
+temperature and differential-pressure transmitters.
 
 This is rollback architecture, not a validated dynamic workflow. Built-in
 equipment, instruments, controller subclasses, recycles and external side
@@ -222,8 +223,7 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; uploaded-case interaction evidence merged; recovery gate in
-stack**.
+Status: **ongoing; uploaded-case recovery in stack; accessible shell gate stacked**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -292,17 +292,27 @@ schema-v1 retry, keep the baseline and recovered cases in bounded Recent Cases,
 consume one-shot pending state, preserve Classic session data and survive a normal
 post-recovery Streamlit rerun.
 
+Child branch `automation/web-studio-s9-accessible-shell-20260813` is **in
+stack** on exact parent head `93a92b68dc1bd07c21733827c8388b893b5b686b`.
+It replaces presentation-only hero and workflow-card containers with semantic
+section, article and heading structure; exposes labelled status and active-case
+regions; preserves visible unique lifecycle action names and disabled planned
+states; and adds an owned mobile layout contract without fragile Streamlit
+selectors.
+
 ## Active stacked work
 
 PRs #109, #110 and #111 are merged. Root PR #112 from
 `automation/web-studio-s9-upload-recovery-20260813` targets `main` from exact
-base `de6c6a81249befb2e902d20f17f8b6375e1e23c8` and is the only active
-Studio implementation branch. Its upload retry and post-recovery rerun assertions
-are **in stack**, not merged completion.
+base `de6c6a81249befb2e902d20f17f8b6375e1e23c8`. Child branch
+`automation/web-studio-s9-accessible-shell-20260813` targets PR #112's exact
+validated branch from base `93a92b68dc1bd07c21733827c8388b893b5b686b`.
+Both tranches are **in stack**, not merged completion; the child becomes
+mergeable to `main` only after #112 merges and the base is safely retargeted.
 
-After this tranche is validated and merged, the next safe S9 tranche is browser
-accessibility and responsive-behavior coverage for the Studio case-lifecycle
-controls.
+After the accessible-shell tranche is validated and merged, the next safe S9/S8
+tranche is a measured large-case workspace performance baseline for graph and
+result-table rendering, without changing NeqSim calculation semantics.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
