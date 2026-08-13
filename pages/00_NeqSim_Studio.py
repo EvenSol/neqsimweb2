@@ -59,12 +59,12 @@ st.markdown(
         margin-bottom: 1.2rem;
     }
     .studio-kicker {
+        margin: 0 0 0.35rem 0;
         font-size: 0.78rem;
         font-weight: 700;
         letter-spacing: 0.10em;
         text-transform: uppercase;
         color: #315ba0;
-        margin-bottom: 0.35rem;
     }
     .studio-title {
         font-size: clamp(2.0rem, 4vw, 3.25rem);
@@ -76,7 +76,7 @@ st.markdown(
     }
     .studio-lead {
         max-width: 850px;
-        margin-top: 0.85rem;
+        margin: 0.85rem 0 0 0;
         color: #526078;
         font-size: 1.04rem;
         line-height: 1.62;
@@ -109,15 +109,16 @@ st.markdown(
         color: #172641;
         font-size: 1.03rem;
         font-weight: 720;
-        margin-bottom: 0.42rem;
+        margin: 0 0 0.42rem 0;
     }
     .workflow-description {
         color: #66738a;
         line-height: 1.45;
         font-size: 0.89rem;
+        margin: 0;
     }
     .workflow-state {
-        margin-top: 0.75rem;
+        margin: 0.75rem 0 0 0;
         color: #315ba0;
         font-size: 0.76rem;
         font-weight: 700;
@@ -132,9 +133,23 @@ st.markdown(
         border-radius: 14px;
         background: rgba(247, 250, 255, 0.90);
     }
+    .case-title {
+        font-size: 1.05rem;
+        margin: 0 0 0.25rem 0;
+    }
     @media (max-width: 720px) {
+        .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
         .studio-hero {
             padding: 1.35rem 1.25rem;
+        }
+        .studio-title {
+            font-size: 2rem;
+        }
+        .studio-lead {
+            font-size: 0.98rem;
         }
         .workflow-card {
             min-height: auto;
@@ -169,20 +184,22 @@ with st.sidebar:
 
 st.markdown(
     """
-<div class="studio-hero">
-    <div class="studio-kicker">NeqSim Studio · Beta</div>
-    <div class="studio-title">Engineering simulation, in one workspace.</div>
-    <div class="studio-lead">
+<section class="studio-hero" aria-labelledby="studio-page-title">
+    <p class="studio-kicker">NeqSim Studio · Beta</p>
+    <h1 class="studio-title" id="studio-page-title">
+        Engineering simulation, in one workspace.
+    </h1>
+    <p class="studio-lead">
         Build process models, inspect engineering evidence, run studies and move
         toward professional drawings and case-aware engineering assistance — all
         backed by the existing NeqSim calculation core.
-    </div>
-    <div>
+    </p>
+    <div aria-label="Workspace status">
         <span class="studio-status">Classic preserved</span>
         <span class="studio-status">NeqSim core</span>
         <span class="studio-status">Case-based workspace</span>
     </div>
-</div>
+</section>
 """,
     unsafe_allow_html=True,
 )
@@ -198,13 +215,13 @@ if active_case:
     with summary:
         st.markdown(
             f"""
-<div class="case-summary">
-    <strong>{active_case_name_html}</strong><br/>
+<section class="case-summary" aria-label="Active case summary">
+    <h3 class="case-title">{active_case_name_html}</h3>
     <span>{active_case['status'].replace('-', ' ').title()} ·
     {active_case['thermodynamics']['eos_model']} ·
     {active_case['units']['system']} units</span><br/>
     <small>Updated {active_case['provenance']['modified_at']}</small>
-</div>
+</section>
 """,
             unsafe_allow_html=True,
         )
@@ -337,15 +354,23 @@ for row_start in range(0, len(STUDIO_DESTINATIONS), 4):
         else:
             state_label = "Planned for Studio"
 
+        workflow_title_id = f"workflow-title-{destination.key}"
+        destination_icon_html = escape(destination.icon)
+        destination_title_html = escape(destination.title)
+        destination_description_html = escape(destination.description)
+        state_label_html = escape(state_label)
+
         with column:
             st.markdown(
                 f"""
-<div class="workflow-card">
-    <div class="workflow-icon">{destination.icon}</div>
-    <div class="workflow-title">{destination.title}</div>
-    <div class="workflow-description">{destination.description}</div>
-    <div class="workflow-state">{state_label}</div>
-</div>
+<article class="workflow-card" aria-labelledby="{workflow_title_id}">
+    <div class="workflow-icon" aria-hidden="true">{destination_icon_html}</div>
+    <h3 class="workflow-title" id="{workflow_title_id}">
+        {destination_title_html}
+    </h3>
+    <p class="workflow-description">{destination_description_html}</p>
+    <p class="workflow-state">{state_label_html}</p>
+</article>
 """,
                 unsafe_allow_html=True,
             )
