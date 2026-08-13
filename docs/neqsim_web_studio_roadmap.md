@@ -285,7 +285,8 @@ under a new case identity. Invalid JSON and unsupported future-schema payloads
 must fail closed without replacing the active case, Recent Cases or unrelated
 Classic session state.
 
-Root branch `automation/web-studio-s9-upload-recovery-20260813` is **in stack**.
+Root PR #112 from
+`automation/web-studio-s9-upload-recovery-20260813` is **in stack**.
 It requires both rejected upload classes to recover through a subsequent supported
 schema-v1 retry, keep the baseline and recovered cases in bounded Recent Cases,
 consume one-shot pending state, preserve Classic session data and survive a normal
@@ -293,7 +294,7 @@ post-recovery Streamlit rerun.
 
 ## Active stacked work
 
-PRs #109, #110 and #111 are merged. Root branch
+PRs #109, #110 and #111 are merged. Root PR #112 from
 `automation/web-studio-s9-upload-recovery-20260813` targets `main` from exact
 base `de6c6a81249befb2e902d20f17f8b6375e1e23c8` and is the only active
 Studio implementation branch. Its upload retry and post-recovery rerun assertions
