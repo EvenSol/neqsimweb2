@@ -218,7 +218,8 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; interoperability evidence merged, cross-page gate in stack**.
+Status: **ongoing; interoperability and cross-page interaction evidence merged;
+uploaded-case gate in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -232,7 +233,8 @@ round-trip export, new identity for external opens, Classic session isolation an
 fail-closed rejection of unsupported future schema v5. It is merged on `main` at
 `9e2b1d98f13d4d6df7cb75314a24a9da0a5b293d`.
 
-Root PR #110 is the current **in stack** S9 tranche. Its hosted Streamlit
+Root PR #110 merged at
+`8a43e813fa794bba300a2d3b3b59e0cc3ccc8b39`. Its hosted Streamlit
 interaction gate traverses the real Classic entrypoint, Studio Home, inherited
 Process Flowsheet Studio and Engineering Results pages. It requires stable active
 case identity and untouched unrelated Classic session state across New, Continue,
@@ -266,22 +268,29 @@ serializer.
 Unsupported future schema v5 must leave the active Studio case, Recent Cases and
 unrelated Classic state unchanged.
 
-Root PR #110 now advances browser interaction coverage without changing
-production calculations or case schemas. The test uses the actual multipage
-Streamlit entrypoint and existing shared services, including the unsolved Results
-guard that returns engineers to the active flowsheet instead of presenting stale
-evidence.
+Root PR #110 merged browser interaction coverage without changing production
+calculations or case schemas. The test uses the actual multipage Streamlit
+entrypoint and existing shared services, including the unsolved Results guard that
+returns engineers to the active flowsheet instead of presenting stale evidence.
+
+The current root branch
+`automation/web-studio-s9-uploaded-case-interactions-20260813` is **in stack**.
+It exercises the existing Studio upload action through the real multipage app:
+supported schema-v1 payloads must migrate through the established flowsheet
+importer to canonical schema v4 under a new case identity. Invalid JSON and
+unsupported future-schema payloads must fail closed without replacing the active
+case, Recent Cases or unrelated Classic session state.
 
 ## Active stacked work
 
-PR #109 is merged. Root PR #110 targets `main` from exact base
-`9e2b1d98f13d4d6df7cb75314a24a9da0a5b293d` and is the only active Studio
-implementation PR. Its cross-page interaction assertions are **in stack**, not
-merged completion.
+PRs #109 and #110 are merged. The root branch
+`automation/web-studio-s9-uploaded-case-interactions-20260813` targets `main`
+from exact base `8a43e813fa794bba300a2d3b3b59e0cc3ccc8b39` and is the only active
+Studio implementation branch. Its uploaded-case interaction assertions are **in
+stack**, not merged completion.
 
-After #110 is validated and merged, the next safe S9 tranche is browser
-interaction for uploaded supported/rejected portable case payloads and
-deployment-level recovery.
+After this tranche is validated and merged, the next safe S9 tranche is
+deployment-level recovery for uploaded supported and rejected portable cases.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
