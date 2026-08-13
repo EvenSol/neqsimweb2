@@ -273,7 +273,7 @@ calculations or case schemas. The test uses the actual multipage Streamlit
 entrypoint and existing shared services, including the unsolved Results guard that
 returns engineers to the active flowsheet instead of presenting stale evidence.
 
-The current root branch
+Root PR #111 from
 `automation/web-studio-s9-uploaded-case-interactions-20260813` is **in stack**.
 It exercises the existing Studio upload action through the real multipage app:
 supported schema-v1 payloads must migrate through the established flowsheet
@@ -283,7 +283,7 @@ case, Recent Cases or unrelated Classic session state.
 
 ## Active stacked work
 
-PRs #109 and #110 are merged. The root branch
+PRs #109 and #110 are merged. Root PR #111 from
 `automation/web-studio-s9-uploaded-case-interactions-20260813` targets `main`
 from exact base `8a43e813fa794bba300a2d3b3b59e0cc3ccc8b39` and is the only active
 Studio implementation branch. Its uploaded-case interaction assertions are **in
