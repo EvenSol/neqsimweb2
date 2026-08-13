@@ -194,7 +194,6 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
                 )
                 self._assert_classic_marker(app)
 
-
     def _active_case_on_studio_home(self) -> tuple[AppTest, dict]:
         app = self._new_app()
         app = self._click(
@@ -301,7 +300,6 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
                     [item.value for item in app.error],
                 )
                 self._assert_classic_marker(app)
-
 
 if __name__ == "__main__":
     unittest.main()
