@@ -306,5 +306,88 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
                 )
                 self._assert_classic_marker(app)
 
+
+    def test_rejected_upload_recovers_through_supported_retry(self):
+        for label, rejected_payload in (
+            ("invalid JSON", b"{not valid JSON"),
+            ("future schema", None),
+        ):
+            with self.subTest(rejected_payload=label):
+                app, baseline = self._active_case_on_studio_home()
+                recent_before = deepcopy(
+                    app.session_state[STUDIO_RECENT_CASES_STATE_KEY]
+                )
+                if rejected_payload is None:
+                    future_case = deepcopy(baseline["case_spec"])
+                    future_case["schema_version"] = 5
+                    future_case["name"] = "Rejected future upload"
+                    rejected_payload = encode_portable_case(future_case)
+
+                app = self._run(app, uploaded_case=rejected_payload)
+                app = self._click(
+                    app,
+                    "Open uploaded case",
+                    uploaded_case=rejected_payload,
+                )
+                if label == "future schema":
+                    app = self._click(
+                        app,
+                        "← Studio home",
+                        target_page="pages/00_NeqSim_Studio.py",
+                    )
+
+                retry_case = deepcopy(baseline["case_spec"])
+                retry_case["schema_version"] = 1
+                retry_case["name"] = f"Recovered after {label}"
+                retry_payload = encode_portable_case(retry_case)
+
+                app = self._run(app, uploaded_case=retry_payload)
+                app = self._click(
+                    app,
+                    "Open uploaded case",
+                    uploaded_case=retry_payload,
+                )
+                self.assertIn(
+                    "🏭 Process Flowsheet Studio",
+                    [item.value for item in app.title],
+                )
+
+                opened = deepcopy(
+                    app.session_state[STUDIO_CASE_CONTEXT_STATE_KEY]
+                )
+                self.assertNotEqual(opened["case_id"], baseline["case_id"])
+                self.assertEqual(opened["name"], retry_case["name"])
+                self.assertEqual(opened["case_schema_version"], 4)
+                self.assertNotIn(
+                    STUDIO_PENDING_CASE_STATE_KEY,
+                    app.session_state,
+                )
+                recent_after = app.session_state[
+                    STUDIO_RECENT_CASES_STATE_KEY
+                ]
+                self.assertEqual(
+                    recent_after[: len(recent_before)],
+                    recent_before,
+                )
+                self.assertEqual(
+                    recent_after[-1]["case_id"],
+                    opened["case_id"],
+                )
+
+                app = self._run(app)
+                recovered = app.session_state[
+                    STUDIO_CASE_CONTEXT_STATE_KEY
+                ]
+                self.assertEqual(recovered["case_id"], opened["case_id"])
+                self.assertEqual(
+                    recovered["case_fingerprint"],
+                    opened["case_fingerprint"],
+                )
+                self.assertNotIn(
+                    STUDIO_PENDING_CASE_STATE_KEY,
+                    app.session_state,
+                )
+                self._assert_classic_marker(app)
+
 if __name__ == "__main__":
     unittest.main()
