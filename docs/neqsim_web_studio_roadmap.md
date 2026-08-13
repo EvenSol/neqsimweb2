@@ -119,9 +119,19 @@ bounded optimization runs on a fail-closed isolated model clone so auto-sizing,
 chart setup and search reruns cannot alter the active solved Studio case. Studio
 does not rerun or duplicate the calculations.
 
+Merged core #2964 / `a0a011f2` adds explicit constraint scaling and conservative
+candidate-active diagnostics. Merged core #2975 / `7334454c` adds reversible,
+identity- and provenance-bearing continuous/discrete operating actions with
+strict candidate validation, write/read-back verification and deterministic
+restoration. These APIs are future shared-service inputs; they do not replace the
+current isolated-clone safety boundary until a deployed NeqSim runtime exposes
+them and exact-model Studio regressions prove equivalent restoration, feasibility
+and evidence behavior.
+
 ### S5 — Engineering Drawings
 
-Status: **blocked on a merged, web-consumable core drawing-set contract**.
+Status: **core document semantics merged; Studio activation remains blocked on
+runtime and artifact contracts**.
 
 Current `equinor/neqsim` master includes the canonical topology-backed assessed
 DEXPI 2.0 Process material projection through #2932, the opt-in successful-run
@@ -131,17 +141,34 @@ case-matched calculation nodes by stable canonical owner identity, converts K to
 degree Celsius and kg/s to kg/h, preserves absolute bara, and diagnoses omitted
 values without a live-stream fallback.
 
-This is reusable simulation-result projection, not a controlled Studio drawing
-set. Document/sheet identity, revision/status, layout ownership, off-page
-references and qualified SVG/PDF artifacts remain future core work. The runtime
-used by NeqSim Web must also expose the merged API before any adapter can call it.
-Studio therefore keeps Engineering Drawings honestly marked as core integration
-in progress rather than defining a competing payload or renderer.
+Merged core #2960 / `e8991c41` adds deterministic simple, branched and multi-area
+drawing reference cases. Merged core #2961 / `74022651` adds the immutable
+`EngineeringDiagramDocumentSet`, drawing-register and sheet identity,
+revision/status/issue-purpose metadata, stable semantic and connector IDs,
+reciprocal off-page references, structured diagnostics, deterministic
+JSON/fingerprints, and `ProcessSystem`/`ProcessModel` adapters. This resolves the
+controlled semantic document/sheet dependency without moving engineering meaning
+into the web layer.
 
-The exact activation boundary and adapter responsibilities are recorded in
-`docs/neqsim_web_studio_drawing_contract.md`. Merged documentation audit #2948 /
-`b35fdb1e` confirms that the controlled drawing/document model remains a future
-core dependency; it does not activate a Studio drawing adapter.
+Merged core #2966 / `c8061c9d` now adds immutable governed semantic-object
+snapshots for single- and multi-area operating cases. It retains stable source
+identity and designations, case-scoped calculated values, explicit units,
+quantity basis, engineering/approval state and provenance. Source names are not
+silently promoted to approved equipment tags or line numbers.
+
+Studio remains disabled because the deployed NeqSim Web runtime must expose the
+#2961/#2966 APIs and the core still deliberately excludes layout/routing, symbols
+and title blocks, manual overrides, qualified SVG/PDF artifacts, and a native
+DEXPI document/graphics projection. Studio must also prove exact active
+solved-signature binding and fail closed on mismatched snapshots. The exact
+activation boundary and adapter responsibilities are recorded in
+`docs/neqsim_web_studio_drawing_contract.md`.
+
+NeqSim-Colab PR #119 is merged on `master` as canonical executable acceptance
+evidence for the assessed DEXPI Process/PFD projection. It validates the existing
+simulation-to-DEXPI path, but it does not supply the remaining runtime and
+artifact contracts or the Studio-side exact-solution binding, so it does not
+activate a Studio drawing adapter.
 
 ### S6 — Process Chat engineering copilot
 
@@ -157,7 +184,33 @@ executed deterministic NeqSim calculation.
 
 ### S7 — Dynamics and controls
 
-Status: dependent on validated NeqSim core handoff/dynamics.
+Status: **core transaction foundation merged; Studio activation remains blocked
+on complete equipment coverage and qualified adaptive stepping**.
+
+Merged core #2965 / `fb206f20` adds opt-in identity-preserving
+`ProcessSystem`/`ProcessModel` step transactions, quantitative fail-closed
+coverage diagnostics, rollback/replay and multi-area atomicity. Merged core #2969
+/ `ad66814e` adds the first built-in state-family adoption for base PID
+controllers.
+
+This is rollback architecture, not a validated dynamic workflow. Built-in
+equipment, instruments, controller subclasses, recycles and external side
+effects remain deliberately incomplete; full-step/two-half-step error estimation,
+rejected-step retry, conservation/timestep evidence and OTS or safety
+qualification are not established.
+
+Merged NeqSim-Colab #121 / `df7186c2` adds bounded executable acceptance evidence
+for a native SRK-CPA gas-oil-water `TwoFluidPipe` shutdown cooldown and OpenFOAM
+dead-leg boundary handoff. Its synthetic 12 km case retained 14.14 h axial
+no-touch time, 0.078% timestep difference, relative mass drift below
+`3.1e-15` and thermal-energy residual below `1.3e-12`. This is a flow-assurance
+reference, not long-duration compositional, hydrate-kinetics/pluggage, CFD,
+general dynamic-process or controls qualification.
+
+Studio Dynamics therefore remains disabled until a deployed runtime exposes a
+representative fully covered process and the web handoff can preserve exact case
+identity, accepted-step evidence and restart state without implementing dynamics
+in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
@@ -165,7 +218,7 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; recovery evidence merged, interoperability gate in stack**.
+Status: **ongoing; interoperability evidence merged, cross-page gate in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -173,11 +226,18 @@ Merged recovery PR #108 restores the central Process Flowsheet fresh-process
 health gate, hosted coverage for every enabled Studio destination, unique native
 action names and independent Recent Cases actions.
 
-Root PR #109 adds browser-level migration evidence through the real shared
+Root PR #109 added browser-level migration evidence through the real shared
 Studio-to-flowsheet handoff. It covers schema v1-v4 canonicalization and
 round-trip export, new identity for external opens, Classic session isolation and
-fail-closed rejection of unsupported future schema v5. This remains **in stack**
-until merged.
+fail-closed rejection of unsupported future schema v5. It is merged on `main` at
+`9e2b1d98f13d4d6df7cb75314a24a9da0a5b293d`.
+
+Root PR #110 is the current **in stack** S9 tranche. Its hosted Streamlit
+interaction gate traverses the real Classic entrypoint, Studio Home, inherited
+Process Flowsheet Studio and Engineering Results pages. It requires stable active
+case identity and untouched unrelated Classic session state across New, Continue,
+Recent Case, Equipment Design, Engineering Studies and fail-closed unsolved-result
+actions.
 
 ## Current tranche
 
@@ -199,21 +259,29 @@ Recovery PR #108 merged at
 application/test payloads on `main` without changing calculations, schemas,
 saved cases, Classic pages or engineering claims.
 
-Root PR #109 now advances the next S9 gate: supported schema v1-v4 cases traverse
-the actual shared pending-case contract and existing flowsheet importer, become
-canonical schema v4 and round-trip through the shared portable serializer.
+Root PR #109 merged the migration/interoperability gate: supported schema v1-v4
+cases traverse the actual shared pending-case contract and existing flowsheet
+importer, become canonical schema v4 and round-trip through the shared portable
+serializer.
 Unsupported future schema v5 must leave the active Studio case, Recent Cases and
 unrelated Classic state unchanged.
 
+Root PR #110 now advances browser interaction coverage without changing
+production calculations or case schemas. The test uses the actual multipage
+Streamlit entrypoint and existing shared services, including the unsolved Results
+guard that returns engineers to the active flowsheet instead of presenting stale
+evidence.
+
 ## Active stacked work
 
-PR #108 is merged. Root PR #109 targets `main` from exact base
-`073e90f56df6b20a5fadaf3b3c86b9ff7448c01b` and is the only active Studio
-implementation PR. Its migration/interoperability assertions are **in stack**,
-not merged completion.
+PR #109 is merged. Root PR #110 targets `main` from exact base
+`9e2b1d98f13d4d6df7cb75314a24a9da0a5b293d` and is the only active Studio
+implementation PR. Its cross-page interaction assertions are **in stack**, not
+merged completion.
 
-After #109 is validated, the next safe S9 tranche is browser interaction across
-Studio home, flowsheet and results for supported and rejected case opens.
+After #110 is validated and merged, the next safe S9 tranche is browser
+interaction for uploaded supported/rejected portable case payloads and
+deployment-level recovery.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.

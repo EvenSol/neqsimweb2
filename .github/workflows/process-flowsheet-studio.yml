@@ -27,6 +27,7 @@ on:
       - "tests/test_studio_study_context.py"
       - "tests/test_studio_shell.py"
       - "tests/test_studio_case_interoperability.py"
+      - "tests/test_studio_workspace_interactions.py"
       - "tests/test_workspace_http_health.py"
       - "tests/test_flowsheet_editor.py"
       - "tests/test_material_stream_identity.py"
@@ -90,6 +91,7 @@ jobs:
             tests/test_studio_results_shell.py \
             tests/test_studio_study_context.py \
             tests/test_studio_shell.py \
+            tests/test_studio_workspace_interactions.py \
             tests/test_workspace_http_health.py \
             tests/test_flowsheet_editor.py \
             tests/test_material_stream_identity.py \
@@ -117,6 +119,8 @@ jobs:
           python tests/test_process_chat_studio_context.py -v
       - name: Run Studio shell smoke test
         run: python tests/test_studio_shell.py -v
+      - name: Run Classic and Studio cross-page interaction regressions
+        run: python tests/test_studio_workspace_interactions.py -v
       - name: Run Classic and Studio HTTP health regressions
         run: python tests/test_workspace_http_health.py -v
       - name: Run deployment-safe import regression tests
