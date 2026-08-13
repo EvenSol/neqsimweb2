@@ -123,10 +123,12 @@ Merged core #2964 / `a0a011f2` adds explicit constraint scaling and conservative
 candidate-active diagnostics. Merged core #2975 / `7334454c` adds reversible,
 identity- and provenance-bearing continuous/discrete operating actions with
 strict candidate validation, write/read-back verification and deterministic
-restoration. These APIs are future shared-service inputs; they do not replace the
-current isolated-clone safety boundary until a deployed NeqSim runtime exposes
-them and exact-model Studio regressions prove equivalent restoration, feasibility
-and evidence behavior.
+restoration. Merged core #2981 / `829def5e` adds defensive reversible hydraulic
+action evaluation with explicit read-back resolution and tolerance evidence. These
+APIs are future shared-service inputs; they do not replace the current
+isolated-clone safety boundary until a deployed NeqSim runtime exposes them and
+exact-model Studio regressions prove equivalent restoration, feasibility and
+evidence behavior.
 
 ### S5 — Engineering Drawings
 
@@ -154,7 +156,9 @@ Merged core #2966 / `c8061c9d` now adds immutable governed semantic-object
 snapshots for single- and multi-area operating cases. It retains stable source
 identity and designations, case-scoped calculated values, explicit units,
 quantity basis, engineering/approval state and provenance. Source names are not
-silently promoted to approved equipment tags or line numbers.
+silently promoted to approved equipment tags or line numbers. Merged core #2979 /
+`9eb9a42f` adds reviewed equipment/stream designations and deterministic semantic
+revision impact while preserving those governance limits.
 
 Studio remains disabled because the deployed NeqSim Web runtime must expose the
 #2961/#2966 APIs and the core still deliberately excludes layout/routing, symbols
@@ -218,8 +222,8 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; interoperability and cross-page interaction evidence merged;
-uploaded-case gate in stack**.
+Status: **ongoing; uploaded-case interaction evidence merged; recovery gate in
+stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -273,24 +277,32 @@ calculations or case schemas. The test uses the actual multipage Streamlit
 entrypoint and existing shared services, including the unsolved Results guard that
 returns engineers to the active flowsheet instead of presenting stale evidence.
 
-Root PR #111 from
-`automation/web-studio-s9-uploaded-case-interactions-20260813` is **in stack**.
-It exercises the existing Studio upload action through the real multipage app:
-supported schema-v1 payloads must migrate through the established flowsheet
-importer to canonical schema v4 under a new case identity. Invalid JSON and
-unsupported future-schema payloads must fail closed without replacing the active
-case, Recent Cases or unrelated Classic session state.
+Root PR #111 merged at
+`de6c6a81249befb2e902d20f17f8b6375e1e23c8`. It exercises the existing
+Studio upload action through the real multipage app: supported schema-v1 payloads
+must migrate through the established flowsheet importer to canonical schema v4
+under a new case identity. Invalid JSON and unsupported future-schema payloads
+must fail closed without replacing the active case, Recent Cases or unrelated
+Classic session state.
+
+Root PR #112 from
+`automation/web-studio-s9-upload-recovery-20260813` is **in stack**.
+It requires both rejected upload classes to recover through a subsequent supported
+schema-v1 retry, keep the baseline and recovered cases in bounded Recent Cases,
+consume one-shot pending state, preserve Classic session data and survive a normal
+post-recovery Streamlit rerun.
 
 ## Active stacked work
 
-PRs #109 and #110 are merged. Root PR #111 from
-`automation/web-studio-s9-uploaded-case-interactions-20260813` targets `main`
-from exact base `8a43e813fa794bba300a2d3b3b59e0cc3ccc8b39` and is the only active
-Studio implementation branch. Its uploaded-case interaction assertions are **in
-stack**, not merged completion.
+PRs #109, #110 and #111 are merged. Root PR #112 from
+`automation/web-studio-s9-upload-recovery-20260813` targets `main` from exact
+base `de6c6a81249befb2e902d20f17f8b6375e1e23c8` and is the only active
+Studio implementation branch. Its upload retry and post-recovery rerun assertions
+are **in stack**, not merged completion.
 
-After this tranche is validated and merged, the next safe S9 tranche is
-deployment-level recovery for uploaded supported and rejected portable cases.
+After this tranche is validated and merged, the next safe S9 tranche is browser
+accessibility and responsive-behavior coverage for the Studio case-lifecycle
+controls.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
