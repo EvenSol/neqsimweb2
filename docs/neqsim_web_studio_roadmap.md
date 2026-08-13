@@ -292,8 +292,9 @@ schema-v1 retry, keep the baseline and recovered cases in bounded Recent Cases,
 consume one-shot pending state, preserve Classic session data and survive a normal
 post-recovery Streamlit rerun.
 
-Child branch `automation/web-studio-s9-accessible-shell-20260813` is **in
-stack** on exact parent head `93a92b68dc1bd07c21733827c8388b893b5b686b`.
+Child PR #113 from
+`automation/web-studio-s9-accessible-shell-20260813` is **in stack** on exact
+parent head `93a92b68dc1bd07c21733827c8388b893b5b686b`.
 It replaces presentation-only hero and workflow-card containers with semantic
 section, article and heading structure; exposes labelled status and active-case
 regions; preserves visible unique lifecycle action names and disabled planned
@@ -304,7 +305,7 @@ selectors.
 
 PRs #109, #110 and #111 are merged. Root PR #112 from
 `automation/web-studio-s9-upload-recovery-20260813` targets `main` from exact
-base `de6c6a81249befb2e902d20f17f8b6375e1e23c8`. Child branch
+base `de6c6a81249befb2e902d20f17f8b6375e1e23c8`. Child PR #113 from
 `automation/web-studio-s9-accessible-shell-20260813` targets PR #112's exact
 validated branch from base `93a92b68dc1bd07c21733827c8388b893b5b686b`.
 Both tranches are **in stack**, not merged completion; the child becomes
