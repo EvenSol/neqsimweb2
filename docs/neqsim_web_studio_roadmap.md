@@ -158,12 +158,15 @@ identity and designations, case-scoped calculated values, explicit units,
 quantity basis, engineering/approval state and provenance. Source names are not
 silently promoted to approved equipment tags or line numbers. Merged core #2979 /
 `9eb9a42f` adds reviewed equipment/stream designations and deterministic semantic
-revision impact while preserving those governance limits.
+revision impact while preserving those governance limits. Merged core #2987 /
+`5d4dfe3e` adds opt-in project-controlled manual sheet definitions, stable
+object assignments, pinned coordinates and protected routes with explicit review
+evidence. These records preserve topology and do not imply engineering approval.
 
 Studio remains disabled because the deployed NeqSim Web runtime must expose the
-#2961/#2966 APIs and the core still deliberately excludes layout/routing, symbols
-and title blocks, manual overrides, qualified SVG/PDF artifacts, and a native
-DEXPI document/graphics projection. Studio must also prove exact active
+#2961/#2966/#2987 APIs and the core still deliberately excludes automatic
+geometry/routing, symbols, legends and title-block geometry, qualified SVG/PDF
+artifacts, and a native DEXPI document/graphics projection. Studio must also prove exact active
 solved-signature binding and fail closed on mismatched snapshots. The exact
 activation boundary and adapter responsibilities are recorded in
 `docs/neqsim_web_studio_drawing_contract.md`.
@@ -195,7 +198,8 @@ Merged core #2965 / `fb206f20` adds opt-in identity-preserving
 `ProcessSystem`/`ProcessModel` step transactions, quantitative fail-closed
 coverage diagnostics, rollback/replay and multi-area atomicity. Merged core #2969
 / `ad66814e` adds the first built-in state-family adoption for base PID
-controllers.
+controllers. Merged core #2985 / `114209dd` extends transaction coverage to local
+temperature and differential-pressure transmitters.
 
 This is rollback architecture, not a validated dynamic workflow. Built-in
 equipment, instruments, controller subclasses, recycles and external side
@@ -222,8 +226,7 @@ Status: planned.
 
 ### S9 — Production hardening
 
-Status: **ongoing; uploaded-case interaction evidence merged; recovery gate in
-stack**.
+Status: **ongoing; uploaded-case recovery merged; accessible shell recovery in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -285,24 +288,36 @@ under a new case identity. Invalid JSON and unsupported future-schema payloads
 must fail closed without replacing the active case, Recent Cases or unrelated
 Classic session state.
 
-Root PR #112 from
-`automation/web-studio-s9-upload-recovery-20260813` is **in stack**.
+Root PR #112 merged on `main` at
+`7b7786317f164254dd324b5d3c6533e574f3be59`.
 It requires both rejected upload classes to recover through a subsequent supported
 schema-v1 retry, keep the baseline and recovered cases in bounded Recent Cases,
 consume one-shot pending state, preserve Classic session data and survive a normal
 post-recovery Streamlit rerun.
 
+Child PR #113 was merged at
+`8774539af778baf8f769264b4edd906ed9c92a94` into the already-merged
+#112 branch after #112 reached `main`, so its reviewed payload is not present on
+`main`. Recovery branch
+`automation/web-studio-s9-accessible-shell-recovery-20260813` is **in stack**
+from exact current-main base `7b7786317f164254dd324b5d3c6533e574f3be59`.
+It restores the exact #113 semantic section, article and heading structure,
+labelled status and active-case regions, visible unique lifecycle action names,
+disabled planned states and owned mobile layout contract without changing
+calculation or lifecycle behavior.
+
 ## Active stacked work
 
-PRs #109, #110 and #111 are merged. Root PR #112 from
-`automation/web-studio-s9-upload-recovery-20260813` targets `main` from exact
-base `de6c6a81249befb2e902d20f17f8b6375e1e23c8` and is the only active
-Studio implementation branch. Its upload retry and post-recovery rerun assertions
-are **in stack**, not merged completion.
+PRs #109 through #112 are merged on `main`. PR #113 was merged into the
+already-merged #112 branch and therefore did not advance `main`. Root recovery
+branch `automation/web-studio-s9-accessible-shell-recovery-20260813` targets
+`main` from exact base `7b7786317f164254dd324b5d3c6533e574f3be59`
+and carries only the reviewed #113 page/test payload plus this ledger correction.
+The recovery is **in stack**, not merged completion.
 
-After this tranche is validated and merged, the next safe S9 tranche is browser
-accessibility and responsive-behavior coverage for the Studio case-lifecycle
-controls.
+After the accessible-shell tranche is validated and merged, the next safe S9/S8
+tranche is a measured large-case workspace performance baseline for graph and
+result-table rendering, without changing NeqSim calculation semantics.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
