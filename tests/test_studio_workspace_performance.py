@@ -1,11 +1,17 @@
 """Deterministic performance guards for large Studio workspace projections."""
 
+from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
 import unittest
 
+from streamlit.testing.v1 import AppTest
+
 from process_chat.flowsheet_editor import build_graph_draft_dot
 from studio.results_context import (
+    ACTIVE_CASE_STATE_KEY,
+    FLOWSHEET_CASE_STATE_KEY,
+    FLOWSHEET_RESULT_STATE_KEY,
     StudioResultContext,
     equipment_design_rows,
     equipment_rows,
@@ -18,6 +24,8 @@ RESULT_STREAM_COUNT = 2_000
 RESULT_UNIT_COUNT = 1_000
 GRAPH_BUDGET_SECONDS = 3.0
 RESULT_BUDGET_SECONDS = 3.0
+PAGE_VIEW_BUDGET_SECONDS = 10.0
+SOLVED_SIGNATURE = "large-workspace-page-profile"
 
 
 def _large_linear_graph():
@@ -127,8 +135,68 @@ class _LargeResultModel:
         return self._units
 
 
+class _LargeResult:
+    kpis = {}
+    constraints = ()
+    raw = {}
+
+
+def _large_page_session():
+    spec = {
+        "schema_version": 4,
+        "name": "Large multi-area workspace",
+        "fluid": {
+            "eos_model": "SRK",
+            "mixing_rule": "classic",
+            "composition_basis": "mole",
+            "flow_unit": "kg/hr",
+            "total_flow": 100_000.0,
+        },
+        "process": [],
+    }
+    active_case = {
+        "case_id": "large-workspace-profile",
+        "name": spec["name"],
+        "status": "solved",
+        "case_schema_version": 4,
+        "case_spec": spec,
+        "runtime": {
+            "model_available": True,
+            "model_name": "large-workspace-profile",
+            "solved_signature": SOLVED_SIGNATURE,
+        },
+        "thermodynamics": {
+            "eos_model": "SRK",
+            "mixing_rule": "classic",
+        },
+        "units": {"system": "SI"},
+        "provenance": {
+            "source": "deterministic page profile",
+            "created_at": "2026-08-14T00:00:00Z",
+            "modified_at": "2026-08-14T00:00:00Z",
+        },
+    }
+    return {
+        ACTIVE_CASE_STATE_KEY: active_case,
+        FLOWSHEET_CASE_STATE_KEY: {
+            "spec": spec,
+            "model": _LargeResultModel(),
+            "result": _LargeResult(),
+            "signature": SOLVED_SIGNATURE,
+            "warnings": [],
+            "run_record": {"neqsim_version": "CI runtime"},
+        },
+        FLOWSHEET_RESULT_STATE_KEY: True,
+    }
+
+
 class LargeStudioWorkspacePerformanceTest(unittest.TestCase):
-    """Guard against order-of-magnitude regressions in shared projections."""
+    """Guard shared projections and their browser-facing Streamlit page."""
+
+    def _assert_healthy_app(self, app, view):
+        if app.exception:
+            details = "\n".join(str(item.value) for item in app.exception)
+            self.fail(f"large Studio {view} view raised exceptions:\n{details}")
 
     def test_large_graph_preview_is_deterministic_and_bounded(self):
         inlets, units, connections = _large_linear_graph()
@@ -197,6 +265,69 @@ class LargeStudioWorkspacePerformanceTest(unittest.TestCase):
             "large Studio result baseline: "
             f"streams={len(streams)} equipment={len(equipment)} "
             f"design_rows={len(design)} seconds={elapsed:.6f}"
+        )
+
+    def test_large_results_page_renders_complete_tables_within_coarse_budget(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app = AppTest.from_file(
+            str(project_root / "pages" / "10_Studio_Results.py")
+        )
+        for key, value in _large_page_session().items():
+            app.session_state[key] = value
+        app.run(timeout=30)
+        self._assert_healthy_app(app, "overview")
+
+        app.radio[0].set_value("Streams")
+        started = perf_counter()
+        app.run(timeout=30)
+        streams_elapsed = perf_counter() - started
+        self._assert_healthy_app(app, "streams")
+
+        stream_tables = [element.value for element in app.dataframe]
+        self.assertEqual(len(stream_tables), 1)
+        self.assertEqual(len(stream_tables[0]), RESULT_STREAM_COUNT)
+        self.assertEqual(stream_tables[0].iloc[0]["Stream"], "Stream 0000")
+        self.assertEqual(stream_tables[0].iloc[-1]["Stream"], "Stream 1999")
+        self.assertLess(
+            streams_elapsed,
+            PAGE_VIEW_BUDGET_SECONDS,
+            (
+                f"large streams page rerun took {streams_elapsed:.3f}s; "
+                f"budget is {PAGE_VIEW_BUDGET_SECONDS:.1f}s"
+            ),
+        )
+
+        app.radio[0].set_value("Equipment & design")
+        started = perf_counter()
+        app.run(timeout=30)
+        equipment_elapsed = perf_counter() - started
+        self._assert_healthy_app(app, "equipment and design")
+
+        equipment_tables = [element.value for element in app.dataframe]
+        self.assertEqual(len(equipment_tables), 3)
+        self.assertEqual(len(equipment_tables[0]), RESULT_UNIT_COUNT)
+        self.assertEqual(len(equipment_tables[1]), RESULT_UNIT_COUNT * 8)
+        self.assertEqual(len(equipment_tables[2]), 1)
+        self.assertEqual(
+            equipment_tables[0].iloc[-1]["Equipment"],
+            "Equipment 0999",
+        )
+        self.assertEqual(
+            equipment_tables[1].iloc[-1]["Equipment"],
+            "Equipment 0999",
+        )
+        self.assertLess(
+            equipment_elapsed,
+            PAGE_VIEW_BUDGET_SECONDS,
+            (
+                f"large equipment page rerun took {equipment_elapsed:.3f}s; "
+                f"budget is {PAGE_VIEW_BUDGET_SECONDS:.1f}s"
+            ),
+        )
+        print(
+            "large Studio results page baseline: "
+            f"streams_seconds={streams_elapsed:.6f} "
+            f"equipment_seconds={equipment_elapsed:.6f}"
         )
 
 
