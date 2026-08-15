@@ -29,6 +29,7 @@ on:
       - "tests/test_studio_workspace_performance.py"
       - "tests/profile_studio_workspace_browser.py"
       - "tests/test_studio_accessibility_browser.py"
+      - "tests/test_studio_full_pilot_browser.py"
       - "tests/fixtures/studio_large_results_browser_app.py"
       - "tests/test_studio_case_interoperability.py"
       - "tests/test_studio_workspace_interactions.py"
@@ -151,7 +152,7 @@ jobs:
 
   studio-browser-profile:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       PYTHONPATH: .
     steps:
@@ -170,11 +171,14 @@ jobs:
           python -m py_compile \
             tests/fixtures/studio_large_results_browser_app.py \
             tests/profile_studio_workspace_browser.py \
-            tests/test_studio_accessibility_browser.py
+            tests/test_studio_accessibility_browser.py \
+            tests/test_studio_full_pilot_browser.py
       - name: Profile representative large solved workspace in Chromium
         run: python tests/profile_studio_workspace_browser.py
       - name: Exercise Classic and Studio responsive accessibility
         run: python tests/test_studio_accessibility_browser.py
+      - name: Exercise full Studio solve, export, and Process Chat pilot
+        run: python tests/test_studio_full_pilot_browser.py
       - name: Retain browser profile evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -188,4 +192,11 @@ jobs:
         with:
           name: studio-responsive-accessibility-browser
           path: studio-accessibility-browser.json
+          if-no-files-found: error
+      - name: Retain full Studio pilot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-full-pilot-browser
+          path: studio-full-pilot-browser.json
           if-no-files-found: error
