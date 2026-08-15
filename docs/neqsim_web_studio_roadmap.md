@@ -222,11 +222,18 @@ in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
-Status: planned.
+Status: **large-workspace projection baseline in stack**.
+
+Child branch `automation/web-studio-s8-performance-baseline-20260814` adds
+deterministic, UI-independent scale guards around the inherited graph preview and
+shared professional-result projections. The acceptance case contains 500 connected
+units, 2,000 solved stream rows, 1,000 equipment rows and 8,000 design-review rows.
+Coarse three-second hosted budgets detect order-of-magnitude regressions without
+claiming production capacity, browser rendering performance or NeqSim solver speed.
 
 ### S9 — Production hardening
 
-Status: **ongoing; uploaded-case recovery merged; accessible shell recovery in stack**.
+Status: **ongoing; accessible shell recovery and large-workspace baseline stacked**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -313,11 +320,17 @@ already-merged #112 branch and therefore did not advance `main`. Root recovery
 branch `automation/web-studio-s9-accessible-shell-recovery-20260813` targets
 `main` from exact base `7b7786317f164254dd324b5d3c6533e574f3be59`
 and carries only the reviewed #113 page/test payload plus this ledger correction.
-The recovery is **in stack**, not merged completion.
+The recovery is **in stack**, not merged completion. Child branch
+`automation/web-studio-s8-performance-baseline-20260814` targets that exact
+validated recovery head `57ff2679f7664850da41cbb0d6d3a62c76a55d30`.
+It adds only the deterministic scale regression, its hosted workflow gate and this
+roadmap evidence. The child is **in stack** and is not independently mergeable to
+`main`.
 
-After the accessible-shell tranche is validated and merged, the next safe S9/S8
-tranche is a measured large-case workspace performance baseline for graph and
-result-table rendering, without changing NeqSim calculation semantics.
+After the scale baseline is validated and merged in order, the next safe S8/S9
+tranche is browser-level profiling of representative large solved workspaces,
+using the measured projection evidence to decide whether pagination,
+virtualization or caching is actually required.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
