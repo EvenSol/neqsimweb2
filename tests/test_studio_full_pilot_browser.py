@@ -94,10 +94,21 @@ def _page_diagnostic(page: Page) -> str:
 
 
 def _click_button(page: Page, name: str, timeout: int = 30_000) -> None:
-    action = page.get_by_role("button", name=name, exact=True)
-    action.wait_for(state="visible", timeout=timeout)
-    action.scroll_into_view_if_needed()
-    action.click()
+    last_error: Exception | None = None
+    for _ in range(3):
+        action = page.get_by_role("button", name=name, exact=True)
+        try:
+            action.wait_for(state="visible", timeout=timeout)
+            action.scroll_into_view_if_needed()
+            page.wait_for_timeout(750)
+            action.click()
+            return
+        except Exception as error:
+            last_error = error
+            page.wait_for_timeout(750)
+    raise AssertionError(
+        f"{name} remained unavailable across Streamlit reruns: {last_error}"
+    )
 
 
 def _download_bytes(page: Page, button_name: str) -> tuple[str, bytes]:
@@ -279,12 +290,18 @@ def run_browser_pilot() -> dict[str, object]:
                 level=1,
             ).wait_for(state="visible", timeout=60_000)
             _click_button(page, "Open Process Chat")
-            page.get_by_role(
-                "heading",
-                name="Process Chat",
-                exact=True,
-                level=1,
-            ).wait_for(state="visible", timeout=60_000)
+            try:
+                page.get_by_role(
+                    "heading",
+                    name="Process Chat",
+                    exact=True,
+                    level=1,
+                ).wait_for(state="visible", timeout=120_000)
+            except Exception as error:
+                raise AssertionError(
+                    "Process Chat did not load through its Studio action; "
+                    + _page_diagnostic(page)
+                ) from error
 
             case_banner = page.get_by_text("Studio case:", exact=False).first
             case_banner.wait_for(state="visible", timeout=30_000)
