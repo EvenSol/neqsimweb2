@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; browser responsive/accessibility evidence in stack**.
+Status: **ongoing; responsive/accessibility gate merged, transition recovery in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -302,12 +302,15 @@ case identity and untouched unrelated Classic session state across New, Continue
 Recent Case, Equipment Design, Engineering Studies and fail-closed unsolved-result
 actions.
 
-The current in-stack browser tranche drives the real Classic and Studio entry
-pages through Chromium at desktop and 390 × 844 mobile viewports. It requires
-accessible headings and action names, disabled planned workflows, labelled
-workspace status, 44 px touch targets, no main-content horizontal overflow,
-repeated root/health success, a live Streamlit process and retained JSON evidence.
-It changes no production UI or calculation behavior.
+PR #120 merged on `main` at
+`3fe3bfa50eda6b7352c5a13dabcb6ee060e623c5`, adding the real Classic and
+Studio Chromium journey at desktop and 390 × 844 mobile viewports. Its hosted
+browser job exposed a deterministic Classic-to-Studio transition timeout before
+the PR was merged; the cumulative Studio gate and inherited large-workspace
+browser profile remained green. The current recovery keeps every accessibility,
+responsive, health and live-process assertion while adding a bounded client-idle
+wait and actionable URL/visible-text diagnostics. No production UI or calculation
+behavior changes.
 
 ## Current tranche
 
@@ -370,14 +373,14 @@ Recovery PR #119 merged on `main` at
 projection, page-rerun and Chromium profile baselines are now present together on
 the default branch.
 
-Root branch
-`automation/web-studio-s9-responsive-accessibility-20260815` targets `main`
-from exact base `310dbcfa02ee1d31556657dfc5112af50342dbd3`. It adds only the real
-Classic/Studio responsive-accessibility browser journey, hosted execution and
-retained evidence plus roadmap/parity updates. The tranche is **in stack**, not
-merged completion, until its exact-head hosted gate passes.
+PR #120 merged on `main` at
+`3fe3bfa50eda6b7352c5a13dabcb6ee060e623c5`. Root recovery branch
+`automation/web-studio-s9-accessibility-transition-recovery-20260815` targets
+that exact merge commit and contains only the transition stabilization and
+failure diagnostics plus this ledger correction. It is **in stack**, not merged
+completion, until its exact-head hosted gate passes.
 
-After this browser tranche is validated and merged, the next safe S8/S9 work is
+After the recovered browser journey is green, the next safe S8/S9 work is
 multi-session/concurrency and failure-isolation evidence for representative
 large solved workspaces. Pagination, virtualization or caching remains gated on
 a repeatable user-visible bottleneck.
