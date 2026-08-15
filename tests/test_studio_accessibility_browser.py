@@ -11,7 +11,12 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from playwright.sync_api import (\n    Locator,\n    Page,\n    TimeoutError as PlaywrightTimeoutError,\n    sync_playwright,\n)
+from playwright.sync_api import (
+    Locator,
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
+    sync_playwright,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
