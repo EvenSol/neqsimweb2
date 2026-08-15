@@ -198,6 +198,7 @@ def run_browser_pilot() -> dict[str, object]:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 headless=True,
+                channel="chromium",
                 args=[
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
