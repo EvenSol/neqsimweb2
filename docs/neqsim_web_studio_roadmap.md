@@ -222,7 +222,7 @@ in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
-Status: **large-workspace projection baseline in stack**.
+Status: **large-workspace projection and page-profile baselines in stack**.
 
 Child branch `automation/web-studio-s8-performance-baseline-20260814` adds
 deterministic, UI-independent scale guards around the inherited graph preview and
@@ -231,9 +231,18 @@ units, 2,000 solved stream rows, 1,000 equipment rows and 8,000 design-review ro
 Coarse three-second hosted budgets detect order-of-magnitude regressions without
 claiming production capacity, browser rendering performance or NeqSim solver speed.
 
+Grandchild branch `automation/web-studio-s8-results-page-profile-20260814`
+runs that same solved-result scale through the actual Studio Engineering Results
+page with Streamlit's browser-facing application harness. It requires complete
+stream, equipment, design and constraint table payloads and times full Streams and
+Equipment & design page reruns against coarse ten-second hosted budgets. This
+isolates page/presentation overhead while leaving native solving and production
+semantics unchanged. It is not a JavaScript paint, network, memory, concurrent-user
+or NeqSim solver benchmark.
+
 ### S9 — Production hardening
 
-Status: **ongoing; accessible shell recovery and large-workspace baseline stacked**.
+Status: **ongoing; accessible shell recovery and large-workspace profiling stacked**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -325,12 +334,16 @@ The recovery is **in stack**, not merged completion. Child branch
 validated recovery head `57ff2679f7664850da41cbb0d6d3a62c76a55d30`.
 It adds only the deterministic scale regression, its hosted workflow gate and this
 roadmap evidence. The child is **in stack** and is not independently mergeable to
-`main`.
+`main`. Grandchild branch
+`automation/web-studio-s8-results-page-profile-20260814` targets exact validated
+child head `8d4864cfbc6438a8cedc851789bfc44f9b5b2bc4`. It adds the actual Results
+page profiling regression and this evidence only. The grandchild is **in stack**,
+depends on both #114 and #115, and is not independently mergeable to `main`.
 
-After the scale baseline is validated and merged in order, the next safe S8/S9
-tranche is browser-level profiling of representative large solved workspaces,
-using the measured projection evidence to decide whether pagination,
-virtualization or caching is actually required.
+After the stacked baselines are validated and merged in order, the next safe S8/S9
+tranche is a true browser paint/network/memory profile of representative large
+solved workspaces. Pagination, virtualization or caching should be introduced only
+if that evidence identifies a user-visible bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
