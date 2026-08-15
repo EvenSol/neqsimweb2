@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; responsive/accessibility gate merged, session isolation in stack**.
+Status: **ongoing; session isolation merged, full browser pilot in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -311,6 +311,13 @@ and real workspace journey. Four root/health probes stayed HTTP 200/`ok` with a
 live process, desktop/mobile overflow was zero, and representative mobile targets
 were 48.39 px high. Both evidence artifacts were retained. No production UI or
 calculation behavior changed.
+
+PR #122 merged on `main` at
+`f0fb66b4a8d334b5d204cd05f61c2944f07aa74d`. Exact-head hosted run #447
+passed two simultaneously live Chromium contexts: malformed portable case JSON
+failed closed in one session while the peer retained a clean Studio state and
+returned to Classic. Four root/health probes remained HTTP 200/`ok` with a live
+process. No production code, calculation, schema or Classic behavior changed.
 
 ## Current tranche
 
@@ -373,17 +380,24 @@ Recovery PR #119 merged on `main` at
 projection, page-rerun and Chromium profile baselines are now present together on
 the default branch.
 
-PR #120 merged on `main` at
-`3fe3bfa50eda6b7352c5a13dabcb6ee060e623c5`. Root branch `automation/web-studio-s9-session-isolation-20260815` targets
-`main` from exact base `0ddb9acd78096e276b1bfb345e39924caa8b88f1`. It extends the
-merged browser journey with two simultaneously live, independent browser
-contexts: one rejects malformed portable case JSON while the peer retains its
-clean case state and remains able to return to Classic. The tranche is **in
-stack**, not merged completion, until exact-head hosted validation passes.
+PR #122 merged on `main` at
+`f0fb66b4a8d334b5d204cd05f61c2944f07aa74d`, so responsive accessibility,
+transition recovery and session-isolated failure handling are now cumulative
+default-branch evidence.
 
-After session isolation is validated and merged, the next safe S9 work is a full
-browser pilot covering solve, export and bounded Process Chat handoff. Pagination,
-virtualization or caching remains gated on a repeatable user-visible bottleneck.
+Root branch `automation/web-studio-s9-full-pilot-20260815` targets `main` from
+exact base `f0fb66b4a8d334b5d204cd05f61c2944f07aa74d`. It adds a retained real-browser
+pilot through Classic, Studio, the inherited starter-case native NeqSim solve,
+portable schema-v4 JSON and engineering-workbook downloads, the existing live
+solved-model Process Chat handoff, and return to the same solved flowsheet. Provider
+calls are deliberately excluded: the pilot proves bounded deterministic handoff
+without requiring secrets or presenting LLM output as engineering evidence. The
+tranche is **in stack; validation pending CI**, not merged completion.
+
+After this pilot is validated and merged, the next safe S9 work is the stable
+migration/interoperability matrix and isolated-worker boundary already identified
+in the inherited UniSim-parity assessment. Pagination, virtualization or caching
+remains gated on a repeatable user-visible bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
