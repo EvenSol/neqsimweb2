@@ -15,8 +15,8 @@ claim full UniSim capability or design certification.
 | Optimization | Sensitivity, adjust/specification and bounded study tools exist | Partial | Operability-aware nonlinear optimization with discrete choices |
 | Reporting | Workbook streams, equipment, constraints, convergence, balances, design and subflowsheet interfaces | Strong | Report templates, traceable assumptions and comparison packs |
 | Interoperability | Process Chat solved-model handoff, native `.neqsim` persistence and schema migration | Strong | Stable external case/API contract and round-trip compatibility matrix |
-| Usability | Searchable palette, graphical editing, history, explicit units and unsolved-draft persistence | Partial | Browser end-to-end pilot workflows and accessibility review |
-| Performance | Hosted/local gates and native nearby-point benchmarks exist | Partial | Large-graph benchmarks, caching and regression budgets |
+| Usability | Searchable palette, graphical editing, history, explicit units, unsolved-draft persistence, semantic/mobile shell and in-stack real-browser workspace-switching evidence | Partial | Complete browser solve/export/Process Chat pilots and formal WCAG audit |
+| Performance | Hosted/local gates, native nearby points, 500-unit/large-result projection budgets and Chromium paint/network/heap baselines | Partial | Multi-session concurrency, failure isolation and evidence-driven optimization |
 | Validation evidence | Native baseline/+5% conservation, convergence, serialization, workbook and Streamlit health gates | Strong for covered units | Independent reference cases and expanded pilot acceptance |
 
 ## Production-ready steady-state v1 priorities
