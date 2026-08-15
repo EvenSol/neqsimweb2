@@ -161,6 +161,14 @@ def _validate_workbook_export(filename: str, payload: bytes) -> dict[str, object
 def run_browser_pilot() -> dict[str, object]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(PROJECT_ROOT)
+    environment["MALLOC_ARENA_MAX"] = "2"
+    environment["JAVA_TOOL_OPTIONS"] = (
+        "-Xms256m -Xmx2048m "
+        "--add-opens=java.base/java.util=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
+        "--add-opens=java.base/java.io=ALL-UNNAMED"
+    )
     command = [
         sys.executable,
         "-m",
@@ -188,7 +196,13 @@ def run_browser_pilot() -> dict[str, object]:
         health_probes.append(_probe_application(process))
 
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
             browser_version = browser.version
             context = browser.new_context(viewport=VIEWPORT)
             page = context.new_page()
