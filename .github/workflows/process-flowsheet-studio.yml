@@ -152,7 +152,7 @@ jobs:
 
   studio-browser-profile:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       PYTHONPATH: .
     steps:
@@ -171,14 +171,11 @@ jobs:
           python -m py_compile \
             tests/fixtures/studio_large_results_browser_app.py \
             tests/profile_studio_workspace_browser.py \
-            tests/test_studio_accessibility_browser.py \
-            tests/test_studio_full_pilot_browser.py
+            tests/test_studio_accessibility_browser.py
       - name: Profile representative large solved workspace in Chromium
         run: python tests/profile_studio_workspace_browser.py
       - name: Exercise Classic and Studio responsive accessibility
         run: python tests/test_studio_accessibility_browser.py
-      - name: Exercise full Studio solve, export, and Process Chat pilot
-        run: python tests/test_studio_full_pilot_browser.py
       - name: Retain browser profile evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -193,6 +190,27 @@ jobs:
           name: studio-responsive-accessibility-browser
           path: studio-accessibility-browser.json
           if-no-files-found: error
+
+  studio-full-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install full-pilot dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install neqsim "streamlit>=1.30.0" pandas playwright xlsxwriter google-genai
+          python -m playwright install --with-deps chromium
+      - name: Compile full-pilot source
+        run: python -m py_compile tests/test_studio_full_pilot_browser.py
+      - name: Exercise full Studio solve, export, and Process Chat pilot
+        run: python tests/test_studio_full_pilot_browser.py
       - name: Retain full Studio pilot evidence
         if: always()
         uses: actions/upload-artifact@v4
