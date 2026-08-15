@@ -11,7 +11,7 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from playwright.sync_api import Locator, Page, sync_playwright
+from playwright.sync_api import (\n    Locator,\n    Page,\n    TimeoutError as PlaywrightTimeoutError,\n    sync_playwright,\n)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -189,21 +189,54 @@ def _wait_for_classic(page: Page) -> None:
     ).wait_for(state="visible", timeout=30_000)
 
 
+def _page_diagnostic(page: Page) -> str:
+    body_text = page.locator("body").inner_text(timeout=5_000)
+    compact_text = " ".join(body_text.split())
+    return f"url={page.url!r}; visible_text={compact_text[:1200]!r}"
+
+
 def _open_studio(page: Page) -> None:
-    page.get_by_role(
+    action = page.get_by_role(
         "button",
         name="Open NeqSim Studio",
         exact=True,
-    ).click()
-    page.locator("h1#studio-page-title").wait_for(
-        state="visible",
-        timeout=30_000,
     )
-    page.get_by_role(
+    action.scroll_into_view_if_needed()
+    page.wait_for_timeout(750)
+    action.click()
+    try:
+        page.locator("h1#studio-page-title").wait_for(
+            state="visible",
+            timeout=30_000,
+        )
+        page.get_by_role(
+            "button",
+            name="Open Classic",
+            exact=True,
+        ).wait_for(state="visible", timeout=30_000)
+    except PlaywrightTimeoutError as error:
+        raise AssertionError(
+            "Studio did not load after its real Classic entry action; "
+            + _page_diagnostic(page)
+        ) from error
+
+
+def _open_classic(page: Page) -> None:
+    action = page.get_by_role(
         "button",
         name="Open Classic",
         exact=True,
-    ).wait_for(state="visible", timeout=30_000)
+    )
+    action.scroll_into_view_if_needed()
+    page.wait_for_timeout(750)
+    action.click()
+    try:
+        _wait_for_classic(page)
+    except PlaywrightTimeoutError as error:
+        raise AssertionError(
+            "Classic did not load after its real Studio return action; "
+            + _page_diagnostic(page)
+        ) from error
 
 
 def _assert_planned_actions(page: Page) -> list[str]:
@@ -290,12 +323,7 @@ def run_browser_journey() -> dict[str, object]:
             studio_desktop_layout = _main_layout(page)
             _assert_layout(studio_desktop_layout, "Studio desktop")
 
-            page.get_by_role(
-                "button",
-                name="Open Classic",
-                exact=True,
-            ).click()
-            _wait_for_classic(page)
+            _open_classic(page)
 
             page.set_viewport_size(MOBILE_VIEWPORT)
             page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
