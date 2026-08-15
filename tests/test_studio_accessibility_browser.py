@@ -343,7 +343,6 @@ def _multi_session_failure_isolation(browser) -> dict[str, object]:
             "failure_session_url": failure_page.url,
             "peer_session_url_after_return": peer_page.url,
             "peer_remained_usable": True,
-            "multi_session": multi_session,
             "page_errors": page_errors,
         }
     finally:
@@ -494,6 +493,7 @@ def run_browser_journey() -> dict[str, object]:
                 "studio_actions": studio_mobile_actions,
                 "studio_accessibility": studio_mobile_ax,
             },
+            "multi_session": multi_session,
             "page_errors": page_errors,
         }
     finally:
