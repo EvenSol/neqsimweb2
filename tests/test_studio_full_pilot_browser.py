@@ -81,9 +81,16 @@ def _probe_application(process: subprocess.Popen[str]) -> dict[str, object]:
 
 
 def _page_diagnostic(page: Page) -> str:
-    body_text = page.locator("body").inner_text(timeout=5_000)
+    try:
+        url = page.url
+        body_text = page.locator("body").inner_text(timeout=5_000)
+    except Exception as diagnostic_error:
+        return (
+            "browser diagnostics unavailable after page failure: "
+            f"{type(diagnostic_error).__name__}: {diagnostic_error}"
+        )
     compact_text = " ".join(body_text.split())
-    return f"url={page.url!r}; visible_text={compact_text[:1600]!r}"
+    return f"url={url!r}; visible_text={compact_text[:1600]!r}"
 
 
 def _click_button(page: Page, name: str, timeout: int = 30_000) -> None:
