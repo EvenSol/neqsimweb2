@@ -27,6 +27,8 @@ on:
       - "tests/test_studio_study_context.py"
       - "tests/test_studio_shell.py"
       - "tests/test_studio_workspace_performance.py"
+      - "tests/profile_studio_workspace_browser.py"
+      - "tests/fixtures/studio_large_results_browser_app.py"
       - "tests/test_studio_case_interoperability.py"
       - "tests/test_studio_workspace_interactions.py"
       - "tests/test_workspace_http_health.py"
@@ -145,3 +147,34 @@ jobs:
         run: python tests/test_process_execution.py -v
       - name: Run native pipeline hydraulics regressions
         run: python tests/test_pipeline_hydraulics.py -v
+
+  studio-browser-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install browser-profile dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "streamlit>=1.30.0" pandas playwright
+          python -m playwright install --with-deps chromium
+      - name: Compile browser-profile sources
+        run: |
+          python -m py_compile \
+            tests/fixtures/studio_large_results_browser_app.py \
+            tests/profile_studio_workspace_browser.py
+      - name: Profile representative large solved workspace in Chromium
+        run: python tests/profile_studio_workspace_browser.py
+      - name: Retain browser profile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-large-workspace-browser-profile
+          path: studio-browser-profile.json
+          if-no-files-found: error
