@@ -210,10 +210,12 @@ def _open_studio(page: Page) -> None:
     page.wait_for_timeout(750)
     action.click()
     try:
-        page.locator("h1#studio-page-title").wait_for(
-            state="visible",
-            timeout=30_000,
-        )
+        page.get_by_role(
+            "heading",
+            name="Engineering simulation, in one workspace.",
+            exact=True,
+            level=1,
+        ).wait_for(state="visible", timeout=30_000)
         page.get_by_role(
             "button",
             name="Open Classic",
