@@ -222,7 +222,7 @@ in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
-Status: **reviewed large-workspace projection and page-profile baselines in recovery**.
+Status: **reviewed projection/page baselines in recovery; browser profile in stack**.
 
 Reviewed PR #115 established deterministic, UI-independent scale guards around
 the inherited graph preview and shared professional-result projections. The
@@ -337,10 +337,20 @@ correction, preserving the original PR and CI history. The recovery is **in
 stack**, not merged completion, and must pass fresh exact-head hosted validation
 before it can be classified ready.
 
-After the recovered baselines are validated and merged, the next safe S8/S9 tranche
-is a true browser paint/network/memory profile of representative large solved
-workspaces. Pagination, virtualization or caching should be introduced only if
-that evidence identifies a user-visible bottleneck.
+Child branch `automation/web-studio-s8-browser-profile-20260815` is **in
+stack** from exact validated parent head
+`972b2f3630b5ae08e84ea8509c7393b674509539`. It adds a test-only Chromium
+profile over the same deterministic 2,000-stream, 1,000-equipment and
+8,000-design-row solved fixture. The hosted gate records first paint, first
+contentful paint, view readiness, CDP network transfer, JavaScript heap, DOM
+nodes and documents for Streams and Equipment & design views. It does not alter
+production pages, Classic behavior, result projections or NeqSim calculation
+semantics, and it does not claim concurrent-user or native solver capacity.
+
+After this browser profile is validated and merged, pagination, virtualization
+or caching should be introduced only if the browser evidence identifies a
+user-visible bottleneck. Otherwise the next safe S9 tranche is a representative
+responsive/accessibility browser interaction gate over both Classic and Studio.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
