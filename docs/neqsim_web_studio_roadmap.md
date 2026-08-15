@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; session isolation merged, full browser pilot in stack**.
+Status: **ongoing; session isolation merged, full browser pilot validated in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -391,10 +391,16 @@ pilot through Classic, Studio, the inherited starter-case native NeqSim solve,
 portable schema-v4 JSON and engineering-workbook downloads, the existing live
 solved-model Process Chat handoff, and return to the same solved flowsheet. Provider
 calls are deliberately excluded: the pilot proves bounded deterministic handoff
-without requiring secrets or presenting LLM output as engineering evidence. The
-tranche is **in stack; validation pending CI**, not merged completion.
+without requiring secrets or presenting LLM output as engineering evidence.
+Exact-head `999aa6a84727cd446ae6b831ddc7e1ab256bf9f5` passed hosted run #455:
+Chromium 151 solved the six-unit/six-connection starter case, downloaded canonical
+schema-v4 JSON and a 21-sheet engineering workbook, exposed the same solved SRK
+case and live model overview in Process Chat without a provider call, returned to
+the solved flowsheet, recorded zero page errors, and kept four root/health probes
+HTTP 200/`ok` with a live process. The tranche is **validated in stack**, not
+merged completion.
 
-After this pilot is validated and merged, the next safe S9 work is the stable
+After this pilot is merged, the next safe S9 work is the stable
 migration/interoperability matrix and isolated-worker boundary already identified
 in the inherited UniSim-parity assessment. Pagination, virtualization or caching
 remains gated on a repeatable user-visible bottleneck.
