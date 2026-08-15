@@ -379,13 +379,29 @@ def run_browser_journey() -> dict[str, object]:
             process.wait(timeout=5)
 
 
-def main() -> None:
-    evidence = run_browser_journey()
+def _write_evidence(evidence: dict[str, object]) -> None:
     EVIDENCE_OUTPUT.write_text(
         json.dumps(evidence, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(json.dumps(evidence, indent=2, sort_keys=True))
+
+
+def main() -> None:
+    try:
+        evidence = run_browser_journey()
+    except Exception as error:
+        _write_evidence(
+            {
+                "status": "failed",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+        )
+        raise
+
+    evidence["status"] = "passed"
+    _write_evidence(evidence)
 
 
 if __name__ == "__main__":
