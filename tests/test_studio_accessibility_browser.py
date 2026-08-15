@@ -261,6 +261,96 @@ def _assert_planned_actions(page: Page) -> list[str]:
     return labels
 
 
+def _multi_session_failure_isolation(browser) -> dict[str, object]:
+    """Prove one failed case import cannot contaminate a peer Studio session."""
+
+    failure_context = browser.new_context(viewport=DESKTOP_VIEWPORT)
+    peer_context = browser.new_context(viewport=DESKTOP_VIEWPORT)
+    failure_page = failure_context.new_page()
+    peer_page = peer_context.new_page()
+    page_errors: dict[str, list[str]] = {
+        "failure_session": [],
+        "peer_session": [],
+    }
+    failure_page.on(
+        "pageerror",
+        lambda error: page_errors["failure_session"].append(str(error)),
+    )
+    peer_page.on(
+        "pageerror",
+        lambda error: page_errors["peer_session"].append(str(error)),
+    )
+
+    try:
+        for session_page in (failure_page, peer_page):
+            session_page.goto(
+                BASE_URL,
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            _wait_for_classic(session_page)
+            _open_studio(session_page)
+            session_page.get_by_text(
+                "No active Studio case yet.",
+                exact=False,
+            ).wait_for(state="visible", timeout=30_000)
+
+        failure_page.locator('input[type="file"]').set_input_files(
+            {
+                "name": "invalid-studio-case.json",
+                "mimeType": "application/json",
+                "buffer": b'{"schema_version": 4',
+            }
+        )
+        failure_page.get_by_role(
+            "button",
+            name="Open uploaded case",
+            exact=True,
+        ).click()
+        import_error = failure_page.get_by_text(
+            "The Studio case is not valid JSON:",
+            exact=False,
+        )
+        import_error.wait_for(state="visible", timeout=30_000)
+
+        peer_page.get_by_text(
+            "No active Studio case yet.",
+            exact=False,
+        ).wait_for(state="visible", timeout=30_000)
+        if peer_page.get_by_text(
+            "The Studio case is not valid JSON:",
+            exact=False,
+        ).count():
+            raise AssertionError(
+                "A failed case import leaked into the independent peer session"
+            )
+
+        _open_classic(peer_page)
+        failure_page.get_by_text(
+            "No active Studio case yet.",
+            exact=False,
+        ).wait_for(state="visible", timeout=30_000)
+        import_error.wait_for(state="visible", timeout=30_000)
+
+        if any(page_errors.values()):
+            raise AssertionError(
+                f"Browser page errors during session-isolation journey: {page_errors}"
+            )
+
+        return {
+            "concurrent_live_sessions": 2,
+            "isolated_failure": "invalid portable case JSON",
+            "failure_session_url": failure_page.url,
+            "peer_session_url_after_return": peer_page.url,
+            "peer_remained_usable": True,
+            "multi_session": multi_session,
+            "page_errors": page_errors,
+        }
+    finally:
+        failure_context.close()
+        peer_context.close()
+
+
 def run_browser_journey() -> dict[str, object]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(PROJECT_ROOT)
@@ -375,6 +465,7 @@ def run_browser_journey() -> dict[str, object]:
             if page_errors:
                 raise AssertionError(f"Browser page errors: {page_errors}")
 
+            multi_session = _multi_session_failure_isolation(browser)
             browser.close()
 
         health_probes.append(_probe_application(process))
