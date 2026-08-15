@@ -145,7 +145,12 @@ def run_profile() -> dict[str, object]:
             def record_data(params):
                 received_bytes[0] += int(params.get("encodedDataLength", 0))
 
+            def record_websocket_frame(params):
+                payload = params.get("response", {}).get("payloadData", "")
+                received_bytes[0] += len(payload.encode("utf-8"))
+
             session.on("Network.dataReceived", record_data)
+            session.on("Network.webSocketFrameReceived", record_websocket_frame)
 
             started = time.perf_counter()
             page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
