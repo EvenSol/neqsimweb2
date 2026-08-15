@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; responsive/accessibility gate merged, transition recovery in stack**.
+Status: **ongoing; responsive/accessibility gate merged, session isolation in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -304,13 +304,13 @@ actions.
 
 PR #120 merged on `main` at
 `3fe3bfa50eda6b7352c5a13dabcb6ee060e623c5`, adding the real Classic and
-Studio Chromium journey at desktop and 390 × 844 mobile viewports. Its hosted
-browser job exposed a deterministic Classic-to-Studio transition timeout before
-the PR was merged; the cumulative Studio gate and inherited large-workspace
-browser profile remained green. The current recovery keeps every accessibility,
-responsive, health and live-process assertion while adding a bounded client-idle
-wait and actionable URL/visible-text diagnostics. No production UI or calculation
-behavior changes.
+Studio Chromium journey at desktop and 390 × 844 mobile viewports. Recovery PR
+#121 merged at `0ddb9acd78096e276b1bfb345e39924caa8b88f1` after exact-head run
+#445 passed the complete Classic+Studio gate, inherited large-workspace profile
+and real workspace journey. Four root/health probes stayed HTTP 200/`ok` with a
+live process, desktop/mobile overflow was zero, and representative mobile targets
+were 48.39 px high. Both evidence artifacts were retained. No production UI or
+calculation behavior changed.
 
 ## Current tranche
 
@@ -374,16 +374,16 @@ projection, page-rerun and Chromium profile baselines are now present together o
 the default branch.
 
 PR #120 merged on `main` at
-`3fe3bfa50eda6b7352c5a13dabcb6ee060e623c5`. Root recovery branch
-`automation/web-studio-s9-accessibility-transition-recovery-20260815` targets
-that exact merge commit and contains only the transition stabilization and
-failure diagnostics plus this ledger correction. It is **in stack**, not merged
-completion, until its exact-head hosted gate passes.
+`3fe3bfa50eda6b7352c5a13dabcb6ee060e623c5`. Root branch `automation/web-studio-s9-session-isolation-20260815` targets
+`main` from exact base `0ddb9acd78096e276b1bfb345e39924caa8b88f1`. It extends the
+merged browser journey with two simultaneously live, independent browser
+contexts: one rejects malformed portable case JSON while the peer retains its
+clean case state and remains able to return to Classic. The tranche is **in
+stack**, not merged completion, until exact-head hosted validation passes.
 
-After the recovered browser journey is green, the next safe S8/S9 work is
-multi-session/concurrency and failure-isolation evidence for representative
-large solved workspaces. Pagination, virtualization or caching remains gated on
-a repeatable user-visible bottleneck.
+After session isolation is validated and merged, the next safe S9 work is a full
+browser pilot covering solve, export and bounded Process Chat handoff. Pagination,
+virtualization or caching remains gated on a repeatable user-visible bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
