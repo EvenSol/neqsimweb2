@@ -222,7 +222,7 @@ in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
-Status: **reviewed large-workspace projection and page-profile baselines in recovery**.
+Status: **large-workspace projection and page-profile baselines merged; browser profile recovery in stack**.
 
 Reviewed PR #115 established deterministic, UI-independent scale guards around
 the inherited graph preview and shared professional-result projections. The
@@ -243,9 +243,25 @@ network, memory, concurrent-user or NeqSim solver benchmark. Its merge commit
 `27b03ef5f086fe1d117a6fea5cddb8560f7c13d8` landed in the already-merged
 #115 branch and therefore did not advance `main`.
 
+Recovery PR #117 subsequently merged on `main` at
+`bdb0726ed984fd7a1bd6f87cfb7061762191e6ee`, restoring the cumulative
+#115/#116 performance-test and workflow payload. Classic routes, calculations,
+case schemas and saved-case behavior remain unchanged.
+
+Validated child PR #118 adds a true Chromium paint/network/memory profile around
+the same deterministic large solved workspace. Its exact-head hosted run recorded
+first paint at 920 ms and first contentful paint at 992 ms; the complete Streams
+view became ready in 2.546 s with 5,219,349 transferred bytes, 15,572,896 bytes
+of JavaScript heap and 442 DOM nodes, while Equipment & design became ready in
+0.282 s with 2,474,776 transferred bytes, 23,398,244 bytes of JavaScript heap
+and 575 DOM nodes. These are reproducible regression observations, not production
+capacity or concurrency claims. PR #118 merge commit
+`97c40a9f4b51d71068bbb892d63d5264bac7f959` landed in the already-merged #117
+branch and therefore did not advance `main`.
+
 ### S9 — Production hardening
 
-Status: **ongoing; accessible shell merged; large-workspace profiling recovery in stack**.
+Status: **ongoing; accessible shell and large-workspace baselines merged; browser profile recovery in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -323,24 +339,28 @@ mobile layout contract without changing calculation or lifecycle behavior.
 
 ## Active stacked work
 
-PRs #109 through #112 and recovery PR #114 are merged on `main`. PR #115 merged
-at `45c5246ebb5e9fd649aa0e563a991c66b1f0221d` into the already-merged #114
-branch, and PR #116 merged at
+PRs #109 through #112, recovery PR #114 and performance recovery PR #117 are
+merged on `main`. PR #115 merged at
+`45c5246ebb5e9fd649aa0e563a991c66b1f0221d` into the already-merged #114
+branch, PR #116 merged at
 `27b03ef5f086fe1d117a6fea5cddb8560f7c13d8` into the already-merged #115
-branch. Neither performance payload reached `main`.
+branch, and PR #118 merged at
+`97c40a9f4b51d71068bbb892d63d5264bac7f959` into the already-merged #117
+branch. Recovery PR #117 placed the #115/#116 payload on `main`; the #118
+browser-profile payload still did not reach `main`.
 
 Root recovery branch
-`automation/web-studio-s8-performance-recovery-20260815` targets `main` from
-exact base `560e39187f6eff5947ec33387f6df1b44a60eb58`. It carries the reviewed
-cumulative #115/#116 performance test and workflow payload plus this ledger
+`automation/web-studio-s8-browser-profile-recovery-20260815` targets `main`
+from exact base `bdb0726ed984fd7a1bd6f87cfb7061762191e6ee`. It carries the validated
+#118 Chromium fixture, profiling script and hosted workflow gate plus this ledger
 correction, preserving the original PR and CI history. The recovery is **in
 stack**, not merged completion, and must pass fresh exact-head hosted validation
 before it can be classified ready.
 
-After the recovered baselines are validated and merged, the next safe S8/S9 tranche
-is a true browser paint/network/memory profile of representative large solved
-workspaces. Pagination, virtualization or caching should be introduced only if
-that evidence identifies a user-visible bottleneck.
+After the recovered browser profile is validated and merged, use its stored
+paint/network/heap/DOM evidence to select the next S8/S9 optimization or
+concurrency tranche. Pagination, virtualization or caching should be introduced
+only if repeatable evidence identifies a user-visible bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
