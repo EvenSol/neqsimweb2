@@ -101,16 +101,30 @@ def _click_button(page: Page, name: str, timeout: int = 30_000) -> None:
 
 
 def _download_bytes(page: Page, button_name: str) -> tuple[str, bytes]:
-    action = page.get_by_role("button", name=button_name, exact=True)
-    action.wait_for(state="visible", timeout=30_000)
-    action.scroll_into_view_if_needed()
-    with page.expect_download(timeout=30_000) as download_info:
-        action.click()
-    download = download_info.value
-    downloaded_path = download.path()
-    if downloaded_path is None:
-        raise AssertionError(f"{button_name} did not produce a local download")
-    return download.suggested_filename, Path(downloaded_path).read_bytes()
+    last_error: Exception | None = None
+    for _ in range(3):
+        action = page.get_by_role("button", name=button_name, exact=True)
+        try:
+            action.wait_for(state="visible", timeout=30_000)
+            action.scroll_into_view_if_needed()
+            with page.expect_download(timeout=30_000) as download_info:
+                action.click()
+            download = download_info.value
+            downloaded_path = download.path()
+            if downloaded_path is None:
+                raise AssertionError(
+                    f"{button_name} did not produce a local download"
+                )
+            return (
+                download.suggested_filename,
+                Path(downloaded_path).read_bytes(),
+            )
+        except Exception as error:
+            last_error = error
+            page.wait_for_timeout(750)
+    raise AssertionError(
+        f"{button_name} remained unavailable across Streamlit reruns: {last_error}"
+    )
 
 
 def _validate_case_export(filename: str, payload: bytes) -> dict[str, object]:
