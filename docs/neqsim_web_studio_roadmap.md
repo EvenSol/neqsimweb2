@@ -222,11 +222,30 @@ in Python.
 
 ### S8 — Large ProcessModel / multi-area workspace
 
-Status: planned.
+Status: **reviewed large-workspace projection and page-profile baselines in recovery**.
+
+Reviewed PR #115 established deterministic, UI-independent scale guards around
+the inherited graph preview and shared professional-result projections. The
+acceptance case contains 500 connected units, 2,000 solved stream rows, 1,000
+equipment rows and 8,000 design-review rows. Coarse three-second hosted budgets
+detect order-of-magnitude regressions without claiming production capacity,
+browser rendering performance or NeqSim solver speed. Its merge commit
+`45c5246ebb5e9fd649aa0e563a991c66b1f0221d` landed in the already-merged
+#114 branch and therefore did not advance `main`.
+
+Reviewed PR #116 runs that same solved-result scale through the actual Studio
+Engineering Results page with Streamlit's browser-facing application harness. It
+requires complete stream, equipment, design and constraint table payloads and
+times full Streams and Equipment & design page reruns against coarse ten-second
+hosted budgets. This isolates page/presentation overhead while leaving native
+solving and production semantics unchanged. It is not a JavaScript paint,
+network, memory, concurrent-user or NeqSim solver benchmark. Its merge commit
+`27b03ef5f086fe1d117a6fea5cddb8560f7c13d8` landed in the already-merged
+#115 branch and therefore did not advance `main`.
 
 ### S9 — Production hardening
 
-Status: **ongoing; uploaded-case recovery merged; accessible shell recovery in stack**.
+Status: **ongoing; accessible shell merged; large-workspace profiling recovery in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -295,29 +314,33 @@ schema-v1 retry, keep the baseline and recovered cases in bounded Recent Cases,
 consume one-shot pending state, preserve Classic session data and survive a normal
 post-recovery Streamlit rerun.
 
-Child PR #113 was merged at
-`8774539af778baf8f769264b4edd906ed9c92a94` into the already-merged
-#112 branch after #112 reached `main`, so its reviewed payload is not present on
-`main`. Recovery branch
-`automation/web-studio-s9-accessible-shell-recovery-20260813` is **in stack**
-from exact current-main base `7b7786317f164254dd324b5d3c6533e574f3be59`.
-It restores the exact #113 semantic section, article and heading structure,
-labelled status and active-case regions, visible unique lifecycle action names,
-disabled planned states and owned mobile layout contract without changing
-calculation or lifecycle behavior.
+Child PR #113 was merged into an already-merged parent branch and therefore did
+not advance `main`. Recovery PR #114 subsequently merged on `main` at
+`560e39187f6eff5947ec33387f6df1b44a60eb58`. It restores the exact #113
+semantic section, article and heading structure, labelled status and active-case
+regions, visible unique lifecycle action names, disabled planned states and owned
+mobile layout contract without changing calculation or lifecycle behavior.
 
 ## Active stacked work
 
-PRs #109 through #112 are merged on `main`. PR #113 was merged into the
-already-merged #112 branch and therefore did not advance `main`. Root recovery
-branch `automation/web-studio-s9-accessible-shell-recovery-20260813` targets
-`main` from exact base `7b7786317f164254dd324b5d3c6533e574f3be59`
-and carries only the reviewed #113 page/test payload plus this ledger correction.
-The recovery is **in stack**, not merged completion.
+PRs #109 through #112 and recovery PR #114 are merged on `main`. PR #115 merged
+at `45c5246ebb5e9fd649aa0e563a991c66b1f0221d` into the already-merged #114
+branch, and PR #116 merged at
+`27b03ef5f086fe1d117a6fea5cddb8560f7c13d8` into the already-merged #115
+branch. Neither performance payload reached `main`.
 
-After the accessible-shell tranche is validated and merged, the next safe S9/S8
-tranche is a measured large-case workspace performance baseline for graph and
-result-table rendering, without changing NeqSim calculation semantics.
+Root recovery branch
+`automation/web-studio-s8-performance-recovery-20260815` targets `main` from
+exact base `560e39187f6eff5947ec33387f6df1b44a60eb58`. It carries the reviewed
+cumulative #115/#116 performance test and workflow payload plus this ledger
+correction, preserving the original PR and CI history. The recovery is **in
+stack**, not merged completion, and must pass fresh exact-head hosted validation
+before it can be classified ready.
+
+After the recovered baselines are validated and merged, the next safe S8/S9 tranche
+is a true browser paint/network/memory profile of representative large solved
+workspaces. Pagination, virtualization or caching should be introduced only if
+that evidence identifies a user-visible bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
