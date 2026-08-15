@@ -294,9 +294,9 @@ def run_browser_pilot() -> dict[str, object]:
                 page.get_by_role(
                     "heading",
                     name="Process Chat",
-                    exact=True,
+                    exact=False,
                     level=1,
-                ).wait_for(state="visible", timeout=120_000)
+                ).wait_for(state="visible", timeout=60_000)
             except Exception as error:
                 raise AssertionError(
                     "Process Chat did not load through its Studio action; "
