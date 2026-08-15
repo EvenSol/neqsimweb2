@@ -28,6 +28,7 @@ on:
       - "tests/test_studio_shell.py"
       - "tests/test_studio_workspace_performance.py"
       - "tests/profile_studio_workspace_browser.py"
+      - "tests/test_studio_accessibility_browser.py"
       - "tests/fixtures/studio_large_results_browser_app.py"
       - "tests/test_studio_case_interoperability.py"
       - "tests/test_studio_workspace_interactions.py"
@@ -162,19 +163,29 @@ jobs:
       - name: Install browser-profile dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "streamlit>=1.30.0" pandas playwright
+          python -m pip install "streamlit>=1.30.0" pandas playwright google-genai
           python -m playwright install --with-deps chromium
       - name: Compile browser-profile sources
         run: |
           python -m py_compile \
             tests/fixtures/studio_large_results_browser_app.py \
-            tests/profile_studio_workspace_browser.py
+            tests/profile_studio_workspace_browser.py \
+            tests/test_studio_accessibility_browser.py
       - name: Profile representative large solved workspace in Chromium
         run: python tests/profile_studio_workspace_browser.py
+      - name: Exercise Classic and Studio responsive accessibility
+        run: python tests/test_studio_accessibility_browser.py
       - name: Retain browser profile evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: studio-large-workspace-browser-profile
           path: studio-browser-profile.json
+          if-no-files-found: error
+      - name: Retain responsive accessibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-responsive-accessibility-browser
+          path: studio-accessibility-browser.json
           if-no-files-found: error
