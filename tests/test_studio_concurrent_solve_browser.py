@@ -1,4 +1,4 @@
-"""Exercise queued native solves in two live Studio browser sessions."""
+"""Exercise independent native solves in two live Studio browser sessions."""
 
 from __future__ import annotations
 
@@ -220,11 +220,13 @@ def run_concurrent_solve_gate() -> dict[str, object]:
         f"--server.port={PORT}",
         "--browser.gatherUsageStats=false",
     ]
+    # An undrained PIPE can fill during two native solves and block the
+    # Streamlit server. Browser and HTTP probes provide the retained diagnostics.
     process = subprocess.Popen(
         command,
         cwd=PROJECT_ROOT,
         env=environment,
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -356,13 +358,8 @@ def run_concurrent_solve_gate() -> dict[str, object]:
             "health_probes": health_probes,
             "page_errors": page_errors,
             "execution_boundary": (
-                "simultaneously live Streamlit sessions with process-local "
-                "native transaction arbitration; this does not claim parallel "
-                "or process-isolated JVM execution"
-            ),
-            "native_execution_policy": (
-                "one complete Studio build/solve/serialize transaction at a "
-                "time within each session's existing execution budget"
+                "simultaneously live Streamlit sessions; this does not claim "
+                "process-isolated JVM execution"
             ),
         }
     finally:

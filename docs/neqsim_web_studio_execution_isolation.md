@@ -19,13 +19,6 @@ Python process or JVM and therefore are not an isolation boundary. A daemon
 Python thread or interrupted Java thread may remain alive after the caller has
 failed closed.
 
-Studio also arbitrates the complete build, solve, serialization and provenance
-transaction with one process-local lock. A second Studio session keeps its own
-case and consumes its own existing execution budget while it waits. This avoids
-sharing one in-process JPype/JVM calculation boundary between simultaneous native
-transactions. It preserves correctness but is queued execution, not parallel
-execution or process isolation. Classic pages and calculation paths are unchanged.
-
 The merged NeqSim persistence APIs also do not yet provide the exact handoff that
 a separate Studio worker needs:
 
@@ -83,10 +76,9 @@ Activation requires focused protocol tests plus a real native end-to-end gate:
 - root HTTP 200, `/_stcore/health = ok`, a live app process and zero browser page
   errors before and after the gate.
 
-The concurrent-session Chromium gate exercises the queued application boundary
+The concurrent-session Chromium gate exercises the existing application boundary
 while this dependency remains open. It must be reported as simultaneously live
-Studio sessions with serialized native transactions, not as parallel or
-process-isolated JVM execution.
+Studio sessions, not as process-isolated JVM execution.
 
 ## Stop boundary
 
