@@ -422,8 +422,13 @@ distinct native starter-case solves before waiting for either completion. Each
 session must retain its own canonical case JSON, engineering workbook, solved
 Process Chat handoff and case name; one session then returns to Classic without
 changing the peer. Four HTTP/health probes, a live process and zero page errors
-remain mandatory. This is concurrent session evidence, not process-isolated JVM
-execution. Validation is **pending hosted CI**.
+remain mandatory. Hosted concurrent probing showed that two uncoordinated native
+transactions can leave a session unavailable beyond the execution budget. The
+recovery therefore queues the complete Studio native transaction behind one
+process-local guard while preserving independent browser/session state and each
+session's existing 180-second budget. This is simultaneously live session evidence
+with serialized native work, not parallel or process-isolated JVM execution.
+Validation is **pending hosted CI**.
 
 The exact isolated-worker dependency is recorded in
 `docs/neqsim_web_studio_execution_isolation.md`. At NeqSim master

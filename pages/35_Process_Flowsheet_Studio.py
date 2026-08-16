@@ -70,7 +70,10 @@ globals().update(
     )
 )
 
-_PROCESS_MODEL_SYMBOL_NAMES = ("ProcessRunTimeoutError",)
+_PROCESS_MODEL_SYMBOL_NAMES = (
+    "ProcessRunTimeoutError",
+    "native_execution_transaction",
+)
 globals().update(
     import_local_symbols(
         "process_chat.process_model",
@@ -6946,28 +6949,31 @@ if run_case:
             return remaining_ms
 
         with st.spinner("Building and solving the NeqSim process..."):
-            builder = ProcessBuilder()
-            graph_process_spec = _build_graph_process_spec(case_spec)
-            model = builder.build_from_spec_bounded(
-                graph_process_spec,
+            with native_execution_transaction(
                 timeout_ms=remaining_execution_budget_ms(),
-            )
-            result = model.run_bounded(
-                timeout_ms=remaining_execution_budget_ms(),
-            )
-            model_bytes = builder.save_neqsim_bytes_bounded(
-                timeout_ms=remaining_execution_budget_ms(),
-            )
-            run_record = model.run_bounded_operation(
-                lambda: _solver_run_record(
-                    result,
-                    model,
-                    current_case_signature,
-                    perf_counter() - execution_started,
-                ),
-                timeout_ms=remaining_execution_budget_ms(),
-                operation="solver provenance collection",
-            )
+            ):
+                builder = ProcessBuilder()
+                graph_process_spec = _build_graph_process_spec(case_spec)
+                model = builder.build_from_spec_bounded(
+                    graph_process_spec,
+                    timeout_ms=remaining_execution_budget_ms(),
+                )
+                result = model.run_bounded(
+                    timeout_ms=remaining_execution_budget_ms(),
+                )
+                model_bytes = builder.save_neqsim_bytes_bounded(
+                    timeout_ms=remaining_execution_budget_ms(),
+                )
+                run_record = model.run_bounded_operation(
+                    lambda: _solver_run_record(
+                        result,
+                        model,
+                        current_case_signature,
+                        perf_counter() - execution_started,
+                    ),
+                    timeout_ms=remaining_execution_budget_ms(),
+                    operation="solver provenance collection",
+                )
 
         state = {
             "spec": case_spec,
