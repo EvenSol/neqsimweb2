@@ -9,7 +9,14 @@ import subprocess
 import sys
 import time
 
-from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Locator,
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
+    sync_playwright,
+)
 
 from test_studio_full_pilot_browser import (
     BASE_URL,
@@ -77,6 +84,14 @@ def _start_solve(page: Page) -> float:
     return started
 
 
+def _is_visible(locator: Locator) -> bool:
+    """Observe visibility without letting a transient rerender block polling."""
+    try:
+        return locator.first.is_visible(timeout=250)
+    except PlaywrightTimeoutError:
+        return False
+
+
 def _wait_for_solves(
     sessions: tuple[tuple[Page, str, float], ...],
 ) -> tuple[float, ...]:
@@ -88,22 +103,25 @@ def _wait_for_solves(
         for index, (page, _, _) in enumerate(sessions):
             if ready_at[index] is not None:
                 continue
-            if page.get_by_text(SOLVED_MESSAGE, exact=True).is_visible():
+            if _is_visible(page.get_by_text(SOLVED_MESSAGE, exact=True)):
                 success_seen[index] = True
-            solver_solved = page.get_by_text(
-                "Solver: Solved",
-                exact=False,
-            ).first.is_visible()
-            case_export_ready = page.get_by_role(
-                "button",
-                name="Download case JSON",
-                exact=True,
-            ).is_visible()
-            workbook_export_ready = page.get_by_role(
-                "button",
-                name="Download engineering workbook",
-                exact=True,
-            ).is_visible()
+            solver_solved = _is_visible(
+                page.get_by_text("Solver: Solved", exact=False)
+            )
+            case_export_ready = _is_visible(
+                page.get_by_role(
+                    "button",
+                    name="Download case JSON",
+                    exact=True,
+                )
+            )
+            workbook_export_ready = _is_visible(
+                page.get_by_role(
+                    "button",
+                    name="Download engineering workbook",
+                    exact=True,
+                )
+            )
             if (
                 success_seen[index]
                 and solver_solved
@@ -238,10 +256,9 @@ def run_concurrent_solve_gate() -> dict[str, object]:
             contexts.extend((first_context, second_context))
 
             first_started = _start_solve(first_page)
-            first_solved_before_second_dispatch = first_page.get_by_text(
-                SOLVED_MESSAGE,
-                exact=True,
-            ).is_visible()
+            first_solved_before_second_dispatch = _is_visible(
+                first_page.get_by_text(SOLVED_MESSAGE, exact=True)
+            )
             second_started = _start_solve(second_page)
             dispatch_gap_seconds = second_started - first_started
             if first_solved_before_second_dispatch:
