@@ -451,15 +451,16 @@ Root PR #127 targets `main` from exact base
 real-Chromium interoperability matrix with one schema-v4 envelope whose
 stable material-connection identity references an unknown inlet. The existing
 engineering graph importer must report that exact connection and missing inlet ID,
-publish neither solved results nor solved-case artifacts, then accept a clean case
-in the same session, complete a real native NeqSim solve, restore JSON/workbook
-deliverables and return to Classic. The browser evidence exposed one
-application-boundary defect: a rejected pending case reported its error but continued
-rendering stale engineering controls, delaying recovery. The flowsheet now retains
-the actionable error and Studio navigation, then stops that stale render before a
-clean case is opened. Calculations, schemas, persistence, Process Chat and Classic
-behavior remain unchanged. The tranche is **in stack; validation pending hosted
-CI**.
+publish neither solved results nor solved-case artifacts, then start a clean
+runnable case in the same session, round-trip its canonical schema-v4 draft and
+return to Classic. The unchanged full native browser pilot in the same hosted job
+continues to own solve, JSON/workbook export and Process Chat handoff evidence. The
+browser evidence exposed one application-boundary defect: a rejected pending case
+reported its error but continued rendering stale engineering controls, delaying
+recovery. The flowsheet now retains the actionable error and Studio navigation,
+then stops that stale render before a clean case is opened. Calculations, schemas,
+persistence, Process Chat and Classic behavior remain unchanged. The tranche is
+**in stack; validation pending hosted CI**.
 
 Pagination, virtualization or caching remains gated on a repeatable user-visible
 bottleneck.
