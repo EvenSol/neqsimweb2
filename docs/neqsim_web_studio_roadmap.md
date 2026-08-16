@@ -423,7 +423,16 @@ session must retain its own canonical case JSON, engineering workbook, solved
 Process Chat handoff and case name; one session then returns to Classic without
 changing the peer. Four HTTP/health probes, a live process and zero page errors
 remain mandatory. This is concurrent session evidence, not process-isolated JVM
-execution. Validation is **pending hosted CI**.
+execution. Exact head `d8e7593a84ab06945501339fafe879c14409e5e3`
+passed hosted run 31954372322: both requests were dispatched 0.813 seconds apart
+before either solved; the sessions completed in 8.968 and 8.199 seconds. Each
+retained its distinct schema-v4 six-unit/six-connection JSON case, 21-sheet
+engineering workbook and solved SRK Process Chat handoff. Peer navigation back to
+Classic stayed isolated, all four root/health probes returned HTTP 200/`ok` with
+a live process, and Chromium reported no page errors. The browser harness drains
+Streamlit output instead of leaving an unread subprocess pipe that can block the
+server under concurrent native logging. No production calculation or execution
+serialization change is included. This recovery is **validated in stack**.
 
 The exact isolated-worker dependency is recorded in
 `docs/neqsim_web_studio_execution_isolation.md`. At NeqSim master
