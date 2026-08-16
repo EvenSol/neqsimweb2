@@ -374,22 +374,30 @@ def _exercise_engineering_failure_recovery(
     _open_studio(page)
     _upload_case(page, rejected_payload, "disconnected-engineering-case.json")
     _wait_for_flowsheet(page)
-    _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
 
     expected_error = (
         "Connect every independent feed before solving; disconnected "
         f"inlet(s): {disconnected_inlet_id}."
     )
-    try:
-        page.get_by_text("Solver: Failed", exact=False).wait_for(
-            state="visible",
-            timeout=60_000,
-        )
-    except Exception as error:
+    last_failure_state_error: Exception | None = None
+    for _ in range(3):
+        _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
+        try:
+            page.get_by_text("Solver: Failed", exact=False).wait_for(
+                state="visible",
+                timeout=20_000,
+            )
+        except Exception as error:
+            last_failure_state_error = error
+            page.wait_for_timeout(750)
+        else:
+            break
+    else:
         raise AssertionError(
-            "The disconnected case did not reach the failed solver state; "
+            "The disconnected case did not reach the failed solver state "
+            "across Streamlit reruns; "
             + _page_diagnostic(page)
-        ) from error
+        ) from last_failure_state_error
     visible_text = " ".join(
         page.locator("body").inner_text(timeout=30_000).split()
     )
