@@ -250,7 +250,7 @@ def run_concurrent_solve_gate() -> dict[str, object]:
             first_banner = _open_process_chat(first_page, first_name)
             second_banner = _open_process_chat(second_page, second_name)
 
-            _click_button(first_page, "← Studio home")
+            _click_button(first_page, "Studio home")
             first_page.get_by_role(
                 "heading",
                 name="Engineering simulation, in one workspace.",
