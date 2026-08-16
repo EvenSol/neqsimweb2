@@ -442,8 +442,9 @@ def _exercise_engineering_failure_recovery(
                 "control; " + _page_diagnostic(page)
             ) from error
         try:
-            page.get_by_text(
-                "The NeqSim flowsheet solved and is ready for review.",
+            page.get_by_role(
+                "button",
+                name="Download case JSON",
                 exact=True,
             ).wait_for(state="visible", timeout=60_000)
         except Exception as error:
@@ -453,8 +454,8 @@ def _exercise_engineering_failure_recovery(
             break
     else:
         raise AssertionError(
-            "The valid recovery case did not solve through native NeqSim "
-            "across Streamlit reruns; "
+            "The valid recovery case did not publish durable native NeqSim "
+            "results across Streamlit reruns; "
             + _page_diagnostic(page)
         ) from last_solve_error
 
