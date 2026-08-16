@@ -448,12 +448,12 @@ bounded thread waits must not be described as process isolation.
 Root PR #127 targets `main` from exact base
 `8f6a1c860e8f3115e3b2eda633944edd4b05acc4`. Its first test commit
 `025a02486be044450341c10f2b28bbf2ccb86cd9` extends the retained
-real-Chromium interoperability matrix with one schema-valid but
-engineering-invalid case. The canonical primary inlet connection is removed by
-stable inlet identity; the existing solve-readiness boundary must report that
-exact disconnected ID, publish neither solved results nor solved-case artifacts,
-then accept a clean case in the same session, complete a real native NeqSim solve,
-restore JSON/workbook deliverables and return to Classic. This is test and roadmap
+real-Chromium interoperability matrix with one schema-v4 envelope whose
+stable material-connection identity references an unknown inlet. The existing
+engineering graph importer must report that exact connection and missing inlet ID,
+publish neither solved results nor solved-case artifacts, then accept a clean case
+in the same session, complete a real native NeqSim solve, restore JSON/workbook
+deliverables and return to Classic. This is test and roadmap
 evidence only: production calculations, UI, schemas, persistence, Process Chat and
 Classic behavior are unchanged. The tranche is **in stack; validation pending
 hosted CI**.
