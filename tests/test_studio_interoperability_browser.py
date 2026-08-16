@@ -70,8 +70,8 @@ def _wait_for_flowsheet(page: Page) -> None:
 
 
 def _case_download(page: Page) -> tuple[bytes, dict[str, object]]:
-    filename, payload = _download_bytes(page, "Download case JSON")
-    if filename != "process_flowsheet_case.json":
+    filename, payload = _download_bytes(page, "Download unsolved case JSON")
+    if filename != "process_flowsheet_unsolved_case.json":
         raise AssertionError(f"Unexpected portable case filename: {filename!r}")
     case_spec = json.loads(payload.decode("utf-8"))
     if case_spec.get("schema_version") != 4:
