@@ -71,6 +71,16 @@ def _wait_for_flowsheet(page: Page) -> None:
 
 
 def _case_download(page: Page) -> tuple[bytes, dict[str, object]]:
+    # The page title and import notice render before the lower flowsheet section
+    # synchronizes the draft into the shared Studio case context. Wait for a
+    # control rendered after that synchronization before navigating home;
+    # otherwise a fast browser can interrupt the Streamlit rerun and correctly
+    # find no active case there.
+    page.get_by_role(
+        "button",
+        name="▶ Run NeqSim flowsheet",
+        exact=True,
+    ).wait_for(state="attached", timeout=60_000)
     _click_button(page, "← Studio home")
     page.get_by_role(
         "heading",
