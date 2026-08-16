@@ -404,7 +404,12 @@ and fail-closed malformed, non-UTF-8, oversized and future-schema inputs followe
 by supported retries. The explicit format, identity and restart boundary is
 recorded in `docs/neqsim_web_studio_interoperability.md`. This tranche changes
 no production calculation, case schema, saved-case behavior or Classic page.
-It is **in stack with validation pending CI**, not merged completion.
+Exact-head `05ddb6c9a14c942f0da19b0ddc76e1d36331be08` passed hosted run
+#461: schemas v1-v4 canonicalized to v4 with Classic continuation and fresh-session
+reopen equality; malformed JSON, non-UTF-8, 1,000,001-byte and future-v5 inputs
+failed closed and each accepted a supported retry. Chromium 151 recorded zero page
+errors and four HTTP 200/`ok` probes with a live process. The tranche is
+**validated in stack**, not merged completion.
 
 After the interoperability matrix is validated and merged, the next safe S9 work
 is the process-isolated worker contract already identified in the inherited
