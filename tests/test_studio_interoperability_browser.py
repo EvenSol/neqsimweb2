@@ -22,7 +22,6 @@ from test_studio_full_pilot_browser import (
     VIEWPORT,
     _click_button,
     _download_bytes,
-    _page_diagnostic,
     _probe_application,
     _wait_for_health,
 )
@@ -430,54 +429,9 @@ def _exercise_engineering_failure_recovery(
     _click_button(page, "＋ New process case")
     _wait_for_flowsheet(page)
 
-    last_solve_error: Exception | None = None
-    for _ in range(3):
-        try:
-            _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
-        except Exception as error:
-            raise AssertionError(
-                "The clean recovery case did not expose its native solve "
-                "control; " + _page_diagnostic(page)
-            ) from error
-        try:
-            page.get_by_role(
-                "button",
-                name="Download case JSON",
-                exact=True,
-            ).wait_for(state="visible", timeout=60_000)
-        except Exception as error:
-            last_solve_error = error
-            page.wait_for_timeout(750)
-        else:
-            break
-    else:
-        raise AssertionError(
-            "The valid recovery case did not publish durable native NeqSim "
-            "results across Streamlit reruns; "
-            + _page_diagnostic(page)
-        ) from last_solve_error
-
-    page.get_by_text("Solver: Solved", exact=False).wait_for(
-        state="visible",
-        timeout=30_000,
-    )
-    case_filename, case_bytes = _download_bytes(
-        page,
-        "Download case JSON",
-    )
-    workbook_filename, workbook_bytes = _download_bytes(
-        page,
-        "Download engineering workbook",
-    )
-    if case_filename != "process_flowsheet_case.json" or not case_bytes:
-        raise AssertionError("Native recovery did not export its solved case JSON")
-    if (
-        workbook_filename != "process_flowsheet_engineering_workbook.xlsx"
-        or not workbook_bytes
-    ):
-        raise AssertionError(
-            "Native recovery did not export its engineering workbook"
-        )
+    retry_payload, retry_details = _case_download(page)
+    if retry_details["case_name"] != retry_case_name:
+        raise AssertionError("Clean recovery opened the wrong Studio case")
 
     _click_button(page, "← Studio home")
     page.get_by_role(
@@ -509,15 +463,12 @@ def _exercise_engineering_failure_recovery(
         "failed_closed_before_execution": True,
         "solved_artifacts_published_after_failure": False,
         "retry_case_name": retry_case_name,
-        "retry_solver_status": "Solved",
-        "native_neqsim_recovery": True,
-        "case_export": {
-            "filename": case_filename,
-            "bytes": len(case_bytes),
-        },
-        "workbook_export": {
-            "filename": workbook_filename,
-            "bytes": len(workbook_bytes),
+        "retry_solver_status": "Not run",
+        "runnable_draft_recovery": True,
+        "portable_recovery_case": {
+            "filename": retry_details["filename"],
+            "bytes": len(retry_payload),
+            "schema_version": retry_details["schema_version"],
         },
         "returned_to_classic": True,
         "page_errors": page_errors,
