@@ -22,6 +22,7 @@ from test_studio_full_pilot_browser import (
     VIEWPORT,
     _click_button,
     _download_bytes,
+    _page_diagnostic,
     _probe_application,
     _wait_for_health,
 )
@@ -311,6 +312,178 @@ def _exercise_failure_recovery(
     }
 
 
+def _engineering_failure_payload(
+    canonical_case: dict[str, object],
+) -> tuple[bytes, str, str]:
+    """Return a schema-valid case with one disconnected material inlet."""
+
+    candidate = deepcopy(canonical_case)
+    case_name = "Disconnected engineering case"
+    candidate["name"] = case_name
+    inlets = candidate.get("inlets")
+    connections = candidate.get("connections")
+    if not isinstance(inlets, list) or not isinstance(connections, list):
+        raise AssertionError("Canonical case lacks inlet or connection arrays")
+
+    inlet_ids = {
+        str(inlet.get("id", "")).strip()
+        for inlet in inlets
+        if isinstance(inlet, dict) and str(inlet.get("id", "")).strip()
+    }
+    disconnected_index = None
+    disconnected_inlet_id = ""
+    for index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            continue
+        source = connection.get("source")
+        if not isinstance(source, dict):
+            continue
+        source_id = str(source.get("id", "")).strip()
+        if (
+            str(source.get("kind", "")).strip().lower() == "inlet"
+            and str(source.get("port", "")).strip().lower() == "out"
+            and source_id in inlet_ids
+        ):
+            disconnected_index = index
+            disconnected_inlet_id = source_id
+            break
+    if disconnected_index is None:
+        raise AssertionError("Canonical case has no material inlet connection")
+
+    del connections[disconnected_index]
+    payload = (
+        json.dumps(candidate, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    return payload, case_name, disconnected_inlet_id
+
+
+def _exercise_engineering_failure_recovery(
+    browser: Browser,
+    canonical_case: dict[str, object],
+) -> dict[str, object]:
+    """Fail a disconnected graph, then recover through a real native solve."""
+
+    context = browser.new_context(viewport=VIEWPORT)
+    page = context.new_page()
+    page_errors: list[str] = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+    rejected_payload, rejected_name, disconnected_inlet_id = (
+        _engineering_failure_payload(canonical_case)
+    )
+    _open_studio(page)
+    _upload_case(page, rejected_payload, "disconnected-engineering-case.json")
+    _wait_for_flowsheet(page)
+    _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
+
+    expected_error = (
+        "Connect every independent feed before solving; disconnected "
+        f"inlet(s): {disconnected_inlet_id}."
+    )
+    page.get_by_text(expected_error, exact=False).wait_for(
+        state="visible",
+        timeout=60_000,
+    )
+    page.get_by_text("Solver: Failed", exact=False).wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+    if page.get_by_role(
+        "button",
+        name="Download case JSON",
+        exact=True,
+    ).count():
+        raise AssertionError(
+            "A failed engineering case exposed a solved-case JSON artifact"
+        )
+    if page.get_by_text("2. Engineering results", exact=True).count():
+        raise AssertionError(
+            "A failed engineering case exposed solved engineering results"
+        )
+
+    _click_button(page, "← Studio home")
+    page.get_by_role(
+        "heading",
+        name="Engineering simulation, in one workspace.",
+        exact=True,
+        level=1,
+    ).wait_for(state="visible", timeout=30_000)
+    page.get_by_role(
+        "heading",
+        name=rejected_name,
+        exact=True,
+        level=3,
+    ).wait_for(state="visible", timeout=30_000)
+
+    retry_case = deepcopy(canonical_case)
+    retry_case["name"] = "Recovered native engineering case"
+    retry_payload = (
+        json.dumps(retry_case, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    _upload_case(page, retry_payload, "recovered-native-case.json")
+    _wait_for_flowsheet(page)
+    _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
+    try:
+        page.get_by_text(
+            "The NeqSim flowsheet solved and is ready for review.",
+            exact=True,
+        ).wait_for(state="visible", timeout=180_000)
+    except Exception as error:
+        raise AssertionError(
+            "The valid recovery case did not solve through native NeqSim; "
+            + _page_diagnostic(page)
+        ) from error
+
+    page.get_by_text("Solver: Solved", exact=False).wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+    for button_name in (
+        "Download case JSON",
+        "Download engineering workbook",
+    ):
+        page.get_by_role(
+            "button",
+            name=button_name,
+            exact=True,
+        ).wait_for(state="attached", timeout=30_000)
+
+    _click_button(page, "← Studio home")
+    page.get_by_role(
+        "heading",
+        name=retry_case["name"],
+        exact=True,
+        level=3,
+    ).wait_for(state="visible", timeout=30_000)
+    _click_button(page, "← NeqSim Classic")
+    page.get_by_role(
+        "heading",
+        name="NeqSim",
+        exact=True,
+        level=1,
+    ).wait_for(state="visible", timeout=30_000)
+    context.close()
+
+    if page_errors:
+        raise AssertionError(
+            f"Engineering failure/recovery browser errors: {page_errors}"
+        )
+
+    return {
+        "rejected_case": rejected_name,
+        "rejected_bytes": len(rejected_payload),
+        "disconnected_inlet_id": disconnected_inlet_id,
+        "expected_error": expected_error,
+        "failed_solver_status": "Failed",
+        "solved_artifacts_published_after_failure": False,
+        "retry_case_name": retry_case["name"],
+        "retry_solver_status": "Solved",
+        "native_neqsim_recovery": True,
+        "returned_to_classic": True,
+        "page_errors": page_errors,
+    }
+
+
 def run_interoperability_matrix() -> dict[str, object]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(PROJECT_ROOT)
@@ -374,6 +547,12 @@ def run_interoperability_matrix() -> dict[str, object]:
                 )
                 for failure_case in _failure_cases(canonical_case)
             ]
+            engineering_failure_recovery = (
+                _exercise_engineering_failure_recovery(
+                    browser,
+                    canonical_case,
+                )
+            )
             browser.close()
 
         health_probes.append(_probe_application(process))
@@ -391,6 +570,7 @@ def run_interoperability_matrix() -> dict[str, object]:
             },
             "supported_matrix": supported,
             "rejected_matrix": rejected,
+            "engineering_failure_recovery": engineering_failure_recovery,
             "health_probes": health_probes,
             "classic_workspace_preserved": True,
             "native_neqsim_model_format_changed": False,
