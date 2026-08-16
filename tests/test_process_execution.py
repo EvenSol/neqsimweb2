@@ -14,10 +14,6 @@ from process_chat.process_model import (
     ProcessExecutionError,
     ProcessRunTimeoutError,
 )
-from studio.execution_guard import (
-    StudioExecutionBusyError,
-    native_execution_transaction,
-)
 
 
 class ProcessRunTimeoutTest(unittest.TestCase):
@@ -327,46 +323,6 @@ class ProcessRunTimeoutTest(unittest.TestCase):
             release.set()
 
 
-class NativeExecutionTransactionTest(unittest.TestCase):
-    """Keep simultaneous Studio requests isolated inside one in-process JVM."""
-
-    def test_busy_transaction_wait_is_bounded(self):
-        with native_execution_transaction(timeout_ms=1_000):
-            with self.assertRaisesRegex(
-                StudioExecutionBusyError,
-                "capacity remained busy",
-            ):
-                with native_execution_transaction(timeout_ms=10):
-                    self.fail("A busy transaction must not enter")
-
-    def test_concurrent_transactions_are_serialized(self):
-        first_entered = threading.Event()
-        release_first = threading.Event()
-        second_entered = threading.Event()
-
-        def hold_first_transaction():
-            with native_execution_transaction(timeout_ms=1_000):
-                first_entered.set()
-                release_first.wait(timeout=1.0)
-
-        def enter_second_transaction():
-            with native_execution_transaction(timeout_ms=1_000):
-                second_entered.set()
-
-        first = threading.Thread(target=hold_first_transaction)
-        second = threading.Thread(target=enter_second_transaction)
-        first.start()
-        self.assertTrue(first_entered.wait(timeout=0.5))
-        second.start()
-        self.assertFalse(second_entered.wait(timeout=0.05))
-        release_first.set()
-        self.assertTrue(second_entered.wait(timeout=0.5))
-        first.join(timeout=0.5)
-        second.join(timeout=0.5)
-        self.assertFalse(first.is_alive())
-        self.assertFalse(second.is_alive())
-
-
 class ProcessRunFailureTest(unittest.TestCase):
     """Prevent failed native workers from publishing partial solved state."""
 
@@ -459,15 +415,6 @@ class StudioExecutionContractTest(unittest.TestCase):
         source = studio_path.read_text(encoding="utf-8")
 
         self.assertIn("STUDIO_SOLVE_TIMEOUT_MS = 180_000", source)
-        self.assertIn(
-            "with native_execution_transaction(timeout_ms=180_000):",
-            source,
-        )
-        self.assertIn(
-            "with native_execution_transaction(\n"
-            "                timeout_ms=remaining_execution_budget_ms(),",
-            source,
-        )
         self.assertIn(
             'f"{STUDIO_SOLVE_TIMEOUT_MS} ms total "',
             source,

@@ -47,9 +47,6 @@ from studio.case_context import (  # noqa: E402
     get_active_case,
     set_active_case,
 )
-from studio.execution_guard import (  # noqa: E402
-    native_execution_transaction,
-)
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -74,24 +71,24 @@ globals().update(
 )
 
 _PROCESS_MODEL_SYMBOL_NAMES = ("ProcessRunTimeoutError",)
+globals().update(
+    import_local_symbols(
+        "process_chat.process_model",
+        _PROCESS_MODEL_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+        force_reload=True,
+    )
+)
+
 _PROCESS_BUILDER_SYMBOL_NAMES = ("ProcessBuilder",)
-with native_execution_transaction(timeout_ms=180_000):
-    globals().update(
-        import_local_symbols(
-            "process_chat.process_model",
-            _PROCESS_MODEL_SYMBOL_NAMES,
-            project_root=_PROJECT_ROOT,
-            force_reload=True,
-        )
+globals().update(
+    import_local_symbols(
+        "process_chat.process_builder",
+        _PROCESS_BUILDER_SYMBOL_NAMES,
+        project_root=_PROJECT_ROOT,
+        force_reload=True,
     )
-    globals().update(
-        import_local_symbols(
-            "process_chat.process_builder",
-            _PROCESS_BUILDER_SYMBOL_NAMES,
-            project_root=_PROJECT_ROOT,
-            force_reload=True,
-        )
-    )
+)
 
 _SUBFLOWSHEET_SYMBOL_NAMES = (
     "subflowsheet_boundary_rows",
@@ -6949,31 +6946,28 @@ if run_case:
             return remaining_ms
 
         with st.spinner("Building and solving the NeqSim process..."):
-            with native_execution_transaction(
+            builder = ProcessBuilder()
+            graph_process_spec = _build_graph_process_spec(case_spec)
+            model = builder.build_from_spec_bounded(
+                graph_process_spec,
                 timeout_ms=remaining_execution_budget_ms(),
-            ):
-                builder = ProcessBuilder()
-                graph_process_spec = _build_graph_process_spec(case_spec)
-                model = builder.build_from_spec_bounded(
-                    graph_process_spec,
-                    timeout_ms=remaining_execution_budget_ms(),
-                )
-                result = model.run_bounded(
-                    timeout_ms=remaining_execution_budget_ms(),
-                )
-                model_bytes = builder.save_neqsim_bytes_bounded(
-                    timeout_ms=remaining_execution_budget_ms(),
-                )
-                run_record = model.run_bounded_operation(
-                    lambda: _solver_run_record(
-                        result,
-                        model,
-                        current_case_signature,
-                        perf_counter() - execution_started,
-                    ),
-                    timeout_ms=remaining_execution_budget_ms(),
-                    operation="solver provenance collection",
-                )
+            )
+            result = model.run_bounded(
+                timeout_ms=remaining_execution_budget_ms(),
+            )
+            model_bytes = builder.save_neqsim_bytes_bounded(
+                timeout_ms=remaining_execution_budget_ms(),
+            )
+            run_record = model.run_bounded_operation(
+                lambda: _solver_run_record(
+                    result,
+                    model,
+                    current_case_signature,
+                    perf_counter() - execution_started,
+                ),
+                timeout_ms=remaining_execution_budget_ms(),
+                operation="solver provenance collection",
+            )
 
         state = {
             "spec": case_spec,

@@ -413,23 +413,20 @@ observation race: the success element repeatedly resolved visible but detached
 during rerenders until a single stable wait timed out. No production calculation
 or existing regression failed.
 
-Recovery branch
-`automation/web-studio-s9-concurrent-solves-recovery-20260816` targets current
-`main` from exact base `98b002c3b78c07dc5effd3792f078cf8a0e59ecc`. It
-restores the four-file child payload and replaces the unstable single-element wait
-with one bounded alternating poll across both browser sessions. The gate dispatches
-distinct native starter-case solves before waiting for either completion. Each
-session must retain its own canonical case JSON, engineering workbook, solved
-Process Chat handoff and case name; one session then returns to Classic without
-changing the peer. Four HTTP/health probes, a live process and zero page errors
-remain mandatory. Hosted concurrent probing showed that two uncoordinated native
-transactions can leave a session unavailable beyond the execution budget. The
-recovery therefore queues the complete Studio native transaction behind one
-process-local guard while preserving independent browser/session state and each
-session's existing 180-second budget. This is simultaneously live session evidence
-with serialized native work, not parallel or process-isolated JVM execution.
-Validation is **pending hosted CI**.
-
+Recovery PR #126 targets current `main` from exact base
+`98b002c3b78c07dc5effd3792f078cf8a0e59ecc`. It records the exact
+process-isolation activation contract and the empirical stop boundary. Exploratory
+two-session Chromium runs dispatched distinct native starter solves before either
+completed and required independent JSON/workbook exports, solved Process Chat
+handoffs, peer Classic navigation, four healthy probes and zero page errors.
+Exact head `d8e7593a84ab06945501339fafe879c14409e5e3` passed run
+31954372322 with requests 0.813 seconds apart and solve completion in 8.968 and
+8.199 seconds. An unchanged documentation-only rerun then lost one session beyond
+180 seconds, and a bounded process-local serialization experiment also failed the
+repeatability gate. The experiment, browser gate and workflow wiring were removed;
+this PR retains documentation only and changes no production or Classic behavior.
+Reliable multi-session native execution remains **blocked** on the process worker
+and exact solved-state rehydration contract below.
 The exact isolated-worker dependency is recorded in
 `docs/neqsim_web_studio_execution_isolation.md`. At NeqSim master
 `001601cb105e6b64539e14d5568b90067630d67f`, the native
