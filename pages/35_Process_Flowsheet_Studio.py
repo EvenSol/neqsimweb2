@@ -6591,6 +6591,11 @@ with st.sidebar:
             key="flowsheet_start_new_case",
         )
 
+if pending_case_error:
+    # Keep the actionable import error and Studio navigation visible, but do not
+    # render stale engineering controls after a rejected cross-page case handoff.
+    st.stop()
+
 with st.expander("Model scope and assumptions", expanded=False):
     st.markdown(
         """
