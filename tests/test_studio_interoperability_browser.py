@@ -462,15 +462,23 @@ def _exercise_engineering_failure_recovery(
         state="visible",
         timeout=30_000,
     )
-    for button_name in (
+    case_filename, case_bytes = _download_bytes(
+        page,
         "Download case JSON",
+    )
+    workbook_filename, workbook_bytes = _download_bytes(
+        page,
         "Download engineering workbook",
+    )
+    if case_filename != "process_flowsheet_case.json" or not case_bytes:
+        raise AssertionError("Native recovery did not export its solved case JSON")
+    if (
+        workbook_filename != "process_flowsheet_engineering_workbook.xlsx"
+        or not workbook_bytes
     ):
-        page.get_by_role(
-            "button",
-            name=button_name,
-            exact=True,
-        ).wait_for(state="attached", timeout=30_000)
+        raise AssertionError(
+            "Native recovery did not export its engineering workbook"
+        )
 
     _click_button(page, "← Studio home")
     page.get_by_role(
@@ -504,6 +512,14 @@ def _exercise_engineering_failure_recovery(
         "retry_case_name": retry_case["name"],
         "retry_solver_status": "Solved",
         "native_neqsim_recovery": True,
+        "case_export": {
+            "filename": case_filename,
+            "bytes": len(case_bytes),
+        },
+        "workbook_export": {
+            "filename": workbook_filename,
+            "bytes": len(workbook_bytes),
+        },
         "returned_to_classic": True,
         "page_errors": page_errors,
     }
