@@ -424,12 +424,10 @@ def _exercise_engineering_failure_recovery(
         level=1,
     ).wait_for(state="visible", timeout=30_000)
 
-    retry_case = deepcopy(canonical_case)
-    retry_case["name"] = "Recovered native engineering case"
-    retry_payload = (
-        json.dumps(retry_case, ensure_ascii=False, indent=2) + "\n"
-    ).encode("utf-8")
-    _upload_case(page, retry_payload, "recovered-native-case.json")
+    retry_case_name = str(canonical_case.get("name", "")).strip()
+    if not retry_case_name:
+        raise AssertionError("Canonical recovery case has no name")
+    _click_button(page, "＋ New process case")
     _wait_for_flowsheet(page)
 
     last_solve_error: Exception | None = None
@@ -484,7 +482,7 @@ def _exercise_engineering_failure_recovery(
     _click_button(page, "← Studio home")
     page.get_by_role(
         "heading",
-        name=retry_case["name"],
+        name=retry_case_name,
         exact=True,
         level=3,
     ).wait_for(state="visible", timeout=30_000)
@@ -510,7 +508,7 @@ def _exercise_engineering_failure_recovery(
         "expected_error": expected_error,
         "failed_closed_before_execution": True,
         "solved_artifacts_published_after_failure": False,
-        "retry_case_name": retry_case["name"],
+        "retry_case_name": retry_case_name,
         "retry_solver_status": "Solved",
         "native_neqsim_recovery": True,
         "case_export": {
