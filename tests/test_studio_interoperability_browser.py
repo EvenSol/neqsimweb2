@@ -380,14 +380,24 @@ def _exercise_engineering_failure_recovery(
         "Connect every independent feed before solving; disconnected "
         f"inlet(s): {disconnected_inlet_id}."
     )
-    page.get_by_text(expected_error, exact=False).wait_for(
-        state="visible",
-        timeout=60_000,
+    try:
+        page.get_by_text("Solver: Failed", exact=False).wait_for(
+            state="visible",
+            timeout=60_000,
+        )
+    except Exception as error:
+        raise AssertionError(
+            "The disconnected case did not reach the failed solver state; "
+            + _page_diagnostic(page)
+        ) from error
+    visible_text = " ".join(
+        page.locator("body").inner_text(timeout=30_000).split()
     )
-    page.get_by_text("Solver: Failed", exact=False).wait_for(
-        state="visible",
-        timeout=30_000,
-    )
+    if expected_error not in visible_text:
+        raise AssertionError(
+            "The failed solver did not expose the disconnected inlet identity; "
+            + _page_diagnostic(page)
+        )
     if page.get_by_role(
         "button",
         name="Download case JSON",
