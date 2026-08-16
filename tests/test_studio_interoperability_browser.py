@@ -550,12 +550,6 @@ def run_interoperability_matrix() -> dict[str, object]:
             starter_payload, starter_details = _starter_case(browser)
             canonical_case = json.loads(starter_payload.decode("utf-8"))
 
-            engineering_failure_recovery = (
-                _exercise_engineering_failure_recovery(
-                    browser,
-                    canonical_case,
-                )
-            )
             supported = [
                 _exercise_supported_schema(
                     browser,
@@ -572,6 +566,12 @@ def run_interoperability_matrix() -> dict[str, object]:
                 )
                 for failure_case in _failure_cases(canonical_case)
             ]
+            engineering_failure_recovery = (
+                _exercise_engineering_failure_recovery(
+                    browser,
+                    canonical_case,
+                )
+            )
             browser.close()
 
         health_probes.append(_probe_application(process))
