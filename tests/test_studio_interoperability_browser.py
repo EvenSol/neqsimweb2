@@ -434,7 +434,13 @@ def _exercise_engineering_failure_recovery(
 
     last_solve_error: Exception | None = None
     for _ in range(3):
-        _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
+        try:
+            _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
+        except Exception as error:
+            raise AssertionError(
+                "The clean recovery case did not expose its native solve "
+                "control; " + _page_diagnostic(page)
+            ) from error
         try:
             page.get_by_text(
                 "The NeqSim flowsheet solved and is ready for review.",
