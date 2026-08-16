@@ -150,10 +150,12 @@ def _exercise_supported_schema(
         )
 
     _click_button(first_page, "← Studio home")
-    first_page.get_by_text(case_name, exact=True).wait_for(
-        state="visible",
-        timeout=30_000,
-    )
+    first_page.get_by_role(
+        "heading",
+        name=case_name,
+        exact=True,
+        level=3,
+    ).wait_for(state="visible", timeout=30_000)
     _click_button(first_page, "← NeqSim Classic")
     first_page.get_by_role(
         "heading",
@@ -162,10 +164,12 @@ def _exercise_supported_schema(
         level=1,
     ).wait_for(state="visible", timeout=30_000)
     _click_button(first_page, "Open NeqSim Studio")
-    first_page.get_by_text(case_name, exact=True).wait_for(
-        state="visible",
-        timeout=30_000,
-    )
+    first_page.get_by_role(
+        "heading",
+        name=case_name,
+        exact=True,
+        level=3,
+    ).wait_for(state="visible", timeout=30_000)
     _click_button(first_page, "Continue active case")
     _wait_for_flowsheet(first_page)
     continued_export, continued_details = _case_download(first_page)
