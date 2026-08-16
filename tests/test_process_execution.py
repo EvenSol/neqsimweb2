@@ -460,6 +460,15 @@ class StudioExecutionContractTest(unittest.TestCase):
 
         self.assertIn("STUDIO_SOLVE_TIMEOUT_MS = 180_000", source)
         self.assertIn(
+            "with native_execution_transaction(timeout_ms=180_000):",
+            source,
+        )
+        self.assertIn(
+            "with native_execution_transaction(\n"
+            "                timeout_ms=remaining_execution_budget_ms(),",
+            source,
+        )
+        self.assertIn(
             'f"{STUDIO_SOLVE_TIMEOUT_MS} ms total "',
             source,
         )

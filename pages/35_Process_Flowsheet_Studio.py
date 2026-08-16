@@ -74,24 +74,24 @@ globals().update(
 )
 
 _PROCESS_MODEL_SYMBOL_NAMES = ("ProcessRunTimeoutError",)
-globals().update(
-    import_local_symbols(
-        "process_chat.process_model",
-        _PROCESS_MODEL_SYMBOL_NAMES,
-        project_root=_PROJECT_ROOT,
-        force_reload=True,
-    )
-)
-
 _PROCESS_BUILDER_SYMBOL_NAMES = ("ProcessBuilder",)
-globals().update(
-    import_local_symbols(
-        "process_chat.process_builder",
-        _PROCESS_BUILDER_SYMBOL_NAMES,
-        project_root=_PROJECT_ROOT,
-        force_reload=True,
+with native_execution_transaction(timeout_ms=180_000):
+    globals().update(
+        import_local_symbols(
+            "process_chat.process_model",
+            _PROCESS_MODEL_SYMBOL_NAMES,
+            project_root=_PROJECT_ROOT,
+            force_reload=True,
+        )
     )
-)
+    globals().update(
+        import_local_symbols(
+            "process_chat.process_builder",
+            _PROCESS_BUILDER_SYMBOL_NAMES,
+            project_root=_PROJECT_ROOT,
+            force_reload=True,
+        )
+    )
 
 _SUBFLOWSHEET_SYMBOL_NAMES = (
     "subflowsheet_boundary_rows",
