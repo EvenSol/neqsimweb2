@@ -52,7 +52,7 @@ def _upload_case(page: Page, payload: bytes, filename: str) -> None:
     page.get_by_label(
         "Open portable case JSON",
         exact=True,
-    ).set_input_files(
+    ).locator('input[type="file"]').set_input_files(
         {
             "name": filename,
             "mimeType": "application/json",
