@@ -30,9 +30,16 @@ a separate Studio worker needs:
   `ProcessSystemState.toProcessSystem` still documents equipment reconstruction
   as future work and returns only a new named process container.
 
-Reusing any of those loaders in a parent process would silently execute a second
-calculation or reconstruct an incomplete model. Studio must not present that as
-the exact solved worker result.
+NeqSim master `2e818a27d1fdd90017de41129ccdcd708bf49920` adds
+identity-preserving transient checkpoints for base equipment state and fully
+configured `Recycle` units. That API restores selected mutable state into the
+same existing object graph and fails closed for uncovered equipment state. It
+does not reconstruct an arbitrary solved `ProcessSystem` or `ProcessModel`
+from a worker artifact, so it does not satisfy the no-rerun handoff requirement.
+
+Reusing the persistence loaders in a parent process would silently execute a
+second calculation or reconstruct an incomplete model. Studio must not present
+that as the exact solved worker result.
 
 ## Required worker protocol
 
