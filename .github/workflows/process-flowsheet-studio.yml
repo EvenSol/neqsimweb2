@@ -30,6 +30,7 @@ on:
       - "tests/profile_studio_workspace_browser.py"
       - "tests/test_studio_accessibility_browser.py"
       - "tests/test_studio_full_pilot_browser.py"
+      - "tests/test_studio_concurrent_solve_browser.py"
       - "tests/test_studio_interoperability_browser.py"
       - "tests/fixtures/studio_large_results_browser_app.py"
       - "tests/test_studio_case_interoperability.py"
@@ -45,6 +46,7 @@ on:
       - "tests/test_studio_warm_deployment.py"
       - "tests/test_subflowsheet_schema.py"
       - "docs/neqsim_web_studio_interoperability.md"
+      - "docs/neqsim_web_studio_execution_isolation.md"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
 
@@ -195,7 +197,7 @@ jobs:
 
   studio-full-pilot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PYTHONPATH: .
     steps:
@@ -209,13 +211,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install neqsim "streamlit>=1.30.0" pandas playwright xlsxwriter google-genai
           python -m playwright install --with-deps chromium
-      - name: Compile full-pilot and interoperability sources
+      - name: Compile full-pilot, concurrent-solve, and interoperability sources
         run: |
           python -m py_compile \
             tests/test_studio_full_pilot_browser.py \
+            tests/test_studio_concurrent_solve_browser.py \
             tests/test_studio_interoperability_browser.py
       - name: Exercise full Studio solve, export, and Process Chat pilot
         run: python tests/test_studio_full_pilot_browser.py
+      - name: Exercise independent concurrent Studio solves
+        run: python tests/test_studio_concurrent_solve_browser.py
       - name: Exercise Studio portable-case interoperability matrix
         run: python tests/test_studio_interoperability_browser.py
       - name: Retain full Studio pilot evidence
@@ -224,6 +229,13 @@ jobs:
         with:
           name: studio-full-pilot-browser
           path: studio-full-pilot-browser.json
+          if-no-files-found: error
+      - name: Retain concurrent Studio solve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-concurrent-solve-browser
+          path: studio-concurrent-solve-browser.json
           if-no-files-found: error
       - name: Retain Studio interoperability evidence
         if: always()
