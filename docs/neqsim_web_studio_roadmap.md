@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; full browser pilot merged, interoperability browser matrix in stack**.
+Status: **ongoing; interoperability merged, concurrent-solve recovery in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -395,29 +395,55 @@ solved-model Process Chat handoff without a provider call, and return to the sam
 solved flowsheet. It recorded zero page errors and four healthy root/application
 probes with a live process.
 
-Root branch
-`automation/web-studio-s9-interoperability-matrix-20260816` targets `main`
-from exact base `628a645afd8e9778f9ead1c9ac19272b267142a1`. It adds a retained
-real-Chromium portable-case matrix for schema v1-v4 migration to canonical v4,
-UTF-8 BOM and Unicode names, Classic/Studio continuation, fresh-session restart,
-and fail-closed malformed, non-UTF-8, oversized and future-schema inputs followed
-by supported retries. The explicit format, identity and restart boundary is
-recorded in `docs/neqsim_web_studio_interoperability.md`. This tranche changes
-no production calculation, case schema, saved-case behavior or Classic page.
-Exact-head `05ddb6c9a14c942f0da19b0ddc76e1d36331be08` passed hosted run
-#461: schemas v1-v4 canonicalized to v4 with Classic continuation and fresh-session
-reopen equality; malformed JSON, non-UTF-8, 1,000,001-byte and future-v5 inputs
-failed closed and each accepted a supported retry. Chromium 151 recorded zero page
-errors and four HTTP 200/`ok` probes with a live process. The tranche is
-**validated in stack**, not merged completion.
+PR #124 merged on `main` at
+`98b002c3b78c07dc5effd3792f078cf8a0e59ecc`. Exact head
+`982908b0b018eb4dd69a505ec2206c5e983c7363` passed hosted run #462,
+placing the real-Chromium portable-case matrix and interoperability contract on
+the default branch. Schemas v1-v4 canonicalized to v4 with UTF-8 BOM and Unicode
+preservation, Classic continuation and fresh-session reopen equality. Malformed
+JSON, non-UTF-8, 1,000,001-byte and future-v5 inputs failed closed and each
+accepted a supported retry. Chromium 151 recorded zero page errors and four HTTP
+200/`ok` probes with a live process.
 
-After the interoperability matrix is validated and merged, the next safe S9 work
-is the process-isolated worker contract already identified in the inherited
-UniSim-parity assessment. The current bounded thread waits must not be described
-as process isolation; implementation requires a fail-loud JVM worker termination,
-validated result/artifact handoff and solved-model rehydration contract that does
-not silently rerun an incomplete calculation. Pagination, virtualization or
-caching remains gated on a repeatable user-visible bottleneck.
+Child PR #125 was merged into the already-merged #124 branch and therefore did
+not advance `main`. Its first hosted run #463 passed the complete non-browser
+Studio gate, large-workspace profile, accessibility journey and inherited full
+native pilot. The new concurrent browser step exposed a Playwright/Streamlit
+observation race: the success element repeatedly resolved visible but detached
+during rerenders until a single stable wait timed out. No production calculation
+or existing regression failed.
+
+Recovery PR #126 targets current `main` from exact base
+`98b002c3b78c07dc5effd3792f078cf8a0e59ecc`. It records the exact
+process-isolation activation contract and the empirical stop boundary. Exploratory
+two-session Chromium runs dispatched distinct native starter solves before either
+completed and required independent JSON/workbook exports, solved Process Chat
+handoffs, peer Classic navigation, four healthy probes and zero page errors.
+Exact head `d8e7593a84ab06945501339fafe879c14409e5e3` passed run
+31954372322 with requests 0.813 seconds apart and solve completion in 8.968 and
+8.199 seconds. An unchanged documentation-only rerun then lost one session beyond
+180 seconds, and a bounded process-local serialization experiment also failed the
+repeatability gate. The experiment, browser gate and workflow wiring were removed;
+this PR retains documentation only and changes no production or Classic behavior.
+Reliable multi-session native execution remains **blocked** on the process worker
+and exact solved-state rehydration contract below.
+The exact isolated-worker dependency is recorded in
+`docs/neqsim_web_studio_execution_isolation.md`. At current NeqSim master
+`2e818a27d1fdd90017de41129ccdcd708bf49920`, the native
+`ProcessSystem.loadFromNeqsim` and `ProcessModel.loadFromNeqsim` paths rerun
+the deserialized model, while lifecycle JSON restoration still does not rebuild
+equipment. Merged PR #3056 adds identity-preserving transient checkpoints for
+base equipment state and configured `Recycle` units, but those checkpoints
+restore selected state into an existing object graph and fail closed for uncovered
+equipment; they do not reconstruct an arbitrary solved process from a worker
+artifact. Studio therefore still cannot rehydrate an exact solved worker result
+without a hidden second solve or incomplete process. Production subprocess
+activation remains blocked until a merged no-run exact-state or equivalent
+authoritative artifact contract is available in the deployed runtime. The current
+bounded thread waits must not be described as process isolation.
+
+Pagination, virtualization or caching remains gated on a repeatable user-visible
+bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.

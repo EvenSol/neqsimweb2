@@ -45,6 +45,7 @@ on:
       - "tests/test_studio_warm_deployment.py"
       - "tests/test_subflowsheet_schema.py"
       - "docs/neqsim_web_studio_interoperability.md"
+      - "docs/neqsim_web_studio_execution_isolation.md"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
 
