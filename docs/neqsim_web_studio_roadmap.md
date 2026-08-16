@@ -459,8 +459,9 @@ browser evidence exposed one application-boundary defect: a rejected pending cas
 reported its error but continued rendering stale engineering controls, delaying
 recovery. The flowsheet now retains the actionable error and Studio navigation,
 then stops that stale render before a clean case is opened. Calculations, schemas,
-persistence, Process Chat and Classic behavior remain unchanged. The tranche is
-**in stack; validation pending hosted CI**.
+persistence, Process Chat and Classic behavior remain unchanged. The tranche is **in stack; validated by hosted run
+31979260314** across the complete Studio gate, large-workspace browser profile,
+native solve/export/Process Chat pilot and interoperability matrix.
 
 Pagination, virtualization or caching remains gated on a repeatable user-visible
 bottleneck.
