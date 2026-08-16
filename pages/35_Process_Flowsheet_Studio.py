@@ -47,6 +47,9 @@ from studio.case_context import (  # noqa: E402
     get_active_case,
     set_active_case,
 )
+from studio.execution_guard import (  # noqa: E402
+    native_execution_transaction,
+)
 from theme import apply_theme, theme_toggle  # noqa: E402
 
 
@@ -70,10 +73,7 @@ globals().update(
     )
 )
 
-_PROCESS_MODEL_SYMBOL_NAMES = (
-    "ProcessRunTimeoutError",
-    "native_execution_transaction",
-)
+_PROCESS_MODEL_SYMBOL_NAMES = ("ProcessRunTimeoutError",)
 globals().update(
     import_local_symbols(
         "process_chat.process_model",

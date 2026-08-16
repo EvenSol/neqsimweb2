@@ -20,10 +20,9 @@ import os
 import queue
 import tempfile
 import threading
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 _MATERIAL_BOUNDARY_ZERO_FLOW_KG_HR = 0.01
@@ -388,28 +387,6 @@ class ProcessRunTimeoutError(TimeoutError):
 
 class ProcessExecutionError(RuntimeError):
     """Raised when native NeqSim execution does not complete successfully."""
-
-
-_NATIVE_EXECUTION_TRANSACTION_LOCK = threading.Lock()
-
-
-@contextmanager
-def native_execution_transaction(timeout_ms: int) -> Iterator[None]:
-    """Serialize in-process NeqSim transactions within one bounded wait."""
-    if timeout_ms <= 0:
-        raise ValueError("timeout_ms must be positive for transaction waits")
-    acquired = _NATIVE_EXECUTION_TRANSACTION_LOCK.acquire(
-        timeout=timeout_ms / 1000.0
-    )
-    if not acquired:
-        raise ProcessRunTimeoutError(
-            "Native NeqSim execution capacity remained busy for "
-            f"{int(timeout_ms)} ms; no process model was built."
-        )
-    try:
-        yield
-    finally:
-        _NATIVE_EXECUTION_TRANSACTION_LOCK.release()
 
 
 # ---------------------------------------------------------------------------

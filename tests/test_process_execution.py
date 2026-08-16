@@ -13,6 +13,9 @@ from process_chat.process_model import (
     NeqSimProcessModel,
     ProcessExecutionError,
     ProcessRunTimeoutError,
+)
+from studio.execution_guard import (
+    StudioExecutionBusyError,
     native_execution_transaction,
 )
 
@@ -330,7 +333,7 @@ class NativeExecutionTransactionTest(unittest.TestCase):
     def test_busy_transaction_wait_is_bounded(self):
         with native_execution_transaction(timeout_ms=1_000):
             with self.assertRaisesRegex(
-                ProcessRunTimeoutError,
+                StudioExecutionBusyError,
                 "capacity remained busy",
             ):
                 with native_execution_transaction(timeout_ms=10):
