@@ -80,39 +80,62 @@ def _start_solve(page: Page) -> float:
 def _wait_for_solves(
     sessions: tuple[tuple[Page, str, float], ...],
 ) -> tuple[float, ...]:
-    """Poll both pages so Streamlit rerenders cannot detach one stable wait."""
-    solved_at: list[float | None] = [None] * len(sessions)
+    """Poll both pages until stable solved state and exports are available."""
+    ready_at: list[float | None] = [None] * len(sessions)
+    success_seen = [False] * len(sessions)
     deadline = max(started for _, _, started in sessions) + 180.0
     while time.monotonic() < deadline:
         for index, (page, _, _) in enumerate(sessions):
-            if solved_at[index] is not None:
+            if ready_at[index] is not None:
                 continue
             if page.get_by_text(SOLVED_MESSAGE, exact=True).is_visible():
-                solved_at[index] = time.monotonic()
-        if all(value is not None for value in solved_at):
+                success_seen[index] = True
+            solver_solved = page.get_by_text(
+                "Solver: Solved",
+                exact=False,
+            ).first.is_visible()
+            case_export_ready = page.get_by_role(
+                "button",
+                name="Download case JSON",
+                exact=True,
+            ).is_visible()
+            workbook_export_ready = page.get_by_role(
+                "button",
+                name="Download engineering workbook",
+                exact=True,
+            ).is_visible()
+            if (
+                success_seen[index]
+                and solver_solved
+                and case_export_ready
+                and workbook_export_ready
+            ):
+                ready_at[index] = time.monotonic()
+        if all(value is not None for value in ready_at):
             break
         for page, _, _ in sessions:
             page.wait_for_timeout(100)
 
-    if any(value is None for value in solved_at):
+    if any(value is None for value in ready_at):
         missing = [
             f"{case_name}: {_page_diagnostic(page)}"
-            for (page, case_name, _), solved in zip(sessions, solved_at)
-            if solved is None
+            for (page, case_name, _), ready in zip(sessions, ready_at)
+            if ready is None
         ]
         raise TimeoutError(
-            "Concurrent Studio solves did not finish within 180 seconds: "
+            "Concurrent Studio solved workspaces were not export-ready within "
+            "180 seconds: "
             + " | ".join(missing)
         )
 
     durations: list[float] = []
-    for (page, case_name, started), solved in zip(sessions, solved_at):
+    for (page, case_name, started), ready in zip(sessions, ready_at):
         if page.get_by_label("Case name", exact=True).input_value() != case_name:
             raise AssertionError(
                 f"Solved session changed case identity for {case_name!r}"
             )
-        assert solved is not None
-        durations.append(solved - started)
+        assert ready is not None
+        durations.append(ready - started)
     return tuple(durations)
 
 
