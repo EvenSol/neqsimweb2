@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; session isolation merged, full browser pilot validated in stack**.
+Status: **ongoing; full browser pilot merged, interoperability browser matrix in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -385,25 +385,34 @@ PR #122 merged on `main` at
 transition recovery and session-isolated failure handling are now cumulative
 default-branch evidence.
 
-Root branch `automation/web-studio-s9-full-pilot-20260815` targets `main` from
-exact base `f0fb66b4a8d334b5d204cd05f61c2944f07aa74d`. It adds a retained real-browser
-pilot through Classic, Studio, the inherited starter-case native NeqSim solve,
-portable schema-v4 JSON and engineering-workbook downloads, the existing live
-solved-model Process Chat handoff, and return to the same solved flowsheet. Provider
-calls are deliberately excluded: the pilot proves bounded deterministic handoff
-without requiring secrets or presenting LLM output as engineering evidence.
-Exact-head `999aa6a84727cd446ae6b831ddc7e1ab256bf9f5` passed hosted run #455:
-Chromium 151 solved the six-unit/six-connection starter case, downloaded canonical
-schema-v4 JSON and a 21-sheet engineering workbook, exposed the same solved SRK
-case and live model overview in Process Chat without a provider call, returned to
-the solved flowsheet, recorded zero page errors, and kept four root/health probes
-HTTP 200/`ok` with a live process. The tranche is **validated in stack**, not
-merged completion.
+PR #123 merged on `main` at
+`628a645afd8e9778f9ead1c9ac19272b267142a1`. Exact-head
+`85f0337920c35e9ca8de34d806fb63970025e683` passed hosted run #456,
+placing the retained full Chromium pilot on the default branch. The pilot traverses
+Classic, Studio, the inherited starter-case native NeqSim solve, portable
+schema-v4 JSON and 21-sheet engineering-workbook downloads, the existing live
+solved-model Process Chat handoff without a provider call, and return to the same
+solved flowsheet. It recorded zero page errors and four healthy root/application
+probes with a live process.
 
-After this pilot is merged, the next safe S9 work is the stable
-migration/interoperability matrix and isolated-worker boundary already identified
-in the inherited UniSim-parity assessment. Pagination, virtualization or caching
-remains gated on a repeatable user-visible bottleneck.
+Root branch
+`automation/web-studio-s9-interoperability-matrix-20260816` targets `main`
+from exact base `628a645afd8e9778f9ead1c9ac19272b267142a1`. It adds a retained
+real-Chromium portable-case matrix for schema v1-v4 migration to canonical v4,
+UTF-8 BOM and Unicode names, Classic/Studio continuation, fresh-session restart,
+and fail-closed malformed, non-UTF-8, oversized and future-schema inputs followed
+by supported retries. The explicit format, identity and restart boundary is
+recorded in `docs/neqsim_web_studio_interoperability.md`. This tranche changes
+no production calculation, case schema, saved-case behavior or Classic page.
+It is **in stack with validation pending CI**, not merged completion.
+
+After the interoperability matrix is validated and merged, the next safe S9 work
+is the process-isolated worker contract already identified in the inherited
+UniSim-parity assessment. The current bounded thread waits must not be described
+as process isolation; implementation requires a fail-loud JVM worker termination,
+validated result/artifact handoff and solved-model rehydration contract that does
+not silently rerun an incomplete calculation. Pagination, virtualization or
+caching remains gated on a repeatable user-visible bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
