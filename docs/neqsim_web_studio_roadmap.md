@@ -428,11 +428,15 @@ this PR retains documentation only and changes no production or Classic behavior
 Reliable multi-session native execution remains **blocked** on the process worker
 and exact solved-state rehydration contract below.
 The exact isolated-worker dependency is recorded in
-`docs/neqsim_web_studio_execution_isolation.md`. At NeqSim master
-`001601cb105e6b64539e14d5568b90067630d67f`, the native
+`docs/neqsim_web_studio_execution_isolation.md`. At current NeqSim master
+`2e818a27d1fdd90017de41129ccdcd708bf49920`, the native
 `ProcessSystem.loadFromNeqsim` and `ProcessModel.loadFromNeqsim` paths rerun
 the deserialized model, while lifecycle JSON restoration still does not rebuild
-equipment. Studio therefore cannot rehydrate an exact solved worker artifact
+equipment. Merged PR #3056 adds identity-preserving transient checkpoints for
+base equipment state and configured `Recycle` units, but those checkpoints
+restore selected state into an existing object graph and fail closed for uncovered
+equipment; they do not reconstruct an arbitrary solved process from a worker
+artifact. Studio therefore still cannot rehydrate an exact solved worker result
 without a hidden second solve or incomplete process. Production subprocess
 activation remains blocked until a merged no-run exact-state or equivalent
 authoritative artifact contract is available in the deployed runtime. The current
