@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; full browser pilot merged, interoperability browser matrix in stack**.
+Status: **ongoing; full browser pilot merged, interoperability and concurrent-solve gates in stack**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -404,20 +404,37 @@ and fail-closed malformed, non-UTF-8, oversized and future-schema inputs followe
 by supported retries. The explicit format, identity and restart boundary is
 recorded in `docs/neqsim_web_studio_interoperability.md`. This tranche changes
 no production calculation, case schema, saved-case behavior or Classic page.
-Exact-head `05ddb6c9a14c942f0da19b0ddc76e1d36331be08` passed hosted run
-#461: schemas v1-v4 canonicalized to v4 with Classic continuation and fresh-session
+Exact-head `982908b0b018eb4dd69a505ec2206c5e983c7363` passed hosted run
+#462: schemas v1-v4 canonicalized to v4 with Classic continuation and fresh-session
 reopen equality; malformed JSON, non-UTF-8, 1,000,001-byte and future-v5 inputs
 failed closed and each accepted a supported retry. Chromium 151 recorded zero page
 errors and four HTTP 200/`ok` probes with a live process. The tranche is
 **validated in stack**, not merged completion.
 
-After the interoperability matrix is validated and merged, the next safe S9 work
-is the process-isolated worker contract already identified in the inherited
-UniSim-parity assessment. The current bounded thread waits must not be described
-as process isolation; implementation requires a fail-loud JVM worker termination,
-validated result/artifact handoff and solved-model rehydration contract that does
-not silently rerun an incomplete calculation. Pagination, virtualization or
-caching remains gated on a repeatable user-visible bottleneck.
+Child branch `automation/web-studio-s9-concurrent-solves-20260816` targets the
+root interoperability branch from exact validated base
+`982908b0b018eb4dd69a505ec2206c5e983c7363`. It adds a retained Chromium gate
+that dispatches distinct native starter-case solves in two simultaneously live
+Studio sessions before waiting for either completion. Each session must retain its
+own canonical case JSON, engineering workbook, solved Process Chat handoff and
+case name; one session then returns to Classic without changing the peer. Four
+HTTP/health probes, a live process and zero page errors remain mandatory. This is
+concurrent session evidence, not process-isolated JVM execution. Validation is
+**pending hosted CI**.
+
+The exact isolated-worker dependency is now recorded in
+`docs/neqsim_web_studio_execution_isolation.md`. At NeqSim master
+`001601cb105e6b64539e14d5568b90067630d67f`, the native
+`ProcessSystem.loadFromNeqsim` and `ProcessModel.loadFromNeqsim` paths rerun
+the deserialized model, while lifecycle JSON restoration still does not rebuild
+equipment. Studio therefore cannot rehydrate an exact solved worker artifact
+without a hidden second solve or incomplete process. Production subprocess
+activation remains blocked until a merged no-run exact-state or equivalent
+authoritative artifact contract is available in the deployed runtime. The current
+bounded thread waits must not be described as process isolation.
+
+Pagination, virtualization or caching remains gated on a repeatable user-visible
+bottleneck.
 Engineering Drawings can move into an interactive Studio adapter only after
 controlled drawing-set and artifact contracts are merged and the required NeqSim
 API is available in the web runtime.
