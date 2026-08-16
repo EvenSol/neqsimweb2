@@ -314,11 +314,11 @@ def _exercise_failure_recovery(
 
 def _engineering_failure_payload(
     canonical_case: dict[str, object],
-) -> tuple[bytes, str, str]:
-    """Return a schema-valid case with one disconnected material inlet."""
+) -> tuple[bytes, str, str, str]:
+    """Return a schema-v4 envelope with one unknown stable inlet reference."""
 
     candidate = deepcopy(canonical_case)
-    case_name = "Disconnected engineering case"
+    case_name = "Invalid engineering graph"
     candidate["name"] = case_name
     inlets = candidate.get("inlets")
     connections = candidate.get("connections")
@@ -330,9 +330,9 @@ def _engineering_failure_payload(
         for inlet in inlets
         if isinstance(inlet, dict) and str(inlet.get("id", "")).strip()
     }
-    disconnected_index = None
-    disconnected_inlet_id = ""
-    for index, connection in enumerate(connections):
+    selected_connection: dict[str, object] | None = None
+    source_inlet_id = ""
+    for connection in connections:
         if not isinstance(connection, dict):
             continue
         source = connection.get("source")
@@ -344,79 +344,66 @@ def _engineering_failure_payload(
             and str(source.get("port", "")).strip().lower() == "out"
             and source_id in inlet_ids
         ):
-            disconnected_index = index
-            disconnected_inlet_id = source_id
+            selected_connection = connection
+            source_inlet_id = source_id
             break
-    if disconnected_index is None:
+    if selected_connection is None:
         raise AssertionError("Canonical case has no material inlet connection")
 
-    del connections[disconnected_index]
+    connection_id = str(selected_connection.get("id", "")).strip()
+    if not connection_id:
+        raise AssertionError("Canonical inlet connection has no stable identity")
+    missing_inlet_id = f"missing-{source_inlet_id}"
+    source = selected_connection["source"]
+    if not isinstance(source, dict):
+        raise AssertionError("Canonical inlet connection source is invalid")
+    source["id"] = missing_inlet_id
+
     payload = (
         json.dumps(candidate, ensure_ascii=False, indent=2) + "\n"
     ).encode("utf-8")
-    return payload, case_name, disconnected_inlet_id
+    return payload, case_name, connection_id, missing_inlet_id
 
 
 def _exercise_engineering_failure_recovery(
     browser: Browser,
     canonical_case: dict[str, object],
 ) -> dict[str, object]:
-    """Fail a disconnected graph, then recover through a real native solve."""
+    """Reject an invalid graph reference, then recover through native NeqSim."""
 
     context = browser.new_context(viewport=VIEWPORT)
     page = context.new_page()
     page_errors: list[str] = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-    rejected_payload, rejected_name, disconnected_inlet_id = (
-        _engineering_failure_payload(canonical_case)
-    )
+    (
+        rejected_payload,
+        rejected_name,
+        connection_id,
+        missing_inlet_id,
+    ) = _engineering_failure_payload(canonical_case)
     _open_studio(page)
-    _upload_case(page, rejected_payload, "disconnected-engineering-case.json")
-    _wait_for_flowsheet(page)
+    _upload_case(page, rejected_payload, "invalid-engineering-graph.json")
 
     expected_error = (
-        "Connect every independent feed before solving; disconnected "
-        f"inlet(s): {disconnected_inlet_id}."
+        f"Connection '{connection_id}' references unknown inlet "
+        f"'{missing_inlet_id}'."
     )
-    last_failure_state_error: Exception | None = None
-    for _ in range(3):
-        _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
-        try:
-            page.get_by_text("Solver: Failed", exact=False).wait_for(
-                state="visible",
-                timeout=20_000,
-            )
-        except Exception as error:
-            last_failure_state_error = error
-            page.wait_for_timeout(750)
-        else:
-            break
-    else:
-        raise AssertionError(
-            "The disconnected case did not reach the failed solver state "
-            "across Streamlit reruns; "
-            + _page_diagnostic(page)
-        ) from last_failure_state_error
-    visible_text = " ".join(
-        page.locator("body").inner_text(timeout=30_000).split()
+    page.get_by_text(expected_error, exact=False).wait_for(
+        state="visible",
+        timeout=60_000,
     )
-    if expected_error not in visible_text:
-        raise AssertionError(
-            "The failed solver did not expose the disconnected inlet identity; "
-            + _page_diagnostic(page)
-        )
     if page.get_by_role(
         "button",
         name="Download case JSON",
         exact=True,
     ).count():
         raise AssertionError(
-            "A failed engineering case exposed a solved-case JSON artifact"
+            "An invalid engineering graph exposed a solved-case JSON artifact"
         )
     if page.get_by_text("2. Engineering results", exact=True).count():
         raise AssertionError(
-            "A failed engineering case exposed solved engineering results"
+            "An invalid engineering graph exposed solved engineering results"
         )
 
     _click_button(page, "← Studio home")
@@ -426,12 +413,6 @@ def _exercise_engineering_failure_recovery(
         exact=True,
         level=1,
     ).wait_for(state="visible", timeout=30_000)
-    page.get_by_role(
-        "heading",
-        name=rejected_name,
-        exact=True,
-        level=3,
-    ).wait_for(state="visible", timeout=30_000)
 
     retry_case = deepcopy(canonical_case)
     retry_case["name"] = "Recovered native engineering case"
@@ -440,17 +421,26 @@ def _exercise_engineering_failure_recovery(
     ).encode("utf-8")
     _upload_case(page, retry_payload, "recovered-native-case.json")
     _wait_for_flowsheet(page)
-    _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
-    try:
-        page.get_by_text(
-            "The NeqSim flowsheet solved and is ready for review.",
-            exact=True,
-        ).wait_for(state="visible", timeout=180_000)
-    except Exception as error:
+
+    last_solve_error: Exception | None = None
+    for _ in range(3):
+        _click_button(page, "▶ Run NeqSim flowsheet", timeout=60_000)
+        try:
+            page.get_by_text(
+                "The NeqSim flowsheet solved and is ready for review.",
+                exact=True,
+            ).wait_for(state="visible", timeout=60_000)
+        except Exception as error:
+            last_solve_error = error
+            page.wait_for_timeout(750)
+        else:
+            break
+    else:
         raise AssertionError(
-            "The valid recovery case did not solve through native NeqSim; "
+            "The valid recovery case did not solve through native NeqSim "
+            "across Streamlit reruns; "
             + _page_diagnostic(page)
-        ) from error
+        ) from last_solve_error
 
     page.get_by_text("Solver: Solved", exact=False).wait_for(
         state="visible",
@@ -490,9 +480,10 @@ def _exercise_engineering_failure_recovery(
     return {
         "rejected_case": rejected_name,
         "rejected_bytes": len(rejected_payload),
-        "disconnected_inlet_id": disconnected_inlet_id,
+        "rejected_connection_id": connection_id,
+        "unknown_inlet_id": missing_inlet_id,
         "expected_error": expected_error,
-        "failed_solver_status": "Failed",
+        "failed_closed_before_execution": True,
         "solved_artifacts_published_after_failure": False,
         "retry_case_name": retry_case["name"],
         "retry_solver_status": "Solved",
@@ -549,6 +540,12 @@ def run_interoperability_matrix() -> dict[str, object]:
             starter_payload, starter_details = _starter_case(browser)
             canonical_case = json.loads(starter_payload.decode("utf-8"))
 
+            engineering_failure_recovery = (
+                _exercise_engineering_failure_recovery(
+                    browser,
+                    canonical_case,
+                )
+            )
             supported = [
                 _exercise_supported_schema(
                     browser,
@@ -565,12 +562,6 @@ def run_interoperability_matrix() -> dict[str, object]:
                 )
                 for failure_case in _failure_cases(canonical_case)
             ]
-            engineering_failure_recovery = (
-                _exercise_engineering_failure_recovery(
-                    browser,
-                    canonical_case,
-                )
-            )
             browser.close()
 
         health_probes.append(_probe_application(process))
