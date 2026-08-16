@@ -453,10 +453,13 @@ stable material-connection identity references an unknown inlet. The existing
 engineering graph importer must report that exact connection and missing inlet ID,
 publish neither solved results nor solved-case artifacts, then accept a clean case
 in the same session, complete a real native NeqSim solve, restore JSON/workbook
-deliverables and return to Classic. This is test and roadmap
-evidence only: production calculations, UI, schemas, persistence, Process Chat and
-Classic behavior are unchanged. The tranche is **in stack; validation pending
-hosted CI**.
+deliverables and return to Classic. The browser evidence exposed one
+application-boundary defect: a rejected pending case reported its error but continued
+rendering stale engineering controls, delaying recovery. The flowsheet now retains
+the actionable error and Studio navigation, then stops that stale render before a
+clean case is opened. Calculations, schemas, persistence, Process Chat and Classic
+behavior remain unchanged. The tranche is **in stack; validation pending hosted
+CI**.
 
 Pagination, virtualization or caching remains gated on a repeatable user-visible
 bottleneck.
