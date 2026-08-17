@@ -195,7 +195,7 @@ def _select_results_view(
         control = page.get_by_role("radio", name=name, exact=True)
         try:
             control.wait_for(state="visible", timeout=30_000)
-            control.check()
+            control.check(force=True)
             for heading in expected_headings:
                 page.get_by_role(
                     "heading",
