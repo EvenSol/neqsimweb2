@@ -469,7 +469,7 @@ case-study projection. The journey continues through the existing live-model
 Process Chat handoff and returns to the same solved flowsheet. Results remains a
 read-only projection and records that no native rerun is executed. Classic pages,
 calculations, saved cases, schemas and production UI are unchanged. The tranche is
-**in stack; validation pending CI**.
+**in stack; validated by hosted run 32017853844**.
 
 Pagination, virtualization or caching remains gated on a repeatable user-visible
 bottleneck.
