@@ -1,4 +1,4 @@
-"""Run the full Classic-to-Studio solve, export, and Process Chat pilot."""
+"""Run the full Classic-to-Studio solve, results, export, and Process Chat pilot."""
 
 from __future__ import annotations
 
@@ -183,6 +183,156 @@ def _validate_workbook_export(filename: str, payload: bytes) -> dict[str, object
     }
 
 
+def _select_results_view(
+    page: Page,
+    name: str,
+    expected_headings: tuple[str, ...],
+) -> None:
+    """Select one results projection and require its rendered engineering evidence."""
+
+    last_error: Exception | None = None
+    for _ in range(3):
+        control = page.get_by_role("radio", name=name, exact=True)
+        try:
+            control.wait_for(state="visible", timeout=30_000)
+            control.check(force=True)
+            for heading in expected_headings:
+                page.get_by_role(
+                    "heading",
+                    name=heading,
+                    exact=False,
+                ).wait_for(state="visible", timeout=30_000)
+            return
+        except Exception as error:
+            last_error = error
+            page.wait_for_timeout(750)
+    raise AssertionError(
+        f"Results view {name!r} did not stabilize: {last_error}; "
+        + _page_diagnostic(page)
+    )
+
+
+def _exercise_solved_results(
+    page: Page,
+    case_name: str,
+) -> dict[str, object]:
+    """Traverse every solved Results projection without rerunning NeqSim."""
+
+    _click_button(page, "Open Equipment Design")
+    page.get_by_role(
+        "heading",
+        name="Engineering Results",
+        exact=True,
+        level=1,
+    ).wait_for(state="visible", timeout=60_000)
+    page.get_by_text(case_name, exact=False).first.wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+
+    equipment_default = page.get_by_role(
+        "radio",
+        name="Equipment & design",
+        exact=True,
+    )
+    equipment_default.wait_for(state="visible", timeout=30_000)
+    if not equipment_default.is_checked():
+        raise AssertionError(
+            "Equipment Design did not open its intended solved Results section"
+        )
+
+    views = (
+        ("Overview", ("Case basis", "Provenance")),
+        ("Streams", ("Solved streams",)),
+        (
+            "Equipment & design",
+            (
+                "Solved equipment",
+                "Operating versus design basis",
+                "Engineering constraints",
+            ),
+        ),
+        (
+            "Validation",
+            (
+                "Convergence",
+                "System energy balance",
+                "Material boundaries",
+                "Component balance",
+                "Per-unit closure",
+                "Audited energy transfers",
+            ),
+        ),
+        (
+            "Case studies",
+            (
+                "Solved session case comparison",
+                "Process Chat engineering studies",
+            ),
+        ),
+    )
+    for view, headings in views:
+        _select_results_view(page, view, headings)
+
+    metric_nodes = page.locator('[data-testid="stMetric"]')
+    metric_count = metric_nodes.count()
+    if metric_count != 5:
+        raise AssertionError(
+            f"Expected five solved-result metrics, found {metric_count}"
+        )
+    metrics = [
+        " ".join(metric_nodes.nth(index).inner_text().split())
+        for index in range(metric_count)
+    ]
+
+    _click_button(page, "← Studio home")
+    page.get_by_role(
+        "heading",
+        name="Engineering simulation, in one workspace.",
+        exact=True,
+        level=1,
+    ).wait_for(state="visible", timeout=60_000)
+    _click_button(page, "Open Engineering Studies")
+    page.get_by_role(
+        "heading",
+        name="Engineering Results",
+        exact=True,
+        level=1,
+    ).wait_for(state="visible", timeout=60_000)
+    studies_default = page.get_by_role(
+        "radio",
+        name="Case studies",
+        exact=True,
+    )
+    studies_default.wait_for(state="visible", timeout=30_000)
+    if not studies_default.is_checked():
+        raise AssertionError(
+            "Engineering Studies did not open its intended solved Results section"
+        )
+    page.get_by_role(
+        "heading",
+        name="Process Chat engineering studies",
+        exact=True,
+    ).wait_for(state="visible", timeout=30_000)
+
+    _click_button(page, "← Studio home")
+    page.get_by_role(
+        "heading",
+        name="Engineering simulation, in one workspace.",
+        exact=True,
+        level=1,
+    ).wait_for(state="visible", timeout=60_000)
+    return {
+        "case_name": case_name,
+        "views": [view for view, _ in views],
+        "metric_count": metric_count,
+        "metrics": metrics,
+        "equipment_destination_default": "Equipment & design",
+        "studies_destination_default": "Case studies",
+        "native_rerun_executed": False,
+    }
+
+
 def run_browser_pilot() -> dict[str, object]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(PROJECT_ROOT)
@@ -289,6 +439,10 @@ def run_browser_pilot() -> dict[str, object]:
                 exact=True,
                 level=1,
             ).wait_for(state="visible", timeout=60_000)
+            solved_results = _exercise_solved_results(
+                page,
+                str(case_export["case_name"]),
+            )
             _click_button(page, "Open Process Chat")
             try:
                 page.get_by_role(
@@ -353,12 +507,14 @@ def run_browser_pilot() -> dict[str, object]:
             "browser": browser_version,
             "journey": (
                 "Classic -> Studio -> starter solve -> portable JSON/workbook "
-                "exports -> Process Chat solved-model handoff -> flowsheet"
+                "exports -> solved Results and Studies -> Process Chat "
+                "solved-model handoff -> flowsheet"
             ),
             "viewport": VIEWPORT,
             "health_probes": health_probes,
             "case_export": case_export,
             "workbook_export": workbook_export,
+            "solved_results": solved_results,
             "process_chat": {
                 "case_banner": banner_text,
                 "live_model_overview": True,

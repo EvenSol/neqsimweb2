@@ -280,7 +280,7 @@ currently justifies pagination, virtualization or caching.
 
 ### S9 — Production hardening
 
-Status: **ongoing; engineering failure recovery in stack; execution isolation blocked**.
+Status: **ongoing; solved-results browser pilot in stack; execution isolation blocked**.
 
 Browser/end-to-end tests, accessibility, performance, safe execution isolation,
 migration/interoperability evidence and deployment validation are release gates.
@@ -445,23 +445,31 @@ activation remains blocked until a merged no-run exact-state or equivalent
 authoritative artifact contract is available in the deployed runtime. The current
 bounded thread waits must not be described as process isolation.
 
-Root PR #127 targets `main` from exact base
-`8f6a1c860e8f3115e3b2eda633944edd4b05acc4`. Its first test commit
-`025a02486be044450341c10f2b28bbf2ccb86cd9` extends the retained
-real-Chromium interoperability matrix with one schema-v4 envelope whose
-stable material-connection identity references an unknown inlet. The existing
-engineering graph importer must report that exact connection and missing inlet ID,
-publish neither solved results nor solved-case artifacts, then start a clean
-runnable case in the same session, round-trip its canonical schema-v4 draft and
-return to Classic. The unchanged full native browser pilot in the same hosted job
-continues to own solve, JSON/workbook export and Process Chat handoff evidence. The
-browser evidence exposed one application-boundary defect: a rejected pending case
-reported its error but continued rendering stale engineering controls, delaying
-recovery. The flowsheet now retains the actionable error and Studio navigation,
-then stops that stale render before a clean case is opened. Calculations, schemas,
-persistence, Process Chat and Classic behavior remain unchanged. The tranche is **in stack; validated by hosted run
-31979260314** across the complete Studio gate, large-workspace browser profile,
-native solve/export/Process Chat pilot and interoperability matrix.
+Root PR #127 merged on `main` at
+`2e0e853eb7f28047293477f06dac52e982a713a8`. Its retained real-Chromium
+interoperability matrix includes one schema-v4 envelope whose stable
+material-connection identity references an unknown inlet. The established
+engineering graph importer reports that exact connection and missing inlet ID,
+publishes neither solved results nor solved-case artifacts, then starts a clean
+runnable case in the same session, round-trips its canonical schema-v4 draft and
+returns to Classic. The flowsheet retains the actionable error and Studio
+navigation, then stops the stale rejected render before a clean case is opened.
+Exact-head hosted run 31979569756 passed the complete Studio gate,
+large-workspace browser profile, native solve/export/Process Chat pilot and
+interoperability matrix. Calculations, schemas, persistence, Process Chat and
+Classic behavior remain unchanged.
+
+Root PR #128 targets `main` from exact base
+`2e0e853eb7f28047293477f06dac52e982a713a8`. It extends the existing native
+Chromium pilot after the single authoritative NeqSim solve: the same exact solved
+case must open Equipment Design, traverse Overview, Streams, Equipment & design,
+Validation and Case studies, expose all five result metrics and each governed
+engineering-evidence section, then prove Engineering Studies opens the intended
+case-study projection. The journey continues through the existing live-model
+Process Chat handoff and returns to the same solved flowsheet. Results remains a
+read-only projection and records that no native rerun is executed. Classic pages,
+calculations, saved cases, schemas and production UI are unchanged. The tranche is
+**in stack; validated by hosted run 32017853844**.
 
 Pagination, virtualization or caching remains gated on a repeatable user-visible
 bottleneck.
