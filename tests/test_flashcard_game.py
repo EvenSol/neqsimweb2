@@ -5,6 +5,7 @@ import unittest
 
 from process_chat.flashcard_game import (
     MAX_DECK_CARDS,
+    MAX_DECK_JSON_BYTES,
     PHASE_EQUILIBRIUM_DECK,
     Flashcard,
     FlashcardDeck,
@@ -97,6 +98,29 @@ class FlashcardGameTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "JSON is too large"):
             deck_to_json(oversized_but_field_valid)
+
+    def test_import_rejects_deck_that_cannot_be_exported(self):
+        raw = {
+            "schema_version": 1,
+            "name": "Boundary",
+            "description": "",
+            "cards": [
+                {
+                    "card_id": f"{index:02d}" + "i" * 78,
+                    "topic": "T" * 80,
+                    "prompt": "Q" * 1_000,
+                    "answer": "A" * 2_000,
+                    "explanation": "E" * 2_000,
+                    "difficulty": "foundation",
+                }
+                for index in range(19)
+            ],
+        }
+        compact = json.dumps(raw, separators=(",", ":"), ensure_ascii=False)
+        self.assertLess(len(compact.encode("utf-8")), MAX_DECK_JSON_BYTES)
+
+        with self.assertRaisesRegex(ValueError, "JSON is too large"):
+            deck_from_json(compact)
 
     def test_score_counts_only_reviewed_known_cards(self):
         deck = PHASE_EQUILIBRIUM_DECK

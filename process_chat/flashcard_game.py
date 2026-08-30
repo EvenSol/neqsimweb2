@@ -172,7 +172,7 @@ def deck_from_json(payload: str | bytes) -> FlashcardDeck:
             raise ValueError(
                 f"Flashcard is missing required field: {exc.args[0]}."
             ) from exc
-    return validate_deck(
+    normalized = validate_deck(
         FlashcardDeck(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
@@ -180,6 +180,12 @@ def deck_from_json(payload: str | bytes) -> FlashcardDeck:
             schema_version=raw.get("schema_version"),
         )
     )
+    # The app always exposes imported decks through the canonical, indented
+    # download format.  A compact upload can fit the input bound while that
+    # normalized representation does not, so accept only round-trippable
+    # decks and keep import/export limits symmetric.
+    deck_to_json(normalized)
+    return normalized
 
 
 def score_flashcards(
