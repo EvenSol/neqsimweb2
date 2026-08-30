@@ -83,17 +83,6 @@ STUDIO_DESTINATIONS = (
         page="pages/10_Studio_Results.py",
     ),
     StudioDestination(
-        key="games",
-        title="NeqSim Games",
-        description=(
-            "Play native process and phase-equilibrium challenges, practice "
-            "thermodynamics with flashcards, or build a reusable learning deck."
-        ),
-        icon="🎮",
-        status=STATUS_AVAILABLE,
-        page="pages/34_NeqSim_Games.py",
-    ),
-    StudioDestination(
         key="dynamics",
         title="Dynamics & Controls",
         description=(
