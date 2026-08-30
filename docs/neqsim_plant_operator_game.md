@@ -6,6 +6,9 @@ how operating choices affect production, product conditions, energy use, and
 process constraints. It is not design certification or operator-procedure
 authorization.
 
+Plant Operator is launched from the shared **NeqSim Games** Studio destination,
+alongside Phase Equilibrium Lab and the reusable flashcard game.
+
 ## Challenge 1: The 10% Throughput Challenge
 
 The supplied process is a synthetic gas-rich feed at 50 bara and 30 °C. The

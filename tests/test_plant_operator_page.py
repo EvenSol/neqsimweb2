@@ -8,23 +8,19 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
-from studio.navigation import destination_by_key
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PAGE_PATH = PROJECT_ROOT / "pages" / "36_NeqSim_Plant_Operator.py"
+GAMES_PAGE_PATH = PROJECT_ROOT / "pages" / "34_NeqSim_Games.py"
 
 
 class PlantOperatorPageTest(unittest.TestCase):
     """Keep the game discoverable, bounded, accessible, and interoperable."""
 
-    def test_page_is_valid_python_and_navigation_target(self):
+    def test_page_is_valid_python_and_registered_in_games_hub(self):
         source = PAGE_PATH.read_text(encoding="utf-8")
         ast.parse(source)
-
-        destination = destination_by_key("plant_operator")
-        self.assertTrue(destination.available)
-        self.assertEqual(destination.page, "pages/36_NeqSim_Plant_Operator.py")
+        games_source = GAMES_PAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn("pages/36_NeqSim_Plant_Operator.py", games_source)
 
     def test_page_exposes_primary_game_flow_and_native_evidence(self):
         source = PAGE_PATH.read_text(encoding="utf-8")
@@ -34,6 +30,7 @@ class PlantOperatorPageTest(unittest.TestCase):
         self.assertIn("Native validation", source)
         self.assertIn("Download reproducible challenge JSON", source)
         self.assertIn("Analyze solved attempt in Process Chat", source)
+        self.assertIn('st.switch_page("pages/34_NeqSim_Games.py")', source)
         self.assertIn('role="img"', source)
         self.assertIn('aria-label="Mission constraints"', source)
         self.assertIn("@media (max-width: 600px)", source)

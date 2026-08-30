@@ -72,22 +72,31 @@ Streamlit reruns while the last trustworthy result stays hidden.
 The current UniSim-parity assessment and production-readiness gaps are tracked
 in [docs/process_flowsheet_unisim_parity.md](docs/process_flowsheet_unisim_parity.md).
 
-## NeqSim Plant Operator
+## NeqSim Games
 
-**NeqSim Plant Operator** is a playable Studio workflow backed by native NeqSim
-process calculations. The first scenario, **The 10% Throughput Challenge**,
-starts from a synthetic 100,000 kg/hr gas-compression case. The player changes
-feed rate, interstage pressure, export pressure, intercooling, and export
-cooling to reach at least 110,000 kg/hr without violating the published
-product, power, temperature, cooling, or conservation limits.
+**NeqSim Games** is the shared Studio menu for native calculation challenges
+and reusable flashcard games.
 
-The game score uses only solved NeqSim evidence. It reports every pass/fail
-criterion, mass and energy closure, native solver constraints, and the exact
-process inputs. A successful attempt can be downloaded as reproducible JSON or
-passed directly to Process Chat for deterministic what-if analysis. Build,
-solve, and evidence extraction share one 180-second execution budget; partial
-or timed-out models are not published as results.
+**Plant Operator** is backed by native NeqSim process calculations. Its first
+scenario, **The 10% Throughput Challenge**, starts from a synthetic 100,000
+kg/hr gas-compression case. The player changes feed rate, interstage pressure,
+export pressure, intercooling, and export cooling to reach at least 110,000
+kg/hr without violating the published product, power, temperature, cooling, or
+conservation limits. Build, solve, and evidence extraction share one
+180-second execution budget; partial or timed-out models are not published.
+
+**Phase Equilibrium Lab** runs a bounded native SRK TP flash for a fixed rich
+gas. The player searches temperature and pressure for a narrow retrograde
+window defined by phase split, gas density, gas Z-factor, liquid density,
+liquid viscosity, and phase-fraction closure. The result includes gas and
+liquid compositions, component K-values, mixture properties, and downloadable
+evidence.
+
+The Games hub also provides a built-in phase-equilibrium and fluid-properties
+flashcard deck. Users can author their own cards, play the custom deck, track
+session mastery, and import or export a bounded versioned JSON deck.
 
 See [docs/neqsim_plant_operator_game.md](docs/neqsim_plant_operator_game.md)
-for the scenario contract, score definition, validation scope, and current
-limitations.
+for the process scenario contract. See
+[docs/neqsim_games.md](docs/neqsim_games.md) for the shared menu, phase-game
+targets, native evidence, flashcard schema, and validation boundaries.
