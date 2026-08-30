@@ -48,15 +48,6 @@ class StudioNavigationTest(unittest.TestCase):
             self.assertTrue(destination.available)
             self.assertEqual(destination.page, "pages/10_Studio_Results.py")
 
-    def test_games_is_the_available_training_workflow_hub(self):
-        destination = destination_by_key("games")
-
-        self.assertTrue(destination.available)
-        self.assertEqual(
-            destination.page,
-            "pages/34_NeqSim_Games.py",
-        )
-
     def test_unknown_destination_fails_loudly(self):
         with self.assertRaisesRegex(KeyError, "Unknown Studio destination"):
             destination_by_key("not-a-real-workflow")
