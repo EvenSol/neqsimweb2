@@ -1,8 +1,10 @@
 """Source-level regression tests for the Plant Operator Streamlit page."""
 
 import ast
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -64,6 +66,35 @@ class PlantOperatorPageTest(unittest.TestCase):
         self.assertIn("timeout_ms=CHALLENGE_TIMEOUT_MS", source)
         self.assertIn("last_run.controls == current_controls", source)
         self.assertIn("native model was discarded", source)
+        self.assertIn("_existing_java_tool_options", source)
+        self.assertIn("_existing_java_tokens", source)
+        self.assertIn("_missing_jvm_opens", source)
+        self.assertIn("option not in _existing_java_tokens", source)
+
+    def test_page_reconciles_partial_jvm_opens_without_dropping_options(self):
+        existing = (
+            "--enable-native-access=ALL-UNNAMED "
+            "--add-opens=java.base/java.net=ALL-UNNAMED "
+            "--add-opens=java.base/java.util=ALL-UNNAMED"
+        )
+        required = (
+            "--add-opens=java.base/java.util=ALL-UNNAMED",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+            "--add-opens=java.base/java.io=ALL-UNNAMED",
+        )
+
+        with patch.dict(os.environ, {"JAVA_TOOL_OPTIONS": existing}):
+            app = AppTest.from_file(str(PAGE_PATH)).run(timeout=30)
+            options = os.environ["JAVA_TOOL_OPTIONS"].split()
+
+            if app.exception:
+                details = "\n".join(str(item.value) for item in app.exception)
+                self.fail(f"Plant Operator page raised exceptions:\n{details}")
+            self.assertIn("--enable-native-access=ALL-UNNAMED", options)
+            self.assertIn("--add-opens=java.base/java.net=ALL-UNNAMED", options)
+            for required_option in required:
+                self.assertEqual(options.count(required_option), 1)
 
 
 if __name__ == "__main__":

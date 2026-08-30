@@ -11,13 +11,22 @@ import streamlit as st
 
 
 _JVM_OPENS = (
-    "--add-opens=java.base/java.util=ALL-UNNAMED "
-    "--add-opens=java.base/java.lang=ALL-UNNAMED "
-    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
-    "--add-opens=java.base/java.io=ALL-UNNAMED"
+    "--add-opens=java.base/java.util=ALL-UNNAMED",
+    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+    "--add-opens=java.base/java.io=ALL-UNNAMED",
 )
-if "add-opens" not in os.environ.get("JAVA_TOOL_OPTIONS", ""):
-    os.environ["JAVA_TOOL_OPTIONS"] = _JVM_OPENS
+_existing_java_tool_options = os.environ.get("JAVA_TOOL_OPTIONS", "").strip()
+_existing_java_tokens = set(_existing_java_tool_options.split())
+_missing_jvm_opens = tuple(
+    option for option in _JVM_OPENS if option not in _existing_java_tokens
+)
+if _missing_jvm_opens:
+    os.environ["JAVA_TOOL_OPTIONS"] = " ".join(
+        part
+        for part in (_existing_java_tool_options, *_missing_jvm_opens)
+        if part
+    )
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
@@ -293,8 +302,8 @@ st.markdown(
 <section class="mission-card" aria-label="Mission constraints">
     <strong>Win condition:</strong> achieve at least 110,000 kg/hr and 128 bara,
     keep export gas at or below 45 °C, compressor discharges at or below 120 °C,
-    compression below 4.5 MW, specific energy below 41 kWh/tonne, cooling below
-    7 MW, and pass the native mass, energy, and solver checks.
+    compression below 4.2 MW, specific energy below 41 kWh/tonne, cooling below
+    5.5 MW, and pass the native mass, energy, and solver checks.
 </section>
 """,
     unsafe_allow_html=True,

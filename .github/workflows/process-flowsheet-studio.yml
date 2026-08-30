@@ -8,6 +8,7 @@ on:
       - "pages/10_Studio_Results.py"
       - "pages/25_Pipeline.py"
       - "pages/35_Process_Flowsheet_Studio.py"
+      - "pages/36_NeqSim_Plant_Operator.py"
       - "pages/90_Process_Chat.py"
       - "pipeline_hydraulics.py"
       - "studio/**"
@@ -18,7 +19,10 @@ on:
       - "process_chat/solver_diagnostics.py"
       - "process_chat/subflowsheet_schema.py"
       - "process_chat/process_model.py"
+      - "process_chat/plant_operator_game.py"
       - "process_chat/studio_context.py"
+      - "tests/test_plant_operator_game.py"
+      - "tests/test_plant_operator_page.py"
       - "tests/test_process_chat_studio_handoff.py"
       - "tests/test_process_chat_studio_context.py"
       - "tests/test_studio_navigation.py"
@@ -46,6 +50,7 @@ on:
       - "tests/test_subflowsheet_schema.py"
       - "docs/neqsim_web_studio_interoperability.md"
       - "docs/neqsim_web_studio_execution_isolation.md"
+      - "docs/neqsim_plant_operator_game.md"
       - ".github/workflows/process-flowsheet-studio.yml"
   workflow_dispatch:
 
@@ -76,6 +81,7 @@ jobs:
             pages/10_Studio_Results.py \
             pages/25_Pipeline.py \
             pages/35_Process_Flowsheet_Studio.py \
+            pages/36_NeqSim_Plant_Operator.py \
             pages/90_Process_Chat.py \
             pipeline_hydraulics.py \
             studio/case_context.py \
@@ -89,7 +95,10 @@ jobs:
             process_chat/solver_diagnostics.py \
             process_chat/subflowsheet_schema.py \
             process_chat/process_model.py \
+            process_chat/plant_operator_game.py \
             process_chat/studio_context.py \
+            tests/test_plant_operator_game.py \
+            tests/test_plant_operator_page.py \
             tests/test_process_chat_studio_handoff.py \
             tests/test_process_chat_studio_context.py \
             tests/test_studio_case_context.py \
@@ -113,6 +122,10 @@ jobs:
             tests/test_subflowsheet_schema.py
       - name: Run Studio workspace navigation regressions
         run: python tests/test_studio_navigation.py -v
+      - name: Run Plant Operator regressions
+        run: |
+          python tests/test_plant_operator_game.py -v
+          python tests/test_plant_operator_page.py -v
       - name: Run shared Studio case lifecycle regressions
         run: python tests/test_studio_case_context.py -v
       - name: Run Studio case migration interoperability regressions

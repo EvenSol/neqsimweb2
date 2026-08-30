@@ -23,9 +23,9 @@ TARGET_FLOW_KG_HR = 110_000.0
 MIN_EXPORT_PRESSURE_BARA = 128.0
 MAX_EXPORT_TEMPERATURE_C = 45.0
 MAX_COMPRESSOR_DISCHARGE_TEMPERATURE_C = 120.0
-MAX_TOTAL_POWER_KW = 4_500.0
+MAX_TOTAL_POWER_KW = 4_200.0
 MAX_SPECIFIC_POWER_KWH_PER_TONNE = 41.0
-MAX_COOLING_DUTY_KW = 7_000.0
+MAX_COOLING_DUTY_KW = 5_500.0
 MAX_BALANCE_ERROR_PCT = 0.10
 CHALLENGE_TIMEOUT_MS = 180_000
 
@@ -290,7 +290,7 @@ def collect_evidence(
     native_violations = tuple(
         constraint.name
         for constraint in result.constraints
-        if str(constraint.status).upper() == "VIOLATION"
+        if str(constraint.status).strip().upper() not in {"OK", "WARN"}
         and constraint.name not in {"mass_balance", "energy_balance"}
     )
     return ChallengeEvidence(
@@ -357,9 +357,9 @@ def assess_challenge(evidence: ChallengeEvidence) -> ChallengeAssessment:
         ),
         ChallengeCheck(
             "Compression power",
-            evidence.total_power_kw <= MAX_TOTAL_POWER_KW,
-            f"{evidence.total_power_kw:,.0f} kW",
-            f"at most {MAX_TOTAL_POWER_KW:,.0f} kW",
+            evidence.total_power_kw < MAX_TOTAL_POWER_KW,
+            f"{evidence.total_power_kw:,.2f} kW",
+            f"less than {MAX_TOTAL_POWER_KW:,.0f} kW",
         ),
         ChallengeCheck(
             "Specific compression energy",
@@ -370,9 +370,9 @@ def assess_challenge(evidence: ChallengeEvidence) -> ChallengeAssessment:
         ),
         ChallengeCheck(
             "Cooling-system load",
-            evidence.total_cooling_duty_kw <= MAX_COOLING_DUTY_KW,
-            f"{evidence.total_cooling_duty_kw:,.0f} kW",
-            f"at most {MAX_COOLING_DUTY_KW:,.0f} kW",
+            evidence.total_cooling_duty_kw < MAX_COOLING_DUTY_KW,
+            f"{evidence.total_cooling_duty_kw:,.2f} kW",
+            f"less than {MAX_COOLING_DUTY_KW:,.0f} kW",
         ),
         ChallengeCheck(
             "Mass balance",
@@ -390,11 +390,11 @@ def assess_challenge(evidence: ChallengeEvidence) -> ChallengeAssessment:
             "Native NeqSim checks",
             not evidence.native_violations,
             (
-                "No violations"
+                "No failed or unavailable checks"
                 if not evidence.native_violations
                 else ", ".join(evidence.native_violations)
             ),
-            "no native constraint violations",
+            "no failed or unavailable native constraints",
         ),
     )
 
@@ -425,7 +425,7 @@ def assess_challenge(evidence: ChallengeEvidence) -> ChallengeAssessment:
     )
     cooling_points = _bounded_score(
         evidence.total_cooling_duty_kw,
-        best=6_000.0,
+        best=5_400.0,
         worst=MAX_COOLING_DUTY_KW,
         points=50.0,
     )
@@ -515,9 +515,19 @@ def run_challenge(
 ) -> ChallengeRun:
     """Build, solve, validate, and score one strategy within one time budget."""
     controls = validate_controls(controls)
-    if isinstance(timeout_ms, bool) or int(timeout_ms) <= 0:
+    if isinstance(timeout_ms, bool):
         raise ValueError("Challenge timeout must be a positive integer.")
-    timeout_ms = int(timeout_ms)
+    try:
+        numeric_timeout_ms = float(timeout_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Challenge timeout must be a positive integer.") from exc
+    if (
+        not math.isfinite(numeric_timeout_ms)
+        or not numeric_timeout_ms.is_integer()
+        or numeric_timeout_ms <= 0
+    ):
+        raise ValueError("Challenge timeout must be a positive integer.")
+    timeout_ms = int(numeric_timeout_ms)
     started = perf_counter()
     deadline = started + timeout_ms / 1000.0
 

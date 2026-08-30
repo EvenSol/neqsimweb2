@@ -34,12 +34,12 @@ One attempt wins only when every check passes:
 | Export pressure | at least 128 bara |
 | Export temperature | at most 45 °C |
 | Maximum compressor discharge temperature | at most 120 °C |
-| Total compressor power | at most 4,500 kW |
+| Total compressor power | less than 4,200 kW |
 | Specific compression energy | at most 41 kWh/tonne |
-| Total cooling duty | at most 7,000 kW |
+| Total cooling duty | less than 5,500 kW |
 | System mass-balance error | at most 0.10% |
 | System energy-balance error | at most 0.10% |
-| Other native NeqSim constraints | no violations |
+| Other native NeqSim constraints | no failed or unavailable checks |
 
 All values are extracted after the native NeqSim process has converged. The
 game does not convert a missing, failed, or unavailable conservation result
