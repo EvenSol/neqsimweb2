@@ -1,6 +1,7 @@
 """Unit tests for the NeqSim Plant Operator challenge contract."""
 
 import math
+from types import SimpleNamespace
 import unittest
 
 from process_chat.plant_operator_game import (
@@ -9,6 +10,8 @@ from process_chat.plant_operator_game import (
     TARGET_FLOW_KG_HR,
     assess_challenge,
     build_challenge_spec,
+    collect_evidence,
+    run_challenge,
     validate_controls,
 )
 
@@ -59,6 +62,60 @@ class PlantOperatorGameTest(unittest.TestCase):
             validate_controls(ChallengeControls(stage_1_pressure_bara=140.0))
         with self.assertRaisesRegex(ValueError, "Export temperature must be between"):
             validate_controls(ChallengeControls(export_temperature_c=80.0))
+
+    def test_rejects_non_convertible_timeout_with_public_value_error(self):
+        for timeout_ms in (None, "abc", True, 0, -1):
+            with self.subTest(timeout_ms=timeout_ms):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Challenge timeout must be a positive integer",
+                ):
+                    run_challenge(ChallengeControls(), timeout_ms=timeout_ms)
+
+    def test_unknown_native_validation_status_blocks_a_win(self):
+        class FakeOutlet:
+            def getTemperature(self, _unit):
+                return 40.0
+
+            def getPressure(self, _unit):
+                return 130.0
+
+        class FakeUnit:
+            def getOutletStream(self):
+                return FakeOutlet()
+
+        class FakeModel:
+            def get_unit(self, _name):
+                return FakeUnit()
+
+        result = SimpleNamespace(
+            kpis={
+                "total_power_kW": SimpleNamespace(value=4_300.0),
+                "total_duty_kW": SimpleNamespace(value=6_500.0),
+                "mass_balance_pct": SimpleNamespace(value=0.001),
+                "energy_balance_pct": SimpleNamespace(value=0.002),
+            },
+            constraints=(
+                SimpleNamespace(name="unit_balance_coverage", status="UNKNOWN"),
+                SimpleNamespace(name="execution_quality", status="WARN"),
+            ),
+        )
+
+        evidence = collect_evidence(
+            ChallengeControls(feed_flow_kg_hr=TARGET_FLOW_KG_HR),
+            FakeModel(),
+            result,
+        )
+        assessment = assess_challenge(evidence)
+
+        self.assertEqual(evidence.native_violations, ("unit_balance_coverage",))
+        self.assertFalse(assessment.won)
+        native_check = next(
+            check
+            for check in assessment.checks
+            if check.name == "Native NeqSim checks"
+        )
+        self.assertFalse(native_check.passed)
 
     def test_winning_evidence_requires_every_engineering_check(self):
         evidence = ChallengeEvidence(

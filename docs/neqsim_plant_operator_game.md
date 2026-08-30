@@ -39,7 +39,7 @@ One attempt wins only when every check passes:
 | Total cooling duty | at most 7,000 kW |
 | System mass-balance error | at most 0.10% |
 | System energy-balance error | at most 0.10% |
-| Other native NeqSim constraints | no violations |
+| Other native NeqSim constraints | no failed or unavailable checks |
 
 All values are extracted after the native NeqSim process has converged. The
 game does not convert a missing, failed, or unavailable conservation result

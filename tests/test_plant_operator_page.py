@@ -64,6 +64,11 @@ class PlantOperatorPageTest(unittest.TestCase):
         self.assertIn("timeout_ms=CHALLENGE_TIMEOUT_MS", source)
         self.assertIn("last_run.controls == current_controls", source)
         self.assertIn("native model was discarded", source)
+        self.assertIn("_existing_java_tool_options", source)
+        self.assertIn(
+            'f"{_existing_java_tool_options} {_JVM_OPENS}".strip()',
+            source,
+        )
 
 
 if __name__ == "__main__":

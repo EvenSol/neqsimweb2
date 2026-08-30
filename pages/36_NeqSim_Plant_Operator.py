@@ -16,8 +16,11 @@ _JVM_OPENS = (
     "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
     "--add-opens=java.base/java.io=ALL-UNNAMED"
 )
-if "add-opens" not in os.environ.get("JAVA_TOOL_OPTIONS", ""):
-    os.environ["JAVA_TOOL_OPTIONS"] = _JVM_OPENS
+_existing_java_tool_options = os.environ.get("JAVA_TOOL_OPTIONS", "").strip()
+if "add-opens" not in _existing_java_tool_options:
+    os.environ["JAVA_TOOL_OPTIONS"] = (
+        f"{_existing_java_tool_options} {_JVM_OPENS}".strip()
+    )
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:

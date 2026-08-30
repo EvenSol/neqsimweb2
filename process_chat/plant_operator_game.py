@@ -290,7 +290,7 @@ def collect_evidence(
     native_violations = tuple(
         constraint.name
         for constraint in result.constraints
-        if str(constraint.status).upper() == "VIOLATION"
+        if str(constraint.status).strip().upper() not in {"OK", "WARN"}
         and constraint.name not in {"mass_balance", "energy_balance"}
     )
     return ChallengeEvidence(
@@ -390,11 +390,11 @@ def assess_challenge(evidence: ChallengeEvidence) -> ChallengeAssessment:
             "Native NeqSim checks",
             not evidence.native_violations,
             (
-                "No violations"
+                "All native checks passed"
                 if not evidence.native_violations
                 else ", ".join(evidence.native_violations)
             ),
-            "no native constraint violations",
+            "no failed or unavailable native constraints",
         ),
     )
 
@@ -515,9 +515,14 @@ def run_challenge(
 ) -> ChallengeRun:
     """Build, solve, validate, and score one strategy within one time budget."""
     controls = validate_controls(controls)
-    if isinstance(timeout_ms, bool) or int(timeout_ms) <= 0:
+    if isinstance(timeout_ms, bool):
         raise ValueError("Challenge timeout must be a positive integer.")
-    timeout_ms = int(timeout_ms)
+    try:
+        timeout_ms = int(timeout_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Challenge timeout must be a positive integer.") from exc
+    if timeout_ms <= 0:
+        raise ValueError("Challenge timeout must be a positive integer.")
     started = perf_counter()
     deadline = started + timeout_ms / 1000.0
 
