@@ -6,7 +6,7 @@ import ast
 import unittest
 import threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from process_chat.process_builder import ProcessBuilder, _execution_deadline
 from process_chat.process_model import (
@@ -401,6 +401,93 @@ class ProcessRunFailureTest(unittest.TestCase):
 
         self.assertEqual(run_process.call_args.kwargs["timeout_ms"], 900)
         self.assertEqual(close_mixer.call_args.kwargs["timeout_ms"], 599)
+
+
+class ProcessModelLoadingTest(unittest.TestCase):
+    """Preserve native NeqSim deserialization before compatibility fallbacks."""
+
+    @staticmethod
+    def _archive_context(*, members=(), xml=b""):
+        archive = MagicMock()
+        archive.namelist.return_value = list(members)
+        archive.read.return_value = xml
+        archive_context = MagicMock()
+        archive_context.__enter__.return_value = archive
+        return archive_context
+
+    def test_native_archive_loader_precedes_reflection_fallback(self):
+        native_process = object()
+        archive_context = self._archive_context()
+
+        with (
+            patch("builtins.open", mock_open(read_data=b"native archive")),
+            patch("zipfile.is_zipfile", return_value=True),
+            patch("zipfile.ZipFile", return_value=archive_context),
+            patch(
+                "neqsim.open_neqsim",
+                return_value=native_process,
+            ) as native_loader,
+            patch.object(
+                NeqSimProcessModel,
+                "_deserialize_xml_string",
+            ) as reflection_loader,
+            patch.object(
+                NeqSimProcessModel,
+                "_run_until_converged",
+                return_value=True,
+            ),
+            patch.object(
+                NeqSimProcessModel,
+                "__init__",
+                return_value=None,
+            ) as initialize_model,
+        ):
+            model = NeqSimProcessModel.from_file("saved-process.neqsim")
+
+        self.assertIsInstance(model, NeqSimProcessModel)
+        native_loader.assert_called_once_with("saved-process.neqsim")
+        reflection_loader.assert_not_called()
+        self.assertIs(
+            initialize_model.call_args.args[0],
+            native_process,
+        )
+
+    def test_reflection_loader_remains_native_failure_fallback(self):
+        compatibility_process = object()
+        archive_context = self._archive_context(
+            members=("saved-process.xml",),
+            xml=b"<saved-process />",
+        )
+
+        with (
+            patch("builtins.open", mock_open(read_data=b"native archive")),
+            patch("zipfile.is_zipfile", return_value=True),
+            patch("zipfile.ZipFile", return_value=archive_context),
+            patch("neqsim.open_neqsim", return_value=None),
+            patch.object(
+                NeqSimProcessModel,
+                "_deserialize_xml_string",
+                return_value=compatibility_process,
+            ) as reflection_loader,
+            patch.object(
+                NeqSimProcessModel,
+                "_run_until_converged",
+                return_value=True,
+            ),
+            patch.object(
+                NeqSimProcessModel,
+                "__init__",
+                return_value=None,
+            ) as initialize_model,
+        ):
+            model = NeqSimProcessModel.from_file("saved-process.neqsim")
+
+        self.assertIsInstance(model, NeqSimProcessModel)
+        reflection_loader.assert_called_once_with("<saved-process />")
+        self.assertIs(
+            initialize_model.call_args.args[0],
+            compatibility_process,
+        )
 
 
 class StudioExecutionContractTest(unittest.TestCase):

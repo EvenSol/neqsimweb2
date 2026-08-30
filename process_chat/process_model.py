@@ -757,10 +757,21 @@ class NeqSimProcessModel:
         errors_seen: list = []  # collect errors for diagnostics
 
         if ext in (".neqsim", ".zip") or ext not in (".xml",):
-            # Try our own ZIP XML extraction first — it uses
-            # ignoreUnknownElements() so version-mismatched fields
-            # (like tagName) are silently skipped without noisy Java logs.
-            if is_zip:
+            # Prefer NeqSim's native reader. Its SerializableConverter runs
+            # class-specific readObject hooks that rebuild transient state
+            # such as SystemThermo.phaseArray. The reflection fallback below
+            # deliberately bypasses those hooks and must therefore only be
+            # used when the native reader cannot load a version-mismatched
+            # archive.
+            try:
+                loaded = neqsim.open_neqsim(filepath)
+            except Exception as e:
+                errors_seen.append(f"open_neqsim: {e}")
+                loaded = None
+
+            # Compatibility fallback: ignore unknown XML elements from files
+            # written by a different NeqSim version.
+            if loaded is None and is_zip:
                 try:
                     with zipfile.ZipFile(filepath, "r") as zf:
                         xml_name = None
@@ -775,14 +786,6 @@ class NeqSimProcessModel:
                             errors_seen.append("ZIP contains no .xml file")
                 except Exception as e:
                     errors_seen.append(f"ZIP XML deserialization: {e}")
-                    loaded = None
-
-            # Fallback: the library's Java-based ZIP reader
-            if loaded is None:
-                try:
-                    loaded = neqsim.open_neqsim(filepath)
-                except Exception as e:
-                    errors_seen.append(f"open_neqsim: {e}")
                     loaded = None
 
         # Plain XML fallback — only makes sense for non-ZIP files
