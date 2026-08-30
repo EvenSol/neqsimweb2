@@ -18,6 +18,7 @@ Modules:
     safety_systems   — PSV sizing per API 520/521, relief scenario analysis
     flow_assurance   — Hydrate, wax, corrosion prediction and inhibitor dosing
     production_scenario — Production/reservoir fluid scenario studies (GOR, watercut, blending)
+    plant_operator_game — Native NeqSim training challenge and transparent scoring
     signal_tracker   — Signal/property tracking across multiple chat interactions
     dexpi_integration — DEXPI P&ID (Proteus XML) import, parsing, and NeqSim bridge
 """
