@@ -4,9 +4,11 @@ import json
 import unittest
 
 from process_chat.flashcard_game import (
+    MAX_DECK_CARDS,
     PHASE_EQUILIBRIUM_DECK,
     Flashcard,
     FlashcardDeck,
+    custom_deck,
     deck_from_json,
     deck_to_json,
     score_flashcards,
@@ -45,7 +47,15 @@ class FlashcardGameTest(unittest.TestCase):
                 FlashcardDeck(
                     "Bad difficulty",
                     "",
-                    (Flashcard("one", "Topic", "Question", "Answer", difficulty="impossible"),),
+                    (
+                        Flashcard(
+                            "one",
+                            "Topic",
+                            "Question",
+                            "Answer",
+                            difficulty="impossible",
+                        ),
+                    ),
                 )
             )
         with self.assertRaisesRegex(ValueError, "schema version"):
@@ -57,6 +67,36 @@ class FlashcardGameTest(unittest.TestCase):
                     schema_version=True,
                 )
             )
+
+    def test_custom_builder_rejects_card_and_json_size_overflow(self):
+        cards = tuple(
+            Flashcard(
+                f"custom-{index}",
+                "Topic",
+                "Question",
+                "Answer",
+            )
+            for index in range(MAX_DECK_CARDS + 1)
+        )
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            custom_deck(cards)
+
+        oversized_but_field_valid = FlashcardDeck(
+            "Oversized JSON",
+            "",
+            tuple(
+                Flashcard(
+                    f"large-{index}",
+                    "Topic",
+                    "Q" * 1_000,
+                    "A" * 2_000,
+                    "E" * 2_000,
+                )
+                for index in range(30)
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "JSON is too large"):
+            deck_to_json(oversized_but_field_valid)
 
     def test_score_counts_only_reviewed_known_cards(self):
         deck = PHASE_EQUILIBRIUM_DECK

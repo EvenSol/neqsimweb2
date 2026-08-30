@@ -27,6 +27,10 @@ class GamesPagesTest(unittest.TestCase):
         self.assertIn("pages/37_NeqSim_Phase_Equilibrium_Lab.py", source)
         self.assertIn("Create a flashcard deck", source)
         self.assertIn("Download custom deck JSON", source)
+        self.assertIn(
+            "candidate_deck = custom_deck((*existing, new_card))",
+            source,
+        )
 
     def test_both_pages_are_valid_python(self):
         ast.parse(GAMES_PAGE.read_text(encoding="utf-8"))

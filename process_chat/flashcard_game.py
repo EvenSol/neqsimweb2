@@ -120,7 +120,10 @@ def deck_to_json(deck: FlashcardDeck) -> str:
         "description": normalized.description,
         "cards": [asdict(card) for card in normalized.cards],
     }
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    encoded = json.dumps(payload, indent=2, ensure_ascii=False)
+    if len(encoded.encode("utf-8")) > MAX_DECK_JSON_BYTES:
+        raise ValueError("Flashcard deck JSON is too large.")
+    return encoded
 
 
 def deck_from_json(payload: str | bytes) -> FlashcardDeck:

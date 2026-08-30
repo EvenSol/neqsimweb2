@@ -281,10 +281,14 @@ with builder_tab:
                     difficulty=difficulty,
                 )
             )
+            candidate_deck = custom_deck((*existing, new_card))
+            # Guarantee that anything stored by the builder can immediately
+            # round-trip through the same bounded JSON import contract.
+            deck_to_json(candidate_deck)
         except ValueError as error:
             st.error(str(error))
         else:
-            st.session_state[CUSTOM_CARDS_KEY] = [*existing, new_card]
+            st.session_state[CUSTOM_CARDS_KEY] = list(candidate_deck.cards)
             _reset_flashcard_session()
             st.success("Card added. Select **My custom deck** to play it.")
 
