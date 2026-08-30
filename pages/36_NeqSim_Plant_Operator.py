@@ -254,6 +254,8 @@ st.markdown(
 with st.sidebar:
     st.markdown("### Plant Operator")
     st.caption("Native NeqSim engineering challenge")
+    if st.button("← NeqSim Games", use_container_width=True):
+        st.switch_page("pages/34_NeqSim_Games.py")
     if st.button("← NeqSim Studio", use_container_width=True):
         st.switch_page("pages/00_NeqSim_Studio.py")
     if st.button("Reset challenge", use_container_width=True):
