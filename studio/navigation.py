@@ -83,6 +83,18 @@ STUDIO_DESTINATIONS = (
         page="pages/10_Studio_Results.py",
     ),
     StudioDestination(
+        key="plant_operator",
+        title="NeqSim Plant Operator",
+        description=(
+            "Play a native NeqSim operating challenge: increase gas-plant "
+            "throughput while respecting product, power, temperature and "
+            "conservation constraints."
+        ),
+        icon="🎮",
+        status=STATUS_AVAILABLE,
+        page="pages/36_NeqSim_Plant_Operator.py",
+    ),
+    StudioDestination(
         key="dynamics",
         title="Dynamics & Controls",
         description=(

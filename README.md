@@ -71,3 +71,23 @@ Streamlit reruns while the last trustworthy result stays hidden.
 
 The current UniSim-parity assessment and production-readiness gaps are tracked
 in [docs/process_flowsheet_unisim_parity.md](docs/process_flowsheet_unisim_parity.md).
+
+## NeqSim Plant Operator
+
+**NeqSim Plant Operator** is a playable Studio workflow backed by native NeqSim
+process calculations. The first scenario, **The 10% Throughput Challenge**,
+starts from a synthetic 100,000 kg/hr gas-compression case. The player changes
+feed rate, interstage pressure, export pressure, intercooling, and export
+cooling to reach at least 110,000 kg/hr without violating the published
+product, power, temperature, cooling, or conservation limits.
+
+The game score uses only solved NeqSim evidence. It reports every pass/fail
+criterion, mass and energy closure, native solver constraints, and the exact
+process inputs. A successful attempt can be downloaded as reproducible JSON or
+passed directly to Process Chat for deterministic what-if analysis. Build,
+solve, and evidence extraction share one 180-second execution budget; partial
+or timed-out models are not published as results.
+
+See [docs/neqsim_plant_operator_game.md](docs/neqsim_plant_operator_game.md)
+for the scenario contract, score definition, validation scope, and current
+limitations.

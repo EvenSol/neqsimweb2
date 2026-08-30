@@ -23,6 +23,7 @@ PROBED_WORKSPACE_ROUTES = frozenset(
         "pages/10_Studio_Results.py",
         "pages/25_Pipeline.py",
         "pages/35_Process_Flowsheet_Studio.py",
+        "pages/36_NeqSim_Plant_Operator.py",
         "pages/90_Process_Chat.py",
     }
 )
@@ -133,6 +134,9 @@ class WorkspaceHttpHealthTest(unittest.TestCase):
 
     def test_process_flowsheet_studio_http_health(self):
         self._probe_streamlit_page("pages/35_Process_Flowsheet_Studio.py")
+
+    def test_neqsim_plant_operator_http_health(self):
+        self._probe_streamlit_page("pages/36_NeqSim_Plant_Operator.py")
 
     def test_process_chat_http_health(self):
         self._probe_streamlit_page("pages/90_Process_Chat.py")
