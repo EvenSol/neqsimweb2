@@ -48,13 +48,13 @@ class StudioNavigationTest(unittest.TestCase):
             self.assertTrue(destination.available)
             self.assertEqual(destination.page, "pages/10_Studio_Results.py")
 
-    def test_plant_operator_is_an_available_native_training_workflow(self):
-        destination = destination_by_key("plant_operator")
+    def test_games_is_the_available_training_workflow_hub(self):
+        destination = destination_by_key("games")
 
         self.assertTrue(destination.available)
         self.assertEqual(
             destination.page,
-            "pages/36_NeqSim_Plant_Operator.py",
+            "pages/34_NeqSim_Games.py",
         )
 
     def test_unknown_destination_fails_loudly(self):
