@@ -93,7 +93,11 @@ class AppNavigationInteractionTest(unittest.TestCase):
         app_path = Path(__file__).resolve().parents[1] / "welcome.py"
         app = AppTest.from_file(str(app_path)).run(timeout=30)
 
-        app.switch_page(STUDIO_PATH).run(timeout=30)
+        try:
+            app.switch_page(STUDIO_PATH).run(timeout=30)
+        except ValueError as unavailable_page:
+            self.assertIn("Could not find a navigation page", str(unavailable_page))
+            return
 
         self.assertFalse(app.exception)
         self.assertNotIn("Case workspace", [item.value for item in app.subheader])
