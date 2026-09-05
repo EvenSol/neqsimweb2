@@ -1,3 +1,5 @@
+"""Entrypoint and dynamic page router for NeqSim Web."""
+
 import os as _os
 
 # JVM module-access flags required by XStream on Java 17+.
@@ -10,180 +12,95 @@ if "add-opens" not in _os.environ.get("JAVA_TOOL_OPTIONS", ""):
         "--add-opens=java.base/java.io=ALL-UNNAMED"
     )
 
-import altair as alt
-import numpy as np
-import pandas as pd
 import streamlit as st
-from google import genai
-from google.genai import types
-from theme import apply_theme, theme_toggle
+
+from app_navigation import (
+    experimental_page_specs,
+    stable_page_specs,
+)
+
+
+EXPERIMENTAL_MODE_KEY = "experimental_mode"
+EXPERIMENTAL_MODE_WIDGET_KEY = "_experimental_mode_toggle"
 
 
 def get_gemini_api_key():
-    """Get Gemini API key from secrets or session state."""
-    # First check Streamlit secrets (for deployed app)
+    """Get the Gemini API key from secrets or session state."""
     try:
-        if 'GEMINI_API_KEY' in st.secrets:
-            return st.secrets['GEMINI_API_KEY']
+        if "GEMINI_API_KEY" in st.secrets:
+            return st.secrets["GEMINI_API_KEY"]
     except Exception:
         pass
-    # Fall back to session state (for user-provided key)
-    return st.session_state.get('gemini_api_key', '')
+    return st.session_state.get("gemini_api_key", "")
 
 
 def make_request(question_input: str):
-    # Only attempt request if AI is enabled and API key is available
-    if not st.session_state.get('ai_enabled', False):
+    """Run optional AI interpretation when it is configured and enabled."""
+    if not st.session_state.get("ai_enabled", False):
         return ""
     api_key = get_gemini_api_key()
-    if not api_key or api_key.strip() == "":
+    if not api_key or not api_key.strip():
         return ""
     try:
+        from google import genai
+
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=question_input
+            model="gemini-2.5-flash",
+            contents=question_input,
         )
         return response.text
     except Exception:
         return ""
 
 
-st.set_page_config(page_title="NeqSim", page_icon='images/neqsimlogocircleflat.png')
-apply_theme()
-theme_toggle()
+def create_page(spec):
+    """Create a Streamlit page from a navigation specification."""
+    return st.Page(spec.path, title=spec.title)
 
-# Custom CSS for responsive header layout with vertical centering
-st.markdown("""
-<style>
-    /* Vertically center content in columns */
-    div[data-testid="column"] {
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-    /* Remove extra spacing around headers */
-    div[data-testid="column"] h1 {
-        margin-top: 0 !important;
-        padding-top: 0 !important;
-    }
-    /* Mobile adjustments */
-    @media (max-width: 640px) {
-        .block-container {
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-        }
-    }
-</style>
-""", unsafe_allow_html=True)
 
-# Logo and title with proper vertical alignment
-col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
-with col_logo:
-    st.image('images/neqsimlogocircleflat.png', width=90)
-with col_title:
-    st.markdown("# NeqSim")
-    st.caption("Process Simulation Tool")
-
-st.write("## Choose your workspace")
-
-workspace_studio, workspace_classic = st.columns(2)
-with workspace_studio:
-    st.markdown("### 🧭 NeqSim Studio")
-    st.caption(
-        "New professional engineering workspace. Studio is in beta and reuses "
-        "the validated NeqSim process-simulation foundation."
+def persist_experimental_mode():
+    """Keep the mode selection stable while navigating between pages."""
+    st.session_state[EXPERIMENTAL_MODE_KEY] = bool(
+        st.session_state[EXPERIMENTAL_MODE_WIDGET_KEY]
     )
-    if st.button(
-        "Open NeqSim Studio",
-        type="primary",
-        use_container_width=True,
-        key="open_neqsim_studio",
-    ):
-        st.switch_page("pages/00_NeqSim_Studio.py")
 
-with workspace_classic:
-    st.markdown("### 🧰 NeqSim Classic")
-    st.caption(
-        "Continue with the existing NeqSim Web pages, calculators and workflows. "
-        "Nothing below has moved."
+
+if EXPERIMENTAL_MODE_KEY not in st.session_state:
+    st.session_state[EXPERIMENTAL_MODE_KEY] = False
+if EXPERIMENTAL_MODE_WIDGET_KEY not in st.session_state:
+    st.session_state[EXPERIMENTAL_MODE_WIDGET_KEY] = st.session_state[
+        EXPERIMENTAL_MODE_KEY
+    ]
+
+experimental_mode = bool(st.session_state.get(EXPERIMENTAL_MODE_KEY, False))
+navigation_pages = {
+    "": [st.Page("home.py", title="Home", icon="🏠", default=True)],
+    "Stable tools": [create_page(spec) for spec in stable_page_specs()],
+}
+if experimental_mode:
+    navigation_pages["Experimental"] = [
+        create_page(spec) for spec in experimental_page_specs()
+    ]
+
+selected_page = st.navigation(navigation_pages)
+
+# Streamlit renders the navigation menu at the top of the sidebar. Creating the
+# mode control afterwards keeps it directly below the menu on every page.
+with st.sidebar:
+    st.divider()
+    st.toggle(
+        "Experimental mode",
+        key=EXPERIMENTAL_MODE_WIDGET_KEY,
+        on_change=persist_experimental_mode,
+        help=(
+            "Show developing tools. Experimental models and interfaces may "
+            "change and require additional validation."
+        ),
     )
-    st.info("You are already in Classic. Use the existing sidebar as before.")
+    if experimental_mode:
+        st.caption("Experimental tools are enabled for this session.")
 
-st.divider()
-st.write("## Welcome! 👋")
-
-"""
-### About NeqSim
-NeqSim (Non-equilibrium Simulator) is a library for the simulation of fluid behavior, phase equilibrium, and process systems.
-Explore the various models and simulations NeqSim offer through this easy-to-use Streamlit interface.
-
-### Getting Started
-Use the left-hand menu to select the desired simulation or process. Enter any required inputs, and NeqSim will handle the calculations.
-
-### Documentation & Tutorials
-For comprehensive documentation on how to use NeqSim for processing and fluid simulations, please refer to our resources:  
-- [NeqSim Documentation](https://equinor.github.io/neqsim/)
-- [Introduction to Gas Processing Using NeqSim](https://colab.research.google.com/github/EvenSol/NeqSim-Colab/blob/master/notebooks/examples_of_NeqSim_in_Colab.ipynb)
-
-### GitHub Repository
-NeqSim is developed in the Java programming language and is available as an open-source project via GitHub. You can access the complete source code and contribute to the project via the home page:
-
-- [NeqSim Home](https://equinor.github.io/neqsimhome/)
-
-### Community & Feedback
-We welcome any feedback, questions, or suggestions for further development. Join the conversation or contribute to discussions on our GitHub page:
-
-- [NeqSim GitHub Discussions](https://github.com/equinor/neqsim/discussions)
-
-### Request New Features
-Have an idea for a new simulation or feature? You can:
-- Open a feature request in [GitHub Issues](https://github.com/equinor/neqsim/issues)
-- Start a discussion in [GitHub Discussions](https://github.com/equinor/neqsim/discussions)
-
-### Extend the App Yourself
-This web application is open source and built with Python. To develop and extend it locally:
-
-**Tools needed:**
-- Python 3.10+
-- Git
-- A code editor (e.g., VS Code)
-
-**Quick start:**
-1. Clone the repository: `git clone https://github.com/EvenSol/neqsimweb2.git`
-2. Create a virtual environment: `python -m venv .venv`
-3. Activate it and install dependencies: `pip install -r requirements.txt`
-4. Run locally: `streamlit run welcome.py`
-
-**Resources:**
-- [NeqSim Web App Repository](https://github.com/EvenSol/neqsimweb2)
-- [NeqSim Python Package](https://github.com/equinor/neqsim-python)
-- [Streamlit Documentation](https://docs.streamlit.io/)
-"""
-
-# AI Settings in sidebar
-if 'ai_enabled' not in st.session_state:
-    st.session_state['ai_enabled'] = False
-
-st.sidebar.divider()
-st.sidebar.subheader("🤖 AI Assistant")
-
-ai_enabled = st.sidebar.toggle(
-    "Enable AI Features",
-    value=st.session_state['ai_enabled'],
-    help="Enable AI-powered analysis and recommendations"
-)
-st.session_state['ai_enabled'] = ai_enabled
-st.session_state['ai_model'] = 'gemini-2.5-flash'
-
-if ai_enabled:
-    try:
-        if 'GEMINI_API_KEY' in st.secrets:
-            st.session_state['gemini_api_key'] = st.secrets['GEMINI_API_KEY']
-            st.sidebar.success("✓ AI ready (gemini-2.5-flash)")
-        else:
-            st.sidebar.warning("No GEMINI_API_KEY in Streamlit secrets.")
-    except Exception:
-        st.sidebar.warning("No GEMINI_API_KEY in Streamlit secrets.")
-
+# Classic pages offering optional AI interpretation call this shared function.
 st.make_request = make_request
+selected_page.run()

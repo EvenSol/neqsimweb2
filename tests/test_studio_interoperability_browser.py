@@ -22,6 +22,7 @@ from test_studio_full_pilot_browser import (
     VIEWPORT,
     _click_button,
     _download_bytes,
+    _enable_experimental_mode,
     _probe_application,
     _wait_for_health,
 )
@@ -39,6 +40,7 @@ def _open_studio(page: Page) -> None:
         exact=True,
         level=1,
     ).wait_for(state="visible", timeout=30_000)
+    _enable_experimental_mode(page)
     _click_button(page, "Open NeqSim Studio")
     page.get_by_role(
         "heading",
@@ -173,6 +175,7 @@ def _exercise_supported_schema(
         exact=True,
         level=1,
     ).wait_for(state="visible", timeout=30_000)
+    _enable_experimental_mode(first_page)
     _click_button(first_page, "Open NeqSim Studio")
     first_page.get_by_role(
         "heading",
