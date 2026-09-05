@@ -7,6 +7,17 @@ The application is in initial development and is using the [streamlit framework]
 
 The application is hosted by streamlit and can be tested at [neqsim web app link](https://neqsim.streamlit.app/).
 
+## Stable and experimental modes
+
+The app starts in **normal mode**, with only the stable TP Flash, Phase
+Envelope, Gas Hydrate, Hydrogen, and EOS-CG tools in the sidebar. The NeqSim
+Studio card is also hidden from the front page.
+
+Enable **Experimental mode** with the toggle directly below the sidebar menu to
+register and show the wider set of developing models and interfaces, including
+NeqSim Studio. The selection is retained in Streamlit session state while the
+user moves between pages and defaults to off for each new session.
+
 ## Pipeline Hydraulics
 
 The **Pipeline** page provides two native NeqSim calculation paths:

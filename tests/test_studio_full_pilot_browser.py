@@ -111,6 +111,27 @@ def _click_button(page: Page, name: str, timeout: int = 30_000) -> None:
     )
 
 
+def _enable_experimental_mode(page: Page) -> None:
+    """Enable the session-scoped Studio navigation from the sidebar."""
+    toggle = page.get_by_label("Experimental mode", exact=True)
+    try:
+        toggle.wait_for(state="visible", timeout=3_000)
+    except Exception:
+        collapsed_control = page.locator(
+            '[data-testid="stSidebarCollapsedControl"]'
+        )
+        if collapsed_control.count():
+            collapsed_control.click()
+        toggle.wait_for(state="visible", timeout=10_000)
+    if not toggle.is_checked():
+        toggle.check()
+    page.get_by_role(
+        "button",
+        name="Open NeqSim Studio",
+        exact=True,
+    ).wait_for(state="visible", timeout=30_000)
+
+
 def _download_bytes(page: Page, button_name: str) -> tuple[str, bytes]:
     last_error: Exception | None = None
     for _ in range(3):
@@ -392,6 +413,7 @@ def run_browser_pilot() -> dict[str, object]:
                 exact=True,
                 level=1,
             ).wait_for(state="visible", timeout=30_000)
+            _enable_experimental_mode(page)
             _click_button(page, "Open NeqSim Studio")
             page.get_by_role(
                 "heading",
