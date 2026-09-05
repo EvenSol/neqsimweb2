@@ -202,7 +202,7 @@ def _enable_experimental_mode(page: Page) -> None:
             collapsed_control.click()
         toggle.wait_for(state="visible", timeout=10_000)
     if not toggle.is_checked():
-        toggle.check()
+        toggle.press("Space")
     page.get_by_role(
         "button",
         name="Open NeqSim Studio",
