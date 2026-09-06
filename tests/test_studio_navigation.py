@@ -53,22 +53,29 @@ class StudioNavigationTest(unittest.TestCase):
             destination_by_key("not-a-real-workflow")
 
     def test_classic_home_and_studio_entry_remain_separate(self):
-        welcome_source = (PROJECT_ROOT / "welcome.py").read_text(encoding="utf-8")
+        router_source = (PROJECT_ROOT / "welcome.py").read_text(encoding="utf-8")
+        home_source = (PROJECT_ROOT / "home.py").read_text(encoding="utf-8")
         studio_source = (
             PROJECT_ROOT / "pages" / "00_NeqSim_Studio.py"
         ).read_text(encoding="utf-8")
 
         # Classic information and its existing sidebar-driven workflow remain.
-        self.assertIn("### About NeqSim", welcome_source)
-        self.assertIn("### Getting Started", welcome_source)
-        self.assertIn("Enable AI Features", welcome_source)
+        self.assertIn("### About NeqSim", home_source)
+        self.assertIn("### Getting Started", home_source)
+        self.assertIn("Enable AI Features", home_source)
 
-        # Studio is added without moving the mature flowsheet page or Classic home.
+        # Studio is registered and shown only when experimental mode is enabled.
+        self.assertIn("st.navigation(navigation_pages)", router_source)
+        self.assertIn('"Experimental mode"', router_source)
+        self.assertIn(
+            'st.session_state.get("experimental_mode", False)',
+            home_source,
+        )
         self.assertIn(
             'st.switch_page("pages/00_NeqSim_Studio.py")',
-            welcome_source,
+            home_source,
         )
-        self.assertIn('st.switch_page("welcome.py")', studio_source)
+        self.assertIn('st.switch_page("home.py")', studio_source)
         self.assertIn(
             'st.switch_page("pages/35_Process_Flowsheet_Studio.py")',
             studio_source,

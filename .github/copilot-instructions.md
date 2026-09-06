@@ -13,7 +13,9 @@ This is a **Streamlit-based web application** for the NeqSim (Non-equilibrium Si
 
 ```
 neqsimweb2/
-├── welcome.py           # Main entry point and home page
+├── welcome.py           # Main entry point and dynamic page router
+├── home.py              # Front page rendered by the router
+├── app_navigation.py    # Stable/experimental page policy
 ├── fluids.py            # Fluid composition data definitions
 ├── pages/               # Streamlit multi-page app pages
 │   ├── 0_TP_flash.py    # Temperature-Pressure flash calculations
@@ -28,6 +30,10 @@ neqsimweb2/
 ├── requirements.txt     # Python dependencies
 └── Dockerfile           # Container configuration
 ```
+
+The app uses `st.navigation` rather than automatic `pages/` discovery. Keep
+normal mode limited to the stable page allowlist in `app_navigation.py`; new
+pages are experimental by default until explicitly promoted.
 
 ## Key Technologies & Libraries
 

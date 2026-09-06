@@ -32,6 +32,18 @@ class StudioWorkspaceInteractionTest(unittest.TestCase):
     def _new_app(self) -> AppTest:
         app = AppTest.from_file(str(self.entrypoint), default_timeout=120)
         app.session_state[CLASSIC_MARKER_KEY] = CLASSIC_MARKER_VALUE
+        app = self._run(app)
+        self.assertNotIn(
+            "Open NeqSim Studio",
+            [button.label for button in app.button],
+        )
+        experimental_toggle = next(
+            toggle
+            for toggle in app.sidebar.toggle
+            if toggle.label == "Experimental mode"
+        )
+        self.assertFalse(experimental_toggle.value)
+        experimental_toggle.set_value(True)
         return self._run(app)
 
     def _run(

@@ -187,6 +187,22 @@ def _wait_for_classic(page: Page) -> None:
         exact=True,
         level=1,
     ).wait_for(state="visible", timeout=30_000)
+
+
+def _enable_experimental_mode(page: Page) -> None:
+    """Enable Studio through the session-scoped sidebar toggle."""
+    toggle = page.get_by_label("Experimental mode", exact=True)
+    try:
+        toggle.wait_for(state="visible", timeout=3_000)
+    except Exception:
+        collapsed_control = page.locator(
+            '[data-testid="stSidebarCollapsedControl"]'
+        )
+        if collapsed_control.count():
+            collapsed_control.click()
+        toggle.wait_for(state="visible", timeout=10_000)
+    if not toggle.is_checked():
+        toggle.press("Space")
     page.get_by_role(
         "button",
         name="Open NeqSim Studio",
@@ -201,6 +217,7 @@ def _page_diagnostic(page: Page) -> str:
 
 
 def _open_studio(page: Page) -> None:
+    _enable_experimental_mode(page)
     action = page.get_by_role(
         "button",
         name="Open NeqSim Studio",
@@ -390,6 +407,15 @@ def run_browser_journey() -> dict[str, object]:
 
             page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
             _wait_for_classic(page)
+            if page.get_by_role(
+                "button",
+                name="Open NeqSim Studio",
+                exact=True,
+            ).count():
+                raise AssertionError(
+                    "NeqSim Studio is visible before experimental mode is enabled"
+                )
+            _enable_experimental_mode(page)
             classic_ax = _ax_summary(session)
             _require_ax_name(classic_ax, "heading_names", "NeqSim")
             _require_ax_name(
@@ -424,6 +450,7 @@ def run_browser_journey() -> dict[str, object]:
             page.set_viewport_size(MOBILE_VIEWPORT)
             page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
             _wait_for_classic(page)
+            _enable_experimental_mode(page)
             classic_mobile_layout = _main_layout(page)
             _assert_layout(classic_mobile_layout, "Classic mobile")
             classic_mobile_action = _touch_target(

@@ -45,7 +45,7 @@ with st.sidebar:
     if st.button("Edit or run flowsheet", use_container_width=True):
         st.switch_page("pages/35_Process_Flowsheet_Studio.py")
     if st.button("NeqSim Classic", use_container_width=True):
-        st.switch_page("welcome.py")
+        st.switch_page("home.py")
     st.caption(
         "Results are read from the existing solved Process Flowsheet Studio model. "
         "No calculation is repeated in this page."
@@ -405,4 +405,3 @@ st.caption(
     "This page is a presentation adapter over the existing solved model. Edit, solve, "
     "export and download reproducible deliverables in Process Flowsheet Studio."
 )
-

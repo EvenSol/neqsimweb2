@@ -167,7 +167,7 @@ with st.sidebar:
     st.markdown("### Workspace")
     st.success("NeqSim Studio · Beta")
     if st.button("← NeqSim Classic", use_container_width=True):
-        st.switch_page("welcome.py")
+        st.switch_page("home.py")
     st.caption(
         "Studio is being built alongside the existing application. "
         "Classic calculations and workflows remain available."
@@ -332,7 +332,7 @@ with primary:
         st.switch_page("pages/35_Process_Flowsheet_Studio.py")
 with secondary:
     if st.button("Open Classic", use_container_width=True):
-        st.switch_page("welcome.py")
+        st.switch_page("home.py")
 
 st.markdown('<div class="studio-section"></div>', unsafe_allow_html=True)
 st.subheader("Start an engineering workflow")
