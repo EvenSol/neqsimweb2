@@ -93,7 +93,8 @@ simulations through this easy-to-use Streamlit interface.
 ### Getting Started
 Use the left-hand menu to select a calculation. Normal mode contains TP Flash,
 Phase Envelope, Gas Hydrate, Hydrogen, and EOS-CG. Enable **Experimental mode**
-below the menu to add the wider set of developing tools.
+below the menu to add the wider set of developing tools. Opening a direct link
+to an experimental page automatically enables Experimental mode for that session.
 
 ### Documentation & Tutorials
 - [NeqSim Documentation](https://equinor.github.io/neqsim/)
