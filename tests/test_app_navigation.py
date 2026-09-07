@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest.mock import PropertyMock, patch
+
+from streamlit.runtime.context import ContextProxy
+from streamlit.navigation.page import StreamlitPage
 
 from streamlit.testing.v1 import AppTest
 
@@ -89,7 +93,34 @@ class AppNavigationInteractionTest(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertNotIn("Open NeqSim Studio", [button.label for button in app.button])
 
-    def test_studio_url_is_unavailable_in_normal_mode(self):
+
+    def test_direct_link_registers_experimental_pages_and_toggle_can_disable(self):
+        app_path = Path(__file__).resolve().parents[1] / "welcome.py"
+        for spec in experimental_page_specs():
+            with self.subTest(page=spec.path):
+                # Page execution is isolated: this test exercises the real router
+                # without importing unrelated Java models or optional AI clients.
+                with patch.object(StreamlitPage, "run"), patch.object(
+                    ContextProxy, "url", new_callable=PropertyMock,
+                    return_value="https://neqsim.streamlit.app/"
+                    + spec.path.split("/", 1)[1].split("_", 1)[1][:-3].replace(" ", "_"),
+                ):
+                    app = AppTest.from_file(str(app_path)).run(timeout=30)
+                    self.assertFalse(app.exception)
+                    self.assertTrue(app.session_state["experimental_mode"])
+                    toggle = next(
+                        item for item in app.sidebar.toggle
+                        if item.label == "Experimental mode"
+                    )
+                    self.assertTrue(toggle.value)
+                    toggle.set_value(False)
+                    app.run(timeout=30)
+                    self.assertFalse(app.exception)
+                    self.assertFalse(app.session_state["experimental_mode"])
+                    app.run(timeout=30)
+                    self.assertFalse(app.session_state["experimental_mode"])
+
+    def test_programmatic_studio_switch_is_unavailable_without_opt_in(self):
         app_path = Path(__file__).resolve().parents[1] / "welcome.py"
         app = AppTest.from_file(str(app_path)).run(timeout=30)
 

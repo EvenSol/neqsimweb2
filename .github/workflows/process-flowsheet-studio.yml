@@ -27,6 +27,7 @@ on:
       - "tests/test_process_chat_studio_context.py"
       - "tests/test_studio_navigation.py"
       - "tests/test_app_navigation.py"
+      - "tests/test_experimental_links.py"
       - "tests/test_studio_results_context.py"
       - "tests/test_studio_results_shell.py"
       - "tests/test_studio_study_context.py"
@@ -121,6 +122,7 @@ jobs:
             tests/test_subflowsheet_schema.py
       - name: Run Studio workspace navigation regressions
         run: |
+          python tests/test_experimental_links.py -v
           python tests/test_app_navigation.py -v
           python tests/test_studio_navigation.py -v
       - name: Run shared Studio case lifecycle regressions

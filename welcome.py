@@ -16,6 +16,7 @@ import streamlit as st
 
 from app_navigation import (
     experimental_page_specs,
+    is_experimental_url,
     stable_page_specs,
 )
 
@@ -66,8 +67,12 @@ def persist_experimental_mode():
     )
 
 
+# Build page metadata before navigation so direct links can opt a new session in.
+experimental_pages = [create_page(spec) for spec in experimental_page_specs()]
 if EXPERIMENTAL_MODE_KEY not in st.session_state:
-    st.session_state[EXPERIMENTAL_MODE_KEY] = False
+    st.session_state[EXPERIMENTAL_MODE_KEY] = is_experimental_url(
+        st.context.url, (page.url_path for page in experimental_pages)
+    )
 if EXPERIMENTAL_MODE_WIDGET_KEY not in st.session_state:
     st.session_state[EXPERIMENTAL_MODE_WIDGET_KEY] = st.session_state[
         EXPERIMENTAL_MODE_KEY
@@ -79,9 +84,7 @@ navigation_pages = {
     "Stable tools": [create_page(spec) for spec in stable_page_specs()],
 }
 if experimental_mode:
-    navigation_pages["Experimental"] = [
-        create_page(spec) for spec in experimental_page_specs()
-    ]
+    navigation_pages["Experimental"] = experimental_pages
 
 selected_page = st.navigation(navigation_pages)
 
