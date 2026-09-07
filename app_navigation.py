@@ -5,8 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable
-from urllib.parse import unquote, urlsplit
+from experimental_links import is_experimental_url
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -93,10 +92,3 @@ def experimental_page_specs() -> tuple[PageSpec, ...]:
         if path not in STABLE_PAGE_PATHS
     )
 
-
-def is_experimental_url(url: str | None, experimental_paths: Iterable[str]) -> bool:
-    """Recognize a registered experimental URL, including a deployment base path."""
-    if not url:
-        return False
-    pathname = unquote(urlsplit(url).path).rstrip("/").rsplit("/", 1)[-1]
-    return bool(pathname) and pathname in experimental_paths

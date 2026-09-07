@@ -2,7 +2,7 @@
 
 import unittest
 
-from app_navigation import is_experimental_url
+from experimental_links import is_experimental_url
 
 
 class ExperimentalLinkTest(unittest.TestCase):
