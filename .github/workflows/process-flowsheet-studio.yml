@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "app_navigation.py"
+      - "experimental_links.py"
+      - "tests/test_navigation_warm_import.py"
       - "home.py"
       - "welcome.py"
       - "requirements.txt"
@@ -122,6 +124,7 @@ jobs:
             tests/test_subflowsheet_schema.py
       - name: Run Studio workspace navigation regressions
         run: |
+          python tests/test_navigation_warm_import.py -v
           python tests/test_experimental_links.py -v
           python tests/test_app_navigation.py -v
           python tests/test_studio_navigation.py -v

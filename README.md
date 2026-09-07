@@ -23,6 +23,12 @@ These links automatically enable Experimental mode before routing to the page;
 no query parameter or prior visit to the home page is needed. The toggle can
 still be turned off afterward.
 
+If a running Streamlit Cloud instance reports an import error immediately after
+an update, **Manage app → Reboot app** restarts its Python process and clears
+modules retained from the previous version. Refreshing the browser alone does
+not restart that process. Direct-link routing is isolated from the older
+navigation module to remain compatible during this update.
+
 ## Pipeline Hydraulics
 
 The **Pipeline** page provides two native NeqSim calculation paths:

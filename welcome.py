@@ -16,9 +16,12 @@ import streamlit as st
 
 from app_navigation import (
     experimental_page_specs,
-    is_experimental_url,
     stable_page_specs,
 )
+
+# Older live processes may still hold the pre-direct-link app_navigation module.
+# Import the new policy from its own module instead of that cached module.
+from experimental_links import is_experimental_url
 
 
 EXPERIMENTAL_MODE_KEY = "experimental_mode"
