@@ -8,6 +8,9 @@ on:
       - "tests/test_navigation_warm_import.py"
       - "home.py"
       - "welcome.py"
+      - "java_runtime.py"
+      - "tests/test_java_runtime.py"
+      - "packages.txt"
       - "requirements.txt"
       - "README.md"
       - "pages/00_NeqSim_Studio.py"
@@ -75,13 +78,17 @@ jobs:
       - name: Install native NeqSim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install neqsim "streamlit>=1.46.0" xlsxwriter google-genai
+          python -m pip install -r requirements.txt
+      - name: Verify Python-installed Java and native process roundtrip
+        run: python tests/test_java_runtime.py -v
       - name: Compile affected Python sources
         run: |
           python -m py_compile \
             app_navigation.py \
             home.py \
             welcome.py \
+            java_runtime.py \
+            tests/test_java_runtime.py \
             pages/00_NeqSim_Studio.py \
             pages/10_Studio_Results.py \
             pages/25_Pipeline.py \
@@ -182,7 +189,7 @@ jobs:
       - name: Install browser-profile dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install neqsim "streamlit>=1.46.0" pandas playwright xlsxwriter google-genai
+          python -m pip install -r requirements.txt playwright
           python -m playwright install --with-deps chromium
       - name: Compile browser-profile sources
         run: |
@@ -223,7 +230,7 @@ jobs:
       - name: Install full-pilot dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install neqsim "streamlit>=1.46.0" pandas playwright xlsxwriter google-genai
+          python -m pip install -r requirements.txt playwright
           python -m playwright install --with-deps chromium
       - name: Compile full-pilot and interoperability sources
         run: |

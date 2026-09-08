@@ -96,11 +96,19 @@ class AppNavigationInteractionTest(unittest.TestCase):
 
     def test_direct_link_registers_experimental_pages_and_toggle_can_disable(self):
         app_path = Path(__file__).resolve().parents[1] / "welcome.py"
+        original_run = StreamlitPage.run
+
+        def run_entrypoint_only(page):
+            # Streamlit also uses Page.run for the entrypoint on the first run.
+            # Keep the real router active while isolating downstream page code.
+            if page._page == app_path:
+                return original_run(page)
+
         for spec in experimental_page_specs():
             with self.subTest(page=spec.path):
                 # Page execution is isolated: this test exercises the real router
                 # without importing unrelated Java models or optional AI clients.
-                with patch.object(StreamlitPage, "run"), patch.object(
+                with patch.object(StreamlitPage, "run", run_entrypoint_only), patch.object(
                     ContextProxy, "url", new_callable=PropertyMock,
                     return_value="https://neqsim.streamlit.app/"
                     + spec.path.split("/", 1)[1].split("_", 1)[1][:-3].replace(" ", "_"),
