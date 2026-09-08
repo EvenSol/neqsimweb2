@@ -7,6 +7,38 @@ The application is in initial development and is using the [streamlit framework]
 
 The application is hosted by streamlit and can be tested at [neqsim web app link](https://neqsim.streamlit.app/).
 
+## Installation and Java runtime
+
+Install the Python dependencies and start the app from the repository root:
+
+```bash
+python -m pip install -r requirements.txt
+streamlit run welcome.py
+```
+
+`requirements.txt` includes `jdk4py==21.0.8.2`, which bundles the Java 21 runtime
+needed by NeqSim. The entry point configures `JAVA_HOME` before any page can
+import NeqSim and start JPype. An explicitly configured `JAVA_HOME` is respected;
+it must point to a compatible Java 17+ installation. The existing XStream
+module-access options remain configured before JVM startup.
+
+Streamlit Community Cloud no longer needs a `packages.txt` file to install
+`default-jre` through APT. This avoids the deployment failure reported on
+September 8, 2026, when the platform's `bullseye-security` repository metadata
+had expired before the Python application could start. Keep `packages.txt`
+absent unless a future feature requires an additional OS package; changing the
+Java package name or adding code in a page cannot repair that earlier APT step.
+
+After deploying this dependency change, use **Manage app → Reboot app** if the
+failed instance does not rebuild automatically. The deployment log should show
+Python dependency installation including `jdk4py`, followed by app startup.
+
+To check Java discovery, a native TP flash, and process save/load locally:
+
+```bash
+PYTHONPATH=. python tests/test_java_runtime.py -v
+```
+
 ## Stable and experimental modes
 
 The app starts in **normal mode**, with only the stable TP Flash, Phase

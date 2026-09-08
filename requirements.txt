@@ -1,4 +1,5 @@
 neqsim
+jdk4py==21.0.8.2
 altair>=5.0.0
 pandas
 streamlit>=1.46.0

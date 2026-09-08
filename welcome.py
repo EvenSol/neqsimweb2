@@ -1,16 +1,8 @@
 """Entrypoint and dynamic page router for NeqSim Web."""
 
-import os as _os
+from java_runtime import configure_java_runtime
 
-# JVM module-access flags required by XStream on Java 17+.
-# Must be set before *any* import triggers jpype.startJVM().
-if "add-opens" not in _os.environ.get("JAVA_TOOL_OPTIONS", ""):
-    _os.environ["JAVA_TOOL_OPTIONS"] = (
-        "--add-opens=java.base/java.util=ALL-UNNAMED "
-        "--add-opens=java.base/java.lang=ALL-UNNAMED "
-        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
-        "--add-opens=java.base/java.io=ALL-UNNAMED"
-    )
+configure_java_runtime()
 
 import streamlit as st
 
