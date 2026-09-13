@@ -41,16 +41,30 @@ PYTHONPATH=. python tests/test_java_runtime.py -v
 
 ## Stable and experimental modes
 
-The app starts in **normal mode**, with only the stable TP Flash, Phase
-Envelope, Gas Hydrate, Hydrogen, and EOS-CG tools in the sidebar. The NeqSim
-Studio card is also hidden from the front page.
+The app starts in **normal mode**, with these stable tools in the sidebar:
+
+- TP Flash
+- Phase Envelope
+- Gas Hydrate
+- Hydrogen
+- EOS-CG
+- Compressor Performance
+- GERG-2008
+- Water Dew Point
+- LNGageing
+- Property Generator
+- Helium
+- CO₂ Mechanistic Model
+
+Direct links to these tools open in normal mode without enabling Experimental
+mode. The NeqSim Studio card is hidden from the front page in normal mode.
 
 Enable **Experimental mode** with the toggle directly below the sidebar menu to
 register and show the wider set of developing models and interfaces, including
 NeqSim Studio. The selection is retained in Streamlit session state while the
 user moves between pages. New sessions start in normal mode unless opened through
 an experimental page's direct URL, such as
-[CO₂ Mechanistic Model](https://neqsim.streamlit.app/CO2_mechanisticModel).
+[Process Chat](https://neqsim.streamlit.app/Process_Chat).
 These links automatically enable Experimental mode before routing to the page;
 no query parameter or prior visit to the home page is needed. The toggle can
 still be turned off afterward.
