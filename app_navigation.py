@@ -19,6 +19,13 @@ STABLE_PAGE_PATHS = (
     "pages/10_Gas_Hydrate.py",
     "pages/60_Hydrogen.py",
     "pages/6_EOS_CG.py",
+    "pages/7_Compressor_Performance.py",
+    "pages/5_GERG2008.py",
+    "pages/30_Water Dew Point.py",
+    "pages/40_LNGageing.py",
+    "pages/50_Property Generator.py",
+    "pages/70_Helium.py",
+    "pages/100_CO2_mechanisticModel.py",
 )
 
 TITLE_OVERRIDES = {
