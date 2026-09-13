@@ -1,17 +1,12 @@
-"""
-NEQSIM CO2 IMPURITY KINETIC MODEL & MULTI-PHASE EXPERIMENT ENGINE
-====================================================================================================
-Illustrative rate-law engine for trace-impurity chemistry in CO2 streams. Uses the NeqSim Java
-SRK EOS when the Python package is available, falling back to a documented screening correlation
-otherwise. Includes a lumped wall-corrosion model and a CSTR-style multi-phase experiment runner.
+"""Screening kinetics for trace impurities and wall corrosion in CO2.
 
-Reaction set (deliberately kept small -- see REACTION_NAMES for the exact stoichiometry):
-R1 (SO2+O2+H2O->H2SO4, extremely slow), R2 (H2S+NO2->SO2+NO), R3a (SO2+NO2+H2O->NO+H2SO4, slow),
-R4 (2NO+O2<->2NO2, fast), R5 (3NO2+H2O<->2HNO3+NO, very fast), R7 (H2S+NO->NH3+SO2, fast),
-R10 (NH3+NO+O2->N2O), R11 (H2S+NO->N2O+S8), R12 (H2S+O2->H2SO4, NO2-catalysed),
-R13 (NO2+H2S->H2SO4+NO), plus 3 wall-corrosion paths (HNO3->Fe(NO3)2, H2SO4->FeSO4, O2->Fe2O3).
+Uses NeqSim thermodynamic properties when available, with an approximate fallback,
+and sequential fixed-pressure CSTR simulation. Species concentrations are kmol/m3,
+kinetic time is seconds, and feed concentrations are ppm-mol.
 
-The default kinetic parameters are uncalibrated and must not be used as qualified design data.
+Reference kinetics and surface activities are empirical and require independent
+validation. This is not qualified design data or a rigorous multiphase reaction
+equilibrium model. Pressurization and retained liquid-film inventories are not modeled.
 """
 
 import warnings
@@ -23,6 +18,7 @@ from matplotlib.ticker import MaxNLocator
 
 try:
     from scipy.integrate import solve_ivp
+    from scipy.optimize import approx_fprime
 except ImportError as scipy_import_error:
     solve_ivp = None
     SCIPY_IMPORT_ERROR = scipy_import_error
@@ -45,11 +41,8 @@ def _cumulative_trapz(y, x):
     return np.concatenate([[0.0], np.cumsum(increments)])
 
 
-
-# ==================================================================================================
-# FUNDAMENTAL PHYSICAL AND THERMODYNAMIC CONSTANTS
-# ==================================================================================================
 R_GAS = 8.314462618             # Universal Gas Constant [J / (mol * K)]
+BIMOLECULAR_ENCOUNTER_RATE_REF = 1.0e11
 MW_CO2 = 44.0095                # Molar Mass of CO2 [g / mol]
 MW_N2 = 28.0134                 # Molar Mass of N2 [g / mol]
 MW_H2O = 18.0153                # Molar Mass of H2O [g / mol]
@@ -60,59 +53,60 @@ P_CRIT_CO2_BAR = 73.8           # Critical Pressure of CO2 [bar]
 T_CRIT_CO2_K = 304.13           # Critical Temperature of CO2 [K]
 
 
-# ==================================================================================================
-# ILLUSTRATIVE, UNCALIBRATED REACTION KINETIC PARAMETERS
-# ==================================================================================================
 DEFAULT_KINETIC_PARAMS = {
-    'R1':  {'name': 'SO2 + 0.5 O2 + H2O <-> H2SO4',           'A': 5.0e5,     'Ea': 30000.0, 'units': 'm3 / (kmol * s)'},   # extremely slow
+    'R1':  {'name': 'SO2 + 0.5 O2 + H2O <-> H2SO4',           'A': 5.0e5,     'Ea': 30000.0, 'units': 'm3 / (kmol * s)'},
     'R2':  {'name': 'H2S + 3 NO2 <-> SO2 + H2O + 3 NO',       'A': 1.0e10,    'Ea': 30000.0, 'units': 'm3 / (kmol * s)'},
-    'R3a': {'name': 'SO2 + NO2 + H2O <-> NO + H2SO4',         'A': 1.0e5,     'Ea': 35000.0, 'units': 'm3 / (kmol * s)'},   # slow
-    'R4':  {'name': '2 NO + O2 <-> 2 NO2',                    'A': 500.0,     'Ea': -4400.0, 'units': 'm6 / (kmol2 * s)'},  # fast
-    'R5':  {'name': '3 NO2 + H2O <-> 2 HNO3 + NO',            'A': 2.4e6,     'Ea': 28000.0, 'units': 'm3 / (kmol * s)'},   # very fast
-    'R7':  {'name': '5 H2S + 6 NO + 4 H2O -> 6 NH3 + 5 SO2',  'A': 2.0e6,     'Ea': 12000.0, 'units': 'm3 / (kmol * s)'},   # fast
+    'R3a': {'name': 'SO2 + NO2 + H2O <-> NO + H2SO4',         'A': 1.0e5,     'Ea': 35000.0, 'units': 'm3 / (kmol * s)'},
+    'R4':  {'name': '2 NO + O2 <-> 2 NO2',                    'A': 500.0,     'Ea': -4400.0, 'units': 'm6 / (kmol2 * s)'},
+    'R5':  {'name': '3 NO2 + H2O <-> 2 HNO3 + NO',            'A': 2.4e6,     'Ea': 28000.0, 'units': 'm3 / (kmol * s)'},
+    'R7':  {'name': '5 H2S + 6 NO + 4 H2O -> 6 NH3 + 5 SO2',  'A': 2.0e6,     'Ea': 12000.0, 'units': 'm3 / (kmol * s)'},
     'R10': {'name': '4 NH3 + 4 NO + 3 O2 -> 4 N2O + 6 H2O',    'A': 1.0e2,     'Ea': 20000.0, 'units': 'm6 / (kmol2 * s)'},
     'R11': {'name': 'H2S + 2 NO -> N2O + 1/8 S8 + H2O',        'A': 1.0e2,     'Ea': 20000.0, 'units': 'm3 / (kmol * s)'},
     'R12': {'name': 'H2S + 2 O2 <-> H2SO4 (NO2-catalysed)',    'A': 1.0e14,    'Ea': 35000.0, 'units': 'm6 / (kmol2 * s), phase-scaled'},
     'R13': {'name': '4 NO2 + H2S <-> H2SO4 + 4 NO',            'A': 1.0e13,    'Ea': 30000.0, 'units': 'm4.5 / (kmol4.5 * s), phase-scaled'},
     'R15': {'name': '4 NO2 <-> 2 N2O + 3 O2',                  'A': 1.0e2,     'Ea': 40000.0, 'units': 'm3 / (kmol * s)'},
+    'R16': {'name': '2 NO2 <-> N2O4',                          'A': 1.0e3,     'Ea': 0.0,     'units': 'm3 / (kmol * s)'},
+    'R17': {'name': '2 NO2 + H2O <-> HNO3 + HNO2',             'A': 1.0e5,     'Ea': 20000.0, 'units': 'm3 / (kmol * s)'},
+    'R18': {'name': 'HNO2 + 0.5 O2 -> HNO3',                   'A': 1.0e5,     'Ea': 20000.0, 'units': 'm3 / (kmol * s)'},
 }
 
-# ==================================================================================================
-# GENERAL REFERENCE CARBON-STEEL / WET-CO2 PARAMETER SET
-# --------------------------------------------------------------------------------------------------
-# A single generic set of reaction-kinetics and wall-corrosion constants for wet
-# dense/gaseous CO2 streams containing H2S, SO2, NO2 and O2 in contact with carbon steel. These
-# describe the chemistry and corrosion mechanism themselves; reactor geometry and feed composition
-# are configured separately. Apply this set
-# with CO2ImpurityKineticsModel.apply_calibrated_profile() / CO2ImpurityReactorExperiment(...,
-# calibrated_profile='carbon_steel_wet_co2') / AutoclaveExperiment(...).
-# The values are illustrative reference inputs, not published experimental results. Validate them
-# for the intended operating envelope before using the model for engineering decisions.
-# ==================================================================================================
 CARBON_STEEL_WET_CO2_KINETICS = {
-    'R2':  {'A': 1.8375e10 * 0.97, 'Ea_kJ_mol': 30.0},  # H2S + 3 NO2 -> SO2 + H2O + 3 NO
-    'R3a': {'A': 1.1e11 * 0.15,   'Ea_kJ_mol': 30.0},   # SO2 + NO2 + H2O -> NO + H2SO4
-    'R4':  {'A': 1.5e6,   'Ea_kJ_mol': -4.4},   # 2 NO + O2 -> 2 NO2
-    'R5':  {'A': 2.4e6,   'Ea_kJ_mol': -5.0},   # 3 NO2 + H2O -> 2 HNO3 + NO
-    'R7':  {'A': 3750.0,  'Ea_kJ_mol': -10.0},  # 5 H2S + 6 NO + 4 H2O -> 6 NH3 + 5 SO2
-    'R10': {'A': 1.0e9,   'Ea_kJ_mol': 20.0},   # 4 NH3 + 4 NO + 3 O2 -> 4 N2O + 6 H2O
-    'R11': {'A': 1.6e7,   'Ea_kJ_mol': 20.0},   # H2S + 2 NO -> N2O + 1/8 S8 + H2O
-    'R12': {'A': 6.0e14,  'Ea_kJ_mol': 35.0},   # H2S + 2 O2 -> H2SO4 (NO2-catalysed, NO2 not consumed)
-    'R13': {'A': 1.0e13,  'Ea_kJ_mol': 30.0},   # 4 NO2 + H2S -> H2SO4 + 4 NO
-    'R15': {'A': 1.0e18,  'Ea_kJ_mol': 40.0},   # 4 NO2 -> 2 N2O + 3 O2
+    'R1':  {'A': 5.0e2, 'Ea_kJ_mol': 30.0},
+    'R2':  {'A': 33402393.195301704, 'Ea_kJ_mol': 29.0},
+    'R3a': {'A': 170000.0, 'Ea_kJ_mol': -5.0},
+    'R4':  {'A': 1.068774571145334e16, 'Ea_kJ_mol': 40.0},
+    'R5':  {'A': 4.839357043036789e-5, 'Ea_kJ_mol': -35.0},
+    'R7':  {'A': 2.3542893999927066e25, 'Ea_kJ_mol': 98.0},
+    'R10': {'A': 0.0,     'Ea_kJ_mol': 20.0},
+    'R11': {'A': 0.0,     'Ea_kJ_mol': 20.0},
+    'R12': {'A': 100.0, 'Ea_kJ_mol': -12.0},
+        'R13': {'A': 19274337.70287051, 'Ea_kJ_mol': -48.0},
+    'R15': {'A': 0.0,     'Ea_kJ_mol': 40.0},
+    'R16': {'A': 1.0e3,   'Ea_kJ_mol': 0.0},
+    'R17': {'A': 2.6973892231563043e31, 'Ea_kJ_mol': 130.0},
+    'R18': {'A': 2.86211893023342e38, 'Ea_kJ_mol': 180.0},
+    'r17_no2_order': 0.1,
+    'r17_h2o_order': 0.1,
+    'r17_wet_order': 2.0,
+    'r17_reference_kmol_m3': 1.0e-5,
+    'r17_floor_kmol_m3': 1.0e-7,
+    'r17_no2_activation_reference_kmol_m3': 9.3e-6,
+    'r17_no2_activation_hill_n': 14.0,
+    'r17_dense_co2_inhibition_f_phase_ref': 0.4,
+    'r17_dense_co2_inhibition_f_phase_hill_n': 3.0,
+    'r17_dense_co2_inhibition_wet_ref': 0.4,
+    'r17_dense_co2_inhibition_wet_hill_n': 2.0,
     'r15_f_phase_exponent': 1.0,
     'r15_o2_inhib_ref_ppm': 15.0,
     'r15_o2_inhib_hill_n': 2.0,
-    # R15's O2 activation gate (see rhs()/__init__ docstring): 0.0 disables it (exact no-op)
-    # until calibrated.
     'r15_o2_activation_ref_ppm': 0.0,
     'r15_o2_activation_hill_n': 2.0,
-    'r15_no2_cap_ppm': 0.0,
-    'r15_no2_cap_hill_n': 2.0,
+    'r15_no2_cap_ppm': 18.0,
+    'r15_no2_cap_hill_n': 6.0,
+    'r15_dimer_dh_kj_mol': 114.0,
+    'r15_dimer_t_ref_k': 275.15,
     'r15_n2o_cap_ppm': 6.0,
     'r15_n2o_cap_hill_n': 20.0,
-    # R15's O2-presence gate (see rhs()/__init__ docstring): 0.0 disables it (exact no-op)
-    # until calibrated for the specific brief/extended zero-O2-feed windows it targets.
     'r15_o2_presence_ref_ppm': 0.0,
     'r15_o2_presence_hill_n': 1.0,
     'r11_o2_ref_ppm': 2.0,
@@ -121,30 +115,63 @@ CARBON_STEEL_WET_CO2_KINETICS = {
     'r2_no2_boost_ref_ppm': 8.0,
     'r2_no2_boost_hill_n': 10.0,
     'r2_no2_boost_gain': 2.0,
-    # LaggedO2 time constant (see rhs()/o2_lag_tau_hours docstring): 0.0 disables it (exact
-    # no-op) until calibrated.
+    'r2_f_phase_exponent': 2.0,
+    'r2_no2_excess_ratio_ref': 0.0,
+    'r2_no2_excess_ratio_hill_n': 12.0,
     'o2_lag_tau_hours': 0.0,
     'o2_feed_lag_tau_hours': 20.0,
     'o2_feed_lag_rise_tau_hours': 1.0,
     'r12_density_independent': False,
+    'r12_f_phase_exponent': 1.2,
     'r12_no2_order': 1.0,
-    # Order of R13's NO2 (forward) / NO (reverse) terms -- 4.0 is the shipped/validated default
-    # (matches the literal stoichiometry). See r13_no2_order docstring on __init__.
+    'r12_no2_saturation_kmol_m3': 1e-5,
+    'r12_h2s_order': 1.35,
+    'r12_reference_kmol_m3': 1e-5,
+    'r12_floor_kmol_m3': 1e-12,
     'r13_no2_order': 4.0,
+    'r13_no2_rate_order': 1.0,
+    'r13_reference_kmol_m3': 1e-5,
+    'r13_floor_kmol_m3': 1e-12,
+    'h2s_no2_temperature': {'reference_K': 276.15, 'suppression_kj_mol': 90.0, 'onset_width_K': 5.0},
+    'dilute_redox': {
+        'rho_ref_kmol_m3': 5.0,
+        'density_hill_n': 6.0,
+        'r2_k_ref': 3300.0,
+        'r2_ea_kj_mol': -10.0,
+        'r2_no2_ref_kmol_m3': 9e-6,
+        'r2_no2_gain': 5.0,
+        'r2_no2_hill_n': 8.0,
+        'r2_h2s_half_kmol_m3': 1e-8,
+        'r4_k_ref': 2.65e10,
+        'r4_ea_kj_mol': -4.4,
+        'r4_no_half_kmol_m3': 5e-9,
+        'r4_no_reference_kmol_m3': 2.44e-6,
+        'r4_no_saturation_order': 2.0,
+        'r13_branch_fraction': 0.05,
+        'sulfur_acid_weight': 0.0,
+    },
 
-    # R5's reverse-term NO activity (see r5_no_activity docstring on CO2ImpurityKineticsModel):
-    # decoupled from the shared phi_dict['NO']=0.05 (a fix for R4's O2-recycling behaviour,
-    # irrelevant to R5). Kept at the ideal-fugacity value of 1.0 so R5 reaches its own genuine
-    # equilibrium instead of having its reverse term artificially starved.
     'r5_no_activity': 1.0,
-    'r4_no_activity': 0.05,
+    'r5_no2_order': 2.2,
+    'r5_reference_kmol_m3': 1e-5,
+    'r5_floor_kmol_m3': 1e-12,
+    'r7_no_order': 6.0,
+    'r7_reference_kmol_m3': 1e-5,
+    'r7_floor_kmol_m3': 1e-12,
+    'r7_no_activation_reference_kmol_m3': 3e-7,
+    'r7_no_activation_hill_n': 3.0,
+    'r7_cold_availability': {'midpoint_K': 273.09848358815213, 'width_K': 2.2397382295291317},
+    'r7_water_saturation': {'half_kmol_m3': 0.0005, 'reference_kmol_m3': 1e-3},
+    'r4_no_activity': 0.015,
+    'r4_o2_half_ppm': 30.0,
     'r4_surface_gain': 14.0,
-    'r3a_bore_gain': 2.0,
+    'r3a_bore_gain': 14.0,
     'r15_surface_suppress_gain': 60.0,
-    'r15_sulfur_ref_ppm': 0.05,
-    'r15_sulfur_hill_n': 2.0,
-    'wall_o2_feed_o2_ref_ppm': 15.0,
+    'r15_sulfur_ref_ppm': 0.075,
+    'r15_sulfur_hill_n': 4.0,
+    'wall_o2_feed_o2_ref_ppm': 10.0,
     'wall_o2_feed_o2_hill_n': 8.0,
+    'wall_o2_h2s_relief': 10.0,
     'wall_no2_feed_o2_ref_ppm': 15.0,
     'wall_no2_feed_o2_hill_n': 4.0,
     'r3a_feed_o2_ref_ppm': 15.0,
@@ -155,41 +182,91 @@ CARBON_STEEL_WET_CO2_KINETICS = {
     'wall_no2_o2_presence_hill_n': 2.0,
     'r3a_o2_presence_ref_ppm': 0.0,
     'r3a_o2_presence_hill_n': 1.0,
+    'r3a_h2s_feed_inhibition_ref_ppm': 0.2,
+    'r3a_h2s_feed_inhibition_hill_n': 22.0,
+    'r3a_h2s_feed_inhibition_no2_ref_ppm': 5.0,
+    'r3a_h2s_feed_inhibition_no2_hill_n': 16.0,
+    'r3a_h2s_feed_inhibition_gain': 0.0,
     'r2_o2_presence_ref_ppm': 0.0,
     'r2_o2_presence_hill_n': 1.0,
-    # wall_no2's NO product brake (see _wall_no2_rate docstring): 0.0 disables it (exact no-op)
-    # until calibrated.
-    'wall_no2_no_cap_ppm': 0.0,
-    'wall_no2_no_cap_hill_n': 2.0,
-    # wall_no2's NO2 Langmuir adsorption isotherm (see _wall_no2_rate docstring): 0.0 disables
-    # it (exact no-op, falls back to the plain wall_no2_potency power law) until calibrated.
-    'wall_no2_langmuir_half_ppm': 0.0,
+    'wall_no2_no_cap_ppm': 0.99,
+    'wall_no2_no_cap_hill_n': 20.0,
+    'wall_no2_no_cap_gas_weighted': True,
+    'wall_no2_langmuir_half_ppm': 2.0,
 
     'r3a_no_escape_frac': 0.0,
 
-    # R1 (SO2 + 0.5 O2 + H2O -> H2SO4) autocatalytic acceleration (see r1_autocat_gain docstring
-    # on __init__): a saturating multiplier on BOTH directions of R1, driven by the cumulative
-    # (never-decreasing) H2SO4 ever produced across R1/R3a/R12/R13, not the current standing H2SO4
-    # ppm -- so wall-corrosion consumption of H2SO4 (Fe + H2SO4 -> FeSO4 + H2) cannot undo the
-    # acceleration or feed back into Keq1's reverse term. gain=0.0 disables it (no autocatalysis).
     'r1_autocat_gain': 0.0,
-    'r1_autocat_ref_ppm': 10.0,     # cumulative H2SO4 (ppm-equivalent) giving half the max boost
+    'r1_autocat_ref_ppm': 10.0,
+    'r1_autocat_hill_n': 1.0,
+    'r1_feed_o2_ref_ppm': 0.0,
+    'r1_feed_o2_hill_n': 4.0,
+    'r1_feed_o2_cap_ppm': 0.0,
 
-    'r3a_autocat_gain': 20.0,
-    'r3a_autocat_ref_ppm': 40.0,
+    'r3a_autocat_gain': 0.0,
+    'r3a_autocat_ref_ppm': 13.3,
     'r3a_autocat_hill_n': 8.0,
     'r3a_autocat_surface_suppress_gain': 20.0,
+    'r3a_acid_film_k_ref': 1.0e4,
+    'r4_acid_film_k_ref': 5.0e9,
+    'r3a_acid_film_ea_kj_mol': 60.0,
+    'r3a_acid_film_ref_ppm': 41.5,
+    'r3a_acid_film_hill_n': 4.0,
+    'r3a_environment': {
+        'wetting_reference': 0.27,
+        'wetting_order': 2.0,
+        'history_fraction': 1.0,
+        'current_acid_reference_ppm': 10.0,
+        'oxygen_supply_fraction': 1.0,
+        'base_so2_inhibition_ref_ppm': 1.0,
+        'base_so2_inhibition_order': 3.6,
+        'base_so2_inhibition_floor': 0.000058823529411764706,
+        'base_so2_activation_ref_ppm': 1.665,
+        'base_so2_activation_order': 6.0,
+        'oxygen_presence_ref_ppm': 0.1,
+        'oxygen_present_multiplier': 0.02,
+    },
+    'r3a_dilute_acid': {
+        'k_ref': 4.845987896e9,
+        'history_ref_ppm': 65.0,
+        'history_order': 1.0,
+        'no2_half_kmol_m3': 5e-7,
+        'density_order': 2.0,
+        'acid_ref_kmol_m3': 3.4495762e-5,
+        'acid_order': 1.525456,
+        'background_k_ref': 1.257677783e6,
+        'h2s_half_kmol_m3': 2e-7,
+        'acid_response_hours': 10.0,
+        'history_fraction': 0.0,
+        'nitric_history_gain': 0.0,
+        'nitric_history_ref_ppm': 100.0,
+        'nitric_history_order': 4.0,
+    },
+    'r3a_conditioned_acid': {
+        'k_ref': 6.0e7,
+        'ea_kj_mol': 90.0,
+        'acid_ref_ppm': 0.2,
+        'acid_order': 12.0,
+        'history_ref_ppm': 20.0,
+        'so2_ref_ppm': 0.7,
+        'so2_order': 8.0,
+        'no_ref_ppm': 0.3,
+        'limit_initial_ppm_h': 0.03,
+        'limit_max_ppm_h': 0.15,
+        'limit_acid_ref_ppm': 20.0,
+        'limit_acid_order': 1.0,
+    },
+
+    'acid_so2_sat_ref_ppm': 0.0,
+    'acid_so2_sat_hill_n': 20.0,
 
     'condensation_exponent': 2.0,
-    'rho_m_reference': 24.0,               # kmol/m^3
+    'rho_m_reference': 24.0,
 
-    'wall_k_intrinsic': 1.8e-7,             # O2 path intrinsic rate [mol O2 / (m^2 s ppm)]
-    'wall_o2_potency': 1.0,                # linear in O2 ppm
+    'wall_k_intrinsic': 3.0e-8,             # O2 path intrinsic rate [mol O2 / (m^2 s ppm)]
+    'wall_o2_potency': 1.0,
+    'wall_o2_f_phase_exponent': 2.0,
     'wall_o2_sat_ref': 0.0,
-    # wall_rho_pass/wall_hill_n (dense-CO2 passivation) are UNUSED by any active wall path.
-    # wall_acid_gain/exponent/background drive _acid_enhancement (the O2 path's acid-history
-    # gating, see above) -- background=0.0 (no floor: zero acid history genuinely means zero
-    # enhancement, matching "ties O2 attack to acid formation").
     'wall_acid_gain': 0.06,
     'wall_acid_exponent': 1.0,
     'wall_acid_background': 0.0,
@@ -198,36 +275,29 @@ CARBON_STEEL_WET_CO2_KINETICS = {
     'wall_rho_pass': 5.0,
     'wall_hill_n': 3.0,
     'wall_consume_h2o': False,
-    # wall_h2o_* below govern ONLY the disabled FeCO3 path's _effective_g_h2o gate; the three
-    # ACTIVE acid paths use the simpler _water_saturation_fraction instead (see above).
     'wall_h2o_mode': 'wet_film',
-    'wall_h2o_enhancement_factor': 1.0,    # tunable non-ideality correction on the Antoine dew point
-    'wall_h2o_deliq_ref_ppm': 30.0,        # acid ppm that halves the solubility limit (deliquescence)
-    'wall_h2o_hill_n': 1.0,                # wetted-fraction Langmuir/Hill sharpness around the dew point
-    'wall_h2o_excess_ref_ppm': 100.0,      # excess-water scale for the film-severity growth term
-    'wall_h2o_excess_exponent': 1.0,       # excess-water growth exponent (severity keeps rising)
-    'wall_feco3_k_intrinsic': 0.0,         # Disabled by default
-    'wall_feco3_potency': 1.0,             # linear in dissolved-CO2 molarity (unused while disabled)
-    'wall_hno3_corrosion_k_intrinsic': 1.0e-7,  # HNO3 wall-film path intrinsic rate [mol Fe / (m^2 s ppm)]
-    'wall_hno3_corrosion_potency': 1.0,         # linear in HNO3 ppm
+    'wall_h2o_enhancement_factor': 1.0,
+    'wall_h2o_deliq_ref_ppm': 30.0,
+    'wall_h2o_hill_n': 1.0,
+    'wall_h2o_excess_ref_ppm': 100.0,
+    'wall_h2o_excess_exponent': 1.0,
+    'wall_feco3_k_intrinsic': 0.0,
+    'wall_feco3_potency': 1.0,
+    'wall_hno3_corrosion_k_intrinsic': 3.0e-9,
+    'wall_hno3_corrosion_potency': 3.5,
     'wall_h2so4_k_intrinsic': 6.0e-9,      # sulfuric-acid path intrinsic rate [mol Fe / (m^2 s ppm)]
-    'wall_h2so4_potency': 1.0,             # linear in H2SO4 ppm
-    'wall_no2_k_intrinsic': 5.0e-6,        # [mol NO2 / (m^2 s ppm)]
-    'wall_no2_potency': 1.0,               # linear in NO2 ppm
-    # O2-depletion Hill gate for wall_no2 (see _wall_no2_rate docstring): strong (gate~1) once O2
-    # is nearly exhausted, weak (gate~0) while O2 stays abundant.
+    'wall_h2so4_potency': 1.0,
+    'wall_no2_k_intrinsic': 1.0e-5,        # [mol NO2 / (m^2 s ppm)]
+    'wall_no2_potency': 1.0,
     'wall_no2_o2_ref_ppm': 2.0,
     'wall_no2_o2_hill_n': 4.0,
-    'wall_o2_gas_phase_gain': 0.6,
-    'wall_gas_phase_gain': 0.6,
+    'wall_o2_gas_phase_gain': 10.0,
+    'wall_gas_phase_gain': 600.0,
     'wall_gas_phase_rho_ref': 5.0,
-    'wall_gas_phase_hill_n': 2.0,
+    'wall_gas_phase_hill_n': 4.0,
     'wall_s8_k_intrinsic': 1.0e-9,         # [mol H2S / (m^2 s ppm)]
-    'wall_s8_h2s_potency': 1.0,            # linear in H2S ppm
-    'wall_s8_o2_potency': 0.5,             # sub-linear in O2 ppm
-    # Surface-catalysed SO2 oxidation (see _wall_so2_rate docstring): 0.0 (disabled) until
-    # calibrated -- new mechanism, targets a genuinely time/exposure-dependent SO2 depletion
-    # some experiments show late in a long, sustained-high-O2 run.
+    'wall_s8_h2s_potency': 1.0,
+    'wall_s8_o2_potency': 0.5,
     'wall_so2_k_intrinsic': 0.0,
     'wall_so2_potency': 1.0,
     'wall_so2_exposure_threshold_ppm_h': 0.0,
@@ -241,62 +311,49 @@ DG_H2SO4_STDGIBBS = -690.1e3
 DG_H2S_STDGIBBS = -33.4e3
 DG_NO2_STDGIBBS = 51.3e3
 DG_NO_STDGIBBS = 86.6e3
-# Using aqueous molecular HNO3 (-79.9) rather than gaseous (-73.5) so that Keq5 is
-# phase-consistent with H2O(l) already used above.
 DG_HNO3_STDGIBBS = -79.9e3
 DG_NH3_STDGIBBS = -16.4e3       # NIST standard Gibbs energy of formation, NH3(g), 298 K
 DG_N2O_STDGIBBS = 104.2e3       # NIST standard Gibbs energy of formation, N2O(g), 298 K
-DG_S8_STDGIBBS = 0.0            # S8(s, rhombic) is the reference state of the element
+DG_N2O4_STDGIBBS = 97.9e3       # NIST standard Gibbs energy of formation, N2O4(g), 298 K
+DG_HNO2_STDGIBBS = -42.97e3     # NIST standard Gibbs energy of formation, HNO2(g), 298 K
+DG_S8_STDGIBBS = 0.0
 _R4_SURFACE_SV_REF_CM_INV = 4.0 / 6.5 + 2.0 / (330.0 / (np.pi * (6.5**2) / 4.0))
 
-MAX_KEQ_EXPONENT = 300.0        # Exponential ceiling to prevent numerical overflow in Keq
-MIN_CONCENTRATION_FLOOR = 1e-25  # Minimum concentration floor to prevent log underflow in ODEs
+MAX_KEQ_EXPONENT = 300.0
+MIN_CONCENTRATION_FLOOR = 1e-25
 MOISTURE_REF_PPM = 50.0         # Reference moisture concentration scale for hydration factor [ppm]
 _WALL_NO2_T_REF_K = 249.15
 
 
-class CO2ImpurityKineticsModel:
-    """
-    Mechanistic simulator for impurity-reaction screening in CO2 streams.
+def _fractional_activity(concentration, exponent, floor=MIN_CONCENTRATION_FLOOR):
+    """Keep fractional-order depletion differentiable at numerical zero."""
+    concentration = max(float(concentration), 0.0)
+    return concentration * (concentration + floor) ** (exponent - 1.0)
 
-    Uses NeqSim SRK thermodynamics when available. The fallback correlation and kinetic
-    parameters are illustrative and require independent calibration and validation.
+
+class CO2ImpurityKineticsModel:
+    """Screen impurity reactions in CO2 with empirical kinetic and surface models.
+
+    Cumulative acid states are kinetic-history proxies, not retained acid mass.
     """
 
     SPECIES = (
         'H2S', 'SO2', 'NO2', 'NO', 'O2', 'H2O',
-        'H2SO4', 'HNO3', 'S8', 'NH3', 'N2O', 'H2'
+        'H2SO4', 'HNO3', 'S8', 'NH3', 'N2O', 'H2', 'N2O4', 'HNO2'
     )
 
-    # Extra ODE states appended after SPECIES (see rhs()/simulate()): two accumulated solid
-    # wall-corrosion products (FeSO4, Fe(NO3)2), and three cumulative, NEVER-DECREASING "total
-    # ever produced" trackers (CumH2SO4, CumHNO3, CumNH3) -- kept deliberately separate from the
-    # actual gas-phase H2SO4/HNO3/NH3 concentration (which the wall reactions, reverse rates and
-    # (for NH3) R10 DO consume/reduce), so that acid/base consumed by any of those does not erase
-    # the reaction history that drives R1's autocatalytic acceleration (see set_r1_autocat
-    # docstring), the autoclave-wash IC-analysis estimate (see get_autoclave_wash_table), or any
-    # future use.
     EXTRA_STATE_KEYS = ('FeSO4', 'FeNO32', 'CumH2SO4', 'CumHNO3', 'CumNO2Exposure', 'LaggedO2',
-                        'CumO2Exposure', 'LaggedO2Feed', 'CumNH3')
+                        'CumO2Exposure', 'LaggedO2Feed', 'CumNH3', 'AcidSiteActivity')
 
     SUPPORTED_MATERIALS = ('carbon_steel', 'magnetite', 'stainless_steel', 'inert')
 
     def __init__(self, T_kelvin=298.15, P_bar=100.0, water_ppm=50.0, material='carbon_steel',
-                 # Phase-condensation multiplier for heterogeneous / wet-film reactions
-                 # (R2, R12, R13).
-                 # f_phase = (rho_m / rho_m_reference) ** condensation_exponent
-                 # 0.0 disables it (backward-compatible default).
                  condensation_exponent=0.0,
                  rho_m_reference=24.0,
-                 # Wall-corrosion O2 sink (adsorbed-moisture-film gating, see _wall_o2_rate).
-                 # Set wall_area_m2 > 0 to enable.
                  wall_area_m2=0.0,
                  wall_k_intrinsic=1.0e-4,
                  wall_o2_potency=1.0,
-                 # Reference water-saturation fraction for wall_o2's combined density+wetness
-                 # gas-phase gate (see _wall_gas_phase_enhancement docstring): 0.0 (default)
-                 # disables the combined effect (sat/density stay independent, backward-
-                 # compatible).
+                 wall_o2_f_phase_exponent=0.0,
                  wall_o2_sat_ref=0.0,
                  wall_rho_pass=5.0,
                  wall_hill_n=3.0,
@@ -304,263 +361,112 @@ class CO2ImpurityKineticsModel:
                  wall_acid_gain=1.0,
                  wall_acid_exponent=1.5,
                  wall_acid_background=0.02,
-                 # Optional SECOND power-law term in _acid_enhancement (see its docstring):
-                 # gain2=0.0 (default) makes it a complete no-op, backward-compatible.
                  wall_acid_gain2=0.0,
                  wall_acid_exponent2=6.0,
                  wall_consume_h2o=False,
-                 # Wet-film activation mode: 'density' (legacy Langmuir g(H2O), the constructor
-                 # default) or 'wet_film' (solubility/dew-point theory: a separate aqueous acid
-                 # film only exists once gas-phase H2O exceeds its solubility limit in the CO2
-                 # phase -- estimated from the Antoine vapor-pressure of pure water, scaled by an
-                 # illustrative enhancement factor for CO2/H2O non-ideality, and lowered by
-                 # hygroscopic-acid deliquescence. Above that limit the *fraction of the coupon
-                 # wetted* saturates quickly (Hill function), but the film's severity keeps
-                 # growing with the excess (unabsorbed) water via a separate power-law term --
-                 # more free water means a thicker/more conductive electrolyte film, not just a
-                 # wetted/dry switch. Used by the general reference profile).
                  wall_h2o_mode='density',
                  wall_h2o_enhancement_factor=1.0,
                  wall_h2o_deliq_ref_ppm=30.0,
                  wall_h2o_hill_n=4.0,
                  wall_h2o_excess_ref_ppm=100.0,
                  wall_h2o_excess_exponent=1.0,
-                 # Carbonic-acid wall path: Fe + CO2(aq) + H2O -> FeCO3 + H2. Driven by the
-                 # Henry's-law dissolved-CO2 concentration (see _co2_aqueous_solubility_mol_l),
-                 # not by a tracked ppm-level species -- CO2 is the bulk carrier gas here, so
-                 # unlike the trace-acid paths below this one is not flow-throughput limited.
-                 # Real NO2/H2SO4 sink; whenever little of those has converted (low HNO3/H2SO4)
-                 # but the gas is wet, this is expected to be the dominant corrosion path.
                  wall_feco3_k_intrinsic=0.0,
                  wall_feco3_potency=1.0,
-                 # Nitric-acid wall path: 8 HNO3 + 3 Fe -> 3 Fe(NO3)2 + 2 NO + 4 H2O -- HNO3
-                 # (already formed in the bulk gas by R5) directly attacks bare steel, releasing
-                 # NO and water back to the gas phase. A real HNO3 sink coupled back into the
-                 # species ODEs whenever wall_hno3_corrosion_k_intrinsic > 0.
                  wall_hno3_corrosion_k_intrinsic=0.0,
                  wall_hno3_corrosion_potency=1.0,
-                 # Sulfuric-acid wall path: Fe + H2SO4 -> FeSO4 + H2. H2SO4 is a
-                 # coupled back into the species ODEs whenever wall_h2so4_k_intrinsic > 0.
                  wall_h2so4_k_intrinsic=0.0,
                  wall_h2so4_potency=1.0,
-                 # Direct dry gas-solid NO2 wall path: 2 Fe + 3 NO2 -> Fe2O3 + 3 NO (see
-                 # _wall_no2_rate docstring). A real NO2 sink that also produces NO directly,
-                 # coupled back into the species ODEs whenever wall_no2_k_intrinsic > 0.
                  wall_no2_k_intrinsic=0.0,
                  wall_no2_potency=1.0,
-                 # Cold-favoured Arrhenius term for the wall NO2 path (see _wall_no2_rate
-                 # docstring): 0.0 (default) disables it, backward-compatible.
                  wall_no2_ea_kj_mol=0.0,
-                 # Absolute-humidity Langmuir gating reference ppm for the wall NO2 path (see
-                 # _wall_no2_rate docstring): 0.0 (default) keeps the relative-dew-point gating.
                  wall_no2_h2o_ppm_ref=0.0,
-                 # Cumulative-NO2-exposure induction-period threshold/sharpness for the wall NO2
-                 # path (see _wall_no2_rate docstring): threshold=0.0 (default) disables it.
                  wall_no2_exposure_threshold_ppm_h=0.0,
                  wall_no2_exposure_hill_n=4.0,
-                 # O2-depletion gating reference ppm/sharpness for the wall NO2 path (see
-                 # _wall_no2_rate docstring): ref=0.0 (default) disables it.
                  wall_no2_o2_ref_ppm=0.0,
                  wall_no2_o2_hill_n=2.0,
-                 # Gas-phase-favoured enhancement for the O2/NO2 wall paths (see
-                 # _wall_gas_phase_enhancement docstring): gain=0.0 (default) disables it.
-                 # wall_o2_gas_phase_gain (O2 attack) and wall_gas_phase_gain (NO2 attack) are
-                 # independent -- the two paths need not share the same gas-phase sensitivity.
                  wall_o2_gas_phase_gain=0.0,
                  wall_gas_phase_gain=0.0,
                  wall_gas_phase_rho_ref=5.0,
                  wall_gas_phase_hill_n=2.0,
-                 # Carbon-steel-catalysed Claus-type path: 8 H2S + 4 O2 -> S8 + 8 H2O. Does not
-                 # consume Fe (catalytic, not corrosive); only active for carbon_steel/magnetite
-                 # (see _wall_s8_rate). Guessed as kinetically slow.
                  wall_s8_k_intrinsic=0.0,
                  wall_s8_h2s_potency=1.0,
                  wall_s8_o2_potency=0.5,
-                 # Surface-catalysed SO2 oxidation (see _wall_so2_rate): SO2 + 0.5 O2 + H2O ->
-                 # H2SO4, catalysed by an oxide layer that builds up with CUMULATIVE O2 exposure
-                 # (CumO2Exposure ODE state -- see EXTRA_STATE_KEYS), not instantaneous O2.
-                 # wall_so2_k_intrinsic=0.0 (default) disables it entirely.
                  wall_so2_k_intrinsic=0.0,
                  wall_so2_potency=1.0,
                  wall_so2_exposure_threshold_ppm_h=0.0,
                  wall_so2_exposure_hill_n=2.0,
-                 # R1 (SO2 + 0.5 O2 + H2O -> H2SO4) autocatalytic acceleration: a phenomenological
-                 # stand-in for the real radical-chain/trace-catalysed SO2-oxidation-to-sulfuric-
-                 # acid mechanism (e.g. the historical "lead chamber" NOx-mediated pathway, or
-                 # aqueous-film trace-metal-catalysed SO2 autoxidation) -- both directions of R1
-                 # are scaled by the SAME factor (a catalyst speeds up the approach to
-                 # equilibrium, it does not shift Keq1). Saturating (Langmuir-form) in the
-                 # cumulative H2SO4 ever produced (``CumH2SO4``, see EXTRA_STATE_KEYS), not the
-                 # current standing H2SO4 ppm, so wall-corrosion consumption of H2SO4 cannot undo
-                 # the acceleration. 0.0 disables it (backward-compatible default).
                  r1_autocat_gain=0.0,
                  r1_autocat_ref_ppm=10.0,
-                 # R3a (SO2 + NO2 + H2O -> NO + H2SO4) autocatalytic acceleration: same
-                 # saturating (Langmuir-form) mechanism and SAME cumulative-H2SO4 driver as
-                 # r1_autocat above (both directions scaled equally, Keq3 unchanged) -- models
-                 # NO2+SO2 conversion itself speeding up once enough H2SO4 has accumulated (e.g.
-                 # an autocatalytic acid-film effect), independent of r1_autocat's own gain so
-                 # each reaction can be tuned separately. 0.0 disables it (backward-compatible).
+                 r1_feed_o2_ref_ppm=0.0,
+                 r1_feed_o2_hill_n=4.0,
+                 r1_feed_o2_cap_ppm=0.0,
                  r3a_autocat_gain=0.0,
                  r3a_autocat_ref_ppm=10.0,
                  r3a_autocat_hill_n=1.0,
                  r3a_autocat_surface_suppress_gain=0.0,
-                 # R12 (H2S+2O2->H2SO4, NO2-catalysed) is a candidate wet-film reaction like R2,
-                 # so defaults to the same f_phase suppression -- but unlike R2 it is a genuine
-                 # catalytic oxidation that plausibly still proceeds in a dilute gas phase (no
-                 # bulk liquid film needed, just adsorbed NO2 on whatever surface/droplets are
-                 # present). Set True to bypass f_phase entirely for R12 (rate = 1x regardless of
-                 # density). False (default) keeps the original wet-film-suppressed behaviour.
+                 acid_so2_sat_ref_ppm=0.0,
+                 acid_so2_sat_hill_n=2.0,
                  r12_density_independent=False,
+                 r12_f_phase_exponent=1.0,
                  r12_no2_order=1.0,
-                 # Order of R13's NO2 (forward) / NO (reverse) rate-law terms. 4.0 (default)
-                 # matches R13's literal 4NO2+H2S<->H2SO4+4NO stoichiometry, but is self-defeating
-                 # at trace concentrations: as R13 consumes NO2, its own rate collapses even
-                 # faster (4th power), so it can never finish depleting a residual NO2 excess no
-                 # matter how large its A-factor. Unlike r12_no2_order (a true catalyst, cancels
-                 # out of Keq12 exactly), NO2/NO are genuine reactant/product here, so lowering
-                 # this DELIBERATELY shifts R13's apparent equilibrium point toward more forward
-                 # conversion at low NO2 -- a kinetic-order choice, not a thermodynamic one (real
-                 # multi-step mechanisms often have empirical orders that don't match the lumped
-                 # overall stoichiometry) -- while keeping the SAME 4:1 mass-balance stoichiometry
-                 # in rhs().
+                 r17_dense_co2_inhibition_f_phase_ref=0.0,
+                 r17_dense_co2_inhibition_f_phase_hill_n=3.0,
+                 r17_dense_co2_inhibition_wet_ref=0.4,
+                 r17_dense_co2_inhibition_wet_hill_n=2.0,
                  r13_no2_order=4.0,
-                 # R15's own f_phase exponent (f_phase**this, default 1.0 = same suppression as
-                 # R2/R12/R13, backward-compatible). <1.0 weakens R15's density suppression.
                  r15_f_phase_exponent=1.0,
-                 # R4's surface-to-volume enhancement gain. 2 NO + O2 -> 2 NO2 is termolecular
-                 # and runs far faster on a wetted wall film than in the bulk, so its apparent
-                 # rate tracks the vessel's A/V ratio (4/d + 2/L). The factor is
-                 # 1 + gain * (A_V / _R4_SURFACE_SV_REF_CM_INV - 1), clamped at >=1.0 and
-                 # normalised to the reference autoclave, so it is EXACTLY 1.0
-                 # for every standard-bore rig and only lifts R4 in a narrower vessel.
-                 # 0.0 (default) disables it entirely.
+                 r4_o2_half_ppm=0.0,
                  r4_surface_gain=0.0,
                  r3a_bore_gain=0.0,
-                 # Narrow-bore surface quenching of R15's N2O channel, 1/(1 + gain * excess),
-                 # exactly 1.0 at the reference bore. See _r15_surface_suppression.
                  r15_surface_suppress_gain=0.0,
-                 # Shared sulfur-catalyst gate for R15 and the wall NO2 path (see
-                 # _sulfur_catalyst_gate). 0.0 disables it.
                  r15_sulfur_ref_ppm=0.0,
                  r15_sulfur_hill_n=2.0,
-                 # Feed-O2 passivation gates (see _feed_o2_passivation). 0.0 disables each.
                  wall_o2_feed_o2_ref_ppm=0.0,
                  wall_o2_feed_o2_hill_n=4.0,
                  wall_no2_feed_o2_ref_ppm=0.0,
                  wall_no2_feed_o2_hill_n=4.0,
                  r3a_feed_o2_ref_ppm=0.0,
                  r3a_feed_o2_hill_n=4.0,
-                 # R3a-ONLY floor on its own feed-O2 passivation gate (see _feed_o2_passivation's
-                 # ``floor`` argument) -- caps how strongly O2 can suppress R3a, so SOME SO2+NO2
-                 # reaction always keeps proceeding (just slower at higher O2), instead of R3a
-                 # being able to shut off almost entirely at very high sustained feed O2. 0.0
-                 # disables it (exact pre-existing behaviour, unbounded suppression).
                  r3a_feed_o2_floor=0.0,
                  r3a_feed_o2_cap_ppm=0.0,
-                 # O2-PRESENCE gates (distinct from the feed-O2 PASSIVATION gates above): those
-                 # suppress at sustained HIGH feed; these suppress when O2 is NOT being fed at
-                 # all (genuinely anoxic window), a case where wall_no2's own O2-scarcity gate
-                 # and R15's own O2-inhibition gate are BOTH wide open with nothing to throttle
-                 # them, letting NO2 crash and NO/N2O spike within a single brief or extended
-                 # zero-O2-feed phase. Langmuir form (feed_ppm/(feed_ppm+ref)): ->0 only as
-                 # feed->0, ->1 for ANY nonzero feed given a small ref. 0.0 (default) disables
-                 # each (factor always 1.0, backward-compatible).
                  wall_no2_o2_presence_ref_ppm=0.0,
                  wall_no2_o2_presence_hill_n=1.0,
                  r3a_o2_presence_ref_ppm=0.0,
                  r3a_o2_presence_hill_n=1.0,
+                 r3a_h2s_feed_inhibition_ref_ppm=0.0,
+                 r3a_h2s_feed_inhibition_hill_n=4.0,
+                 r3a_h2s_feed_inhibition_no2_ref_ppm=0.0,
+                 r3a_h2s_feed_inhibition_no2_hill_n=4.0,
+                 r3a_h2s_feed_inhibition_gain=0.0,
                  r2_o2_presence_ref_ppm=0.0,
                  r2_o2_presence_hill_n=1.0,
-                 # R2's NO2-abundance boost: 1 + gain*ratio/(1+ratio), ratio=(C_NO2_ppm/ref)**n --
-                 # mirrors r11_o2_gain exactly (same Langmuir-saturating form), but keyed to NO2
-                 # instead of O2 and applied to R2 (H2S+3NO2->SO2+H2O+3NO) instead of R11. Lets R2
-                 # speed up specifically when NO2 is abundant without a flat, NO2-independent A2
-                 # change (which would raise R2's rate identically at low- and high-NO2 checkpoints
-                 # alike). ref_ppm<=0 or gain=0.0 (default) disables it (exact no-op).
                  r2_no2_boost_ref_ppm=0.0,
                  r2_no2_boost_hill_n=2.0,
                  r2_no2_boost_gain=0.0,
-                 # wall_no2's NO product brake (see _wall_no2_rate docstring): mirrors R15's
-                 # N2O brake -- throttles as standing NO approaches/exceeds this ceiling, so
-                 # wall_no2 cannot keep converting NO2 into unbounded extra NO once NO is
-                 # already abundant. 0.0 (default) disables it (exact no-op).
+                 r2_f_phase_exponent=1.0,
+                 r2_no2_excess_ratio_ref=0.0,
+                 r2_no2_excess_ratio_hill_n=4.0,
                  wall_no2_no_cap_ppm=0.0,
                  wall_no2_no_cap_hill_n=2.0,
-                 # Langmuir adsorption isotherm for wall_no2's NO2 dependence (see
-                 # _wall_no2_rate docstring): a finite number of coupon active sites means the
-                 # attack rate should saturate at high NO2 instead of scaling unboundedly.
-                 # 0.0 (default) disables it (falls back to the plain wall_no2_potency power law).
                  wall_no2_langmuir_half_ppm=0.0,
-                 # R15's O2 PRODUCT-inhibition gate (see rhs()): O2 is a product of
-                 # 4 NO2 -> 2 N2O + 3 O2, so an accumulated O2 pool blocks the surface/radical
-                 # chain that carries it. Forward factor 1/(1+(O2_ppm/ref)**n), i.e. R15 runs at
-                 # full strength in an O2-starved gas and is throttled once O2 is abundant.
-                 # ref_ppm=0.0 (default) disables the gate entirely (factor always 1.0,
-                 # backward-compatible).
                  r15_o2_inhib_ref_ppm=0.0,
                  r15_o2_inhib_hill_n=2.0,
-                 # R15's O2 ACTIVATION gate (see rhs()): the inhibition gate above is
-                 # permissive AT O2=0 (nothing left to inhibit with), so it cannot itself stop
-                 # R15 during a genuinely anoxic window. This gate instead puts INSTANTANEOUS
-                 # O2 directly into the rate as something R15 NEEDS to proceed at all --
-                 # Hill-activation form ratio**n/(1+ratio**n), exactly 0 at O2=0 regardless of
-                 # NO2, rising to 1 as O2 becomes abundant. ref_ppm=0.0 (default) disables it
-                 # entirely (factor always 1.0, backward-compatible).
                  r15_o2_activation_ref_ppm=0.0,
                  r15_o2_activation_hill_n=2.0,
-                 # R15's NO2 Langmuir cap (see rhs()): saturates the EFFECTIVE NO2 concentration
-                 # feeding R15's forward term only, so a very high standing NO2 (far beyond any
-                 # experiment r15_o2_inhib was calibrated against) cannot drive an unbounded
-                 # NO2^4 forward rate purely because its own O2-inhibition gate happens to be
-                 # wide open (e.g. a genuinely zero-O2-feed window). ppm=0.0 (default) disables
-                 # it entirely (exact no-op, backward-compatible).
                  r15_no2_cap_ppm=0.0,
                  r15_no2_cap_hill_n=2.0,
-                 # R15's N2O product brake (see rhs()): saturating gate on the FORWARD term,
-                 # keyed on the STANDING N2O concentration itself -- unlike r15_o2_inhib and
-                 # the reverse/equilibrium term (both need O2, which is ALSO absent during a
-                 # genuinely zero-O2-feed window), this brake still works when O2=0. ppm=0.0
-                 # (default) disables it entirely (exact no-op, backward-compatible).
+                 r15_dimer_dh_kj_mol=0.0,
+                 r15_dimer_t_ref_k=278.15,
                  r15_n2o_cap_ppm=0.0,
                  r15_n2o_cap_hill_n=2.0,
-                 # R15's O2-PRESENCE gate (see rhs()): keys off whether O2 is being FED AT ALL
-                 # (exogenous C_in[4]), unlike r15_o2_inhib_ref_ppm above which reacts to the
-                 # instantaneous/consumed O2 concentration. During a genuinely zero-O2-feed
-                 # window r15_o2_inhib is ALWAYS wide open (nothing left to inhibit with),
-                 # letting R15 run at full, unthrottled strength off whatever NO2 happens to be
-                 # standing -- this gate throttles that specific case while leaving R15 at full
-                 # strength whenever O2 is genuinely being fed (its normal operating regime,
-                 # including experiments that need R15's own O2 byproduct for their O2 targets).
-                 # Langmuir form (feed_ppm/(feed_ppm+ref)): ->0 only as feed->0, ->1 for ANY
-                 # nonzero feed given a small ref. ref_ppm=0.0 (default) disables it entirely
-                 # (factor always 1.0, backward-compatible).
                  r15_o2_presence_ref_ppm=0.0,
                  r15_o2_presence_hill_n=1.0,
-                 # R11's forward rate gets an O2-abundance boost (see rhs()): 0.0 (default)
-                 # disables it (boost always 1.0, backward-compatible) -- ADDS strength above
-                 # the current A11 value once O2 is abundant, never subtracts from it.
                  r11_o2_ref_ppm=0.0,
                  r11_o2_hill_n=2.0,
                  r11_o2_gain=0.0,
-                 # Symmetric lag time constant (hours) for the LaggedO2 ODE state (see rhs()
-                 # docstring). 0.0 (default) disables it entirely -- r15_o2_inhib/wall_no2's
-                 # O2-scarcity gate then read raw instantaneous O2, as before.
                  o2_lag_tau_hours=0.0,
-                 # ASYMMETRIC lag time constants (hours) for the LaggedO2Feed ODE state (see
-                 # rhs() docstring) -- fast rise, slow fall, tracking the FED (not instantaneous)
-                 # O2 concentration for use ONLY by wall_o2's own feed-passivation gate.
-                 # o2_feed_lag_tau_hours=0.0 (default) disables it entirely (wall_o2 falls back
-                 # to the raw, discontinuous feed step, as before).
                  o2_feed_lag_tau_hours=0.0,
                  o2_feed_lag_rise_tau_hours=1.0,
-                 # CO2-species binary interaction parameters (kij) for the SRK fugacity flash,
-                 # keyed by SPECIES name (e.g. {'NO2': 0.7}). Default 0.0 for every pair (i.e.
-                 # NeqSim's own database value, which is 0 for these uncommon trace pairs).
-                 # Tunable override for species whose bulk-CO2-phase fugacity coefficient is not
-                 # representative of their true reactive availability -- e.g. once a separate
-                 # aqueous/acid film is included, NO2 may leave the bulk CO2 phase and react
-                 # there more readily than a kij=0 bulk-phase SRK flash represents.
                  srk_kij_co2=None):
         self.T = T_kelvin
         self.P = P_bar
@@ -578,31 +484,20 @@ class CO2ImpurityKineticsModel:
 
         self.srk_kij_co2 = dict(srk_kij_co2) if srk_kij_co2 else {}
         self.molar_density, self.phase, self.phi_dict = self._calculate_srk_fugacities(T_kelvin, P_bar)
-        # Deliberate phi overrides (see set_phi_override), replayed after any re-flash so a
-        # temperature/pressure change cannot silently revert them to raw SRK values.
         self._phi_overrides = {}
         self._water_solubility_ppm_base = self._calculate_water_solubility_ppm(T_kelvin, P_bar)
 
-        # Phase-condensation switch (constant per (T, P))
         self.condensation_exponent = float(condensation_exponent)
         self.rho_m_reference = float(rho_m_reference)
         self._f_phase = self._compute_f_phase()
 
-        # R5's reverse-term NO activity, decoupled from the shared/global phi_dict['NO'] used by
-        # R4/R7/R11/R13 (that global value is a tuned fix for R4's 2NO+O2->2NO2 over-recycling
-        # specifically, only relevant when O2 is co-fed -- applying that same suppression inside
-        # R5's own reverse term is unrelated to R4 and, at high-NO2/no-O2 feeds (no R4 activity to
-        # correct for), silently starves R5's reverse reaction and lets HNO3 run away well past
-        # its true equilibrium. Default 1.0 (ideal fugacity, consistent with NO2/H2O/HNO3 already
-        # being treated as ideal elsewhere) so R5 alone reaches its own genuine equilibrium point.
         self.r5_no_activity = 1.0
+        self.set_r5_no2_order()
+        self.set_r7_no_order()
 
-        # R4's forward-term NO activity, decoupled from the shared/global phi_dict['NO'] for the
-        # same reason as r5_no_activity above (see set_r4_no_activity docstring).
         self.r4_no_activity = 1.0
+        self.r4_o2_half_ppm = float(r4_o2_half_ppm)
 
-        # R4's surface-to-volume enhancement gain (see r4_surface_gain in __init__'s signature).
-        # 0.0 (default) is an exact no-op, and it stays 1.0 at the reference bore regardless.
         self.r4_surface_gain = float(r4_surface_gain)
         self.r3a_bore_gain = float(r3a_bore_gain)
         self.r15_surface_suppress_gain = float(r15_surface_suppress_gain)
@@ -610,6 +505,7 @@ class CO2ImpurityKineticsModel:
         self.r15_sulfur_hill_n = float(r15_sulfur_hill_n)
         self.wall_o2_feed_o2_ref_ppm = float(wall_o2_feed_o2_ref_ppm)
         self.wall_o2_feed_o2_hill_n = float(wall_o2_feed_o2_hill_n)
+        self.wall_o2_h2s_relief = 0.0
         self.wall_no2_feed_o2_ref_ppm = float(wall_no2_feed_o2_ref_ppm)
         self.wall_no2_feed_o2_hill_n = float(wall_no2_feed_o2_hill_n)
         self.r3a_feed_o2_ref_ppm = float(r3a_feed_o2_ref_ppm)
@@ -620,23 +516,24 @@ class CO2ImpurityKineticsModel:
         self.wall_no2_o2_presence_hill_n = float(wall_no2_o2_presence_hill_n)
         self.wall_no2_no_cap_ppm = float(wall_no2_no_cap_ppm)
         self.wall_no2_no_cap_hill_n = float(wall_no2_no_cap_hill_n)
+        self.wall_no2_no_cap_gas_weighted = False
         self.wall_no2_langmuir_half_ppm = float(wall_no2_langmuir_half_ppm)
         self.r3a_o2_presence_ref_ppm = float(r3a_o2_presence_ref_ppm)
         self.r3a_o2_presence_hill_n = float(r3a_o2_presence_hill_n)
+        self.r3a_h2s_feed_inhibition_ref_ppm = float(r3a_h2s_feed_inhibition_ref_ppm)
+        self.r3a_h2s_feed_inhibition_hill_n = float(r3a_h2s_feed_inhibition_hill_n)
+        self.r3a_h2s_feed_inhibition_no2_ref_ppm = float(r3a_h2s_feed_inhibition_no2_ref_ppm)
+        self.r3a_h2s_feed_inhibition_no2_hill_n = float(r3a_h2s_feed_inhibition_no2_hill_n)
+        self.r3a_h2s_feed_inhibition_gain = float(r3a_h2s_feed_inhibition_gain)
         self.r2_o2_presence_ref_ppm = float(r2_o2_presence_ref_ppm)
         self.r2_o2_presence_hill_n = float(r2_o2_presence_hill_n)
 
-        # R3a's reverse-term NO activity fraction that "escapes" the liquid/wet film, scaled by
-        # f_phase (see set_r3a_no_escape_frac docstring): genuinely shifts R3a's apparent
-        # equilibrium toward more forward conversion (SO2+NO2+H2O -> NO+H2SO4) specifically at
-        # dense/liquid-like conditions, without touching Keq3a itself or affecting gas-phase
-        # (low f_phase) conditions. 0.0 (default) is backward-compatible/no-op.
         self.r3a_no_escape_frac = 0.0
 
-        # Wall corrosion (heterogeneous O2 sink on carbon-steel coupon)
         self.wall_area_m2 = float(wall_area_m2)
         self.wall_k_intrinsic = float(wall_k_intrinsic)
         self.wall_o2_potency = float(wall_o2_potency)
+        self.wall_o2_f_phase_exponent = float(wall_o2_f_phase_exponent)
         self.wall_o2_sat_ref = float(wall_o2_sat_ref)
         self.wall_rho_pass = float(wall_rho_pass)
         self.wall_hill_n = float(wall_hill_n)
@@ -680,13 +577,29 @@ class CO2ImpurityKineticsModel:
         self.wall_so2_exposure_hill_n = float(wall_so2_exposure_hill_n)
         self.r1_autocat_gain = float(r1_autocat_gain)
         self.r1_autocat_ref_ppm = float(r1_autocat_ref_ppm)
+        self.r1_autocat_hill_n = 1.0
+        self.set_r17_orders()
+        self.set_r17_dense_co2_inhibition(
+            f_phase_ref=r17_dense_co2_inhibition_f_phase_ref,
+            f_phase_hill_n=r17_dense_co2_inhibition_f_phase_hill_n,
+            wet_ref=r17_dense_co2_inhibition_wet_ref,
+            wet_hill_n=r17_dense_co2_inhibition_wet_hill_n)
+        self.r1_feed_o2_ref_ppm = float(r1_feed_o2_ref_ppm)
+        self.r1_feed_o2_hill_n = float(r1_feed_o2_hill_n)
+        self.r1_feed_o2_cap_ppm = float(r1_feed_o2_cap_ppm)
         self.r3a_autocat_gain = float(r3a_autocat_gain)
         self.r3a_autocat_ref_ppm = float(r3a_autocat_ref_ppm)
         self.r3a_autocat_hill_n = float(r3a_autocat_hill_n)
         self.r3a_autocat_surface_suppress_gain = float(r3a_autocat_surface_suppress_gain)
+        self.set_r3a_acid_film()
+        self.acid_so2_sat_ref_ppm = float(acid_so2_sat_ref_ppm)
+        self.acid_so2_sat_hill_n = float(acid_so2_sat_hill_n)
         self.r12_density_independent = bool(r12_density_independent)
+        self.r12_f_phase_exponent = float(r12_f_phase_exponent)
         self.r12_no2_order = float(r12_no2_order)
+        self.set_r12_rate_shape()
         self.r13_no2_order = float(r13_no2_order)
+        self.set_r13_no2_rate_order()
         self.r15_f_phase_exponent = float(r15_f_phase_exponent)
         self.r15_o2_inhib_ref_ppm = float(r15_o2_inhib_ref_ppm)
         self.r15_o2_inhib_hill_n = float(r15_o2_inhib_hill_n)
@@ -694,6 +607,8 @@ class CO2ImpurityKineticsModel:
         self.r15_o2_activation_hill_n = float(r15_o2_activation_hill_n)
         self.r15_no2_cap_ppm = float(r15_no2_cap_ppm)
         self.r15_no2_cap_hill_n = float(r15_no2_cap_hill_n)
+        self.r15_dimer_dh_kj_mol = float(r15_dimer_dh_kj_mol)
+        self.r15_dimer_t_ref_k = float(r15_dimer_t_ref_k)
         self.r15_n2o_cap_ppm = float(r15_n2o_cap_ppm)
         self.r15_n2o_cap_hill_n = float(r15_n2o_cap_hill_n)
         self.r15_o2_presence_ref_ppm = float(r15_o2_presence_ref_ppm)
@@ -704,6 +619,9 @@ class CO2ImpurityKineticsModel:
         self.r2_no2_boost_ref_ppm = float(r2_no2_boost_ref_ppm)
         self.r2_no2_boost_hill_n = float(r2_no2_boost_hill_n)
         self.r2_no2_boost_gain = float(r2_no2_boost_gain)
+        self.r2_f_phase_exponent = float(r2_f_phase_exponent)
+        self.r2_no2_excess_ratio_ref = float(r2_no2_excess_ratio_ref)
+        self.r2_no2_excess_ratio_hill_n = float(r2_no2_excess_ratio_hill_n)
         self.o2_lag_tau_hours = float(o2_lag_tau_hours)
         self.o2_feed_lag_tau_hours = float(o2_feed_lag_tau_hours)
         self.o2_feed_lag_rise_tau_hours = float(o2_feed_lag_rise_tau_hours)
@@ -727,26 +645,15 @@ class CO2ImpurityKineticsModel:
 
     def _total_acid_ppm(self, C_NO2, C_H2SO4, C_HNO3):
         """Instantaneous NO2 + H2SO4 + HNO3 gas-phase loading, expressed as an equivalent
-        mole-fraction ppm of the bulk gas (kmol / kmol gas * 1e6). Deliberately includes bare
-        NO2 gas itself (not just the acids it forms) since the wall O2-attack signal is meant to
-        track the NO2 dosing schedule directly.
+        mole-fraction ppm of the bulk gas (kmol / kmol gas * 1e6). Deliberately
+        includes bare NO2 gas itself (not just the acids it forms) since the wall
+        O2-attack signal is meant to track the NO2 dosing schedule directly.
         """
         return (max(C_NO2, 0.0) + max(C_H2SO4, 0.0) + max(C_HNO3, 0.0)) \
             / max(self.molar_density, 1e-9) * 1e6
 
     def _acid_enhancement(self, C_NO2, C_H2SO4, C_HNO3):
-        """NO2-dosing-driven gating factor for the wall O2 sink (dimensionless).
-
-        Scales with the instantaneous NO2 + H2SO4 + HNO3 loading (see ``_total_acid_ppm``), not
-        a cumulative tracker, so it heals immediately once NO2 dosing stops (a known, accepted
-        simplification).
-
-        Two additive power-law terms: a gentle one (``wall_acid_gain``/``wall_acid_exponent``)
-        plus an optional steep second one (``wall_acid_gain2``/``wall_acid_exponent2``, default
-        gain2=0.0 i.e. inert) meant to stay negligible at low NO2/acid loading while engaging
-        strongly only once the loading climbs high -- a threshold response layered on top of the
-        gentle term, not a replacement for it.
-        """
+        """NO2-dosing-driven gating factor for the wall O2 sink (dimensionless)."""
         total_acid_ppm = self._total_acid_ppm(C_NO2, C_H2SO4, C_HNO3)
         enhancement = self.wall_acid_background + self.wall_acid_gain * total_acid_ppm ** self.wall_acid_exponent
         if self.wall_acid_gain2 > 0.0:
@@ -754,76 +661,37 @@ class CO2ImpurityKineticsModel:
         return enhancement
 
     def _water_solubility_ppm(self):
-        """Water solubility (dew point) in the CO2-rich phase [ppm mol].
-
-        Returns the SRK-based value cached at construction (see
-        ``_calculate_water_solubility_ppm``), scaled by ``wall_h2o_enhancement_factor`` -- an
-        illustrative, tunable residual correction on top of the thermodynamic estimate. This
-        anchors the wet-film threshold to a genuine solubility-limit concept (water condenses
-        into a separate phase once the feed exceeds this dew point) rather than an arbitrary
-        empirical ppm constant.
-        """
+        """Water solubility (dew point) in the CO2-rich phase [ppm mol]."""
         return self._water_solubility_ppm_base * self.wall_h2o_enhancement_factor
 
     def _calculate_water_solubility_ppm(self, T_K, P_bar):
-        """Water solubility (dew point) in the CO2-rich phase [ppm mol], via a modified
-        Raoult's-law estimate corrected by the SRK fugacity coefficient of water.
+        """Estimate CO2-rich-phase water saturation [ppm-mol] using Antoine and SRK.
 
-        y_H2O,sat = P_sat_H2O(T) / (phi_H2O * P), with ``P_sat_H2O(T)`` from the Antoine
-        equation and ``phi_H2O`` the water fugacity coefficient already computed by
-        ``_calculate_srk_fugacities`` for the bulk gas (assumes the condensed phase is
-        essentially pure water, i.e. x_H2O ~ 1, gamma ~ 1). ``phi_H2O`` is what captures the
-        *real* (non-ideal) SRK behaviour of water in dense/supercritical CO2 -- the actual
-        physical reason the solubility departs from the naive ideal-gas value -- while
-        reusing the single VLE calculation already performed at construction rather than
-        issuing extra NeqSim flashes (repeated flashes are unreliable in this environment's
-        JVM/JPype setup, see AGENTS notes).
+        The Antoine coefficients cover 1-100 C; subzero use is an extrapolation.
         """
         T_C = T_K - 273.15
-        log10_p_mmhg = 8.07131 - 1730.63 / (233.426 + T_C)   # Antoine eq., water, 1-100 C
-        p_sat_bar = (10.0 ** log10_p_mmhg) * 1.33322e-3       # mmHg -> bar
+        log10_p_mmhg = 8.07131 - 1730.63 / (233.426 + T_C)
+        p_sat_bar = (10.0 ** log10_p_mmhg) * 1.33322e-3
         phi_h2o = max(self.phi_dict.get('H2O', 1.0), 1e-6)
         return (p_sat_bar / (phi_h2o * max(P_bar, 1e-9))) * 1e6
 
     def _strong_acid_ppm(self, C_H2SO4, C_HNO3):
-        """Hygroscopic strong-acid loading (H2SO4 + HNO3) [ppm], driving deliquescence.
-
-        Deliberately excludes NO2: NO2 gas itself is not strongly hygroscopic, so with no
-        HNO3/H2SO4 formed yet the wetted-film threshold stays at the pure-water solubility
-        limit (i.e. it is fine to run with water up to saturation on NO2 alone). Once HNO3/
-        H2SO4 actually form, their strong affinity for water stabilizes a liquid film at a
-        lower bulk water content than pure-water saturation (deliquescence).
-        """
+        """Hygroscopic strong-acid loading (H2SO4 + HNO3) [ppm], driving deliquescence."""
         return (C_H2SO4 + C_HNO3) / max(self.molar_density, 1e-9) * 1e6
 
     def _co2_aqueous_solubility_mol_l(self):
-        """Henry's-law dissolved-CO2 concentration in the condensed water film [mol/L].
+        """Estimate dissolved CO2 [mol/L] using Henry's law and a van't Hoff correction.
 
-        Uses the van't Hoff temperature dependence of CO2's Henry's-law solubility constant
-        (K_H,298 = 0.034 mol/(L*atm), dH/R ~ 2400 K; standard literature values, e.g. Sander
-        2015) and takes the CO2 partial pressure as the total system pressure -- the bulk gas
-        here is essentially pure CO2. This grounds the carbonic-acid corrosion driving force
-        in real gas-solubility physics (and its temperature dependence) instead of an
-        arbitrary empirical constant.
+        Uses K_H(298 K) = 0.034 mol/(L atm) and dH/R = 2400 K (Sander, 2015).
         """
-        K_H_298 = 0.034   # mol / (L * atm)
-        DH_OVER_R = 2400.0   # K
+        K_H_298 = 0.034
+        DH_OVER_R = 2400.0
         K_H_T = K_H_298 * np.exp(DH_OVER_R * (1.0 / self.T - 1.0 / 298.15))
-        P_co2_atm = self.P * 0.986923   # bar -> atm
+        P_co2_atm = self.P * 0.986923
         return K_H_T * P_co2_atm
 
     def _effective_g_h2o(self, h2o_ppm, C_H2SO4, C_HNO3):
-        """Wet-film activation factor: wetted-fraction x excess-film severity.
-
-        ``'density'`` mode is the legacy Langmuir form h2o_ppm / (h2o_ppm + K). ``'wet_film'``
-        mode is a two-part solubility/dew-point model: (1) a Hill-saturating *wetted fraction*
-        of the coupon, active once H2O exceeds the SRK-flash water-solubility limit from
-        ``_water_solubility_ppm()`` (lowered by hygroscopic strong-acid deliquescence, see
-        ``_strong_acid_ppm``); and (2) an unbounded *excess-film severity* term, growing with
-        the water beyond that limit, since more free water builds a thicker/more conductive
-        electrolyte film rather than simply toggling corrosion on/off. The return value is
-        therefore a multiplier that need not stay below 1.
-        """
+        """Wet-film activation factor: wetted-fraction x excess-film severity."""
         if h2o_ppm <= 0.0:
             return 0.0
         if self.wall_h2o_mode == 'wet_film':
@@ -839,22 +707,9 @@ class CO2ImpurityKineticsModel:
         return h2o_ppm / (h2o_ppm + self.wall_k_h2o_ppm)
 
     def _wall_gas_phase_enhancement(self, gain, sat=None, sat_ref=None):
-        """Gas-phase-favoured Hill enhancement for surface oxidative attack (O2, NO2 wall
-        paths): direct gas-solid electrochemical corrosion is understood to be MORE prominent in
-        a dilute gas phase (thin adsorbed-moisture-film corrosion, more direct molecular contact
-        with the bare metal) than in a dense/liquid CO2 phase (where the bulk fluid effectively
-        shields the surface) -- the OPPOSITE density dependence to the wet-film R2/R12/R13/R15
-        reactions (which need a genuine condensed film, favoured by density). ``ratio =
-        wall_gas_phase_rho_ref/rho_m`` grows as the bulk density drops below the reference.
+        """Return a fitted, bounded wall-rate enhancement favouring lower CO2 density.
 
-        If ``sat``/``sat_ref`` are given (O2 path only, see ``wall_o2_sat_ref``), the water-
-        saturation fraction is folded into the SAME ratio (``ratio *= sat/sat_ref``) instead of
-        being a separate multiplier, since relative water saturation can differ materially
-        between rigs of similar absolute H2O ppm once their dew points differ (e.g. warmer, low-
-        density gas streams). ``enhancement = 1 + gain*ratio**n/(1+ratio**n)``. ``gain`` is
-        passed in per-caller (``wall_o2_gas_phase_gain`` for the O2 path, ``wall_gas_phase_gain``
-        for the NO2 path) so the two attack paths can be tuned independently. ``gain<=0.0``
-        disables it (enhancement always 1.0).
+        Optional water saturation modifies the density ratio used by the Hill factor.
         """
         if gain <= 0.0 or self.wall_gas_phase_rho_ref <= 0.0:
             return 1.0
@@ -865,23 +720,7 @@ class CO2ImpurityKineticsModel:
         return 1.0 + gain * ratio_n / (1.0 + ratio_n)
 
     def _feed_o2_passivation(self, C_O2_feed, ref_ppm, hill_n, floor=0.0, cap_ppm=0.0):
-        """Passivation gate keyed to the FED O2 level: ``1/(1+(feed_ppm/ref)**n)``.
-
-        Sustained high O2 exposure accelerates passive oxide-film growth, shielding the surface
-        from further active attack. Driven by the FED (exogenous) O2 rather than the
-        instantaneous bulk value on purpose: the instantaneous value is itself depressed by the
-        very reactions this gates, which would otherwise close a self-reinforcing loop.
-        ``ref_ppm <= 0`` disables it (returns 1.0).
-
-        ``floor`` clamps the minimum returned value (default 0.0, i.e. no floor). This is a
-        per-caller argument, not a shared default -- wall_o2/wall_no2 both genuinely need
-        near-total suppression at high sustained feed O2, so only R3a's own call site passes a
-        nonzero floor (see ``r3a_feed_o2_floor``).
-
-        ``cap_ppm`` clamps the fed ppm value itself (before the gate formula), so any feed at or
-        above ``cap_ppm`` is treated identically to ``cap_ppm`` (default 0.0 = no cap). Also a
-        per-caller argument, R3a-only (see ``r3a_feed_o2_cap_ppm``).
-        """
+        """Passivation gate keyed to the FED O2 level: ``1/(1+(feed_ppm/ref)**n)``."""
         if ref_ppm <= 0.0 or C_O2_feed is None:
             return 1.0
         feed_ppm = max(C_O2_feed, 0.0) / max(self.molar_density, 1e-9) * 1e6
@@ -890,20 +729,154 @@ class CO2ImpurityKineticsModel:
         gate = 1.0 / (1.0 + (feed_ppm / ref_ppm) ** hill_n)
         return max(floor, gate)
 
+    def set_dilute_redox(self, parameters=None):
+        """Set fitted redox rates at 298.15 K with a smooth density blend.
+
+        Optional NO saturation uses raw kmol/m3; the acid branch is a mobility
+        ratio, not a separate reaction or a thermodynamic phase fraction.
+        """
+        if parameters is None:
+            self.dilute_redox = None
+            return
+        positive = ('rho_ref_kmol_m3', 'density_hill_n', 'r2_no2_ref_kmol_m3', 'r2_no2_hill_n')
+        nonnegative = ('r2_k_ref', 'r2_no2_gain', 'r4_k_ref')
+        energies = ('r2_ea_kj_mol', 'r4_ea_kj_mol')
+        required = set(positive + nonnegative + energies)
+        optional = {'r2_h2s_half_kmol_m3': 0.0, 'r4_no_half_kmol_m3': 0.0,
+                    'r4_no_reference_kmol_m3': 1e-6, 'r4_no_saturation_order': 1.0,
+                    'r13_branch_fraction': 0.0, 'sulfur_acid_weight': 1.0}
+        if required - set(parameters) or set(parameters) - (required | set(optional)):
+            raise ValueError('Incomplete or unknown dilute-redox parameters')
+        settings = {**optional, **{key: float(value) for key, value in parameters.items()}}
+        if (not all(np.isfinite(value) for value in settings.values())
+                or any(settings[key] <= 0.0 for key in positive)
+            or any(settings[key] < 0.0 for key in nonnegative)
+            or settings['r2_h2s_half_kmol_m3'] < 0.0
+            or settings['r4_no_half_kmol_m3'] < 0.0 or settings['r4_no_reference_kmol_m3'] <= 0.0
+            or not 0.0 < settings['r4_no_saturation_order'] <= 2.0
+            or not 0.0 <= settings['r13_branch_fraction'] < 1.0
+            or not 0.0 <= settings['sulfur_acid_weight'] <= 1.0):
+            raise ValueError('Invalid dilute-redox coefficient or reference')
+        self.dilute_redox = settings
+
+    def _dilute_redox_weight(self):
+        settings = getattr(self, 'dilute_redox', None)
+        if settings is None:
+            return 0.0
+        reference = settings['rho_ref_kmol_m3']
+        density = max(self.molar_density, 0.0)
+        if density <= reference:
+            return 1.0 / (1.0 + (density / reference) ** settings['density_hill_n'])
+        inverse = (reference / density) ** settings['density_hill_n']
+        return inverse / (1.0 + inverse)
+
+    def _dilute_reference_rate(self, reaction):
+        settings = self.dilute_redox
+        return settings[reaction + '_k_ref'] * np.exp(settings[reaction + '_ea_kj_mol'] * 1000.0
+                                                     / R_GAS * (1.0 / 298.15 - 1.0 / self.T))
+
+    def _r2_effective_coefficient(self, dense_coefficient, no2, h2s=0.0):
+        weight = self._dilute_redox_weight()
+        if weight <= 0.0 or dense_coefficient <= 0.0:
+            return dense_coefficient
+        activation = self._reactant_activation_factor(no2, self.dilute_redox['r2_no2_ref_kmol_m3'],
+                                                      self.dilute_redox['r2_no2_hill_n'])
+        dilute_coefficient = self._dilute_reference_rate('r2') \
+            * (1.0 + self.dilute_redox['r2_no2_gain'] * activation)
+        half = self.dilute_redox['r2_h2s_half_kmol_m3']
+        if half > 0.0:
+            dilute_coefficient *= half / (half + max(h2s, 0.0))
+        return (1.0 - weight) * dense_coefficient + weight * dilute_coefficient
+
+    def _r4_effective_coefficient(self, dense_coefficient):
+        weight = self._dilute_redox_weight()
+        if weight <= 0.0 or dense_coefficient <= 0.0:
+            return dense_coefficient
+        return (1.0 - weight) * dense_coefficient + weight * self._dilute_reference_rate('r4')
+
+    def _r4_dilute_no_factor(self, no):
+        """Bounded trace-NO recycling mobility, common to both reaction directions."""
+        settings = getattr(self, 'dilute_redox', None)
+        if settings is None or settings['r4_no_half_kmol_m3'] <= 0.0:
+            return 1.0
+        half = settings['r4_no_half_kmol_m3']
+        saturation = max(1.0, (half + settings['r4_no_reference_kmol_m3']) / (half + max(no, 0.0)))
+        saturation **= settings['r4_no_saturation_order']
+        return 1.0 + self._dilute_redox_weight() ** 2 * (saturation - 1.0)
+
+    def _r13_dilute_factor(self, coefficient, r2_coefficient):
+        """Add dilute acid-branch mobility without altering stoichiometry or equilibrium."""
+        settings = getattr(self, 'dilute_redox', None)
+        if settings is None or coefficient <= 0.0 or r2_coefficient <= 0.0:
+            return 1.0
+        fraction = settings['r13_branch_fraction']
+        return 1.0 + self._dilute_redox_weight() ** 2 * fraction / (1.0 - fraction) \
+            * r2_coefficient / coefficient
+
+    def _bimolecular_encounter_factor(self, effective_rate_constant):
+        """Finite encounter mobility for apparent bimolecular kinetics."""
+        limit = BIMOLECULAR_ENCOUNTER_RATE_REF * self.T / 298.15
+        return 1.0 / (1.0 + max(0.0, effective_rate_constant) / limit)
+
+    def set_h2s_no2_temperature(self, parameters=None):
+        """Set common cold-favoured availability for NO2-dependent H2S oxidation."""
+        if parameters is None:
+            self.h2s_no2_temperature = None
+            return
+        required = {'reference_K', 'suppression_kj_mol'}
+        if required - set(parameters) or set(parameters) - (required | {'onset_width_K'}):
+            raise ValueError('Require H2S/NO2 reference temperature and suppression energy')
+        settings = {'onset_width_K': 0.0, **{key: float(value) for key, value in parameters.items()}}
+        if (not all(np.isfinite(value) for value in settings.values())
+                or settings['reference_K'] <= 0.0 or settings['suppression_kj_mol'] < 0.0
+                or settings['onset_width_K'] < 0.0):
+            raise ValueError('Require finite H2S/NO2 reference > 0, suppression >= 0, and onset width >= 0')
+        self.h2s_no2_temperature = settings
+
+    def _h2s_no2_temperature_factor(self):
+        settings = getattr(self, 'h2s_no2_temperature', None)
+        if settings is None or self.T <= settings['reference_K']:
+            return 1.0
+        inverse_difference = 1.0 / settings['reference_K'] - 1.0 / self.T
+        if settings['onset_width_K'] > 0.0:
+            inverse_width = settings['onset_width_K'] / settings['reference_K'] ** 2
+            inverse_difference *= inverse_difference / (inverse_difference + inverse_width)
+        exponent = -settings['suppression_kj_mol'] * 1000.0 / R_GAS * inverse_difference
+        return float(np.exp(max(exponent, -700.0)))
+
+    def _r3a_h2s_feed_inhibition(self, C_H2S_feed, C_NO2_feed=None):
+        """Return R3a inhibition from the reducing inlet chemistry."""
+        if self.r3a_h2s_feed_inhibition_ref_ppm <= 0.0 or C_H2S_feed is None:
+            return 1.0
+        h2s_ppm = max(C_H2S_feed, 0.0) / max(self.molar_density, 1e-9) * 1e6
+        h2s_ratio = (h2s_ppm / self.r3a_h2s_feed_inhibition_ref_ppm) \
+            ** self.r3a_h2s_feed_inhibition_hill_n
+        if self.r3a_h2s_feed_inhibition_no2_ref_ppm <= 0.0:
+            return 1.0 / (1.0 + h2s_ratio)
+        if self.r3a_h2s_feed_inhibition_gain <= 0.0 or C_NO2_feed is None:
+            return 1.0
+        no2_ppm = max(C_NO2_feed, 0.0) / max(self.molar_density, 1e-9) * 1e6
+        no2_ratio = (no2_ppm / self.r3a_h2s_feed_inhibition_no2_ref_ppm) \
+            ** self.r3a_h2s_feed_inhibition_no2_hill_n
+        h2s_available = h2s_ratio / (1.0 + h2s_ratio)
+        no2_available = no2_ratio / (1.0 + no2_ratio)
+        return 1.0 / (1.0 + self.r3a_h2s_feed_inhibition_gain * h2s_available * no2_available)
+
+    def _r2_no2_excess_gate(self, C_H2S_feed, C_NO2_feed):
+        """Return R2's inlet oxidant-excess availability gate."""
+        if (self.r2_no2_excess_ratio_ref <= 0.0 or C_H2S_feed is None
+                or C_NO2_feed is None):
+            return 1.0
+        h2s_feed = max(C_H2S_feed, 0.0)
+        if h2s_feed <= 0.0:
+            return 1.0
+        ratio = max(C_NO2_feed, 0.0) / h2s_feed / self.r2_no2_excess_ratio_ref
+        ratio_n = ratio ** self.r2_no2_excess_ratio_hill_n
+        return ratio_n / (1.0 + ratio_n)
+
     def _o2_presence_gate(self, C_O2_feed, ref_ppm, hill_n):
         """O2-PRESENCE gate keyed to the FED O2 level: ``ratio/(1+ratio)``, ``ratio =
         (feed_ppm/ref)**n`` -- the mirror image of ``_feed_o2_passivation`` above.
-
-        Several reactions/wall paths have their OWN gate that reacts to LOW instantaneous O2 by
-        firing MORE strongly (R15's product-inhibition release, wall_no2's O2-scarcity gate) --
-        physically correct for the ordinary case of O2 being merely depleted BY CONSUMPTION while
-        still genuinely being fed. But during a window where O2 is not being fed AT ALL (exactly
-        zero, whether a brief pulse or an extended anoxic hold), those gates are ALWAYS wide open
-        with nothing left to throttle them, letting the reaction run unchecked off whatever NO2
-        happens to be standing. This gate throttles that specific, genuinely-anoxic case while
-        leaving the reaction at full strength the moment ANY real O2 feed resumes -- driven by
-        the FED (exogenous) value for the same self-reinforcing-loop reason as
-        ``_feed_o2_passivation``. ``ref_ppm <= 0`` disables it (returns 1.0).
         """
         if ref_ppm <= 0.0 or C_O2_feed is None:
             return 1.0
@@ -913,18 +886,10 @@ class CO2ImpurityKineticsModel:
         ratio = (feed_ppm / ref_ppm) ** hill_n
         return ratio / (1.0 + ratio)
 
-    def _wall_o2_rate(self, C_O2, h2o_ppm, C_NO2, C_H2SO4, C_HNO3, C_O2_feed=None):
-        """O2-driven Fe2O3 wall-corrosion sink rate [kmol O2/(m^3 s)]: 4 Fe + 3 O2 -> 2 Fe2O3.
-
-        Gated by the SAME ``_water_saturation_fraction`` wetting index as the other two active
-        wall paths, AND by ``_acid_enhancement`` driven by the INSTANTANEOUS NO2+H2SO4+HNO3
-        loading (see ``_total_acid_ppm``) -- direct dry O2 attack on bare steel is slow; real
-        rust formation in this system is understood to be driven by the acid film/NO2 exposure
-        the coupon currently sees, which is genuinely zero before any NO2 dosing starts (no
-        artificial always-on "background" floor needed to bootstrap it). Also scaled by
-        ``_wall_gas_phase_enhancement`` (see its docstring, via ``wall_o2_gas_phase_gain`` and
-        ``wall_o2_sat_ref``): O2 attack is favoured in a dilute, relatively wetter gas phase over
-        a dense/liquid, relatively drier one.
+    def _wall_o2_rate(self, C_O2, h2o_ppm, C_NO2, C_H2SO4, C_HNO3, C_O2_feed=None,
+                     C_H2S_feed=None):
+        """O2-driven Fe2O3 wall-corrosion sink rate [kmol O2/(m^3 s)]: 4 Fe + 3 O2 -> 2
+        Fe2O3.
         """
         if self.wall_area_m2 <= 0.0 or self.wall_k_intrinsic <= 0.0:
             return 0.0
@@ -932,29 +897,21 @@ class CO2ImpurityKineticsModel:
         enhancement = self._acid_enhancement(C_NO2, C_H2SO4, C_HNO3)
         gas_phase = self._wall_gas_phase_enhancement(self.wall_o2_gas_phase_gain, sat=sat,
                                                       sat_ref=self.wall_o2_sat_ref)
-        passivation = self._feed_o2_passivation(C_O2_feed, self.wall_o2_feed_o2_ref_ppm,
+        reference = self.wall_o2_feed_o2_ref_ppm
+        if reference > 0.0 and C_H2S_feed is not None:
+            reference += self.wall_o2_h2s_relief * max(C_H2S_feed, 0.0) / self.molar_density * 1e6
+        passivation = self._feed_o2_passivation(C_O2_feed, reference,
                                                 self.wall_o2_feed_o2_hill_n)
         o2_ppm = max(C_O2, 0.0) / max(self.molar_density, 1e-9) * 1e6
         V_m3 = max(self.volume_ml, 1e-9) * 1e-6
         A_sv = self.wall_area_m2 / V_m3
         return self.wall_k_intrinsic * sat * enhancement * gas_phase * passivation * \
+            self._f_phase ** self.wall_o2_f_phase_exponent * \
             (o2_ppm ** self.wall_o2_potency) * A_sv * 1e-3
 
     def _water_saturation_fraction(self, h2o_ppm, C_H2SO4=0.0, C_HNO3=0.0):
-        """Fraction of the (acid-lowered) water dew point reached by the bulk gas, in [0, 1].
-
-        A simple relative-humidity-like wetting index driving how much of the coupon surface
-        carries an adsorbed/condensed aqueous film for the three ACTIVE acid wall-corrosion paths
-        (O2, HNO3+Fe, H2SO4+Fe): ramps linearly with the gas H2O content and saturates at 1 once
-        the gas reaches/exceeds its own effective solubility limit -- a genuinely dry gas cannot
-        support acid attack on bare steel, and a fully saturated/wet one cannot be gated any
-        harder than "fully wetted" by this simple index. The dew point itself is lowered by
-        hygroscopic H2SO4/HNO3 deliquescence (see ``_strong_acid_ppm``), the SAME correction
-        already applied to the ``'wet_film'`` FeCO3 path's ``_effective_g_h2o`` -- once real acid
-        has formed, a concentrated H2SO4/HNO3 film is far more hygroscopic than pure water and
-        stays wetted at a lower bulk H2O content than the naive pure-water dew point implies, an
-        effect that matters more at cold conditions where the pure-water dew point is already
-        only tens of ppm.
+        """Fraction of the (acid-lowered) water dew point reached by the bulk gas, in [0,
+        1].
         """
         w_sat = self._water_solubility_ppm()
         strong_acid_ppm = self._strong_acid_ppm(C_H2SO4, C_HNO3)
@@ -962,15 +919,8 @@ class CO2ImpurityKineticsModel:
         return float(np.clip(max(h2o_ppm, 0.0) / max(w_sat_eff, 1e-9), 0.0, 1.0))
 
     def _wall_feco3_rate(self, h2o_ppm, C_H2SO4, C_HNO3):
-        """Carbonic-acid (iron-carbonate) wall path [kmol Fe/(m^3 s)]:
-        Fe + CO2(aq) + H2O -> FeCO3 + H2.
-
-        Driven by the wetted-film factor (a liquid film must exist at all) times the
-        Henry's-law dissolved-CO2 concentration (``_co2_aqueous_solubility_mol_l``). CO2 is
-        the bulk carrier gas here, not a tracked ppm-level species, so unlike the trace-acid
-        paths this one is not limited by a fixed feed-gas throughput -- consistent with
-        classical wet-CO2 corrosion, which dominates whenever little strong acid has formed
-        (low HNO3/H2SO4) but the gas remains wet.
+        """Carbonic-acid (iron-carbonate) wall path [kmol Fe/(m^3 s)]: Fe + CO2(aq) + H2O
+        -> FeCO3 + H2.
         """
         if self.wall_area_m2 <= 0.0 or self.wall_feco3_k_intrinsic <= 0.0:
             return 0.0
@@ -981,22 +931,8 @@ class CO2ImpurityKineticsModel:
         return self.wall_feco3_k_intrinsic * g_h2o * (co2_aq ** self.wall_feco3_potency) * A_sv * 1e-3
 
     def _wall_hno3_corrosion_rate(self, h2o_ppm, C_HNO3, C_H2SO4=0.0):
-        """Nitric-acid wall-film corrosion rate [kmol Fe(NO3)2/(m^3 s)]:
-        8 HNO3 + 3 Fe -> 3 Fe(NO3)2 + 2 NO + 4 H2O.
-
-        HNO3 (formed in the bulk gas by R5, 3 NO2 + H2O <-> 2 HNO3 + NO) is the species that
-        actually attacks bare iron -- unlike the earlier NO2-driven formulation, this reaction
-        is now the textbook dilute-nitric-acid/iron reaction, releasing NO and water rather than
-        consuming NO2 directly. Gated by the ``_water_saturation_fraction`` wetting index (a
-        liquid/adsorbed film must exist at all for an aqueous acid attack to proceed, now also
-        lowered by HNO3/H2SO4 deliquescence -- see that method's docstring) AND by the
-        SAME ``_f_phase`` heterogeneous/wet-film density-ratio factor used for R2/R12/R13: a
-        wall acid
-        film is a wet, condensed-phase-like environment that forms far more readily against
-        dense/liquid CO2 than against a dilute low-density gas, where there is genuinely less
-        residence time/molecular contact available for the film to build up and react. Returned
-        rate is defined as the rate of Fe(NO3)2 formation (1:1 with Fe consumed); the caller
-        (``rhs``) applies the remaining 8:2:4 HNO3:NO:H2O stoichiometric ratios relative to it.
+        """Nitric-acid wall-film corrosion rate [kmol Fe(NO3)2/(m^3 s)]: 8 HNO3 + 3 Fe ->
+        3 Fe(NO3)2 + 2 NO + 4 H2O.
         """
         if self.wall_area_m2 <= 0.0 or self.wall_hno3_corrosion_k_intrinsic <= 0.0:
             return 0.0
@@ -1008,13 +944,7 @@ class CO2ImpurityKineticsModel:
             (hno3_ppm ** self.wall_hno3_corrosion_potency) * A_sv * 1e-3
 
     def _wall_h2so4_rate(self, h2o_ppm, C_H2SO4, C_HNO3=0.0):
-        """Sulfuric-acid wall path Fe rate [kmol Fe/(m^3 s)]: Fe + H2SO4 -> FeSO4 + H2.
-
-        Gated by the ``_water_saturation_fraction`` wetting index (now also lowered by HNO3/
-        H2SO4 deliquescence) AND ``_f_phase`` (same heterogeneous/wet-film density-ratio
-        reasoning as ``_wall_hno3_corrosion_rate`` above). Applied in ``rhs`` whenever
-        ``wall_h2so4_k_intrinsic`` > 0.
-        """
+        """Sulfuric-acid wall path Fe rate [kmol Fe/(m^3 s)]: Fe + H2SO4 -> FeSO4 + H2."""
         if self.wall_area_m2 <= 0.0 or self.wall_h2so4_k_intrinsic <= 0.0:
             return 0.0
         sat = self._water_saturation_fraction(h2o_ppm, C_H2SO4, C_HNO3)
@@ -1025,17 +955,18 @@ class CO2ImpurityKineticsModel:
             (h2so4_ppm ** self.wall_h2so4_potency) * A_sv * 1e-3
 
     def _sulfur_catalyst_gate(self, C_H2S_raw, C_H2SO4_raw):
-        """Hill gate on the presence of ANY sulfur species (H2S + H2SO4), in RAW ppm.
-
-        Both the NO2 -> N2O disproportionation (R15) and the dry NO2 + Fe wall attack are
-        understood to need a sulfur co-contaminant to proceed at a meaningful rate. Uses raw
-        (not phi-scaled) concentration per the wall-decoupling rule: H2SO4's SRK fugacity
-        coefficient is ~2e-8 here, so a phi-scaled read would keep this gate permanently shut.
-        ``ref_ppm <= 0`` disables it (returns 1.0).
-        """
+        """Return bounded sulfur activation with optional dilute acid weighting."""
         if self.r15_sulfur_ref_ppm <= 0.0:
             return 1.0
-        sulfur_ppm = (max(C_H2S_raw, 0.0) + max(C_H2SO4_raw, 0.0)) \
+        acid_weight = 1.0
+        settings = getattr(self, 'dilute_redox', None)
+        if settings is not None:
+            half = settings['r2_h2s_half_kmol_m3']
+            reductant = max(C_H2S_raw, 0.0)
+            availability = reductant / (half + reductant) if half > 0.0 else 1.0
+            acid_weight -= self._dilute_redox_weight() ** 2 \
+                * (1.0 - settings['sulfur_acid_weight']) * (1.0 - availability)
+        sulfur_ppm = (max(C_H2S_raw, 0.0) + acid_weight * max(C_H2SO4_raw, 0.0)) \
             / max(self.molar_density, 1e-9) * 1e6
         ratio_n = (sulfur_ppm / self.r15_sulfur_ref_ppm) ** self.r15_sulfur_hill_n
         return ratio_n / (1.0 + ratio_n)
@@ -1043,59 +974,7 @@ class CO2ImpurityKineticsModel:
     def _wall_no2_rate(self, C_NO2, h2o_ppm, cum_no2_exposure=0.0, C_O2=None,
                        C_H2S_raw=0.0, C_H2SO4_raw=0.0, C_O2_feed=None, C_O2_lagged=None,
                        C_NO=None):
-        """NO2 wall-corrosion sink rate [kmol NO2/(m^3 s)]: 2 Fe + 3 NO2 -> Fe2O3 + 3 NO.
-
-        Like the acid-film paths above, this ACCELERATES WITH water saturation (adsorbed-
-        moisture-film corrosion, not a bone-dry chemisorption process): a thin electrolyte film
-        is what enables the ionic/electrochemical corrosion mechanism, and this effect is
-        understood to be MORE prominent in a dilute gas phase (see ``_wall_gas_phase_enhancement``)
-        than in a dense/liquid CO2 phase. Provides NO2 with a real, Fe-mediated sink that also
-        produces NO directly without routing through HNO3/R5, so it is NOT subject to R5's own
-        Keq5-governed equilibrium.
-
-        Optional Arrhenius term (``wall_no2_ea_kj_mol``, default 0.0 = no-op): the dew-point-
-        relative dry_factor ALONE makes this reaction look MORE favourable at warmer conditions
-        (water solubility/dew point rises faster with T than typical feed H2O ppm does, so a
-        warmer stream can appear relatively "drier"), the opposite of the cold-favoured behaviour
-        intended. A negative ``wall_no2_ea_kj_mol`` counteracts this by making the reaction
-        genuinely SLOWER at higher T (real physical precedent: adsorption-limited heterogeneous
-        kinetics, where surface coverage falls as T rises, can show a net negative apparent
-        activation energy). ``wall_no2_k_intrinsic`` keeps its calibrated meaning AT
-        ``_WALL_NO2_T_REF_K``; the Arrhenius term only rescales the rate at OTHER temperatures
-        relative to that.
-
-        Optional ABSOLUTE-humidity gating (``wall_no2_h2o_ppm_ref`` > 0): replaces the relative-
-        dew-point ``wet_factor`` above with a plain Langmuir adsorption isotherm in the ACTUAL
-        H2O ppm present (``h2o_ppm/(h2o_ppm+ref)``), independent of the (T-dependent) dew point --
-        physically, a real Langmuir water-adsorption model is driven by the absolute concentration
-        of water molecules available to adsorb, not a dimensionless relative-humidity ratio.
-        0.0 (default) keeps the relative-dew-point behaviour.
-
-        Optional cumulative-exposure INDUCTION PERIOD (``wall_no2_exposure_threshold_ppm_h`` >
-        0): a real corrosion phenomenon -- a passive oxide film only breaks down (exposing fresh,
-        reactive bare Fe) after SUSTAINED aggressive-species exposure, not instantaneously (e.g.
-        pitting-corrosion incubation times in the literature). Gated by a Hill/saturating
-        function of ``cum_no2_exposure`` (ppm-hours of NO2 the wall has ever been exposed to,
-        tracked as the ``CumNO2Exposure`` ODE state, see ``EXTRA_STATE_KEYS``): ``activation =
-        ratio**n / (1+ratio**n)`` where ``ratio = cum_ppm_h / wall_no2_exposure_threshold_ppm_h``
-        and ``n = wall_no2_exposure_hill_n``. 0.0 (default) disables it (activation always 1.0,
-        backward-compatible).
-
-        Optional O2-DEPLETION gating (``wall_no2_o2_ref_ppm`` > 0): real carbon-steel corrosion
-        follows genuinely different mechanisms/product speciation under O2-depleted (anaerobic-
-        like) vs O2-rich (aerobic) conditions -- gates this reaction to favour the O2-scarce
-        regime via a Hill function in O2 ppm: ``o2_gate = 1/(1+(O2_ppm/ref)**n)``, so it is near
-        1 when O2 is nearly exhausted and falls toward 0 once O2 is abundant. 0.0 (default)
-        disables it (o2_gate always 1.0, backward-compatible).
-
-        Optional O2-PRESENCE gating (``wall_no2_o2_presence_ref_ppm`` > 0, see
-        ``_o2_presence_gate``): the O2-DEPLETION gate just above is ALSO wide open during a
-        genuinely zero-O2-FEED window (not just ordinary consumption-driven depletion), letting
-        this reaction crash the standing NO2 pool and spike NO within a single brief or extended
-        anoxic phase. This gate throttles that specific case via the FED (not instantaneous) O2
-        level, independent of the depletion gate above. 0.0 (default) disables it (factor always
-        1.0, backward-compatible).
-        """
+        """NO2 wall-corrosion sink rate [kmol NO2/(m^3 s)]: 2 Fe + 3 NO2 -> Fe2O3 + 3 NO."""
         if self.wall_area_m2 <= 0.0 or self.wall_no2_k_intrinsic <= 0.0:
             return 0.0
         if self.wall_no2_h2o_ppm_ref > 0.0:
@@ -1109,8 +988,6 @@ class CO2ImpurityKineticsModel:
             activation = ratio_n / (1.0 + ratio_n)
         o2_gate = 1.0
         if self.wall_no2_o2_ref_ppm > 0.0 and C_O2 is not None:
-            # Reads the LAGGED O2 signal when enabled (see o2_lag_tau_hours), same reasoning
-            # as R15's own product-inhibition gate above.
             o2_source = C_O2_lagged if (self.o2_lag_tau_hours > 0.0 and C_O2_lagged is not None) else C_O2
             o2_ppm = max(o2_source, 0.0) / max(self.molar_density, 1e-9) * 1e6
             ratio_n = (o2_ppm / self.wall_no2_o2_ref_ppm) ** self.wall_no2_o2_hill_n
@@ -1125,20 +1002,13 @@ class CO2ImpurityKineticsModel:
                                                 self.wall_no2_feed_o2_hill_n)
         presence = self._o2_presence_gate(C_O2_feed, self.wall_no2_o2_presence_ref_ppm,
                                           self.wall_no2_o2_presence_hill_n)
-        # NO product brake (see wall_no2_no_cap_ppm docstring): mirrors R15's N2O brake --
-        # throttles this reaction as standing NO approaches/exceeds a chosen ceiling, so it
-        # cannot indefinitely keep converting NO2 into MORE NO once NO is already abundant.
         no_brake = 1.0
         if self.wall_no2_no_cap_ppm > 0.0 and C_NO is not None:
             no_ppm_wall = max(C_NO, 0.0) / max(self.molar_density, 1e-9) * 1e6
+            if self.wall_no2_no_cap_gas_weighted:
+                no_ppm_wall *= self._dilute_redox_weight()
             no_brake = 1.0 / (1.0 + (no_ppm_wall / self.wall_no2_no_cap_ppm) ** self.wall_no2_no_cap_hill_n)
         no2_ppm = max(C_NO2, 0.0) / max(self.molar_density, 1e-9) * 1e6
-        # Langmuir adsorption isotherm for NO2 on the coupon surface (see
-        # wall_no2_langmuir_half_ppm docstring): a finite number of active sites means the
-        # attack rate must saturate at high NO2, not keep scaling with the power law forever.
-        # `half_ppm * theta` recovers the plain (potency=1) linear term at low NO2 (theta<<1,
-        # so this is a strict generalisation, not a competing knob) and flattens to a hard
-        # ceiling of `half_ppm` once NO2 >> half_ppm, instead of growing unboundedly.
         if self.wall_no2_langmuir_half_ppm > 0.0:
             no2_term = self.wall_no2_langmuir_half_ppm * no2_ppm / (no2_ppm + self.wall_no2_langmuir_half_ppm)
         else:
@@ -1149,17 +1019,11 @@ class CO2ImpurityKineticsModel:
             gas_phase * sulfur_gate * passivation * presence * no2_term * A_sv * 1e-3
 
     def _wall_so2_rate(self, C_SO2, h2o_ppm, cum_o2_exposure=0.0):
-        """Surface-catalysed SO2 oxidation sink [kmol SO2/(m^3 s)]: SO2 + 0.5 O2 + H2O -> H2SO4
-        (same net stoichiometry as the homogeneous R1, but catalysed by an accumulating surface
-        oxide layer -- iron oxide is a real, if weak, industrial SO2-oxidation catalyst, the
-        same chemistry underlying the "contact process" for sulfuric acid manufacture).
-
-        Gated by an induction-period Hill function of CUMULATIVE O2 EXPOSURE (ppm-hours the
-        wall has ever seen, tracked as the ``CumO2Exposure`` ODE state -- mirrors
-        ``wall_no2_exposure_threshold_ppm_h``'s exact pattern): a genuinely built-up oxide layer,
-        not instantaneous O2 presence, is what's understood to catalyse this. Water-saturation
-        gated like the other acid-forming wall paths (``_water_saturation_fraction``).
-        ``wall_so2_k_intrinsic <= 0`` (default) disables it entirely.
+        """Surface-catalysed SO2 oxidation sink [kmol SO2/(m^3 s)]: SO2 + 0.5 O2 + H2O ->
+        H2SO4 (same net stoichiometry as the homogeneous R1, but catalysed by an
+        accumulating surface oxide layer -- iron oxide is a real, if weak, industrial
+        SO2-oxidation catalyst, the same chemistry underlying the "contact process"
+        for sulfuric acid manufacture).
         """
         if self.wall_area_m2 <= 0.0 or self.wall_so2_k_intrinsic <= 0.0:
             return 0.0
@@ -1176,13 +1040,8 @@ class CO2ImpurityKineticsModel:
             (so2_ppm ** self.wall_so2_potency) * A_sv * 1e-3
 
     def _wall_s8_rate(self, C_H2S, C_O2):
-        """Carbon-steel-catalysed Claus-type surface reaction [kmol H2S/(m^3 s)]:
-        8 H2S + 4 O2 -> S8 + 8 H2O.
-
-        Requires the steel coupon as a catalyst (negligible without a carbon-steel/magnetite
-        wall present) and is not gated by water -- a genuinely dry, catalytic gas-surface
-        reaction, unlike the acid-film corrosion paths above. Guessed as kinetically slow (see
-        ``wall_s8_k_intrinsic``).
+        """Carbon-steel-catalysed Claus-type surface reaction [kmol H2S/(m^3 s)]: 8 H2S +
+        4 O2 -> S8 + 8 H2O.
         """
         if self.wall_area_m2 <= 0.0 or self.wall_s8_k_intrinsic <= 0.0:
             return 0.0
@@ -1193,33 +1052,21 @@ class CO2ImpurityKineticsModel:
         V_m3 = max(self.volume_ml, 1e-9) * 1e-6
         A_sv = self.wall_area_m2 / V_m3
         return self.wall_s8_k_intrinsic * (h2s_ppm ** self.wall_s8_h2s_potency) * \
-            (o2_ppm ** self.wall_s8_o2_potency) * A_sv * 1e-3
+            _fractional_activity(o2_ppm, self.wall_s8_o2_potency,
+                                 MIN_CONCENTRATION_FLOOR / self.molar_density * 1e6) * A_sv * 1e-3
 
     def get_wall_deposit_rates(self, C_O2, h2o_ppm, C_NO2, C_H2SO4, C_HNO3, C_H2S=0.0,
                                 cum_no2_exposure=0.0, C_O2_feed=None, C_O2_lagged=None,
-                                C_SO2=0.0, cum_o2_exposure=0.0, C_NO=None, C_O2_feed_lagged=None):
-        """Instantaneous wall-corrosion product formation rates [kmol/(m^3 s)], all coupled
-        back into the species ODEs in ``rhs``: ``r_wall_o2`` (O2 -> Fe2O3, gated by the
-        instantaneous NO2+H2SO4+HNO3 loading via ``C_NO2``/``C_H2SO4``/``C_HNO3``),
-        ``r_wall_no2`` (2 Fe + 3 NO2 -> Fe2O3 + 3 NO, see ``_wall_no2_rate``),
-        ``r_hno3_corrosion`` (HNO3 -> Fe(NO3)2) and ``r_h2so4`` (H2SO4 -> FeSO4,
-        hydrogen-producing) are the four ACTIVE corrosion paths. ``r_feco3`` (CO2(aq) ->
-        FeCO3) is disabled by default (see the module-level parameter-set docstring) and
-        returns 0.0 unless explicitly re-enabled. ``r_wall_s8``
-        (H2S + O2 -> S8 + H2O, carbon-steel-catalysed, no Fe consumed) is a separate catalytic
-        (non-corrosion) path.
+                                C_SO2=0.0, cum_o2_exposure=0.0, C_NO=None, C_O2_feed_lagged=None,
+                                C_H2S_feed=None):
+        """Return wall-pathway rates [kmol/(m3 s)] consistent with the species balances.
 
-        ``C_O2_feed`` (fed, not instantaneous, O2 concentration) forwards to ``_wall_o2_rate``/
-        ``_wall_no2_rate``'s feed-O2 passivation gate (see ``_feed_o2_passivation``) -- omitting
-        it (``None``, the default) leaves that gate fully OPEN, matching its own no-op default,
-        so callers that don't track a feed schedule (e.g. a single fixed-feed calculation) are
-        unaffected; callers reconstructing a real multi-phase run (see
-        ``_compute_reaction_rate_series``) MUST pass it to stay consistent with ``rhs()``.
+        Includes corrosion and catalytic pathways; a disabled pathway returns zero.
         """
         return {
             'r_wall_o2': self._wall_o2_rate(C_O2, h2o_ppm, C_NO2, C_H2SO4, C_HNO3,
                                             C_O2_feed=(C_O2_feed_lagged if self.o2_feed_lag_tau_hours > 0.0
-                                                       else C_O2_feed)),
+                                                       else C_O2_feed), C_H2S_feed=C_H2S_feed),
             'r_feco3': self._wall_feco3_rate(h2o_ppm, C_H2SO4, C_HNO3),
             'r_hno3_corrosion': self._wall_hno3_corrosion_rate(h2o_ppm, C_HNO3, C_H2SO4),
             'r_h2so4': self._wall_h2so4_rate(h2o_ppm, C_H2SO4, C_HNO3),
@@ -1227,7 +1074,7 @@ class CO2ImpurityKineticsModel:
                                               C_H2S_raw=C_H2S, C_H2SO4_raw=C_H2SO4,
                                               C_O2_feed=C_O2_feed, C_O2_lagged=C_O2_lagged,
                                               C_NO=C_NO),
-            'r_wall_s8': self._wall_s8_rate(C_H2S, C_O2),
+            'r_wall_s8': self._wall_s8_rate(C_H2S * self.phi_dict['H2S'], C_O2),
             'r_wall_so2': self._wall_so2_rate(C_SO2, h2o_ppm, cum_o2_exposure),
         }
 
@@ -1266,6 +1113,7 @@ class CO2ImpurityKineticsModel:
                                  coupon_thickness_mm=None,
                                  k_intrinsic=None,
                                  o2_potency=None,
+                                 o2_f_phase_exponent=None,
                                  o2_sat_ref=None,
                                  rho_pass=None,
                                  hill_n=None,
@@ -1307,12 +1155,7 @@ class CO2ImpurityKineticsModel:
                                  so2_exposure_hill_n=None,
                                  acid_gain2=None,
                                  acid_exponent2=None):
-        """Configure the wall-corrosion O2 sink after construction.
-
-        Provide either ``area_m2`` directly or a ``(coupon_diameter_cm, coupon_thickness_mm)``
-        pair to compute the disc-coupon wetted area (2 faces + edge). All other arguments are
-        optional overrides for the wall-model parameters.
-        """
+        """Configure the wall-corrosion O2 sink after construction."""
         if coupon_diameter_cm is not None and coupon_thickness_mm is not None:
             r = float(coupon_diameter_cm) * 0.5e-2
             h = float(coupon_thickness_mm) * 1e-3
@@ -1323,6 +1166,8 @@ class CO2ImpurityKineticsModel:
             self.wall_k_intrinsic = float(k_intrinsic)
         if o2_potency is not None:
             self.wall_o2_potency = float(o2_potency)
+        if o2_f_phase_exponent is not None:
+            self.wall_o2_f_phase_exponent = float(o2_f_phase_exponent)
         if o2_sat_ref is not None:
             self.wall_o2_sat_ref = float(o2_sat_ref)
         if rho_pass is not None:
@@ -1418,40 +1263,15 @@ class CO2ImpurityKineticsModel:
         self._f_phase = self._compute_f_phase()
 
     def override_f_phase(self, value):
-        """Directly set ``f_phase``, the wet-film/heterogeneous-reaction multiplier used ONLY
-        by R2, R12 and R13 (the H2S-dependent NO2 reactions), bypassing the density-ratio
-        formula in ``_compute_f_phase``.
-
-        Use this (rather than ``set_srk_kij`` on NO2) to make NO2 react faster specifically via
-        R2/R12/R13 when process-specific validation indicates that pathway is under-represented
-        -- without also
-        perturbing R3a/R4/R5, which all use NO2's bulk SRK fugacity too but have no H2S
-        dependence and were not shown to need correcting. (Overriding NO2's SRK kij instead was
-        tried and rejected: R5 is cubic in [NO2] and R4's reverse term is quadratic in [NO2], so
-        a single shared NO2 fugacity blows both of those up far more than R2/R12/R13, wrongly
-        consuming NO2 well before H2S is even fed. Boosting H2S or O2 instead was also tried and
-        rejected: NO2 is the genuinely scarce reagent in R2/R12/R13, and the old (now-removed)
-        R6/R8 paths provided an NO2-independent sink for H2S/O2, so they won the competition for
-        the boosted H2S long before R2/R9 (R9's own successor, R12/R13) did -- NO2 itself has to
-        become more available for R2/R12/R13 specifically.)
-        This is a pure Python attribute assignment -- no NeqSim flash involved, so it is always
-        safe to call, including repeatedly.
+        """Directly set ``f_phase``, the wet-film/heterogeneous-reaction multiplier used
+        ONLY by R2, R12 and R13 (the H2S-dependent NO2 reactions), bypassing the
+        density-ratio formula in ``_compute_f_phase``.
         """
         self._f_phase = float(value)
 
     def set_srk_kij(self, species_name, kij):
-        """Override the CO2-``species_name`` binary interaction parameter in the SRK flash.
-
-        Recomputes ``phi_dict``/``molar_density``/``phase``, the water-solubility limit and
-        ``f_phase``, since all of them derive from the fugacity flash. Default kij is 0.0 for
-        every pair (NeqSim's own database has no regressed value for these trace pairs), which
-        for a strongly polar/reactive species like NO2 or SO2 in dense/liquid CO2 can produce
-        an unrealistically small bulk-phase fugacity coefficient. This is a deliberate, tuned
-        override rather than a measured value, and should only be used when process-specific
-        validation indicates the bulk single-phase SRK flash is not representative. Prefer
-        ``override_f_phase`` instead when only R2/R12/R13 (not every reaction using that
-        species) should be affected -- see its docstring for why that matters for NO2
-        specifically.
+        """Override the CO2-``species_name`` binary interaction parameter in the SRK
+        flash.
         """
         self.srk_kij_co2[species_name] = float(kij)
         self.molar_density, self.phase, self.phi_dict = self._calculate_srk_fugacities(self.T, self.P)
@@ -1459,16 +1279,7 @@ class CO2ImpurityKineticsModel:
         self._f_phase = self._compute_f_phase()
 
     def set_conditions(self, temp_C=None, pressure_bar=None):
-        """Re-evaluate the reactor state at a new temperature and/or pressure.
-
-        Redoes the SRK flash, so ``molar_density`` (and therefore the CSTR residence time and
-        every concentration-based rate law), ``phase``, ``phi_dict``, the water-solubility/dew
-        point and ``f_phase`` all move with the new conditions. Arrhenius terms pick up the new
-        ``self.T`` automatically. Deliberate ``set_phi_override``/``set_ideal_fugacity`` values
-        are replayed afterwards so a condition change cannot silently revert them.
-
-        No-op (and no NeqSim flash) when neither argument changes the current state.
-        """
+        """Re-evaluate the reactor state at a new temperature and/or pressure."""
         new_T = self.T if temp_C is None else float(temp_C) + 273.15
         new_P = self.P if pressure_bar is None else float(pressure_bar)
         if new_T == self.T and new_P == self.P:
@@ -1482,14 +1293,9 @@ class CO2ImpurityKineticsModel:
         self._f_phase = self._compute_f_phase()
 
     def set_phi_override(self, species_name, value):
-        """Force ``phi_dict[species_name]`` to ``value``, overriding whatever the SRK flash
-        computed for it. Pure Python attribute set (no NeqSim flash), always safe to call.
-
-        See ``set_ideal_fugacity`` for the ``value=1.0`` case. Values other than 1.0 are a tuned
-        adjustment on top of that -- e.g. NO's SRK phi (~10 at -26C/31bar) makes R4 (2 NO + O2
-        -> 2 NO2) pull essentially all the NO produced by R2/R12/R13 straight back to NO2 (see
-        AGENTS notes); reducing phi_NO below 1 weakens that pull and lets a genuine steady-state
-        NO residual persist, at the cost of being a tuned rather than a generally derived value.
+        """Force ``phi_dict[species_name]`` to ``value``, overriding whatever the SRK
+        flash computed for it. Pure Python attribute set (no NeqSim flash), always
+        safe to call.
         """
         self.phi_dict[species_name] = float(value)
         self._phi_overrides[species_name] = float(value)
@@ -1499,42 +1305,27 @@ class CO2ImpurityKineticsModel:
     def set_ideal_fugacity(self, species_name):
         """Force ``phi_dict[species_name]`` to 1.0 (ideal-mixture assumption), overriding
         whatever the SRK flash computed for it.
-
-        The raw SRK flash can give NO2/HNO3 fugacity
-        coefficients so extreme (~0.008 and ~0.0002 at -26C/31bar) that R5 (NO2 + H2O -> HNO3 +
-        NO) makes literally zero progress in any realistic time, while a `kij` correction large
-        enough to unstick the forward reaction leaves the reverse reaction still crippled by
-        HNO3's own tiny phi and overshoots the real equilibrium several-fold (see
-        `set_srk_kij` notes). Setting NO2/HNO3/H2O/NO to ideal (phi=1) instead reproduces the
-        This is a simplified treatment for trace species and requires case-specific review.
-        This is a pure Python attribute set (no NeqSim flash), always safe to call.
         """
         self.set_phi_override(species_name, 1.0)
 
     def set_r5_no_activity(self, value):
-        """Set R5's reverse-term NO activity, decoupled from ``phi_dict['NO']`` (see
-        ``r5_no_activity`` in ``__init__`` for the rationale). Pure Python attribute set,
-        always safe to call.
-        """
+        """Set R5 reverse-term NO activity independently of its fugacity coefficient."""
         self.r5_no_activity = float(value)
 
     def set_r4_no_activity(self, value):
-        """Set R4's forward-term NO activity, decoupled from ``phi_dict['NO']`` (see
-        ``r4_no_activity`` in ``__init__`` for the rationale). Pure Python attribute set,
-        always safe to call.
-        """
+        """Set R4 forward-term NO activity independently of its fugacity coefficient."""
         self.r4_no_activity = float(value)
 
+    def set_r4_o2_half_ppm(self, value):
+        """Set R4's O2 half-saturation concentration in ppm; 0.0 restores first-order O2."""
+        self.r4_o2_half_ppm = float(value)
+
     def set_r4_surface_gain(self, value):
-        """Set R4's surface-to-volume enhancement gain (see ``r4_surface_gain`` on ``__init__``).
-        0.0 disables the term; it is 1.0 at the reference bore for any gain.
-        """
+        """Set R4's surface-to-volume enhancement gain; zero disables it."""
         self.r4_surface_gain = float(value)
 
     def set_r3a_bore_gain(self, value):
-        """Set R3a's surface-to-volume enhancement gain (see ``r3a_bore_gain`` on ``__init__``).
-        Pure Python attribute set, always safe to call.
-        """
+        """Set R3a's surface-to-volume enhancement gain; zero disables it."""
         self.r3a_bore_gain = float(value)
 
     def set_r15_surface_suppress_gain(self, value):
@@ -1555,8 +1346,12 @@ class CO2ImpurityKineticsModel:
     def set_feed_o2_passivation(self, wall_o2_ref_ppm=None, wall_o2_hill_n=None,
                                 wall_no2_ref_ppm=None, wall_no2_hill_n=None,
                                 r3a_ref_ppm=None, r3a_hill_n=None, r3a_floor=None,
-                                r3a_cap_ppm=None):
+                                r3a_cap_ppm=None, wall_o2_h2s_relief=None):
         """Set the feed-O2 passivation gates (see ``_feed_o2_passivation``). 0.0 disables each."""
+        if wall_o2_h2s_relief is not None:
+            if not np.isfinite(wall_o2_h2s_relief) or wall_o2_h2s_relief < 0.0:
+                raise ValueError('H2S passivation relief must be finite and nonnegative')
+            self.wall_o2_h2s_relief = float(wall_o2_h2s_relief)
         if wall_o2_ref_ppm is not None:
             self.wall_o2_feed_o2_ref_ppm = float(wall_o2_ref_ppm)
         if wall_o2_hill_n is not None:
@@ -1573,6 +1368,27 @@ class CO2ImpurityKineticsModel:
             self.r3a_feed_o2_floor = float(r3a_floor)
         if r3a_cap_ppm is not None:
             self.r3a_feed_o2_cap_ppm = float(r3a_cap_ppm)
+
+    def set_r3a_h2s_feed_inhibition(self, ref_ppm=None, hill_n=None, no2_ref_ppm=None,
+                                     no2_hill_n=None, gain=None):
+        """Configure R3a's optional inlet H2S/NO2 competition mechanism."""
+        if ref_ppm is not None:
+            self.r3a_h2s_feed_inhibition_ref_ppm = float(ref_ppm)
+        if hill_n is not None:
+            self.r3a_h2s_feed_inhibition_hill_n = float(hill_n)
+        if no2_ref_ppm is not None:
+            self.r3a_h2s_feed_inhibition_no2_ref_ppm = float(no2_ref_ppm)
+        if no2_hill_n is not None:
+            self.r3a_h2s_feed_inhibition_no2_hill_n = float(no2_hill_n)
+        if gain is not None:
+            self.r3a_h2s_feed_inhibition_gain = float(gain)
+
+    def set_r2_no2_excess_gate(self, ratio_ref=None, hill_n=None):
+        """Set R2's inlet NO2/H2S excess gate; a nonpositive ratio reference disables it."""
+        if ratio_ref is not None:
+            self.r2_no2_excess_ratio_ref = float(ratio_ref)
+        if hill_n is not None:
+            self.r2_no2_excess_ratio_hill_n = float(hill_n)
 
     def set_o2_presence_gates(self, wall_no2_ref_ppm=None, wall_no2_hill_n=None,
                               r3a_ref_ppm=None, r3a_hill_n=None,
@@ -1591,28 +1407,27 @@ class CO2ImpurityKineticsModel:
         if r2_hill_n is not None:
             self.r2_o2_presence_hill_n = float(r2_hill_n)
 
-    def set_wall_no2_no_cap(self, ppm=None, hill_n=None):
-        """Set wall_no2's NO product brake (see ``wall_no2_no_cap_ppm`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
+    def set_wall_no2_no_cap(self, ppm=None, hill_n=None, gas_weighted=None):
+        """Set NO product inhibition of wall-mediated NO2 conversion.
+
+        Optional density weighting is an empirical activity, not a phase fraction.
         """
+        if gas_weighted is not None:
+            if not isinstance(gas_weighted, (bool, np.bool_)):
+                raise ValueError('Gas-weighted NO inhibition must be a boolean')
+            self.wall_no2_no_cap_gas_weighted = bool(gas_weighted)
         if ppm is not None:
             self.wall_no2_no_cap_ppm = float(ppm)
         if hill_n is not None:
             self.wall_no2_no_cap_hill_n = float(hill_n)
 
     def set_wall_no2_langmuir(self, half_ppm):
-        """Set wall_no2's NO2 Langmuir half-saturation ppm (see ``wall_no2_langmuir_half_ppm``
-        docstring on ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set NO2 half-saturation [ppm] for the wall pathway."""
         self.wall_no2_langmuir_half_ppm = float(half_ppm)
 
     def _surface_sv_excess(self):
-        """Fractional excess of the vessel surface-to-volume ratio over the reference bore.
-
-        A/V for a cylinder is ``4/d + 2/L``, normalised to ``_R4_SURFACE_SV_REF_CM_INV`` (a
-       reference autoclave). Exactly 0.0 at (or above) the reference bore, so
-        every standard-bore rig is untouched by any term built on this; only a narrower bore
-        gives a positive excess.
+        """Fractional excess of the vessel surface-to-volume ratio over the reference
+        bore.
         """
         a_sv = 4.0 / max(self.diameter_cm, 1e-9) + 2.0 / max(self.length_cm, 1e-9)
         return max(0.0, a_sv / _R4_SURFACE_SV_REF_CM_INV - 1.0)
@@ -1624,53 +1439,195 @@ class CO2ImpurityKineticsModel:
         return 1.0 + self.r4_surface_gain * self._surface_sv_excess()
 
     def _r3a_bore_factor(self):
-        """Wall-film enhancement of R3a's base rate from the vessel surface-to-volume ratio
-        (>=1.0). Same signal as ``_r4_surface_factor`` -- exactly 1.0 for every cm rig.
-        """
+        """Return R3a's surface-to-volume enhancement relative to the reference geometry."""
         if self.r3a_bore_gain <= 0.0:
             return 1.0
         return 1.0 + self.r3a_bore_gain * self._surface_sv_excess()
 
     def _r15_surface_suppression(self):
-        """Surface quenching of R15's N2O channel in a narrow bore (<=1.0).
-
-        The 4 NO2 -> 2 N2O + 3 O2 route runs through an N2O4-like intermediate; a high wall area
-        per unit volume gives that intermediate a competing heterogeneous fate instead, so the
-        homogeneous N2O channel is throttled. Exactly 1.0 at the reference bore.
-        """
+        """Surface quenching of R15's N2O channel in a narrow bore (<=1.0)."""
         if self.r15_surface_suppress_gain <= 0.0:
             return 1.0
         return 1.0 / (1.0 + self.r15_surface_suppress_gain * self._surface_sv_excess())
 
     def _r3a_autocat_surface_suppression(self):
-        """Bore-specific suppression of R3a's autocat (see ``r3a_autocat_surface_suppress_gain``
-        docstring on ``__init__``): 1.0 (no-op) at the reference bore, falls below 1.0 only for
-        a narrower bore.
-        """
+        """Reduce R3a autocatalysis when surface-to-volume ratio exceeds the reference."""
         if self.r3a_autocat_surface_suppress_gain <= 0.0:
             return 1.0
         return 1.0 / (1.0 + self.r3a_autocat_surface_suppress_gain * self._surface_sv_excess())
 
     def set_r3a_no_escape_frac(self, value):
-        """Set the fraction of NO that "escapes" R3a's reverse term in the liquid/wet film,
-        scaled by f_phase (see ``r3a_no_escape_frac`` in ``__init__`` for the rationale). Pure
-        Python attribute set, always safe to call.
-        """
+        """Set the phase-scaled reduction of NO activity in R3a's reverse term."""
         self.r3a_no_escape_frac = float(value)
 
-    def set_r1_autocat(self, gain=None, ref_ppm=None):
-        """Set R1's autocatalytic acceleration parameters (see ``r1_autocat_gain`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+    def set_r1_autocat(self, gain=None, ref_ppm=None, hill_n=None):
+        """Set R1 acid activation: gain, reference [ppm-equivalent], and Hill exponent."""
+        if hill_n is not None and (not np.isfinite(hill_n) or hill_n <= 0.0):
+            raise ValueError('R1 Hill exponent must be finite and positive')
+        if ref_ppm is not None and (not np.isfinite(ref_ppm) or ref_ppm <= 0.0):
+            raise ValueError('R1 activation reference must be finite and positive')
+        if gain is not None and not np.isfinite(gain):
+            raise ValueError('R1 activation gain must be finite')
         if gain is not None:
             self.r1_autocat_gain = float(gain)
         if ref_ppm is not None:
             self.r1_autocat_ref_ppm = float(ref_ppm)
+        if hill_n is not None:
+            self.r1_autocat_hill_n = float(hill_n)
+
+    def _r1_autocat_factor(self, cumulative_acid_ppm):
+        """Bounded acid activation; exponent one retains the original Langmuir form."""
+        if self.r1_autocat_gain <= 0.0 or cumulative_acid_ppm <= 0.0:
+            return 1.0
+        saturation = self._reactant_activation_factor(
+            cumulative_acid_ppm, self.r1_autocat_ref_ppm, self.r1_autocat_hill_n)
+        return 1.0 + self.r1_autocat_gain * saturation
+
+    @staticmethod
+    def _reactant_activation_factor(concentration, reference, hill_n):
+        """Bounded loading activation; a zero reference disables it."""
+        if reference <= 0.0:
+            return 1.0
+        if concentration <= 0.0:
+            return 0.0
+        log_ratio = hill_n * (np.log(reference) - np.log(concentration))
+        return 1.0 / (1.0 + np.exp(np.clip(log_ratio, -700.0, 700.0)))
+
+    def set_r5_no2_order(self, order=3.0, reference_kmol_m3=1e-5, floor_kmol_m3=1e-12):
+        """Set a normalized apparent NO2 order without changing R5's equilibrium condition."""
+        if not np.isfinite(order) or order <= 0.0:
+            raise ValueError('R5 NO2 order must be finite and positive')
+        if not np.isfinite(reference_kmol_m3) or not 0.0 < floor_kmol_m3 < reference_kmol_m3:
+            raise ValueError('Require finite R5 reference > floor > 0')
+        self.r5_no2_order = float(order)
+        self.r5_reference_kmol_m3 = float(reference_kmol_m3)
+        self.r5_floor_kmol_m3 = float(floor_kmol_m3)
+
+    def _r5_rate_factor(self, no2):
+        """Dimensionless mobility common to the forward and reverse rates."""
+        return (max(no2, self.r5_floor_kmol_m3) / self.r5_reference_kmol_m3) ** (self.r5_no2_order - 3.0)
+
+    def set_r7_no_order(self, order=1.0, reference_kmol_m3=1e-5, floor_kmol_m3=1e-12,
+                        activation_reference_kmol_m3=0.0, activation_hill_n=1.0):
+        """Set apparent NO order and optional bounded activation using NO activity."""
+        if not np.isfinite(order) or order <= 0.0:
+            raise ValueError('R7 NO order must be finite and positive')
+        if not np.isfinite(reference_kmol_m3) or not 0.0 < floor_kmol_m3 < reference_kmol_m3:
+            raise ValueError('Require finite R7 reference > floor > 0')
+        if (not np.isfinite(activation_reference_kmol_m3) or activation_reference_kmol_m3 < 0.0
+                or not np.isfinite(activation_hill_n) or activation_hill_n <= 0.0):
+            raise ValueError('Require finite nonnegative R7 activation reference and positive Hill exponent')
+        self.r7_no_order = float(order)
+        self.r7_reference_kmol_m3 = float(reference_kmol_m3)
+        self.r7_floor_kmol_m3 = float(floor_kmol_m3)
+        self.r7_no_activation_reference_kmol_m3 = float(activation_reference_kmol_m3)
+        self.r7_no_activation_hill_n = float(activation_hill_n)
+
+    def _r7_rate_factor(self, no):
+        """Dimensionless correction; the original NO factor still vanishes at zero."""
+        order_factor = (max(no, self.r7_floor_kmol_m3) / self.r7_reference_kmol_m3) ** (self.r7_no_order - 1.0)
+        return order_factor * self._reactant_activation_factor(
+            no, self.r7_no_activation_reference_kmol_m3, self.r7_no_activation_hill_n)
+
+    def set_r7_water_saturation(self, parameters=None):
+        """Set a normalized Langmuir water dependence for the apparent R7 rate."""
+        if parameters is None:
+            self.r7_water_saturation = None
+            return
+        if set(parameters) != {'half_kmol_m3', 'reference_kmol_m3'}:
+            raise ValueError('Require water half-saturation and reference concentrations')
+        settings = {key: float(value) for key, value in parameters.items()}
+        if (not all(np.isfinite(value) for value in settings.values())
+                or settings['half_kmol_m3'] < 0.0 or settings['reference_kmol_m3'] <= 0.0):
+            raise ValueError('Require finite water half-saturation >= 0 and reference > 0')
+        self.r7_water_saturation = settings
+
+    def _r7_water_activity(self, water):
+        """Return finite, monotone water availability, with an exact dry limit."""
+        concentration = max(float(water), 0.0)
+        settings = getattr(self, 'r7_water_saturation', None)
+        if settings is None or settings['half_kmol_m3'] <= 0.0:
+            return concentration
+        half = settings['half_kmol_m3']
+        return concentration / (half + concentration) * (half + settings['reference_kmol_m3'])
+
+    def set_r7_cold_availability(self, parameters=None):
+        """Set a bounded apparent cold-site availability multiplying the R7 coefficient."""
+        if parameters is None:
+            self.r7_cold_availability = None
+            return
+        if set(parameters) != {'midpoint_K', 'width_K'}:
+            raise ValueError('Require cold-availability midpoint_K and width_K')
+        settings = {key: float(value) for key, value in parameters.items()}
+        if any(not np.isfinite(value) or value <= 0.0 for value in settings.values()):
+            raise ValueError('Cold-availability temperatures must be finite and positive')
+        self.r7_cold_availability = settings
+
+    def _r7_cold_factor(self):
+        settings = getattr(self, 'r7_cold_availability', None)
+        if settings is None:
+            return 1.0
+        exponent = (self.T - settings['midpoint_K']) / settings['width_K']
+        return 1.0 / (1.0 + np.exp(np.clip(exponent, -700.0, 700.0)))
+
+    def set_r17_orders(self, no2=2.0, h2o=1.0, wet=2.0, reference_kmol_m3=1e-5, floor_kmol_m3=1e-7,
+                       activation_reference_kmol_m3=0.0, activation_hill_n=1.0):
+        """Set real apparent orders with symmetric, dimensionless rate corrections."""
+        if any(not np.isfinite(order) or order <= 0.0 for order in (no2, wet)):
+            raise ValueError('R17 NO2 and wet orders must be finite and positive')
+        if not np.isfinite(h2o):
+            raise ValueError('R17 water order must be finite')
+        if not np.isfinite(reference_kmol_m3) or not 0.0 < floor_kmol_m3 < reference_kmol_m3:
+            raise ValueError('Require finite R17 reference > floor > 0')
+        if (not np.isfinite(activation_reference_kmol_m3) or activation_reference_kmol_m3 < 0.0
+                or not np.isfinite(activation_hill_n) or activation_hill_n <= 0.0):
+            raise ValueError('Require finite nonnegative R17 activation reference and positive Hill exponent')
+        self.r17_no2_order = float(no2)
+        self.r17_h2o_order = float(h2o)
+        self.r17_wet_order = float(wet)
+        self.r17_reference_kmol_m3 = float(reference_kmol_m3)
+        self.r17_floor_kmol_m3 = float(floor_kmol_m3)
+        self.r17_no2_activation_reference_kmol_m3 = float(activation_reference_kmol_m3)
+        self.r17_no2_activation_hill_n = float(activation_hill_n)
+
+    def set_r17_dense_co2_inhibition(self, f_phase_ref=0.0, f_phase_hill_n=3.0,
+                                      wet_ref=0.4, wet_hill_n=2.0):
+        """Set the dense-CO2 inhibition of R17; a nonpositive phase reference disables it."""
+        if not np.isfinite(f_phase_ref) or f_phase_ref < 0.0:
+            raise ValueError('R17 dense-CO2 phase reference must be finite and nonnegative')
+        if f_phase_ref > 0.0 and (
+                not np.isfinite(f_phase_hill_n) or f_phase_hill_n <= 0.0
+                or not np.isfinite(wet_ref) or wet_ref <= 0.0
+                or not np.isfinite(wet_hill_n) or wet_hill_n < 0.0):
+            raise ValueError('Require positive R17 dense-CO2 references and phase exponent')
+        self.r17_dense_co2_inhibition_f_phase_ref = float(f_phase_ref)
+        self.r17_dense_co2_inhibition_f_phase_hill_n = float(f_phase_hill_n)
+        self.r17_dense_co2_inhibition_wet_ref = float(wet_ref)
+        self.r17_dense_co2_inhibition_wet_hill_n = float(wet_hill_n)
+
+    def _r17_dense_co2_inhibition(self, water_ppm):
+        """Return R17 mobility in dense CO2; a developed water film relieves the quench."""
+        if self.r17_dense_co2_inhibition_f_phase_ref <= 0.0:
+            return 1.0
+        wet = float(np.clip(max(water_ppm, 0.0) / max(self._water_solubility_ppm(), 1e-9), 0.0, 1.0))
+        phase_ratio = self._f_phase / self.r17_dense_co2_inhibition_f_phase_ref
+        wet_ratio = self.r17_dense_co2_inhibition_wet_ref / max(wet, 1e-7)
+        return 1.0 / (1.0 + phase_ratio ** self.r17_dense_co2_inhibition_f_phase_hill_n
+                      * wet_ratio ** self.r17_dense_co2_inhibition_wet_hill_n)
+
+    def _r17_rate_factor(self, no2, h2o, water_ppm):
+        """Common forward/reverse mobility, including the existing wet-film fraction."""
+        wet = float(np.clip(max(water_ppm, 0.0) / max(self._water_solubility_ppm(), 1e-9), 0.0, 1.0))
+        no2_factor = (max(no2, self.r17_floor_kmol_m3) / self.r17_reference_kmol_m3) ** (self.r17_no2_order - 2.0)
+        h2o_factor = (max(h2o, self.r17_floor_kmol_m3) / self.r17_reference_kmol_m3) ** (self.r17_h2o_order - 1.0)
+        wet_factor = max(wet, 1e-7) ** (self.r17_wet_order - 2.0)
+        activation = self._reactant_activation_factor(
+            no2, self.r17_no2_activation_reference_kmol_m3, self.r17_no2_activation_hill_n)
+        return no2_factor * h2o_factor * wet_factor * wet ** 2 * activation \
+            * self._r17_dense_co2_inhibition(water_ppm)
 
     def set_r3a_autocat(self, gain=None, ref_ppm=None, surface_suppress_gain=None, hill_n=None):
-        """Set R3a's autocatalytic acceleration parameters (see ``r3a_autocat_gain`` docstring
-        on ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set R3a acid activation and its optional surface-to-volume suppression."""
         if gain is not None:
             self.r3a_autocat_gain = float(gain)
         if ref_ppm is not None:
@@ -1680,79 +1637,373 @@ class CO2ImpurityKineticsModel:
         if surface_suppress_gain is not None:
             self.r3a_autocat_surface_suppress_gain = float(surface_suppress_gain)
 
-    def set_r12_density_independent(self, value):
-        """Set whether R12 bypasses f_phase (see ``r12_density_independent`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
+    def _r3a_autocat_factor(self, cumulative_acid_ppm):
+        """Acid activation shared by the solver and reaction reporting."""
+        if self.r3a_autocat_gain <= 0.0:
+            return 1.0
+        if cumulative_acid_ppm <= 0.0:
+            saturation = 0.0
+        else:
+            ratio = self.r3a_autocat_ref_ppm / cumulative_acid_ppm
+            if ratio >= 1.0:
+                scaled = (1.0 / ratio) ** self.r3a_autocat_hill_n
+                saturation = scaled / (1.0 + scaled)
+            else:
+                saturation = 1.0 / (1.0 + ratio ** self.r3a_autocat_hill_n)
+        activation = 1.0 + self.r3a_autocat_gain * saturation
+        return 1.0 + (activation - 1.0) * self._r3a_autocat_surface_suppression()
+
+    def set_r3a_acid_film(self, k_ref=0.0, ea_kj_mol=60.0, ref_ppm=100.0, hill_n=4.0,
+                         r4_k_ref=0.0):
+        """Configure apparent acid-film SO2 oxidation and optional NO recycling."""
+        values = tuple(float(value) for value in (k_ref, ea_kj_mol, ref_ppm, hill_n, r4_k_ref))
+        if not all(np.isfinite(value) for value in values):
+            raise ValueError('Acid-film parameters must be finite')
+        if min(values[0], values[4]) < 0.0 or values[2] <= 0.0 or values[3] <= 0.0:
+            raise ValueError('Acid-film rate must be nonnegative; reference and Hill order must be positive')
+        (self.r3a_acid_film_k_ref, self.r3a_acid_film_ea_kj_mol,
+         self.r3a_acid_film_ref_ppm, self.r3a_acid_film_hill_n, self.r4_acid_film_k_ref) = values
+
+    def _acid_film_kinetic_factor(self, cumulative_acid_ppm):
+        """Shared acid activation, separate from inlet-based surface inhibition."""
+        if cumulative_acid_ppm <= 0.0:
+            return 0.0
+        if cumulative_acid_ppm <= self.r3a_acid_film_ref_ppm:
+            scaled = (cumulative_acid_ppm / self.r3a_acid_film_ref_ppm) ** self.r3a_acid_film_hill_n
+            availability = scaled / (1.0 + scaled)
+        else:
+            availability = 1.0 / (1.0 + (self.r3a_acid_film_ref_ppm / cumulative_acid_ppm)
+                                  ** self.r3a_acid_film_hill_n)
+        temperature_factor = np.exp(self.r3a_acid_film_ea_kj_mol * 1000.0 / R_GAS
+                                    * (1.0 / 298.15 - 1.0 / self.T))
+        return temperature_factor * availability
+
+    def _r3a_acid_film_rate_constant(self, cumulative_acid_ppm):
+        """Apparent SO2 oxidation coefficient in m6/(kmol2 s)."""
+        if self.r3a_acid_film_k_ref <= 0.0:
+            return 0.0
+        return self.r3a_acid_film_k_ref * self._acid_film_kinetic_factor(cumulative_acid_ppm)
+
+    def set_r3a_dilute_acid(self, parameters=None):
+        """Set local-acid activation and acid-history conditioning of dilute R3a.
+
+        Local concentrations are kmol/m3; history is ppm-equivalent, not retained mass.
         """
+        if parameters is None:
+            self.r3a_dilute_acid = None
+            return
+        required = {'k_ref', 'history_ref_ppm', 'history_order', 'no2_half_kmol_m3', 'density_order'}
+        optional = {'acid_ref_kmol_m3': 0.0, 'acid_order': 1.0,
+                'nitric_history_gain': 0.0, 'nitric_history_ref_ppm': 100.0,
+            'nitric_history_order': 2.0, 'background_k_ref': 0.0, 'history_fraction': 1.0,
+                'h2s_half_kmol_m3': 0.0, 'acid_response_hours': 0.0}
+        if required - set(parameters) or set(parameters) - (required | set(optional)):
+            raise ValueError('Incomplete or unknown dilute-acid parameters')
+        settings = {**optional, **{key: float(value) for key, value in parameters.items()}}
+        if (not all(np.isfinite(value) for value in settings.values())
+                or settings['k_ref'] < 0.0
+                or any(settings[key] <= 0.0 for key in required - {'k_ref'})
+                or settings['acid_ref_kmol_m3'] < 0.0 or settings['acid_order'] <= 0.0
+                or settings['background_k_ref'] < 0.0
+                or settings['h2s_half_kmol_m3'] < 0.0
+                or settings['acid_response_hours'] < 0.0
+                or not 0.0 <= settings['history_fraction'] <= 1.0
+                or settings['nitric_history_gain'] < 0.0 or settings['nitric_history_ref_ppm'] <= 0.0
+                or settings['nitric_history_order'] <= 0.0):
+            raise ValueError('Invalid dilute-acid coefficient or reference')
+        self.r3a_dilute_acid = settings
+
+    def _r3a_dilute_acid_rate_constant(self, acid_history_ppm, no2, sulfuric_acid=0.0,
+                                     nitric_history_ppm=0.0, h2s=0.0, acid_sites=None):
+        """Reversible acid-assisted mobility with optional competing H2S uptake."""
+        settings = getattr(self, 'r3a_dilute_acid', None)
+        if settings is None or settings['k_ref'] <= 0.0:
+            return 0.0
+        activation = self._reactant_activation_factor(
+            max(acid_history_ppm, 0.0), settings['history_ref_ppm'], settings['history_order'])
+        activation = 1.0 - settings['history_fraction'] * (1.0 - activation)
+        if settings['acid_response_hours'] > 0.0 and acid_sites is not None:
+            activation *= float(np.clip(acid_sites, 0.0, 1.0))
+        else:
+            activation *= self._reactant_activation_factor(
+                max(sulfuric_acid, 0.0), settings['acid_ref_kmol_m3'], settings['acid_order'])
+        activation *= 1.0 + settings['nitric_history_gain'] * self._reactant_activation_factor(
+            max(nitric_history_ppm, 0.0), settings['nitric_history_ref_ppm'], settings['nitric_history_order'])
+        coefficient = (settings['background_k_ref'] + settings['k_ref'] * activation) \
+            * self._dilute_redox_weight() ** settings['density_order']
+        if settings['h2s_half_kmol_m3'] > 0.0:
+            coefficient /= 1.0 + max(h2s, 0.0) / settings['h2s_half_kmol_m3']
+        return coefficient / (1.0 + max(no2, 0.0) / settings['no2_half_kmol_m3'])
+
+    def _acid_site_response(self, sulfuric_acid, activity):
+        """Relax bounded acid-site activity; this state carries no material inventory."""
+        settings = getattr(self, 'r3a_dilute_acid', None)
+        if settings is None or settings['acid_response_hours'] <= 0.0:
+            return 0.0
+        target = self._reactant_activation_factor(
+            max(sulfuric_acid, 0.0), settings['acid_ref_kmol_m3'], settings['acid_order'])
+        return (target - float(np.clip(activity, 0.0, 1.0))) / (settings['acid_response_hours'] * 3600.0)
+
+    def set_r3a_conditioned_acid(self, parameters=None):
+        """Set empirical acid-conditioned R3a activity, not a new material source."""
+        if parameters is None:
+            self.r3a_conditioned_acid = None
+            return
+        positive = {'acid_ref_ppm', 'acid_order', 'history_ref_ppm',
+                    'so2_ref_ppm', 'so2_order', 'no_ref_ppm'}
+        required = positive | {'k_ref', 'ea_kj_mol'}
+        optional = {'limit_initial_ppm_h': 0.0, 'limit_max_ppm_h': 0.0,
+            'limit_acid_ref_ppm': 20.0, 'limit_acid_order': 1.0}
+        if required - set(parameters) or set(parameters) - (required | set(optional)):
+            raise ValueError('Incomplete or unknown conditioned-acid parameters')
+        settings = {**optional, **{key: float(value) for key, value in parameters.items()}}
+        if (not all(np.isfinite(value) for value in settings.values())
+            or settings['k_ref'] < 0.0 or any(settings[key] <= 0.0 for key in positive)
+            or not 0.0 <= settings['limit_initial_ppm_h'] <= settings['limit_max_ppm_h']
+            or settings['limit_acid_ref_ppm'] <= 0.0 or settings['limit_acid_order'] <= 0.0):
+            raise ValueError('Invalid conditioned-acid reference or coefficient')
+        self.r3a_conditioned_acid = settings
+
+    def _r3a_conditioned_acid_rate_constant(self, history_ppm, sulfuric_acid, so2, no):
+        """Return reversible mobility from raw concentrations and the acid-history proxy."""
+        settings = getattr(self, 'r3a_conditioned_acid', None)
+        if settings is None or settings['k_ref'] <= 0.0:
+            return 0.0
+        scale = 1e6 / max(self.molar_density, 1e-9)
+        acid_activity = self._reactant_activation_factor(
+            max(sulfuric_acid, 0.0) * scale, settings['acid_ref_ppm'], settings['acid_order'])
+        history_activity = self._reactant_activation_factor(max(history_ppm, 0.0), settings['history_ref_ppm'], 1.0)
+        substrate = self._reactant_activation_factor(settings['so2_ref_ppm'], max(so2, 0.0) * scale,
+                                                     settings['so2_order'])
+        product = self._reactant_activation_factor(settings['no_ref_ppm'], max(no, 0.0) * scale, 2.0)
+        temperature = np.exp(settings['ea_kj_mol'] * 1000.0 / R_GAS * (1.0 / 298.15 - 1.0 / self.T))
+        return settings['k_ref'] * temperature * acid_activity * history_activity * substrate * product
+
+    def _limit_r3a_conditioned_rate(self, rate, acid_history_ppm):
+        """Limit net turnover with one symmetric mobility, preserving equilibrium."""
+        settings = getattr(self, 'r3a_conditioned_acid', None)
+        if settings is None or settings['limit_max_ppm_h'] <= 0.0:
+            return rate
+        activation = self._reactant_activation_factor(
+            max(acid_history_ppm, 0.0), settings['limit_acid_ref_ppm'], settings['limit_acid_order'])
+        ceiling_ppm_h = settings['limit_initial_ppm_h'] \
+            + (settings['limit_max_ppm_h'] - settings['limit_initial_ppm_h']) * activation
+        if ceiling_ppm_h <= 0.0:
+            return 0.0
+        ceiling = ceiling_ppm_h * self.molar_density * 1e-6 / 3600.0
+        return rate / (1.0 + abs(rate) / ceiling)
+
+    def set_r3a_environment(self, parameters=None):
+        """Configure R3a wetting and acid availability without changing its equilibrium."""
+        defaults = {'wetting_reference': 0.0, 'wetting_order': 2.0,
+                'history_fraction': 1.0, 'current_acid_reference_ppm': 10.0,
+            'oxygen_supply_fraction': 1.0, 'base_so2_inhibition_ref_ppm': 0.0,
+                'base_so2_inhibition_order': 3.0, 'base_so2_inhibition_floor': 0.0,
+                'base_so2_activation_ref_ppm': 0.0, 'base_so2_activation_order': 1.0,
+                'oxygen_presence_ref_ppm': 0.0, 'oxygen_present_multiplier': 1.0}
+        if parameters is None:
+            self.r3a_environment = defaults
+            return
+        if set(parameters) - set(defaults):
+            raise ValueError('Unknown R3a environment parameter')
+        settings = {**defaults, **{key: float(value) for key, value in parameters.items()}}
+        if (not all(np.isfinite(value) for value in settings.values())
+                or not 0.0 <= settings['wetting_reference'] <= 1.0
+                or not 0.0 <= settings['history_fraction'] <= 1.0
+                or not 0.0 <= settings['oxygen_supply_fraction'] <= 1.0
+                or settings['wetting_order'] <= 0.0
+                or settings['base_so2_inhibition_ref_ppm'] < 0.0
+                or settings['base_so2_inhibition_order'] <= 0.0
+                or not 0.0 <= settings['base_so2_inhibition_floor'] <= 1.0
+                or settings['base_so2_activation_ref_ppm'] < 0.0
+                or settings['base_so2_activation_order'] <= 0.0
+                or settings['oxygen_presence_ref_ppm'] < 0.0
+                or not 0.0 <= settings['oxygen_present_multiplier'] <= 1.0
+                or settings['current_acid_reference_ppm'] <= 0.0):
+            raise ValueError('Invalid R3a wetting or acid-availability parameters')
+        self.r3a_environment = settings
+
+    def _r3a_base_so2_inhibition(self, so2_ppm):
+        """Bounded apparent substrate inhibition of the base SO2/NO2 channel."""
+        settings = getattr(self, 'r3a_environment', None)
+        if settings is None or settings['base_so2_inhibition_ref_ppm'] <= 0.0:
+            return 1.0
+        reference = settings['base_so2_inhibition_ref_ppm']
+        concentration = max(so2_ppm, 0.0)
+        exponent = settings['base_so2_inhibition_order']
+        if concentration <= reference:
+            availability = 1.0 / (1.0 + (concentration / reference) ** exponent)
+        else:
+            scaled = (reference / concentration) ** exponent
+            availability = scaled / (1.0 + scaled)
+        if settings['base_so2_activation_ref_ppm'] > 0.0:
+            availability *= self._reactant_activation_factor(
+                concentration, settings['base_so2_activation_ref_ppm'], settings['base_so2_activation_order'])
+        floor = settings['base_so2_inhibition_floor']
+        return floor + (1.0 - floor) * availability
+
+    def _r3a_oxygen_inhibition(self, oxygen, oxygen_supply):
+        settings = getattr(self, 'r3a_environment', None)
+        if settings is not None and settings['oxygen_presence_ref_ppm'] > 0.0:
+            oxygen_ppm = max(float(oxygen), 0.0) / self.molar_density * 1e6
+            fraction = min(oxygen_ppm / settings['oxygen_presence_ref_ppm'], 1.0)
+            presence = fraction * fraction * (3.0 - 2.0 * fraction)
+            return 1.0 - (1.0 - settings['oxygen_present_multiplier']) * presence
+        supply_fraction = 1.0 if settings is None else settings['oxygen_supply_fraction']
+        if oxygen_supply is None:
+            signal = oxygen
+        else:
+            signal = supply_fraction * oxygen_supply + (1.0 - supply_fraction) * oxygen
+        return self._feed_o2_passivation(signal, self.r3a_feed_o2_ref_ppm,
+                                        self.r3a_feed_o2_hill_n, floor=self.r3a_feed_o2_floor,
+                                        cap_ppm=self.r3a_feed_o2_cap_ppm)
+
+    def _r3a_acid_signal(self, cumulative_acid_ppm, sulfuric_acid):
+        settings = getattr(self, 'r3a_environment', None)
+        if settings is None or settings['history_fraction'] == 1.0:
+            return cumulative_acid_ppm
+        current_ppm = max(sulfuric_acid, 0.0) / self.molar_density * 1e6
+        current_equivalent = current_ppm * self.r3a_acid_film_ref_ppm \
+            / settings['current_acid_reference_ppm']
+        return settings['history_fraction'] * max(cumulative_acid_ppm, 0.0) \
+            + (1.0 - settings['history_fraction']) * current_equivalent
+
+    def _r3a_wetting_factor(self, water_ppm, sulfuric_acid, nitric_acid):
+        settings = getattr(self, 'r3a_environment', None)
+        if settings is None or settings['wetting_reference'] <= 0.0:
+            return 1.0
+        wet = self._water_saturation_fraction(water_ppm, sulfuric_acid, nitric_acid)
+        return min(1.0, wet / settings['wetting_reference']) ** settings['wetting_order']
+
+    def _r4_acid_film_rate_constant(self, cumulative_acid_ppm):
+        """Apparent NO oxidation coefficient sharing R3a's acid availability."""
+        if self.r4_acid_film_k_ref <= 0.0:
+            return 0.0
+        return self.r4_acid_film_k_ref * self._acid_film_kinetic_factor(cumulative_acid_ppm)
+
+    def set_acid_so2_saturation(self, ref_ppm=None, hill_n=None):
+        """Set shared R1/R3a SO2 inhibition; a nonpositive reference disables it."""
+        if ref_ppm is not None:
+            self.acid_so2_sat_ref_ppm = float(ref_ppm)
+        if hill_n is not None:
+            self.acid_so2_sat_hill_n = float(hill_n)
+
+    def _acid_so2_saturation(self, C_SO2_raw):
+        """Finite-capacity SO2 uptake factor shared by R1 and R3a, in (0, 1]."""
+        if self.acid_so2_sat_ref_ppm <= 0.0:
+            return 1.0
+        so2_ppm = max(C_SO2_raw, 0.0) / max(self.molar_density, 1e-9) * 1e6
+        if so2_ppm <= 0.0:
+            return 1.0
+        return 1.0 / (1.0 + (so2_ppm / self.acid_so2_sat_ref_ppm) ** self.acid_so2_sat_hill_n)
+
+    def set_r12_density_independent(self, value):
+        """Set whether R12 bypasses the density-based phase multiplier."""
         self.r12_density_independent = bool(value)
 
+    def set_r12_f_phase_exponent(self, value):
+        """Set R12's wet-film phase exponent; 1.0 preserves the shared phase factor."""
+        self.r12_f_phase_exponent = float(value)
+
     def set_r12_no2_order(self, value):
-        """Set R12's NO2 catalytic-term order (see ``r12_no2_order`` docstring on ``__init__``).
-        Pure Python attribute set, always safe to call.
-        """
+        """Set the apparent NO2 order in R12's catalyst activity."""
         self.r12_no2_order = float(value)
 
     def set_r13_no2_order(self, value):
-        """Set R13's NO2 term order (see ``r13_no2_order`` docstring on ``__init__``). Pure
-        Python attribute set, always safe to call.
-        """
+        """Set the NO2 and NO exponents in R13's forward and reverse terms."""
         self.r13_no2_order = float(value)
 
+    def set_r12_rate_shape(self, h2s_order=1.0, no2_saturation_kmol_m3=0.0,
+                           reference_kmol_m3=1e-5, floor_kmol_m3=1e-12):
+        """Configure symmetric R12 loading corrections; zero saturation disables the cap."""
+        values = (h2s_order, no2_saturation_kmol_m3, reference_kmol_m3, floor_kmol_m3)
+        if (not all(np.isfinite(value) for value in values) or h2s_order <= 0.0
+                or no2_saturation_kmol_m3 < 0.0 or not reference_kmol_m3 > floor_kmol_m3 > 0.0):
+            raise ValueError('Require positive H2S order, nonnegative saturation, and reference > floor > 0')
+        self.r12_h2s_order = float(h2s_order)
+        self.r12_no2_saturation_kmol_m3 = float(no2_saturation_kmol_m3)
+        self.r12_reference_kmol_m3 = float(reference_kmol_m3)
+        self.r12_floor_kmol_m3 = float(floor_kmol_m3)
+
+    def _r12_catalyst_factor(self, no2):
+        no2 = max(float(no2), 0.0)
+        saturation = self.r12_no2_saturation_kmol_m3
+        if saturation <= 0.0:
+            return no2 ** self.r12_no2_order
+        if no2 > saturation:
+            return saturation ** self.r12_no2_order / (1.0 + (saturation / no2) ** self.r12_no2_order)
+        return no2 ** self.r12_no2_order / (1.0 + (no2 / saturation) ** self.r12_no2_order)
+
+    def _r12_h2s_rate_factor(self, h2s):
+        return (max(float(h2s), self.r12_floor_kmol_m3) / self.r12_reference_kmol_m3) ** (self.r12_h2s_order - 1.0)
+
+    def set_r13_no2_rate_order(self, order=4.0, reference_kmol_m3=1e-5, floor_kmol_m3=1e-12):
+        """Apply an NO2 loading correction relative to fourth order to both R13 directions."""
+        if (not all(np.isfinite(value) for value in (order, reference_kmol_m3, floor_kmol_m3))
+                or order <= 0.0 or not reference_kmol_m3 > floor_kmol_m3 > 0.0):
+            raise ValueError('Require positive finite order and reference > floor > 0')
+        self.r13_no2_rate_order = float(order)
+        self.r13_reference_kmol_m3 = float(reference_kmol_m3)
+        self.r13_floor_kmol_m3 = float(floor_kmol_m3)
+
+    def _r13_rate_factor(self, no2):
+        return (max(float(no2), self.r13_floor_kmol_m3) / self.r13_reference_kmol_m3) ** (self.r13_no2_rate_order - 4.0)
+
     def set_r15_f_phase_exponent(self, value):
-        """Set R15's own f_phase exponent (see ``r15_f_phase_exponent`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set R15's density-based phase exponent."""
         self.r15_f_phase_exponent = float(value)
 
     def set_r15_o2_inhibition(self, ref_ppm=None, hill_n=None):
-        """Set R15's O2 product-inhibition gate (see ``r15_o2_inhib_ref_ppm`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set R15 oxygen inhibition using a ppm reference and Hill exponent."""
         if ref_ppm is not None:
             self.r15_o2_inhib_ref_ppm = float(ref_ppm)
         if hill_n is not None:
             self.r15_o2_inhib_hill_n = float(hill_n)
 
     def set_r15_o2_activation(self, ref_ppm=None, hill_n=None):
-        """Set R15's O2 activation gate (see ``r15_o2_activation_ref_ppm`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set R15 activation by local oxygen; a nonpositive reference disables it."""
         if ref_ppm is not None:
             self.r15_o2_activation_ref_ppm = float(ref_ppm)
         if hill_n is not None:
             self.r15_o2_activation_hill_n = float(hill_n)
 
     def set_r15_no2_cap(self, ppm=None, hill_n=None):
-        """Set R15's NO2 Langmuir cap (see ``r15_no2_cap_ppm`` docstring on ``__init__``). Pure
-        Python attribute set, always safe to call.
-        """
+        """Set the soft cap on NO2 activity in R15's forward term."""
         if ppm is not None:
             self.r15_no2_cap_ppm = float(ppm)
         if hill_n is not None:
             self.r15_no2_cap_hill_n = float(hill_n)
 
+    def set_r15_dimer_availability(self, dh_kj_mol=None, t_ref_k=None):
+        """Set R15 dimer-availability energy [kJ/mol] and reference temperature [K]."""
+        if dh_kj_mol is not None:
+            self.r15_dimer_dh_kj_mol = float(dh_kj_mol)
+        if t_ref_k is not None:
+            self.r15_dimer_t_ref_k = float(t_ref_k)
+
+    def _r15_dimer_availability(self):
+        """Return bounded temperature-dependent dimer availability for R15."""
+        if self.r15_dimer_dh_kj_mol <= 0.0 or self.T <= self.r15_dimer_t_ref_k:
+            return 1.0
+        dh_j = self.r15_dimer_dh_kj_mol * 1000.0
+        return float(np.exp(-dh_j / R_GAS * (1.0 / self.r15_dimer_t_ref_k - 1.0 / self.T)))
+
     def set_r15_n2o_cap(self, ppm=None, hill_n=None):
-        """Set R15's N2O product brake (see ``r15_n2o_cap_ppm`` docstring on ``__init__``). Pure
-        Python attribute set, always safe to call.
-        """
+        """Set R15 product inhibition using an N2O reference [ppm] and Hill exponent."""
         if ppm is not None:
             self.r15_n2o_cap_ppm = float(ppm)
         if hill_n is not None:
             self.r15_n2o_cap_hill_n = float(hill_n)
 
     def set_r15_o2_presence(self, ref_ppm=None, hill_n=None):
-        """Set R15's O2-presence gate (see ``r15_o2_presence_ref_ppm`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set R15 activation by oxygen supply; a nonpositive reference disables it."""
         if ref_ppm is not None:
             self.r15_o2_presence_ref_ppm = float(ref_ppm)
         if hill_n is not None:
             self.r15_o2_presence_hill_n = float(hill_n)
 
     def set_r11_o2_gate(self, ref_ppm=None, hill_n=None, gain=None):
-        """Set R11's O2-abundance boost parameters (see ``r11_o2_ref_ppm`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set the bounded oxygen-dependent enhancement of R11."""
         if ref_ppm is not None:
             self.r11_o2_ref_ppm = float(ref_ppm)
         if hill_n is not None:
@@ -1761,9 +2012,7 @@ class CO2ImpurityKineticsModel:
             self.r11_o2_gain = float(gain)
 
     def set_r2_no2_boost(self, ref_ppm=None, hill_n=None, gain=None):
-        """Set R2's NO2-abundance boost parameters (see ``r2_no2_boost_gain`` docstring on
-        ``__init__``). Pure Python attribute set, always safe to call.
-        """
+        """Set the bounded NO2-loading enhancement of R2."""
         if ref_ppm is not None:
             self.r2_no2_boost_ref_ppm = float(ref_ppm)
         if hill_n is not None:
@@ -1771,65 +2020,25 @@ class CO2ImpurityKineticsModel:
         if gain is not None:
             self.r2_no2_boost_gain = float(gain)
 
+    def set_r2_f_phase_exponent(self, value):
+        """Set R2's wet-film phase exponent; 1.0 preserves the shared phase factor."""
+        self.r2_f_phase_exponent = float(value)
+
     def set_o2_lag_tau_hours(self, value):
-        """Set the LaggedO2 relaxation time constant in hours (see rhs() docstring). 0.0
-        disables it (falls back to raw instantaneous O2 everywhere it's used).
-        """
+        """Set the local-oxygen relaxation time [h]; zero disables the lag."""
         self.o2_lag_tau_hours = float(value)
 
     def set_o2_feed_lag_tau_hours(self, value, rise_tau_hours=None):
-        """Set the LaggedO2Feed asymmetric (fast-rise/slow-fall) relaxation time constants in
-        hours (see rhs() docstring). ``value`` is the FALLING (feed-decreasing) tau; 0.0
-        disables the whole mechanism (wall_o2 falls back to the raw, discontinuous feed step).
+        """Set falling and optional rising oxygen-supply relaxation times [h].
+
+        A zero falling time disables the supply lag.
         """
         self.o2_feed_lag_tau_hours = float(value)
         if rise_tau_hours is not None:
             self.o2_feed_lag_rise_tau_hours = float(rise_tau_hours)
 
     def apply_calibrated_profile(self, profile='carbon_steel_wet_co2'):
-        """Apply the general reference carbon-steel / wet-CO2 kinetics + wall-corrosion set.
-
-        This is a single generic parameter set (see the module-level
-        ``CARBON_STEEL_WET_CO2_KINETICS`` dict for the full list of constants and their meaning
-        and units). It sets:
-          - Homogeneous gas-phase Arrhenius parameters for R2, R3a, R4, R5, R7, R10, R11, R12 and
-            R13 (R1 keeps its ``DEFAULT_KINETIC_PARAMS`` value -- deliberately uncalibrated/
-            extremely slow, per the reaction-speed guidance this set is built from).
-          - The phase-condensation multiplier for the heterogeneous R2/R12/R13 reactions.
-          - The wall-corrosion mechanism (HNO3 -> Fe(NO3)2, H2SO4 -> FeSO4, and O2 -> Fe2O3),
-            with the acid paths gated by the ``_water_saturation_fraction`` wetting index and
-            conservative 1:1 Fe:solid-product stoichiometry. The O2 path is additionally gated by
-            cumulative H2SO4/HNO3 ever produced (``CumH2SO4``/``CumHNO3``), tying rust formation
-            to real acid-exposure history rather than an ungated background rate. A carbonic-acid
-            path (CO2(aq) -> FeCO3, see ``_co2_aqueous_solubility_mol_l``) also exists in code
-            but is disabled by default (``wall_feco3_k_intrinsic=0.0``).
-          - NO2/HNO3/H2O treated as ideal fugacity (phi=1). The raw SRK fugacity coefficients
-            for these species (generic corresponding-states critical-property correlations, no
-            regressed CO2 kij) are extreme (phi~0.008/0.0002) at the cold/cryogenic conditions
-            typical of cold trace-component applications -- an extrapolation artefact for strongly polar/
-            associating species being modelled below their normal boiling points (NO2: 21C,
-            HNO3: 83C), not a measured value. Ideal fugacity is itself an approximation, but is
-            the one that reproduces an independent Gibbs-equilibrium estimate for a NO2/O2/H2O-
-            in-CO2 system; no better-grounded number is available (checked: NeqSim's own
-            GibbsReactor chemical-equilibrium solver does not reliably converge for this trace/
-            cryogenic system even with adaptive-step/Armijo/regularised algorithms, and the
-            regressed literature CO2/NO2 kij data, e.g. Camy et al. 2011, only covers
-            concentrated (>=15 mol%) mixtures at 25-55C, not trace ppm at -26C).
-          - NO's own fugacity coefficient fixed at 0.05 (tuned, not measured/derived): the raw
-            SRK value (~10) lets R4 (2NO+O2->2NO2) recycle essentially all produced NO straight
-            back to NO2, leaving no genuine NO to persist; 0.05 lets a real ~0.5ppm NO steady
-            state emerge instead, matching observations.
-          - R5's forward and reverse rates use the real Gibbs-free-energy-based Keq5 directly --
-            no extra multiplier on top of it.
-          - R5's reverse-term NO activity (``r5_no_activity``, see its docstring on ``__init__``)
-            is decoupled from the shared/global NO fugacity above, so high-NO2/no-O2 feeds (no
-            R4 activity) don't inherit R4's unrelated tuning and let HNO3 run away past its own
-            Gibbs-equilibrium bound.
-
-        It does not set reactor geometry, coupon area, or feed composition -- those are configured
-        separately (e.g. via ``configure_wall_corrosion(coupon_diameter_cm=..., ...)``) and are the
-        same regardless of which profile is applied. ``'carbon_steel_wet_co2'`` is the only profile.
-        """
+        """Apply the empirical carbon-steel/wet-CO2 reference parameter set."""
         if profile != 'carbon_steel_wet_co2':
             raise ValueError(f'Unknown profile: {profile}')
 
@@ -1839,7 +2048,21 @@ class CO2ImpurityKineticsModel:
 
         p = CARBON_STEEL_WET_CO2_KINETICS
         self.set_r5_no_activity(p['r5_no_activity'])
+        self.set_r5_no2_order(p['r5_no2_order'], reference_kmol_m3=p['r5_reference_kmol_m3'],
+                     floor_kmol_m3=p['r5_floor_kmol_m3'])
+        self.set_r7_no_order(p['r7_no_order'], reference_kmol_m3=p['r7_reference_kmol_m3'],
+                    floor_kmol_m3=p['r7_floor_kmol_m3'],
+                    activation_reference_kmol_m3=p['r7_no_activation_reference_kmol_m3'],
+                    activation_hill_n=p['r7_no_activation_hill_n'])
         self.set_r4_no_activity(p['r4_no_activity'])
+        self.set_r3a_environment(p.get('r3a_environment'))
+        self.set_dilute_redox(p.get('dilute_redox'))
+        self.set_h2s_no2_temperature(p.get('h2s_no2_temperature'))
+        self.set_r3a_dilute_acid(p.get('r3a_dilute_acid'))
+        self.set_r3a_conditioned_acid(p.get('r3a_conditioned_acid'))
+        self.set_r7_cold_availability(p.get('r7_cold_availability'))
+        self.set_r7_water_saturation(p.get('r7_water_saturation'))
+        self.set_r4_o2_half_ppm(p['r4_o2_half_ppm'])
         self.set_r4_surface_gain(p['r4_surface_gain'])
         self.set_r3a_bore_gain(p['r3a_bore_gain'])
         self.set_r15_surface_suppress_gain(p['r15_surface_suppress_gain'])
@@ -1848,6 +2071,7 @@ class CO2ImpurityKineticsModel:
         self.set_feed_o2_passivation(
             wall_o2_ref_ppm=p['wall_o2_feed_o2_ref_ppm'],
             wall_o2_hill_n=p['wall_o2_feed_o2_hill_n'],
+            wall_o2_h2s_relief=p.get('wall_o2_h2s_relief', 0.0),
             wall_no2_ref_ppm=p['wall_no2_feed_o2_ref_ppm'],
             wall_no2_hill_n=p['wall_no2_feed_o2_hill_n'],
             r3a_ref_ppm=p['r3a_feed_o2_ref_ppm'],
@@ -1861,30 +2085,69 @@ class CO2ImpurityKineticsModel:
             r3a_hill_n=p['r3a_o2_presence_hill_n'],
             r2_ref_ppm=p['r2_o2_presence_ref_ppm'],
             r2_hill_n=p['r2_o2_presence_hill_n'])
-        self.set_wall_no2_no_cap(ppm=p['wall_no2_no_cap_ppm'], hill_n=p['wall_no2_no_cap_hill_n'])
+        self.set_r3a_h2s_feed_inhibition(
+            ref_ppm=p['r3a_h2s_feed_inhibition_ref_ppm'],
+            hill_n=p['r3a_h2s_feed_inhibition_hill_n'],
+            no2_ref_ppm=p['r3a_h2s_feed_inhibition_no2_ref_ppm'],
+            no2_hill_n=p['r3a_h2s_feed_inhibition_no2_hill_n'],
+            gain=p['r3a_h2s_feed_inhibition_gain'])
+        self.set_wall_no2_no_cap(ppm=p['wall_no2_no_cap_ppm'], hill_n=p['wall_no2_no_cap_hill_n'],
+                     gas_weighted=p.get('wall_no2_no_cap_gas_weighted', False))
         self.set_wall_no2_langmuir(p['wall_no2_langmuir_half_ppm'])
         self.set_r3a_no_escape_frac(p['r3a_no_escape_frac'])
-        self.set_r1_autocat(gain=p['r1_autocat_gain'], ref_ppm=p['r1_autocat_ref_ppm'])
+        self.set_r1_autocat(gain=p['r1_autocat_gain'], ref_ppm=p['r1_autocat_ref_ppm'],
+                    hill_n=p['r1_autocat_hill_n'])
+        self.set_r17_orders(no2=p['r17_no2_order'], h2o=p['r17_h2o_order'], wet=p['r17_wet_order'],
+                    reference_kmol_m3=p['r17_reference_kmol_m3'], floor_kmol_m3=p['r17_floor_kmol_m3'],
+                    activation_reference_kmol_m3=p['r17_no2_activation_reference_kmol_m3'],
+                    activation_hill_n=p['r17_no2_activation_hill_n'])
+        self.set_r17_dense_co2_inhibition(
+            f_phase_ref=p['r17_dense_co2_inhibition_f_phase_ref'],
+            f_phase_hill_n=p['r17_dense_co2_inhibition_f_phase_hill_n'],
+            wet_ref=p['r17_dense_co2_inhibition_wet_ref'],
+            wet_hill_n=p['r17_dense_co2_inhibition_wet_hill_n'])
+        self.r1_feed_o2_ref_ppm = float(p['r1_feed_o2_ref_ppm'])
+        self.r1_feed_o2_hill_n = float(p['r1_feed_o2_hill_n'])
+        self.r1_feed_o2_cap_ppm = float(p['r1_feed_o2_cap_ppm'])
         self.set_r3a_autocat(gain=p['r3a_autocat_gain'], ref_ppm=p['r3a_autocat_ref_ppm'],
                              surface_suppress_gain=p['r3a_autocat_surface_suppress_gain'],
                              hill_n=p['r3a_autocat_hill_n'])
+        self.set_r3a_acid_film(k_ref=p.get('r3a_acid_film_k_ref', 0.0),
+                     ea_kj_mol=p.get('r3a_acid_film_ea_kj_mol', 60.0),
+                     ref_ppm=p.get('r3a_acid_film_ref_ppm', 100.0),
+                             hill_n=p.get('r3a_acid_film_hill_n', 4.0),
+                             r4_k_ref=p.get('r4_acid_film_k_ref', 0.0))
+        self.set_acid_so2_saturation(ref_ppm=p['acid_so2_sat_ref_ppm'],
+                                     hill_n=p['acid_so2_sat_hill_n'])
         self.set_r12_density_independent(p['r12_density_independent'])
+        self.set_r12_f_phase_exponent(p['r12_f_phase_exponent'])
         self.set_r12_no2_order(p['r12_no2_order'])
+        self.set_r12_rate_shape(h2s_order=p['r12_h2s_order'],
+                no2_saturation_kmol_m3=p['r12_no2_saturation_kmol_m3'],
+                reference_kmol_m3=p['r12_reference_kmol_m3'], floor_kmol_m3=p['r12_floor_kmol_m3'])
         self.set_r13_no2_order(p['r13_no2_order'])
+        self.set_r13_no2_rate_order(p['r13_no2_rate_order'],
+                reference_kmol_m3=p['r13_reference_kmol_m3'], floor_kmol_m3=p['r13_floor_kmol_m3'])
         self.set_r15_f_phase_exponent(p['r15_f_phase_exponent'])
         self.set_r15_o2_inhibition(ref_ppm=p['r15_o2_inhib_ref_ppm'],
                                    hill_n=p['r15_o2_inhib_hill_n'])
         self.set_r15_o2_activation(ref_ppm=p['r15_o2_activation_ref_ppm'],
                                    hill_n=p['r15_o2_activation_hill_n'])
         self.set_r15_no2_cap(ppm=p['r15_no2_cap_ppm'], hill_n=p['r15_no2_cap_hill_n'])
+        self.set_r15_dimer_availability(dh_kj_mol=p['r15_dimer_dh_kj_mol'],
+                                        t_ref_k=p['r15_dimer_t_ref_k'])
         self.set_r15_n2o_cap(ppm=p['r15_n2o_cap_ppm'], hill_n=p['r15_n2o_cap_hill_n'])
         self.set_r15_o2_presence(ref_ppm=p['r15_o2_presence_ref_ppm'], hill_n=p['r15_o2_presence_hill_n'])
         self.set_r11_o2_gate(ref_ppm=p['r11_o2_ref_ppm'], hill_n=p['r11_o2_hill_n'], gain=p['r11_o2_gain'])
         self.set_r2_no2_boost(ref_ppm=p['r2_no2_boost_ref_ppm'], hill_n=p['r2_no2_boost_hill_n'],
                               gain=p['r2_no2_boost_gain'])
+        self.set_r2_f_phase_exponent(p['r2_f_phase_exponent'])
+        self.set_r2_no2_excess_gate(ratio_ref=p['r2_no2_excess_ratio_ref'],
+                        hill_n=p['r2_no2_excess_ratio_hill_n'])
         self.set_o2_lag_tau_hours(p['o2_lag_tau_hours'])
         self.set_o2_feed_lag_tau_hours(p['o2_feed_lag_tau_hours'], rise_tau_hours=p['o2_feed_lag_rise_tau_hours'])
-        for rxn_id in ('R2', 'R3a', 'R4', 'R5', 'R7', 'R10', 'R11', 'R12', 'R13', 'R15'):
+        for rxn_id in ('R1', 'R2', 'R3a', 'R4', 'R5', 'R7', 'R10', 'R11', 'R12', 'R13', 'R15', 'R16',
+                       'R17', 'R18'):
             self.set_reaction_constants(rxn_id, A_forward=p[rxn_id]['A'],
                                          Ea_forward_kJ_mol=p[rxn_id]['Ea_kJ_mol'])
         self.set_phase_condensation(exponent=p['condensation_exponent'],
@@ -1892,6 +2155,7 @@ class CO2ImpurityKineticsModel:
         self.configure_wall_corrosion(
             k_intrinsic=p['wall_k_intrinsic'],
             o2_potency=p['wall_o2_potency'],
+            o2_f_phase_exponent=p['wall_o2_f_phase_exponent'],
             o2_sat_ref=p['wall_o2_sat_ref'],
             rho_pass=p['wall_rho_pass'],
             hill_n=p['wall_hill_n'],
@@ -2045,7 +2309,6 @@ class CO2ImpurityKineticsModel:
             f.setMixingRule("classic")
 
             if self.srk_kij_co2:
-                # Component add order above fixes these indices (CO2 is always 0).
                 component_index = {
                     'H2S': 1, 'O2': 2, 'H2O': 3, 'NH3': 4, 'S8': 5,
                     'SO2': 6, 'NO2': 7, 'NO': 8, 'H2SO4': 9, 'HNO3': 10,
@@ -2069,14 +2332,6 @@ class CO2ImpurityKineticsModel:
             molar_mass_g_mol = float(phase.getMolarMass()) * 1000.0
             rho_m = density_kg_m3 / molar_mass_g_mol if molar_mass_g_mol > 0 else density_kg_m3 / 44.0095
 
-            # Refine the bulk molar density with NeqSim's Span-Wagner reference equation of
-            # state for CO2 -- materially more accurate than SRK for CO2 PVT behaviour (the
-            # SRK mixture flash above is kept only for the trace-species fugacity
-            # coefficients/phase determination, since Span-Wagner is pure-CO2-only and cannot
-            # see the trace impurities). CO2 is 99.995 mol% of this mixture, so substituting
-            # its own pure-component density for the bulk mixture density is a well-justified
-            # approximation. Falls back silently to the SRK-derived rho_m above if this
-            # secondary flash fails for any reason (e.g. outside Span-Wagner's valid range).
             backend_label = "NeqSim SRK EOS"
             try:
                 f_sw = fluid("span-wagner", temperature=T_K, pressure=P_bar)
@@ -2173,37 +2428,20 @@ class CO2ImpurityKineticsModel:
         dG5 = (2.0 * DG_HNO3_STDGIBBS + DG_NO_STDGIBBS) - (3.0 * DG_NO2_STDGIBBS + DG_H2O_STDGIBBS)
         Keq5 = np.exp(-dG5 / (R_GAS * T))
 
-        # R7: 5 H2S + 6 NO + 4 H2O -> 6 NH3 + 5 SO2. dG7 ~ -1000 kJ/mol at 298K (NO is a
-        # high-energy species; reducing it to NH3 while oxidising H2S to SO2 is strongly
-        # exergonic) -- Keq7 is astronomical, confirming the reverse reaction is genuinely
-        # negligible rather than an assumed simplification. Clipped at MAX_KEQ_EXPONENT like
-        # the other equilibria; a 6th/5th-order reverse term is not worth the numerical risk
-        # for a rate that underflows to ~0 regardless, so it is computed here for transparency
-        # only and is not wired into the forward-only r7 rate law in rhs().
         dG7 = (6.0 * DG_NH3_STDGIBBS + 5.0 * DG_SO2_STDGIBBS) - \
             (5.0 * DG_H2S_STDGIBBS + 6.0 * DG_NO_STDGIBBS + 4.0 * DG_H2O_STDGIBBS)
         Keq7 = np.exp(min(-dG7 / (R_GAS * T), MAX_KEQ_EXPONENT))
 
-        # R12: H2S + 2 O2 -> H2SO4 (NO2-catalysed; NO2 appears in the rate law on both sides,
-        # so it accelerates the approach to equilibrium without shifting Keq12 itself).
         dG12 = DG_H2SO4_STDGIBBS - (DG_H2S_STDGIBBS + 2.0 * DG_O2_STDGIBBS)
         Keq12 = max(np.exp(min(-dG12 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
 
-        # R13: 4 NO2 + H2S -> H2SO4 + 4 NO
         dG13 = (DG_H2SO4_STDGIBBS + 4.0 * DG_NO_STDGIBBS) - (4.0 * DG_NO2_STDGIBBS + DG_H2S_STDGIBBS)
         Keq13 = max(np.exp(min(-dG13 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
 
-        # R10: 4 NH3 + 4 NO + 3 O2 -> 4 N2O + 6 H2O. dG10 ~ -1300 kJ/mol at 298K (consuming 4
-        # high-energy NO plus forming stable H2O dominates over N2O's own modest instability) --
-        # Keq10 is astronomical (clipped at MAX_KEQ_EXPONENT), confirming the reverse is
-        # genuinely negligible rather than an assumed simplification, same treatment as Keq7.
         dG10 = (4.0 * DG_N2O_STDGIBBS + 6.0 * DG_H2O_STDGIBBS) - \
             (4.0 * DG_NH3_STDGIBBS + 4.0 * DG_NO_STDGIBBS + 3.0 * DG_O2_STDGIBBS)
         Keq10 = max(np.exp(min(-dG10 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
 
-        # R11: H2S + 2 NO -> N2O + 1/8 S8 + H2O. dG11 ~ -273 kJ/mol at 298K -> Keq11 ~ 4e47 --
-        # large but NOT clipped at MAX_KEQ_EXPONENT (unlike Keq7/Keq10), i.e. a genuine finite
-        # equilibrium constant, not an artefact of the exponential ceiling.
         dG11 = (DG_N2O_STDGIBBS + 0.125 * DG_S8_STDGIBBS + DG_H2O_STDGIBBS) - \
             (DG_H2S_STDGIBBS + 2.0 * DG_NO_STDGIBBS)
         Keq11 = max(np.exp(min(-dG11 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
@@ -2211,39 +2449,53 @@ class CO2ImpurityKineticsModel:
         dG15 = (2.0 * DG_N2O_STDGIBBS + 3.0 * DG_O2_STDGIBBS) - (4.0 * DG_NO2_STDGIBBS)
         Keq15 = max(np.exp(min(-dG15 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
 
+        dG16 = DG_N2O4_STDGIBBS - 2.0 * DG_NO2_STDGIBBS
+        Keq16 = max(np.exp(min(-dG16 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
+
+        dG17 = (DG_HNO3_STDGIBBS + DG_HNO2_STDGIBBS) - (2.0 * DG_NO2_STDGIBBS + DG_H2O_STDGIBBS)
+        Keq17 = max(np.exp(min(-dG17 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
+        dG18 = DG_HNO3_STDGIBBS - (DG_HNO2_STDGIBBS + 0.5 * DG_O2_STDGIBBS)
+        Keq18 = max(np.exp(min(-dG18 / (R_GAS * T), MAX_KEQ_EXPONENT)), 1e-15)
+
         p = self.kinetic_params
         k1_f = p['R1']['A'] * np.exp(-p['R1']['Ea'] / (R_GAS * T))
         k2_f = p['R2']['A'] * np.exp(-p['R2']['Ea'] / (R_GAS * T))
         k3a_f = p['R3a']['A'] * np.exp(-p['R3a']['Ea'] / (R_GAS * T))
         k4_f = p['R4']['A'] * np.exp(-p['R4']['Ea'] / (R_GAS * T)) if p['R4']['Ea'] > 0 else p['R4']['A'] * np.exp(530.0 / T)
+        k4_f = self._r4_effective_coefficient(k4_f)
         k5_f = p['R5']['A'] * np.exp(-p['R5']['Ea'] / (R_GAS * T))
-        k7_f = p['R7']['A'] * np.exp(-p['R7']['Ea'] / (R_GAS * T))
+        k7_f = p['R7']['A'] * np.exp(-p['R7']['Ea'] / (R_GAS * T)) * self._r7_cold_factor()
 
-        # R10: 4 NH3 + 4 NO + 3 O2 -> 4 N2O + 6 H2O (real Keq10 above; reverse wired in rhs())
         k10_f = p['R10']['A'] * np.exp(-p['R10']['Ea'] / (R_GAS * T))
-        # R11: H2S + 2 NO -> N2O + 1/8 S8 + H2O (real Keq11 above; reverse wired in rhs())
         k11_f = p['R11']['A'] * np.exp(-p['R11']['Ea'] / (R_GAS * T))
         k12_f = p['R12']['A'] * np.exp(-p['R12']['Ea'] / (R_GAS * T))
         k13_f = p['R13']['A'] * np.exp(-p['R13']['Ea'] / (R_GAS * T))
-        # R15: 4 NO2 -> 2 N2O + 3 O2 (real Keq15 above; both directions matter)
         k15_f = p['R15']['A'] * np.exp(-p['R15']['Ea'] / (R_GAS * T))
+        k16_f = p['R16']['A'] * np.exp(-p['R16']['Ea'] / (R_GAS * T))
+        k17_f = p['R17']['A'] * np.exp(-p['R17']['Ea'] / (R_GAS * T))
+        k18_f = p['R18']['A'] * np.exp(-p['R18']['Ea'] / (R_GAS * T))
 
         k1_r = k1_f / Keq1 if Keq1 > 1e-15 else 0.0
         k2_r = k2_f / Keq2 if Keq2 > 1e-15 else 0.0
         k3a_r = k3a_f / Keq3 if Keq3 > 1e-15 else 0.0
         k4_r = k4_f / Keq4 if Keq4 > 1e-15 else 0.0
         k5_r = k5_f / Keq5
-        k7_r = k7_f / Keq7  # ~0 in practice (Keq7 astronomical); see dG7 note above
-        k10_r = k10_f / Keq10 if Keq10 > 1e-15 else 0.0  # ~0 in practice (Keq10 astronomical)
+        k7_r = k7_f / Keq7
+        k10_r = k10_f / Keq10 if Keq10 > 1e-15 else 0.0
         k11_r = k11_f / Keq11 if Keq11 > 1e-15 else 0.0
         k12_r = k12_f / Keq12 if Keq12 > 1e-15 else 0.0
         k13_r = k13_f / Keq13 if Keq13 > 1e-15 else 0.0
         k15_r = k15_f / Keq15 if Keq15 > 1e-15 else 0.0
+        k16_r = k16_f / Keq16 if Keq16 > 1e-15 else 0.0
+        k17_r = k17_f / Keq17 if Keq17 > 1e-15 else 0.0
+        k18_r = k18_f / Keq18 if Keq18 > 1e-15 else 0.0
 
         safe_moisture_ppm = max(float(moisture_ppm), 0.0)
         moisture_factor = 0.25 + 0.75 * (1.0 - np.exp(-min(safe_moisture_ppm / MOISTURE_REF_PPM, 50.0)))
         k1_f *= moisture_factor
+        k1_r *= moisture_factor
         k3a_f *= moisture_factor
+        k3a_r *= moisture_factor
 
         return {
             'k1_f': k1_f, 'k1_r': k1_r, 'Keq1': Keq1,
@@ -2257,6 +2509,9 @@ class CO2ImpurityKineticsModel:
             'k12_f': k12_f, 'k12_r': k12_r, 'Keq12': Keq12,
             'k13_f': k13_f, 'k13_r': k13_r, 'Keq13': Keq13,
             'k15_f': k15_f, 'k15_r': k15_r, 'Keq15': Keq15,
+            'k16_f': k16_f, 'k16_r': k16_r, 'Keq16': Keq16,
+            'k17_f': k17_f, 'k17_r': k17_r, 'Keq17': Keq17,
+            'k18_f': k18_f, 'k18_r': k18_r, 'Keq18': Keq18,
             'material': self.material,
             'moisture_factor': moisture_factor,
             'f_phase': self._f_phase,
@@ -2264,11 +2519,7 @@ class CO2ImpurityKineticsModel:
 
     def rhs(self, t, C, rates_dict, C_in=None, space_time_sec=None, inflow_only=False):
         n_species = len(self.SPECIES)
-        C_raw = np.clip(C[:n_species], MIN_CONCENTRATION_FLOOR, 1e5 * self.molar_density)
-        # Extra ODE states (appended after the gas species, see simulate()): cumulative solid
-        # FeSO4/Fe(NO3)2 corrosion product, and cumulative (never-decreasing) total H2SO4/HNO3
-        # ever produced [kmol/m^3] -- see EXTRA_STATE_KEYS. None have an inflow/outflow term, see
-        # the dC_dt assembly at the bottom.
+        C_raw = np.clip(C[:n_species], 0.0, 1e5 * self.molar_density)
         n_extra = len(self.EXTRA_STATE_KEYS)
         C_wall_solid = np.maximum(0.0, C[n_species:]) if len(C) > n_species else np.zeros(n_extra)
         C_cum_h2so4 = C_wall_solid[2] if len(C_wall_solid) > 2 else 0.0
@@ -2277,6 +2528,7 @@ class CO2ImpurityKineticsModel:
         C_lagged_o2 = C_wall_solid[5] if len(C_wall_solid) > 5 else 0.0
         C_cum_o2_exposure = C_wall_solid[6] if len(C_wall_solid) > 6 else 0.0
         C_lagged_o2_feed = C_wall_solid[7] if len(C_wall_solid) > 7 else 0.0
+        acid_sites = C_wall_solid[9] if len(C_wall_solid) > 9 else 0.0
 
         phi = self.phi_dict
         C_H2S   = max(0.0, C_raw[0] * phi['H2S'])
@@ -2290,6 +2542,8 @@ class CO2ImpurityKineticsModel:
         C_S8    = max(0.0, C_raw[8] * phi['S8'])
         C_NH3   = max(0.0, C_raw[9] * phi['NH3'])
         C_N2O   = max(0.0, C_raw[10] * phi['N2O'])
+        C_N2O4  = max(0.0, C_raw[12] * phi['N2O4']) if len(C_raw) > 12 else 0.0
+        C_HNO2  = max(0.0, C_raw[13] * phi['HNO2']) if len(C_raw) > 13 else 0.0
 
         k1_f, k1_r   = rates_dict['k1_f'], rates_dict['k1_r']
         k2_f, k2_r   = rates_dict['k2_f'], rates_dict['k2_r']
@@ -2303,200 +2557,156 @@ class CO2ImpurityKineticsModel:
         k13_f, k13_r = rates_dict.get('k13_f', 0.0), rates_dict.get('k13_r', 0.0)
         f_phase      = rates_dict.get('f_phase', self._f_phase)
 
-        # Shared driver for both R1's and R3a's autocatalytic acceleration (see their
-        # docstrings on __init__): TOTAL H2SO4 ever produced, not the current standing ppm.
         cum_h2so4_ppm = C_cum_h2so4 / max(self.molar_density, 1e-9) * 1e6
 
-        r1 = k1_f * C_SO2 * (C_O2**0.5) * C_H2O - k1_r * C_H2SO4
-        if self.r1_autocat_gain > 0.0:
-            # Saturating (Langmuir-form) acceleration driven by TOTAL H2SO4 ever produced (not
-            # the current, wall-consumable standing ppm) -- scales BOTH directions of R1
-            # equally, so it speeds up the approach to equilibrium without shifting Keq1.
-            r1_autocat = 1.0 + self.r1_autocat_gain * cum_h2so4_ppm / (self.r1_autocat_ref_ppm + cum_h2so4_ppm)
-            r1 *= r1_autocat
-        # R2, R12 and R13 are heterogeneous/wet-film reactions - scaled by f_phase
-        # (constant per T,P; 1.0 when phase-condensation switch is disabled).
         C_O2_feed = C_in[4] if C_in is not None else None
+        C_H2S_feed = C_in[0] if C_in is not None else None
+        C_NO2_feed = C_in[2] if C_in is not None else None
+        r1 = k1_f * C_SO2 * _fractional_activity(C_O2, 0.5) * C_H2O - k1_r * C_H2SO4
+        acid_so2_sat = self._acid_so2_saturation(C_raw[1])
+        r1 *= acid_so2_sat * self._feed_o2_passivation(C_O2_feed, self.r1_feed_o2_ref_ppm,
+                                                       self.r1_feed_o2_hill_n,
+                                                       cap_ppm=self.r1_feed_o2_cap_ppm)
+        if self.r1_autocat_gain > 0.0:
+            r1_autocat = self._r1_autocat_factor(cum_h2so4_ppm)
+            r1 *= r1_autocat
         r2_no2_boost = 1.0
         if self.r2_no2_boost_ref_ppm > 0.0:
             no2_ppm_r2 = max(C_NO2, 0.0) / max(self.molar_density, 1e-9) * 1e6
             ratio_r2 = (no2_ppm_r2 / self.r2_no2_boost_ref_ppm) ** self.r2_no2_boost_hill_n
             r2_no2_boost = 1.0 + self.r2_no2_boost_gain * ratio_r2 / (1.0 + ratio_r2)
-        r2 = r2_no2_boost * (k2_f * C_H2S * C_NO2 - k2_r * C_SO2 * C_H2O * (C_NO**3)) * f_phase \
+        r2_scale = r2_no2_boost * f_phase ** self.r2_f_phase_exponent \
             * self._o2_presence_gate(C_O2_feed, self.r2_o2_presence_ref_ppm,
-                                     self.r2_o2_presence_hill_n)
-        # R3a's reverse term uses a liquid/wet-film-scaled NO activity (see r3a_no_escape_frac
-        # docstring): some of the NO produced escapes the film into bulk gas before it can drive
-        # the reverse reaction, an effect that grows with f_phase (dense/liquid) and vanishes in
-        # low-density gas phase -- genuinely shifts R3a's apparent equilibrium, unlike f_phase.
-        # Multiplies the existing (already phi-scaled) C_NO, so frac=0.0 is an exact no-op.
+                                     self.r2_o2_presence_hill_n) \
+            * self._r2_no2_excess_gate(C_H2S_feed, C_NO2_feed)
+        r13_scale = f_phase * self._r13_rate_factor(C_NO2)
+        r13_bimolecular_coefficient = k13_f * r13_scale \
+            * max(C_NO2, self.r13_floor_kmol_m3) ** (self.r13_no2_order - 1.0)
+        r2_coefficient = self._r2_effective_coefficient(k2_f * r2_scale, C_NO2, C_H2S)
+        r13_dilute = self._r13_dilute_factor(r13_bimolecular_coefficient, r2_coefficient)
+        r13_scale *= r13_dilute
+        r13_bimolecular_coefficient *= r13_dilute
+        h2s_no2_encounter = self._bimolecular_encounter_factor(r2_coefficient + r13_bimolecular_coefficient)
+        h2s_no2_encounter *= self._h2s_no2_temperature_factor()
+        r2 = h2s_no2_encounter * r2_coefficient \
+            * (C_H2S * C_NO2 - C_SO2 * C_H2O * (C_NO**3) / rates_dict['Keq2'])
         C_NO_r3a = C_NO * (1.0 - self.r3a_no_escape_frac * f_phase)
         r3a = self._r3a_bore_factor() * (k3a_f * C_SO2 * C_NO2 * C_H2O - k3a_r * C_NO_r3a * C_H2SO4) \
-            * self._feed_o2_passivation(C_O2_feed, self.r3a_feed_o2_ref_ppm,
-                                        self.r3a_feed_o2_hill_n,
-                                        floor=self.r3a_feed_o2_floor,
-                                        cap_ppm=self.r3a_feed_o2_cap_ppm) \
+            * acid_so2_sat \
+            * self._r3a_base_so2_inhibition(C_raw[1] / self.molar_density * 1e6) \
+            * self._r3a_oxygen_inhibition(C_raw[4], C_O2_feed) \
             * self._o2_presence_gate(C_O2_feed, self.r3a_o2_presence_ref_ppm,
-                                     self.r3a_o2_presence_hill_n)
+                                     self.r3a_o2_presence_hill_n) \
+            * self._r3a_h2s_feed_inhibition(C_H2S_feed, C_NO2_feed)
+        r3a_acid_signal = self._r3a_acid_signal(cum_h2so4_ppm, C_raw[6])
         if self.r3a_autocat_gain > 0.0:
-            # Same mechanism as r1_autocat (see above), independently tunable gain/ref_ppm, plus
-            # a bore-specific suppression that only ever engages at a narrower-than-reference
-            # bore (see _r3a_autocat_surface_suppression docstring).
-            cum_h2so4_n = cum_h2so4_ppm ** self.r3a_autocat_hill_n
-            ref_ppm_n = self.r3a_autocat_ref_ppm ** self.r3a_autocat_hill_n
-            r3a_autocat = 1.0 + self.r3a_autocat_gain * cum_h2so4_n / (ref_ppm_n + cum_h2so4_n)
-            r3a_autocat = 1.0 + (r3a_autocat - 1.0) * self._r3a_autocat_surface_suppression()
+            r3a_autocat = self._r3a_autocat_factor(r3a_acid_signal)
             r3a *= r3a_autocat
+        r3a_acid_coefficient = self._r3a_acid_film_rate_constant(r3a_acid_signal) \
+            + self._r3a_dilute_acid_rate_constant(
+                r3a_acid_signal, C_NO2, C_raw[6], C_cum_hno3 / self.molar_density * 1e6,
+                C_H2S, acid_sites)
+        r3a_driving_force = C_SO2 * C_NO2 * C_H2O - C_NO * C_H2SO4 / rates_dict['Keq3']
+        r3a_conditioned = self._r3a_conditioned_acid_rate_constant(
+            r3a_acid_signal, C_raw[6], C_raw[1], C_raw[3]) * r3a_driving_force
+        r3a += r3a_acid_coefficient * r3a_driving_force \
+            + self._limit_r3a_conditioned_rate(r3a_conditioned, cum_h2so4_ppm)
+        r3a *= self._r3a_wetting_factor(C_raw[5] / self.molar_density * 1e6, C_raw[6], C_raw[7])
         C_NO_r4 = max(0.0, C_raw[3] * self.r4_no_activity * self._r4_surface_factor())
-        r4 = k4_f * (C_NO_r4**2) * C_O2 - k4_r * (C_NO2**2)
-        # R5's reverse term uses its own decoupled NO activity (see r5_no_activity docstring)
-        # instead of the shared phi['NO'], so it genuinely shifts R5's equilibrium point rather
-        # than just changing how fast it is approached (unlike f_phase).
+        o2_ppm_r4 = max(C_raw[4], 0.0) / max(self.molar_density, 1e-9) * 1e6
+        if self.r4_o2_half_ppm > 0.0:
+            C_O2_r4 = C_O2 * (9.6 + self.r4_o2_half_ppm) / (o2_ppm_r4 + self.r4_o2_half_ppm)
+        else:
+            C_O2_r4 = C_O2
+        r4 = k4_f * (C_NO_r4**2) * C_O2_r4 - k4_r * (C_NO2**2)
+        r4 += self._r4_acid_film_rate_constant(cum_h2so4_ppm) \
+            * (C_NO ** 2 * C_O2 - C_NO2 ** 2 / rates_dict['Keq4'])
+        r4 *= self._r4_dilute_no_factor(C_raw[3])
         C_NO_r5 = max(0.0, C_raw[3] * self.r5_no_activity)
-        r5 = k5_f * (C_NO2**3) * C_H2O - k5_r * (C_HNO3**2) * C_NO_r5
-        r7 = k7_f * C_H2S * C_NO * C_H2O
-        # R10: 4 NH3 + 4 NO + 3 O2 -> 4 N2O + 6 H2O (N2O-selectivity side-reaction of NH3-SCR/
-        # deNOx chemistry; a genuine dead-end for the NH3 that R7 produces from H2S + NO).
-        # Reverse term uses the products' literal stoichiometric powers (N2O^4, H2O^6), matching
-        # R2's convention (forward kept as the simplified/empirical 1st-order-each rate law, the
-        # true kinetic mechanism; reverse enforces the real Keq10 -- see its docstring, clipped
-        # astronomical, so this reverse term is negligible in practice but not simply omitted).
+        r5 = self._r5_rate_factor(C_NO2) * (k5_f * (C_NO2**3) * C_H2O - k5_r * (C_HNO3**2) * C_NO_r5)
+        r7 = self._r7_rate_factor(C_NO) * k7_f * C_H2S * C_NO * self._r7_water_activity(C_H2O)
         r10 = k10_f * C_NH3 * C_NO * C_O2 - k10_r * (C_N2O**4) * (C_H2O**6)
-        # R11: H2S + 2 NO -> N2O + 1/8 S8 + H2O (direct NO reduction by H2S, the "chemo-
-        # denitrification" analogue of the historical R8's H2S + O2 -> S8 + H2O; main N2O
-        # source since it draws on the abundant H2S/NO pool instead of the trace NH3 byproduct
-        # of R7). A genuine homogeneous gas-phase bimolecular reaction (not a wet-film/
-        # heterogeneous one like R2/R12/R13), so it is NOT scaled by f_phase -- it must stay a
-        # real, density-independent NO sink or NO fails to recombine fast enough at
-        # low-density gas-phase conditions. Reverse term uses the products' literal stoichiometric
-        # powers (N2O^1, S8^(1/8), H2O^1); Keq11 is large but finite (~4e47, not clipped, see its
-        # docstring), so this reverse term is genuinely negligible at any reachable concentration
-        # rather than assumed away.
         r11_o2_boost = 1.0
         if self.r11_o2_ref_ppm > 0.0:
             o2_ppm_r11 = max(C_O2, 0.0) / max(self.molar_density, 1e-9) * 1e6
             ratio_n = (o2_ppm_r11 / self.r11_o2_ref_ppm) ** self.r11_o2_hill_n
             r11_o2_boost = 1.0 + self.r11_o2_gain * ratio_n / (1.0 + ratio_n)
         r11 = r11_o2_boost * k11_f * C_H2S * C_NO - k11_r * C_N2O * (C_S8**0.125) * C_H2O
-        # R12: H2S + 2 O2 -> H2SO4, NO2-catalysed (NO2 is not consumed -- appears on both the
-        # forward and reverse term, raised to r12_no2_order, so it speeds up the approach to
-        # Keq12 without shifting it).
-        C_NO2_r12 = C_NO2 ** self.r12_no2_order
+        C_NO2_r12 = self._r12_catalyst_factor(C_NO2)
         r12 = (k12_f * C_H2S * C_O2 * C_NO2_r12 - k12_r * C_H2SO4 * C_NO2_r12) \
-            * (1.0 if self.r12_density_independent else f_phase)
-        # R13: 4 NO2 + H2S -> H2SO4 + 4 NO
+            * (1.0 if self.r12_density_independent else f_phase ** self.r12_f_phase_exponent) \
+            * self._r12_h2s_rate_factor(C_H2S)
+        r12 *= self._h2s_no2_temperature_factor()
         C_NO2_r13 = C_NO2 ** self.r13_no2_order
         C_NO_r13 = C_NO ** self.r13_no2_order
-        r13 = (k13_f * C_H2S * C_NO2_r13 - k13_r * C_H2SO4 * C_NO_r13) * f_phase
-        # R15: 4 NO2 -> 2 N2O + 3 O2 -- a pure gas-phase NO2 decomposition, no H2S/NO needed, so
-        # it doesn't compete with R2/R11/R12/R13 for those shared reagents. f_phase-scaled (like
-        # R2/R12/R13): real NOx disproportionation is understood to be surface/radical-chain
-        # mediated, favoured in a denser, more condensed-film-like environment, not simple gas-
-        # phase pyrolysis. Reverse term uses literal powers.
+        r13 = h2s_no2_encounter * r13_scale \
+            * (k13_f * C_H2S * C_NO2_r13 - k13_r * C_H2SO4 * C_NO_r13)
         k15_f, k15_r = rates_dict.get('k15_f', 0.0), rates_dict.get('k15_r', 0.0)
+        k16_f, k16_r = rates_dict.get('k16_f', 0.0), rates_dict.get('k16_r', 0.0)
+        k17_f, k17_r = rates_dict.get('k17_f', 0.0), rates_dict.get('k17_r', 0.0)
+        k18_f, k18_r = rates_dict.get('k18_f', 0.0), rates_dict.get('k18_r', 0.0)
         f_phase_r15 = f_phase ** self.r15_f_phase_exponent
-        # O2 product-inhibition gate (see r15_o2_inhib_ref_ppm docstring): applied to the
-        # FORWARD term only, so it throttles how fast R15 runs without touching Keq15 (the
-        # reverse term still enforces the real equilibrium). Reads the LAGGED O2 signal when
-        # enabled (see o2_lag_tau_hours) instead of raw instantaneous O2: a brief interruption
-        # (much shorter than tau) barely moves the lagged value, so the gate does not swing
-        # wide open for a momentary pulse; a genuinely extended depletion (much longer than tau)
-        # still reaches it normally.
         r15_o2_inhib = 1.0
         if self.r15_o2_inhib_ref_ppm > 0.0:
             o2_source = C_lagged_o2 if self.o2_lag_tau_hours > 0.0 else C_raw[4]
             o2_ppm_r15 = max(o2_source, 0.0) / max(self.molar_density, 1e-9) * 1e6
             r15_o2_inhib = 1.0 / (1.0 + (o2_ppm_r15 / self.r15_o2_inhib_ref_ppm)
                                   ** self.r15_o2_inhib_hill_n)
-        # O2 ACTIVATION gate (see r15_o2_activation_ref_ppm docstring): the inhibition gate
-        # above is permissive AT O2=0 by construction (nothing left to inhibit with), so it
-        # cannot stop R15 during a genuinely anoxic window -- this gate puts O2 directly into
-        # the rate as something the reaction NEEDS to proceed at all, the opposite shape,
-        # so it is exactly 0 the instant instantaneous O2 hits 0, regardless of NO2. 0.0
-        # (default) disables it (exact no-op, backward-compatible).
         r15_o2_activation = 1.0
         if self.r15_o2_activation_ref_ppm > 0.0:
             o2_ppm_act = max(C_raw[4], 0.0) / max(self.molar_density, 1e-9) * 1e6
             ratio_act = (o2_ppm_act / self.r15_o2_activation_ref_ppm) ** self.r15_o2_activation_hill_n \
                 if o2_ppm_act > 0.0 else 0.0
             r15_o2_activation = ratio_act / (1.0 + ratio_act)
-        # NO2 Langmuir cap (see r15_no2_cap_ppm docstring): saturates the EFFECTIVE NO2 feeding
-        # the forward term only, so a very high standing NO2 (with r15_o2_inhib's gate wide open
-        # during a genuinely zero-O2-feed window) cannot drive an unbounded NO2^4 forward rate.
         C_NO2_r15 = C_NO2
         if self.r15_no2_cap_ppm > 0.0:
             no2_ppm_r15 = max(C_raw[2], 0.0) / max(self.molar_density, 1e-9) * 1e6
             if no2_ppm_r15 > 0.0:
                 ratio_n = (no2_ppm_r15 / self.r15_no2_cap_ppm) ** self.r15_no2_cap_hill_n
-                no2_ppm_r15_capped = self.r15_no2_cap_ppm * ratio_n / (1.0 + ratio_n)
+                no2_ppm_r15_capped = no2_ppm_r15 / (1.0 + ratio_n) ** (1.0 / self.r15_no2_cap_hill_n)
             else:
                 no2_ppm_r15_capped = 0.0
             C_NO2_r15 = no2_ppm_r15_capped * 1e-6 * self.molar_density * phi['NO2']
-        # N2O product brake (see r15_n2o_cap_ppm docstring): applied to the FORWARD term only,
-        # gated on the STANDING N2O concentration itself -- unlike r15_o2_inhib (needs O2) and
-        # the reverse/equilibrium term (ALSO needs O2, since O2 is a reactant of the reverse
-        # reaction), this brake still works during a genuinely zero-O2 window, when neither of
-        # those other two brakes can act at all.
         r15_n2o_brake = 1.0
         if self.r15_n2o_cap_ppm > 0.0:
             n2o_ppm_r15 = max(C_raw[10], 0.0) / max(self.molar_density, 1e-9) * 1e6
             r15_n2o_brake = 1.0 / (1.0 + (n2o_ppm_r15 / self.r15_n2o_cap_ppm)
                                    ** self.r15_n2o_cap_hill_n)
-        # O2-PRESENCE gate (see _o2_presence_gate docstring): reads FED (not instantaneous) O2
-        # via C_O2_feed, already computed above for R3a's own feed gate.
         r15_o2_presence = self._o2_presence_gate(C_O2_feed, self.r15_o2_presence_ref_ppm,
                                                  self.r15_o2_presence_hill_n)
         r15 = (r15_o2_inhib * r15_o2_activation * r15_n2o_brake * self._r15_surface_suppression()
+               * self._r15_dimer_availability()
                * self._sulfur_catalyst_gate(C_raw[0], C_raw[6]) * k15_f * (C_NO2_r15**4)
                - k15_r * (C_N2O**2) * (C_O2**3)) * f_phase_r15 * r15_o2_presence
+        r16 = k16_f * (C_NO2**2) - k16_r * C_N2O4
+        h2o_ppm_r17 = C_raw[5] / max(self.molar_density, 1e-9) * 1e6
+        r17_wet = self._r17_rate_factor(C_NO2, C_H2O, h2o_ppm_r17)
+        r17 = (k17_f * (C_NO2**2) * C_H2O - k17_r * C_HNO3 * C_HNO2) * r17_wet
+        r18 = k18_f * C_HNO2 * _fractional_activity(C_O2, 0.5) - k18_r * C_HNO3
 
         R_H2S   = - r2 - 5.0 * r7 - r11 - r12 - r13
         R_SO2   = - r1 + r2 - r3a + 5.0 * r7
-        R_NO2   = - 3.0 * r2 - r3a + 2.0 * r4 - 3.0 * r5 - 4.0 * r13 - 4.0 * r15
+        R_NO2   = - 3.0 * r2 - r3a + 2.0 * r4 - 3.0 * r5 - 4.0 * r13 - 4.0 * r15 - 2.0 * r16 - 2.0 * r17
+        R_N2O4  = + r16
+        R_HNO2  = + r17 - r18
         R_NO    = + 3.0 * r2 + r3a - 2.0 * r4 + r5 - 6.0 * r7 - 4.0 * r10 - 2.0 * r11 + 4.0 * r13
-        R_O2    = - 0.5 * r1 - r4 - 3.0 * r10 - 2.0 * r12 + 3.0 * r15
-        R_H2O   = - r1 + r2 - r3a - r5 - 4.0 * r7 + 6.0 * r10 + r11
+        R_O2    = - 0.5 * r1 - r4 - 3.0 * r10 - 2.0 * r12 + 3.0 * r15 - 0.5 * r18
+        R_H2O   = - r1 + r2 - r3a - r5 - 4.0 * r7 + 6.0 * r10 + r11 - r17
         R_H2SO4 = + r1 + r3a + r12 + r13
-        R_HNO3  = + 2.0 * r5
+        R_HNO3  = + 2.0 * r5 + r17 + r18
         R_S8    = + 0.125 * r11
         R_NH3   = + 6.0 * r7 - 4.0 * r10
         R_N2O   = + 4.0 * r10 + r11 + 2.0 * r15
         R_H2    = 0.0
 
-        # Cumulative "total ever produced" trackers (see EXTRA_STATE_KEYS): only the forward,
-        # acid-forming contribution counts (never negative), so a reversible reaction's own
-        # back-reaction does not erase history already counted, and neither does the wall
-        # reactions' subsequent consumption of the actual gas-phase H2SO4/HNO3 pool.
         cum_h2so4_rate = max(0.0, r1) + max(0.0, r3a) + max(0.0, r12) + max(0.0, r13)
-        cum_hno3_rate = max(0.0, r5)
-        # R7 (5 H2S+6 NO+4 H2O->6 NH3+5 SO2) is the only NH3-producing reaction and is already
-        # forward-only (no reverse term wired into rhs(), see Keq7 docstring above) -- max(0, ..)
-        # kept anyway for the same defensive-consistency reason as the other Cum* trackers.
-        # R10 (4 NH3+4 NO+3 O2->4 N2O+6 H2O) genuinely consumes already-formed NH3 afterwards,
-        # but -- exactly like wall corrosion consuming the actual H2SO4/HNO3 pool above -- that
-        # consumption must NOT erase this "ever produced" history.
+        cum_hno3_rate = 2.0 * max(0.0, r5) + max(0.0, r17) + max(0.0, r18)
         cum_nh3_rate = 6.0 * max(0.0, r7)
 
-        # Symmetric first-order relaxation of instantaneous O2 (see o2_lag_tau_hours docstring
-        # on __init__): tracks C_raw[4] with a lag, used ONLY as an alternate input to R15's/
-        # wall_no2's own low-O2-favoured gates so a BRIEF O2 interruption/restoration (much
-        # shorter than tau) does not fully swing those gates open, while a genuinely extended
-        # depletion (much longer than tau) still reaches them normally. 0.0 (default) disables
-        # it (state stays frozen at 0, unused -- the gates fall back to raw instantaneous O2).
         lagged_o2_rate = 0.0
         if self.o2_lag_tau_hours > 0.0:
             lagged_o2_rate = (C_raw[4] - C_lagged_o2) / (self.o2_lag_tau_hours * 3600.0)
 
-        # ASYMMETRIC first-order relaxation of the FED (not instantaneous) O2 concentration
-        # (see o2_feed_lag_tau_hours docstring): tracks C_in[4] itself, used ONLY as an
-        # alternate input to wall_o2's OWN feed-passivation gate. A discrete feed step (e.g. a
-        # brief "O2 stopped" phase) currently flips that gate fully open INSTANTLY, letting
-        # wall_o2 devour the O2 still physically present in the vessel far faster than dilution
-        # alone -- a real passive oxide film built up over a long high-O2 exposure would not
-        # vanish the instant the feed valve closes. Fast rise (o2_feed_lag_rise_tau_hours) when
-        # feed is increasing, slow fall (o2_feed_lag_tau_hours) when decreasing -- deliberately
-        # asymmetric, unlike the symmetric LaggedO2 state above. 0.0 (default) disables it
-        # (state frozen at 0, unused -- wall_o2 falls back to the raw instantaneous feed step).
         lagged_o2_feed_rate = 0.0
         if self.o2_feed_lag_tau_hours > 0.0 and C_O2_feed is not None:
             feed_now = max(C_O2_feed, 0.0)
@@ -2504,67 +2714,46 @@ class CO2ImpurityKineticsModel:
             tau_hours = self.o2_feed_lag_rise_tau_hours if rising else self.o2_feed_lag_tau_hours
             lagged_o2_feed_rate = (feed_now - C_lagged_o2_feed) / (max(tau_hours, 1e-9) * 3600.0)
 
-        # Wall corrosion sinks (HNO3->Fe(NO3)2, H2SO4->FeSO4, O2->Fe2O3, NO2->Fe2O3).
-        # Only fires when wall_area_m2 > 0.
         r_hno3corr = 0.0
         r_h2so4 = 0.0
         cum_no2_rate = 0.0
         cum_o2_rate = 0.0
         r_wall_so2 = 0.0
         if self.wall_area_m2 > 0.0:
-            # Wall/corrosion severity is driven by how much of each species is physically
-            # present (mole-fraction ppm), NOT by the phi-scaled "reactive availability"
-            # concentration used for the homogeneous gas reactions above -- those are two
-            # different physical questions (see AGENTS notes: overriding a species' SRK phi
-            # for gas kinetics purposes must not silently rescale the wall-corrosion
-            # calibration, which was fit against the raw amount present).
             h2o_ppm_here = C_raw[5] / max(self.molar_density, 1e-9) * 1e6
             C_NO2_wall = C_raw[2]
             C_H2SO4_wall = C_raw[6]
             C_HNO3_wall = C_raw[7]
             C_SO2_wall = C_raw[1]
-            # O2 exposure accumulates regardless of whether wall_so2 itself is enabled, so its
-            # induction period can be pre-existing/ready the moment it is turned on (same
-            # convention as cum_no2_rate below).
             cum_o2_rate = C_raw[4]
             if self.wall_so2_k_intrinsic > 0.0:
-                # SO2 + 0.5 O2 + H2O -> H2SO4 (surface-catalysed path, see _wall_so2_rate)
                 r_wall_so2 = self._wall_so2_rate(C_SO2_wall, h2o_ppm_here, C_cum_o2_exposure)
                 R_SO2 -= r_wall_so2
                 R_H2SO4 += r_wall_so2
             r_wall_o2 = self._wall_o2_rate(C_O2, h2o_ppm_here, C_NO2_wall, C_H2SO4_wall, C_HNO3_wall,
                                            C_O2_feed=(C_lagged_o2_feed if self.o2_feed_lag_tau_hours > 0.0
-                                                      else C_O2_feed))
+                                                      else C_O2_feed), C_H2S_feed=C_H2S_feed)
             R_O2 -= r_wall_o2
             if self.wall_consume_h2o:
                 R_H2O -= r_wall_o2
             if self.wall_hno3_corrosion_k_intrinsic > 0.0:
-                # 8 HNO3 + 3 Fe -> 3 Fe(NO3)2 + 2 NO + 4 H2O. r_hno3corr is defined as the rate
-                # of Fe(NO3)2 formation (1:1 with Fe consumed); the other species' ratios are
-                # relative to that (8/3 HNO3, 2/3 NO, 4/3 H2O per unit Fe(NO3)2 formed).
                 r_hno3corr = self._wall_hno3_corrosion_rate(h2o_ppm_here, C_HNO3_wall, C_H2SO4_wall)
                 R_HNO3 -= (8.0 / 3.0) * r_hno3corr
                 R_NO += (2.0 / 3.0) * r_hno3corr
                 R_H2O += (4.0 / 3.0) * r_hno3corr
             if self.wall_h2so4_k_intrinsic > 0.0:
-                # Fe + H2SO4 -> FeSO4 + H2 (conservative 1:1)
                 r_h2so4 = self._wall_h2so4_rate(h2o_ppm_here, C_H2SO4_wall, C_HNO3_wall)
                 R_H2SO4 -= r_h2so4
                 R_H2 += r_h2so4
             if self.wall_no2_k_intrinsic > 0.0:
-                # 2 Fe + 3 NO2 -> Fe2O3 + 3 NO (dry gas-solid path, see _wall_no2_rate)
                 r_wall_no2 = self._wall_no2_rate(C_NO2_wall, h2o_ppm_here, C_cum_no2_exposure,
                                                  C_O2=C_O2, C_H2S_raw=C_raw[0],
                                                  C_H2SO4_raw=C_raw[6], C_O2_feed=C_O2_feed,
                                                  C_O2_lagged=C_lagged_o2, C_NO=C_raw[3])
                 R_NO2 -= r_wall_no2
                 R_NO += r_wall_no2
-            # NO2 exposure accumulates regardless of whether wall_no2 itself is enabled, so the
-            # induction period can be pre-existing/ready the moment it is turned on.
             cum_no2_rate = C_NO2_wall
             R_H2 += self._wall_feco3_rate(h2o_ppm_here, C_H2SO4_wall, C_HNO3_wall)
-            # 8 H2S + 4 O2 -> S8 + 8 H2O, carbon-steel-catalysed (Claus-type surface reaction;
-            # requires the steel wall as catalyst, not a homogeneous gas-phase pathway).
             r_wall_s8 = self._wall_s8_rate(C_H2S, C_O2)
             R_H2S -= r_wall_s8
             R_O2 -= 0.5 * r_wall_s8
@@ -2574,15 +2763,11 @@ class CO2ImpurityKineticsModel:
 
         R_vector = np.array([
             R_H2S, R_SO2, R_NO2, R_NO, R_O2, R_H2O,
-            R_H2SO4, R_HNO3, R_S8, R_NH3, R_N2O, R_H2
+            R_H2SO4, R_HNO3, R_S8, R_NH3, R_N2O, R_H2, R_N2O4, R_HNO2
         ])
 
         if C_in is not None and space_time_sec is not None and space_time_sec > 0.0:
             if inflow_only:
-                # Vessel pressurization/fill stage: feed gas (already at its dosed impurity
-                # composition) enters a vessel with no outflow yet (back-pressure regulation
-                # only starts once the vessel reaches its target inventory) -- unlike the
-                # steady CSTR term below, there is no "-C/space_time_sec" loss term.
                 dC_dt_species = C_in[:n_species] / space_time_sec + R_vector
             else:
                 dC_dt_species = (C_in[:n_species] - C[:n_species]) / space_time_sec + R_vector
@@ -2590,11 +2775,10 @@ class CO2ImpurityKineticsModel:
             dC_dt_species = R_vector
 
         if len(C) > n_species:
-            # Solid corrosion product accumulates on the coupon, not in the flowing gas: pure
-            # accumulation, no inflow/outflow term regardless of the branch above.
             dC_dt_wall_solid = np.array([r_h2so4, r_hno3corr, cum_h2so4_rate, cum_hno3_rate,
                                          cum_no2_rate, lagged_o2_rate, cum_o2_rate,
-                                         lagged_o2_feed_rate, cum_nh3_rate])
+                                         lagged_o2_feed_rate, cum_nh3_rate,
+                                         self._acid_site_response(C_raw[6], acid_sites)])
             return np.concatenate([dC_dt_species, dC_dt_wall_solid])
         return dC_dt_species
 
@@ -2611,7 +2795,7 @@ class CO2ImpurityKineticsModel:
 
         n_species = len(self.SPECIES)
         n_extra = len(self.EXTRA_STATE_KEYS)
-        C0 = np.zeros(n_species + n_extra)   # + accumulated solid/cumulative states, see EXTRA_STATE_KEYS
+        C0 = np.zeros(n_species + n_extra)
         for idx, spec in enumerate(self.SPECIES):
             if spec in initial_ppm:
                 C0[idx] = (initial_ppm[spec] * 1.0e-6) * self.molar_density
@@ -2621,7 +2805,7 @@ class CO2ImpurityKineticsModel:
 
         C_in = None
         if feed_ppm is not None:
-            C_in = np.zeros(n_species + n_extra)   # trailing entries unused, see rhs()
+            C_in = np.zeros(n_species + n_extra)
             for idx, spec in enumerate(self.SPECIES):
                 if spec in feed_ppm:
                     C_in[idx] = (feed_ppm[spec] * 1.0e-6) * self.molar_density
@@ -2630,15 +2814,25 @@ class CO2ImpurityKineticsModel:
         moisture_ppm = moisture_basis.get('H2O', self.water_ppm)
         rates_dict = self._calculate_pure_physical_rate_constants(moisture_ppm)
 
+        def derivative(time, state):
+            return self.rhs(time, state, rates_dict, C_in=C_in, space_time_sec=space_time_sec,
+                            inflow_only=inflow_only)
+
+        def jacobian(time, state):
+            steps = np.sqrt(np.finfo(float).eps) * np.maximum(np.abs(state), 1e-32)
+            return approx_fprime(state, lambda trial: derivative(time, trial), steps)
+
+        absolute_tolerance = np.full(len(C0), 1e-13)
+        absolute_tolerance[[self.SPECIES.index(species) for species in ('O2', 'H2S', 'NO2')]] = 1e-32
         sol = solve_ivp(
-            fun=lambda t, y: self.rhs(t, y, rates_dict, C_in=C_in, space_time_sec=space_time_sec,
-                                       inflow_only=inflow_only),
+            fun=derivative,
             t_span=t_span,
             y0=C0,
             t_eval=t_eval,
-            method='Radau',
-            rtol=1e-6,
-            atol=1e-12
+            method='BDF',
+            jac=jacobian,
+            rtol=2e-8,
+            atol=absolute_tolerance
         )
 
         if not sol.success:
@@ -2666,14 +2860,8 @@ class CO2ImpurityKineticsModel:
         }
 
 
-# ==================================================================================================
-# HIGH-LEVEL MULTI-PHASE CSTR EXPERIMENT MANAGER CLASS
-# ==================================================================================================
 class CO2ImpurityReactorExperiment:
-    """
-    High-level Manager for Setting Up, Configuring, and Executing Multi-Phase CSTR Experiments.
-    Uses NeqSim Java SRK EOS when available, with an explicit screening fallback.
-    """
+    """Configure and run sequential fixed-pressure CSTR simulations."""
 
     def __init__(self, target_pressure_bar=25.0, target_temp_C=-25.0, diameter_cm=6.5, volume_ml=300.0, mass_flow_g_h=50.0, material='carbon_steel',
                  condensation_exponent=0.0, rho_m_reference=24.0,
@@ -2690,9 +2878,9 @@ class CO2ImpurityReactorExperiment:
         self.mass_flow_g_h = float(mass_flow_g_h)
         self.material = material
 
-        self.initial_gas = 'N2'
-        self.initial_P_bar = 1.0
-        self.initial_T_C = 25.0
+        self.initial_gas = 'CO2'
+        self.initial_P_bar = self.target_P
+        self.initial_T_C = self.target_T_C
 
         self.model = CO2ImpurityKineticsModel(
             T_kelvin=self.target_T_K,
@@ -2750,17 +2938,15 @@ class CO2ImpurityReactorExperiment:
         self.model.set_r5_no_activity(value)
 
     def apply_calibrated_profile(self, profile='carbon_steel_wet_co2'):
-        """Apply a named calibrated parameter profile to the underlying model."""
+        """Apply a named empirical parameter profile to the underlying model."""
         self.model.apply_calibrated_profile(profile=profile)
 
     def set_initial_vessel_charge(self, gas_name='N2', pressure_bar=1.0, temp_C=25.0):
-        """Record initial-charge metadata.
-
-        The tutorial kinetics state tracks only the impurity species in ``SPECIES``. The initial
-        inert-gas inventory is therefore reported as metadata and is not included in the species
-        ODE balance.
-        """
-        self.initial_gas = str(gas_name).upper()
+        """Specify the carrier charge at the start of the impurity-dosing clock."""
+        if (not np.isfinite(pressure_bar) or pressure_bar <= 0.0
+                or not np.isfinite(temp_C) or temp_C <= -273.15):
+            raise ValueError('Initial charge requires positive finite pressure and absolute temperature')
+        self.initial_gas = str(gas_name).strip().upper()
         self.initial_P_bar = float(pressure_bar)
         self.initial_T_C = float(temp_C)
 
@@ -2781,10 +2967,12 @@ class CO2ImpurityReactorExperiment:
 
     def add_phase(self, duration_hours, feed_ppm, phase_name=None, mass_flow_g_h=None,
                   temp_C=None, pressure_bar=None):
+        if not np.isfinite(duration_hours) or duration_hours <= 0.0:
+            raise ValueError('Phase duration must be finite and positive')
         p_idx = len(self.phases)
         name = phase_name if phase_name else f"Phase {p_idx}"
         phase_mass_flow_g_h = self.mass_flow_g_h if mass_flow_g_h is None else float(mass_flow_g_h)
-        if phase_mass_flow_g_h < 0.0:
+        if not np.isfinite(phase_mass_flow_g_h) or phase_mass_flow_g_h < 0.0:
             raise ValueError(f'Phase mass flow must be non-negative, got {phase_mass_flow_g_h} g/h')
 
         feed = {s: 0.0 for s in self.model.SPECIES}
@@ -2809,17 +2997,29 @@ class CO2ImpurityReactorExperiment:
     def generate_reactor_report(self):
         report = self.model.generate_reactor_report()
         charge = (
-            f"\nInitial vessel charge metadata: {self.initial_gas}, "
+            f"\nInitial vessel charge: {self.initial_gas}, "
             f"{self.initial_P_bar:.3f} bar, {self.initial_T_C:.3f} °C "
-            "(not included in the impurity-species ODE balance)"
+            "(fixed-pressure through-flow from t=0; no artificial vessel-fill stage)"
         )
         return report + charge
 
     def run_experiment(self):
         if not self.phases:
-            self.add_phase(10.0, {s: 0.0 for s in self.model.SPECIES}, "Phase 0: Pressurization & Pure CO2 Flow")
+            self.add_phase(10.0, {s: 0.0 for s in self.model.SPECIES}, "Phase 0: Pure CO2 Flow")
             self.add_phase(20.0, {'SO2': 10.0, 'NO2': 10.0, 'O2': 10.0, 'H2O': 10.0}, "Phase 1: 10 ppm Without H2S")
             self.add_phase(20.0, {'H2S': 10.0, 'SO2': 10.0, 'NO2': 10.0, 'O2': 10.0, 'H2O': 10.0}, "Phase 2: 10 ppm All Impurities")
+
+        first_phase = self.phases[0]
+        first_pressure = first_phase['pressure_bar'] if first_phase['pressure_bar'] is not None else self.target_P
+        first_temperature = first_phase['temp_C'] if first_phase['temp_C'] is not None else self.target_T_C
+        if (self.initial_gas != 'CO2'
+                or not np.isclose(self.initial_P_bar, first_pressure, rtol=1e-6, atol=1e-9)
+                or not np.isclose(self.initial_T_C, first_temperature, rtol=0.0, atol=1e-6)):
+            raise ValueError(
+                'The initial charge must be pure CO2 at the first phase pressure and temperature. '
+                'This fixed-pressure model does not simulate pressurization or carrier-gas displacement; '
+                'start impurity dosing after conditioning, or use a variable-inventory model.'
+            )
 
         all_t_h = []
         all_ppm = {s: [] for s in self.model.SPECIES}
@@ -2834,65 +3034,28 @@ class CO2ImpurityReactorExperiment:
             dur_h = phase['duration_hours']
             feed = phase['feed_ppm']
             phase_mass_flow_g_h = phase['mass_flow_g_h']
-            # Re-flash first: molar_density feeds the residence time and the fill-mass target.
             self.model.set_conditions(temp_C=phase.get('temp_C'),
                                       pressure_bar=phase.get('pressure_bar'))
-            rho_g_ml = (self.model.molar_density * MW_CO2) * 1e-3
-            m_target_g = self.volume_ml * rho_g_ml
             self.set_reactor_geometry(mass_flow_g_h=phase_mass_flow_g_h)
             tau_sec = self.model.get_reactor_geometry()['residence_time_seconds']
-            t_fill_hours = m_target_g / phase_mass_flow_g_h if phase_mass_flow_g_h > 0 else 0.0
+            res_flow = self.model.simulate(
+                initial_ppm=current_state_ppm,
+                duration_sec=dur_h * 3600.0,
+                num_points=max(int(dur_h * 10), 100),
+                feed_ppm=feed,
+                space_time_sec=tau_sec,
+                initial_wall_solid=current_wall_solid,
+            )
+            t_res = res_flow['time_hours']
+            ppm_res = res_flow['ppm']
+            wall_solid_res = res_flow['wall_solid']
 
-            if idx == 0 and dur_h >= t_fill_hours:
-                res_fill = self.model.simulate(
-                    initial_ppm=current_state_ppm,
-                    duration_sec=t_fill_hours * 3600.0,
-                    num_points=max(int(t_fill_hours * 10), 50),
-                    feed_ppm=feed,
-                    space_time_sec=t_fill_hours * 3600.0,
-                    inflow_only=True,
-                    initial_wall_solid=current_wall_solid,
-                )
-
-                fill_state = {s: res_fill['ppm'][s][-1] for s in self.model.SPECIES}
-                fill_wall_solid = {k: v[-1] for k, v in res_fill['wall_solid'].items()}
-                rem_dur_h = dur_h - t_fill_hours
-
-                if rem_dur_h > 0.001:
-                    res_flow = self.model.simulate(
-                        initial_ppm=fill_state,
-                        duration_sec=rem_dur_h * 3600.0,
-                        num_points=max(int(rem_dur_h * 10), 30),
-                        feed_ppm=feed,
-                        space_time_sec=tau_sec,
-                        initial_wall_solid=fill_wall_solid,
-                    )
-                    t_res = np.concatenate([res_fill['time_hours'], t_fill_hours + res_flow['time_hours']])
-                    ppm_res = {s: np.concatenate([res_fill['ppm'][s], res_flow['ppm'][s]]) for s in self.model.SPECIES}
-                    wall_solid_res = {k: np.concatenate([res_fill['wall_solid'][k], res_flow['wall_solid'][k]])
-                                      for k in extra_keys}
-                else:
-                    t_res = res_fill['time_hours']
-                    ppm_res = res_fill['ppm']
-                    wall_solid_res = res_fill['wall_solid']
-            else:
-                res_flow = self.model.simulate(
-                    initial_ppm=current_state_ppm,
-                    duration_sec=dur_h * 3600.0,
-                    num_points=max(int(dur_h * 10), 100),
-                    feed_ppm=feed,
-                    space_time_sec=tau_sec,
-                    initial_wall_solid=current_wall_solid,
-                )
-                t_res = res_flow['time_hours']
-                ppm_res = res_flow['ppm']
-                wall_solid_res = res_flow['wall_solid']
-
-            all_t_h.append(current_cumulative_t + t_res)
+            first_sample = 0 if idx == 0 else 1
+            all_t_h.append(current_cumulative_t + t_res[first_sample:])
             for s in self.model.SPECIES:
-                all_ppm[s].append(ppm_res[s])
+                all_ppm[s].append(ppm_res[s][first_sample:])
             for k in extra_keys:
-                all_wall_solid[k].append(wall_solid_res[k])
+                all_wall_solid[k].append(wall_solid_res[k][first_sample:])
 
             current_cumulative_t += dur_h
             current_state_ppm = {s: ppm_res[s][-1] for s in self.model.SPECIES}
@@ -2984,12 +3147,6 @@ class CO2ImpurityReactorExperiment:
         return fig, (ax1, ax2, ax3)
 
 
-# ==================================================================================================
-# COMPACT NOTEBOOK FACADE FOR SEQUENTIAL-PHASE AUTOCLAVE CORROSION SIMULATIONS
-# ==================================================================================================
-# Atom counts per gas-phase species, used only by AutoclaveExperiment.get_mass_balance_table() to
-# verify N/S/H/O are conserved (feed in = outflow + gas-phase accumulation + wall-solid deposit).
-# ==================================================================================================
 SPECIES_ATOM_COUNTS = {
     'H2S':   {'H': 2, 'S': 1},
     'SO2':   {'S': 1, 'O': 2},
@@ -3002,41 +3159,33 @@ SPECIES_ATOM_COUNTS = {
     'S8':    {'S': 8},
     'NH3':   {'N': 1, 'H': 3},
     'N2O':   {'N': 2, 'O': 1},
+    'N2O4':  {'N': 2, 'O': 4},
+    'HNO2':  {'H': 1, 'N': 1, 'O': 2},
     'H2':    {'H': 2},
 }
 
 
-# ==================================================================================================
-# WASH-WATER pH MODEL (illustrative, screening-level -- see AutoclaveExperiment.
-# get_wash_water_pH_table() docstring for the full physical model description)
-# ==================================================================================================
-# Standard literature aqueous-equilibrium constants at 298.15 K, each with a van't Hoff
-# temperature-correction enthalpy (J/mol). Not independently regressed for this specific
-# mixture -- reasonable, widely tabulated textbook values used for a screening-level estimate.
-KW_298 = 1.0e-14                   # H2O <-> H+ + OH-
+KW_298 = 1.0e-14
 DH_KW = 55800.0
 
-KH_CO2_298_MOL_L_ATM = 3.3e-2      # CO2(g) <-> CO2(aq), mol/(L*atm)
-DH_KH_CO2 = -19950.0               # exothermic dissolution (d ln(KH)/d(1/T) ~= +2400 K)
+KH_CO2_298_MOL_L_ATM = 3.3e-2
+DH_KH_CO2 = -19950.0
 
-KA1_CO2_298 = 4.45e-7              # CO2(aq) + H2O <-> H+ + HCO3-   (pKa1 = 6.35)
+KA1_CO2_298 = 4.45e-7
 DH_KA1_CO2 = 7700.0
 
-KA2_CO2_298 = 4.69e-11             # HCO3- <-> H+ + CO3^2-          (pKa2 = 10.33)
+KA2_CO2_298 = 4.69e-11
 DH_KA2_CO2 = 14900.0
 
-KA_NH4_298 = 5.6e-10               # NH4+ <-> NH3(aq) + H+          (pKa = 9.25)
+KA_NH4_298 = 5.6e-10
 DH_KA_NH4 = 52200.0
 
-KA2_H2SO4_298 = 1.2e-2             # HSO4- <-> H+ + SO4^2- (pKa2 = 1.92; T-independence assumed)
+KA2_H2SO4_298 = 1.2e-2
 
-# Ion <-> neutral-species molar masses for ion-chromatography-style reporting (see
-# AutoclaveExperiment.get_autoclave_wash_table()) -- IC measures the dissociated ionic species,
-# not the neutral parent acid/base tracked by the kinetics model.
 PROTON_MASS_G_MOL = 1.008
-M_SO4_2MINUS = MW_H2SO4 - 2.0 * PROTON_MASS_G_MOL   # H2SO4 -> SO4^2-
-M_NO3_MINUS = MW_HNO3 - PROTON_MASS_G_MOL           # HNO3  -> NO3-
-M_NH4_PLUS = MW_NH3 + PROTON_MASS_G_MOL             # NH3   -> NH4+ (protonated in acidic water)
+M_SO4_2MINUS = MW_H2SO4 - 2.0 * PROTON_MASS_G_MOL
+M_NO3_MINUS = MW_HNO3 - PROTON_MASS_G_MOL
+M_NH4_PLUS = MW_NH3 + PROTON_MASS_G_MOL
 
 
 def _van_t_hoff(k_298, dh_j_per_mol, temp_kelvin):
@@ -3052,9 +3201,9 @@ def _wash_water_charge_balance(pH, co2_aq, nh3_t, h2so4_t, hno3_t, kw, ka1, ka2,
     hco3 = ka1 * co2_aq / h
     co3 = ka1 * ka2 * co2_aq / h ** 2
     nh4 = nh3_t * h / (h + ka_nh4)
-    so4 = h2so4_t * ka2_so4 / (h + ka2_so4)     # H2SO4's 1st proton is taken as fully dissociated
+    so4 = h2so4_t * ka2_so4 / (h + ka2_so4)
     hso4 = h2so4_t - so4
-    no3 = hno3_t                                 # strong acid, fully dissociated
+    no3 = hno3_t
     cations = h + nh4
     anions = oh + hco3 + 2.0 * co3 + hso4 + 2.0 * so4 + no3
     return cations - anions
@@ -3073,7 +3222,7 @@ def _solve_wash_water_pH(co2_aq, nh3_t, h2so4_t, hno3_t, temp_kelvin=298.15):
     f_lo = _wash_water_charge_balance(lo, *args)
     f_hi = _wash_water_charge_balance(hi, *args)
     if f_lo * f_hi > 0.0:
-        return 7.0  # degenerate/edge case (e.g. all concentrations ~0) -- report neutral
+        return 7.0
     for _ in range(80):
         mid = 0.5 * (lo + hi)
         f_mid = _wash_water_charge_balance(mid, *args)
@@ -3085,32 +3234,7 @@ def _solve_wash_water_pH(co2_aq, nh3_t, h2so4_t, hno3_t, temp_kelvin=298.15):
 
 
 class AutoclaveExperiment:
-    """Notebook-friendly facade over :class:`CO2ImpurityReactorExperiment`.
-
-    Bundles the sequential A-I feed-schedule bookkeeping, the general calibrated
-    carbon-steel / wet-CO2 kinetics + wall-corrosion parameter set (same constants for every
-    experiment; see ``CARBON_STEEL_WET_CO2_KINETICS``), reaction-activity ranking and the
-    standard plot set behind a handful of methods, so a notebook only needs to supply reactor
-    geometry and a feed schedule:
-
-        autoclave = AutoclaveExperiment(volume_ml=530, mass_flow_g_h=150, diameter_cm=2,
-                                         temp_C=25, pressure_bar=20, material='carbon_steel',
-                                         coupon_diameter_cm=4.0, coupon_thickness_mm=1)
-        autoclave.set_phases(PHASES_FEED, termination_hour=305.0).run()
-        autoclave.get_values()                              # ppm vs time, all species
-        autoclave.build_plot('reactant species')
-        autoclave.build_plot('reaction products')
-        autoclave.get_reaction_table()                       # overall pathway ranking
-        autoclave.get_step_reaction_table()                  # ranking per A-I step
-        autoclave.build_plot('surface reaction products')
-        autoclave.build_plot('corrosion rate')
-        autoclave.get_surface_data()                         # corrosion numbers vs time
-        autoclave.get_mass_balance_table()                   # N/S/H/O closure check per phase
-        autoclave.get_wash_water_pH_table(water_mass_g=30.0)  # wash-water pH vs time
-        autoclave.build_plot('wash water pH', water_mass_g=30.0)
-        autoclave.get_autoclave_wash_table(wash_mass_g=30.0)  # IC-style SO4/NO3/NH4 vs time
-        autoclave.get_autoclave_wash_summary(wash_mass_g=30.0)  # end-of-run IC report layout
-    """
+    """Notebook-friendly facade over :class:`CO2ImpurityReactorExperiment`."""
 
 
     REACTION_NAMES = {
@@ -3125,6 +3249,9 @@ class AutoclaveExperiment:
         'R12': 'H2S + 2 O2 -> H2SO4 (NO2-catalysed)',
         'R13': '4 NO2 + H2S -> H2SO4 + 4 NO',
         'R15': '4 NO2 -> 2 N2O + 3 O2',
+        'R16': '2 NO2 <-> N2O4',
+        'R17': '2 NO2 + H2O -> HNO3 + HNO2',
+        'R18': 'HNO2 + 0.5 O2 -> HNO3',
         'Wall O2 / Fe2O3': '4 Fe + 3 O2 -> 2 Fe2O3 (surface path)',
         'Wall NO2 / Fe2O3': '2 Fe + 3 NO2 -> Fe2O3 + 3 NO (dry surface path)',
         'FeCO3 deposit': 'Fe + CO2(aq) + H2O -> FeCO3 + H2 (surface path, disabled by default)',
@@ -3133,13 +3260,42 @@ class AutoclaveExperiment:
         'Wall S8 / Claus': '8 H2S + 4 O2 -> S8 + 8 H2O (carbon-steel-catalysed, surface path)',
         'Wall SO2 / H2SO4': 'SO2 + 0.5 O2 + H2O -> H2SO4 (surface-catalysed, disabled by default)',
     }
+    REACTION_SPECIES = {
+        'R1': {'SO2': -1, 'O2': -0.5, 'H2O': -1, 'H2SO4': 1},
+        'R2': {'H2S': -1, 'NO2': -3, 'SO2': 1, 'H2O': 1, 'NO': 3},
+        'R3A': {'SO2': -1, 'NO2': -1, 'H2O': -1, 'NO': 1, 'H2SO4': 1},
+        'R4': {'NO': -2, 'O2': -1, 'NO2': 2},
+        'R5': {'NO2': -3, 'H2O': -1, 'HNO3': 2, 'NO': 1},
+        'R7': {'H2S': -5, 'NO': -6, 'H2O': -4, 'NH3': 6, 'SO2': 5},
+        'R10': {'NH3': -4, 'NO': -4, 'O2': -3, 'N2O': 4, 'H2O': 6},
+        'R11': {'H2S': -1, 'NO': -2, 'N2O': 1, 'S8': 0.125, 'H2O': 1},
+        'R12': {'H2S': -1, 'O2': -2, 'H2SO4': 1},
+        'R13': {'NO2': -4, 'H2S': -1, 'H2SO4': 1, 'NO': 4},
+        'R15': {'NO2': -4, 'N2O': 2, 'O2': 3},
+        'R16': {'NO2': -2, 'N2O4': 1},
+        'R17': {'NO2': -2, 'H2O': -1, 'HNO3': 1, 'HNO2': 1},
+        'R18': {'HNO2': -1, 'O2': -0.5, 'HNO3': 1},
+        'Wall O2 / Fe2O3': {'O2': -1},
+        'Wall NO2 / Fe2O3': {'NO2': -1, 'NO': 1},
+        'FeCO3 deposit': {'H2': 1},
+        'Wall HNO3 / Fe(NO3)2': {'HNO3': -8.0 / 3.0, 'NO': 2.0 / 3.0, 'H2O': 4.0 / 3.0},
+        'Wall H2SO4 / FeSO4': {'H2SO4': -1, 'H2': 1},
+        'Wall S8 / Claus': {'H2S': -1, 'O2': -0.5, 'H2O': 1, 'S8': 0.125},
+        'Wall SO2 / H2SO4': {'SO2': -1, 'H2SO4': 1},
+    }
     REACTANT_STYLE = {'H2S': '#e74c3c', 'SO2': '#f39c12', 'NO2': '#9b59b6', 'O2': '#2ecc71', 'H2O': '#3498db'}
     PRODUCT_STYLE = {
         'H2SO4': ('#c0392b', '-'), 'HNO3': ('#8e44ad', '-'), 'S8': ('#f1c40f', '-'),
         'NH3': ('#16a085', '-'), 'NO': ('#7f8c8d', '--'), 'N2O': ('#d35400', '--'),
+        'N2O4': ('#27ae60', '--'),
+        'HNO2': ('#e67e22', '-'),
         'H2': ('#2980b9', '-'),
     }
     PHASE_COLORS = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#08519c']
+    INTERACTIVE_PLOT_CONFIG = {
+        'responsive': True, 'displaylogo': False, 'scrollZoom': True, 'showTips': False,
+        'modeBarButtonsToRemove': ['select2d', 'lasso2d', 'sendDataToCloud', 'share'],
+    }
 
     M_FE, M_FE2O3 = 55.845, 159.688
     M_FECO3 = 115.856
@@ -3179,7 +3335,6 @@ class AutoclaveExperiment:
         self._reaction_rate_series = None
         self._reactant_plot_limits = (None, None)
 
-    # ---------------------------------------------------------------------- setup
     @staticmethod
     def _phase_label(feed, prev, index):
         if not feed:
@@ -3198,21 +3353,11 @@ class AutoclaveExperiment:
         return ', '.join(changes) if changes else f'Phase {index}'
 
     def set_phases(self, phases_feed, termination_hour):
-        """Build the phase schedule from ``(start_hour, mass_flow_g_h, feed_ppm[, label])`` entries.
+        """Build a sequential feed schedule ending at termination_hour [h].
 
-        Each phase's duration is derived automatically from consecutive start times; the
-        final phase ends at ``termination_hour``. When supplied, ``mass_flow_g_h`` sets that
-        phase's CSTR residence time and feed/outflow throughput; otherwise the constructor's
-        ``mass_flow_g_h`` is used. Legacy ``(start_hour, feed_ppm[, label[, mass_flow_g_h]])``
-        entries remain supported.
-
-        A phase may also be given as ``(start_hour, dict)`` where the dict carries any of
-        ``pressure_bar`` / ``temp_C`` / ``mass_flow_g_h`` / ``feed`` / ``label`` -- the form to
-        use when a run changes conditions mid-experiment (e.g. stepping the temperature down
-        partway through a run). Whenever ``temp_C``/``pressure_bar`` change, the SRK flash is re-evaluated
-        at the start of that phase, so molar density, fugacity coefficients, the water dew
-        point and the residence time are all recomputed rather than carried over. Omitted keys
-        inherit the constructor's values.
+        Accept (start, feed[, label, flow]), (start, flow, feed[, label]), or
+        (start, spec) entries. A spec can override feed, flow [g/h], temperature
+        [C], pressure [bar], and label for that phase.
         """
         def _unpack(entry):
             """-> (start_h, feed, label, mass_flow_g_h, temp_C, pressure_bar)."""
@@ -3287,7 +3432,6 @@ class AutoclaveExperiment:
     def get_reactor_report(self):
         return self.exp.generate_reactor_report()
 
-    # ------------------------------------------------------------------------ run
     def run(self):
         if not self.phases:
             raise RuntimeError('Call set_phases(...) before run().')
@@ -3310,7 +3454,6 @@ class AutoclaveExperiment:
         O2 enhancement, not a post-hoc reconstruction."""
         return self.results['wall_solid']
 
-    # ----------------------------------------------------------------------- data
     def get_values(self):
         """All simulated outlet concentrations (ppm) vs time, as a DataFrame."""
         if self.results is None:
@@ -3332,20 +3475,29 @@ class AutoclaveExperiment:
         t_h, ppm = self.t_h, self.ppm
         C = {s: np.clip(ppm[s] * 1e-6 * rho_m * phi[s], 0.0, None) for s in model.SPECIES}
         no_r5 = np.clip(ppm['NO'] * 1e-6 * rho_m * model.r5_no_activity, 0.0, None)
-        no_r4 = np.clip(ppm['NO'] * 1e-6 * rho_m * model.r4_no_activity, 0.0, None)
+        no_r4 = np.clip(ppm['NO'] * 1e-6 * rho_m * model.r4_no_activity * model._r4_surface_factor(), 0.0, None)
 
         o2_feed_ppm_series = np.zeros_like(t_h)
+        h2s_feed_ppm_series = np.zeros_like(t_h)
+        no2_feed_ppm_series = np.zeros_like(t_h)
+        h2o_feed_ppm_series = np.zeros_like(t_h)
         for (_, feed), mask in zip(self.phases, self._phase_masks()):
             o2_feed_ppm_series[mask] = feed.get('O2', 0.0)
+            h2s_feed_ppm_series[mask] = feed.get('H2S', 0.0)
+            no2_feed_ppm_series[mask] = feed.get('NO2', 0.0)
+            h2o_feed_ppm_series[mask] = feed.get('H2O', model.water_ppm)
         C_O2_feed_series = o2_feed_ppm_series * 1e-6 * rho_m
+        C_H2S_feed_series = h2s_feed_ppm_series * 1e-6 * rho_m
+        C_NO2_feed_series = no2_feed_ppm_series * 1e-6 * rho_m
 
-        names = ('R1', 'R2', 'R3A', 'R4', 'R5', 'R7', 'R10', 'R11', 'R12', 'R13', 'R15',
+        names = ('R1', 'R2', 'R3A', 'R4', 'R5', 'R7', 'R10', 'R11', 'R12', 'R13', 'R15', 'R16',
+                 'R17', 'R18',
                  'Wall O2 / Fe2O3', 'FeCO3 deposit', 'Wall HNO3 / Fe(NO3)2', 'Wall H2SO4 / FeSO4',
                  'Wall NO2 / Fe2O3', 'Wall S8 / Claus', 'Wall SO2 / H2SO4')
         rate = {name: np.zeros_like(t_h) for name in names}
 
         for i in range(len(t_h)):
-            k = model.get_reaction_rates(moisture_ppm=ppm['H2O'][i])
+            k = model.get_reaction_rates(moisture_ppm=h2o_feed_ppm_series[i])
             h2s, so2, no2 = C['H2S'][i], C['SO2'][i], C['NO2'][i]
             no, o2, h2o = C['NO'][i], C['O2'][i], C['H2O'][i]
             h2so4, hno3 = C['H2SO4'][i], C['HNO3'][i]
@@ -3353,28 +3505,69 @@ class AutoclaveExperiment:
             c_h2s_raw = ppm['H2S'][i] * 1e-6 * rho_m
             c_h2so4_raw = ppm['H2SO4'][i] * 1e-6 * rho_m
             c_o2_feed = C_O2_feed_series[i]
+            c_h2s_feed = C_H2S_feed_series[i]
+            c_no2_feed = C_NO2_feed_series[i]
             c_o2_lagged = self.wall_solid['LaggedO2'][i] if 'LaggedO2' in self.wall_solid else 0.0
+            c_so2_raw = ppm['SO2'][i] * 1e-6 * rho_m
+            acid_so2_sat = model._acid_so2_saturation(c_so2_raw)
 
-            rate['R1'][i] = k['k1_f'] * so2 * o2**0.5 * h2o - k['k1_r'] * h2so4
+            rate['R1'][i] = (k['k1_f'] * so2 * _fractional_activity(o2, 0.5) * h2o - k['k1_r'] * h2so4) * acid_so2_sat \
+                * model._feed_o2_passivation(c_o2_feed, model.r1_feed_o2_ref_ppm,
+                                             model.r1_feed_o2_hill_n,
+                                             cap_ppm=model.r1_feed_o2_cap_ppm)
+            cumulative_acid_ppm = self.wall_solid['CumH2SO4'][i] / max(rho_m, 1e-9) * 1e6
+            rate['R1'][i] *= model._r1_autocat_factor(cumulative_acid_ppm)
             r2_no2_boost = 1.0
             if model.r2_no2_boost_ref_ppm > 0.0:
                 no2_ppm_r2 = no2 / max(rho_m, 1e-9) * 1e6
                 ratio_r2 = (no2_ppm_r2 / model.r2_no2_boost_ref_ppm) ** model.r2_no2_boost_hill_n
                 r2_no2_boost = 1.0 + model.r2_no2_boost_gain * ratio_r2 / (1.0 + ratio_r2)
-            rate['R2'][i] = r2_no2_boost * (k['f_phase'] * k['k2_f'] * h2s * no2 - k['k2_r'] * so2 * h2o * no**3) \
+            r2_scale = r2_no2_boost * k['f_phase'] ** model.r2_f_phase_exponent \
                 * model._o2_presence_gate(c_o2_feed, model.r2_o2_presence_ref_ppm,
-                                          model.r2_o2_presence_hill_n)
+                                          model.r2_o2_presence_hill_n) \
+                * model._r2_no2_excess_gate(c_h2s_feed, c_no2_feed)
+            r13_scale = k['f_phase'] * model._r13_rate_factor(no2)
+            r13_bimolecular_coefficient = k['k13_f'] * r13_scale \
+                * max(no2, model.r13_floor_kmol_m3) ** (model.r13_no2_order - 1.0)
+            r2_coefficient = model._r2_effective_coefficient(k['k2_f'] * r2_scale, no2, h2s)
+            r13_dilute = model._r13_dilute_factor(r13_bimolecular_coefficient, r2_coefficient)
+            r13_scale *= r13_dilute
+            r13_bimolecular_coefficient *= r13_dilute
+            h2s_no2_encounter = model._bimolecular_encounter_factor(r2_coefficient + r13_bimolecular_coefficient)
+            h2s_no2_encounter *= model._h2s_no2_temperature_factor()
+            rate['R2'][i] = h2s_no2_encounter * r2_coefficient \
+                * (h2s * no2 - so2 * h2o * no**3 / k['Keq2'])
             no_r3a = no * (1.0 - model.r3a_no_escape_frac * k['f_phase'])
-            rate['R3A'][i] = (k['k3a_f'] * so2 * no2 * h2o - k['k3a_r'] * no_r3a * h2so4) \
-                * model._feed_o2_passivation(c_o2_feed, model.r3a_feed_o2_ref_ppm,
-                                             model.r3a_feed_o2_hill_n,
-                                             floor=model.r3a_feed_o2_floor,
-                                             cap_ppm=model.r3a_feed_o2_cap_ppm) \
+            r3a_acid_signal = model._r3a_acid_signal(cumulative_acid_ppm, c_h2so4_raw)
+            rate['R3A'][i] = model._r3a_bore_factor() * model._r3a_autocat_factor(r3a_acid_signal) \
+                * (k['k3a_f'] * so2 * no2 * h2o - k['k3a_r'] * no_r3a * h2so4) \
+                * acid_so2_sat \
+                * model._r3a_base_so2_inhibition(ppm['SO2'][i]) \
+                * model._r3a_oxygen_inhibition(ppm['O2'][i] * rho_m * 1e-6, c_o2_feed) \
                 * model._o2_presence_gate(c_o2_feed, model.r3a_o2_presence_ref_ppm,
-                                          model.r3a_o2_presence_hill_n)
-            rate['R4'][i] = k['k4_f'] * no_r4[i]**2 * o2 - k['k4_r'] * no2**2
-            rate['R5'][i] = k['k5_f'] * no2**3 * h2o - k['k5_r'] * hno3**2 * no_r5[i]
-            rate['R7'][i] = k['k7_f'] * h2s * no * h2o
+                                          model.r3a_o2_presence_hill_n) \
+                * model._r3a_h2s_feed_inhibition(c_h2s_feed, c_no2_feed)
+            r3a_acid_coefficient = model._r3a_acid_film_rate_constant(r3a_acid_signal) \
+                + model._r3a_dilute_acid_rate_constant(
+                    r3a_acid_signal, no2, c_h2so4_raw, self.wall_solid['CumHNO3'][i] / rho_m * 1e6,
+                    h2s, self.wall_solid['AcidSiteActivity'][i])
+            r3a_driving_force = so2 * no2 * h2o - no * h2so4 / k['Keq3']
+            r3a_conditioned = model._r3a_conditioned_acid_rate_constant(
+                r3a_acid_signal, c_h2so4_raw, c_so2_raw, ppm['NO'][i] * rho_m * 1e-6) * r3a_driving_force
+            rate['R3A'][i] += r3a_acid_coefficient * r3a_driving_force \
+                + model._limit_r3a_conditioned_rate(r3a_conditioned, cumulative_acid_ppm)
+            rate['R3A'][i] *= model._r3a_wetting_factor(
+                ppm['H2O'][i], c_h2so4_raw, ppm['HNO3'][i] * rho_m * 1e-6)
+            c_o2_r4 = o2
+            if model.r4_o2_half_ppm > 0.0:
+                c_o2_r4 *= (9.6 + model.r4_o2_half_ppm) / (ppm['O2'][i] + model.r4_o2_half_ppm)
+            rate['R4'][i] = k['k4_f'] * no_r4[i]**2 * c_o2_r4 - k['k4_r'] * no2**2
+            rate['R4'][i] += model._r4_acid_film_rate_constant(cumulative_acid_ppm) \
+                * (no ** 2 * o2 - no2 ** 2 / k['Keq4'])
+            rate['R4'][i] *= model._r4_dilute_no_factor(ppm['NO'][i] * rho_m * 1e-6)
+            rate['R5'][i] = model._r5_rate_factor(no2) * (k['k5_f'] * no2**3 * h2o
+                                                        - k['k5_r'] * hno3**2 * no_r5[i])
+            rate['R7'][i] = model._r7_rate_factor(no) * k['k7_f'] * h2s * no * model._r7_water_activity(h2o)
             rate['R10'][i] = k.get('k10_f', 0.0) * nh3 * no * o2 - k.get('k10_r', 0.0) * n2o**4 * h2o**6
             r11_o2_boost = 1.0
             if model.r11_o2_ref_ppm > 0.0:
@@ -3382,11 +3575,12 @@ class AutoclaveExperiment:
                 ratio_n = (o2_ppm_r11 / model.r11_o2_ref_ppm) ** model.r11_o2_hill_n
                 r11_o2_boost = 1.0 + model.r11_o2_gain * ratio_n / (1.0 + ratio_n)
             rate['R11'][i] = r11_o2_boost * k.get('k11_f', 0.0) * h2s * no - k.get('k11_r', 0.0) * n2o * s8**0.125 * h2o
-            r12_scale = 1.0 if model.r12_density_independent else k['f_phase']
-            no2_r12 = no2 ** model.r12_no2_order
-            rate['R12'][i] = r12_scale * (k.get('k12_f', 0.0) * h2s * o2 * no2_r12
+            r12_scale = 1.0 if model.r12_density_independent else k['f_phase'] ** model.r12_f_phase_exponent
+            no2_r12 = model._r12_catalyst_factor(no2)
+            rate['R12'][i] = r12_scale * model._r12_h2s_rate_factor(h2s) * (k.get('k12_f', 0.0) * h2s * o2 * no2_r12
                                            - k.get('k12_r', 0.0) * h2so4 * no2_r12)
-            rate['R13'][i] = k['f_phase'] * (k.get('k13_f', 0.0) * h2s * no2 ** model.r13_no2_order
+            rate['R12'][i] *= model._h2s_no2_temperature_factor()
+            rate['R13'][i] = h2s_no2_encounter * r13_scale * (k.get('k13_f', 0.0) * h2s * no2 ** model.r13_no2_order
                                               - k.get('k13_r', 0.0) * h2so4 * no ** model.r13_no2_order)
             r15_o2_inhib = 1.0
             if model.r15_o2_inhib_ref_ppm > 0.0:
@@ -3407,7 +3601,7 @@ class AutoclaveExperiment:
                 no2_ppm_r15 = ppm['NO2'][i]
                 if no2_ppm_r15 > 0.0:
                     ratio_n = (no2_ppm_r15 / model.r15_no2_cap_ppm) ** model.r15_no2_cap_hill_n
-                    no2_ppm_r15_capped = model.r15_no2_cap_ppm * ratio_n / (1.0 + ratio_n)
+                    no2_ppm_r15_capped = no2_ppm_r15 / (1.0 + ratio_n) ** (1.0 / model.r15_no2_cap_hill_n)
                 else:
                     no2_ppm_r15_capped = 0.0
                 no2_r15 = no2_ppm_r15_capped * 1e-6 * rho_m * phi['NO2']
@@ -3421,11 +3615,14 @@ class AutoclaveExperiment:
             if model.r15_n2o_cap_ppm > 0.0:
                 n2o_ppm_r15 = ppm['N2O'][i]
                 r15_n2o_brake = 1.0 / (1.0 + (n2o_ppm_r15 / model.r15_n2o_cap_ppm) ** model.r15_n2o_cap_hill_n)
-            rate['R15'][i] = r15_o2_presence * k['f_phase'] ** model.r15_f_phase_exponent * (r15_o2_inhib * r15_o2_activation * r15_n2o_brake * model._r15_surface_suppression() * model._sulfur_catalyst_gate(c_h2s_raw, c_h2so4_raw) * k.get('k15_f', 0.0) * no2_r15**4 - k.get('k15_r', 0.0) * n2o**2 * o2**3)
+            rate['R15'][i] = r15_o2_presence * k['f_phase'] ** model.r15_f_phase_exponent * (r15_o2_inhib * r15_o2_activation * r15_n2o_brake * model._r15_surface_suppression() * model._r15_dimer_availability() * model._sulfur_catalyst_gate(c_h2s_raw, c_h2so4_raw) * k.get('k15_f', 0.0) * no2_r15**4 - k.get('k15_r', 0.0) * n2o**2 * o2**3)
+            n2o4 = C['N2O4'][i] if 'N2O4' in C else 0.0
+            rate['R16'][i] = k.get('k16_f', 0.0) * no2**2 - k.get('k16_r', 0.0) * n2o4
+            hno2 = C['HNO2'][i] if 'HNO2' in C else 0.0
+            rate['R17'][i] = (k.get('k17_f', 0.0) * no2**2 * h2o - k.get('k17_r', 0.0) * hno3 * hno2) \
+                * model._r17_rate_factor(no2, h2o, ppm['H2O'][i])
+            rate['R18'][i] = k.get('k18_f', 0.0) * hno2 * _fractional_activity(o2, 0.5) - k.get('k18_r', 0.0) * hno3
 
-            # Wall/corrosion severity uses the raw (mole-fraction-based) concentrations,
-            # matching rhs(), not the phi-scaled reactive concentrations used just above for
-            # the homogeneous R1-R13.
             h2s_raw = ppm['H2S'][i] * 1e-6 * rho_m
             no2_raw = ppm['NO2'][i] * 1e-6 * rho_m
             no_raw = ppm['NO'][i] * 1e-6 * rho_m
@@ -3440,7 +3637,8 @@ class AutoclaveExperiment:
                                                  C_H2S=h2s_raw, cum_no2_exposure=cum_no2_i,
                                                  C_O2_feed=c_o2_feed, C_O2_lagged=lagged_o2_i,
                                                  C_SO2=so2_raw, cum_o2_exposure=cum_o2_i,
-                                                 C_NO=no_raw, C_O2_feed_lagged=lagged_o2_feed_i)
+                                                 C_NO=no_raw, C_O2_feed_lagged=lagged_o2_feed_i,
+                                                 C_H2S_feed=c_h2s_feed)
             rate['Wall O2 / Fe2O3'][i] = wall['r_wall_o2']
             rate['FeCO3 deposit'][i] = wall['r_feco3']
             rate['Wall HNO3 / Fe(NO3)2'][i] = wall['r_hno3_corrosion']
@@ -3457,7 +3655,7 @@ class AutoclaveExperiment:
             return 0.0
         t_s = self.t_h * 3600.0
         V_m3 = self.volume_ml * 1e-6
-        return np.trapezoid(np.abs(series[mask]), t_s[mask]) * V_m3 * 1e9
+        return np.trapezoid(np.abs(series[mask]), t_s[mask]) * V_m3 * 1e6
 
     def get_reaction_table(self, min_share_pct=1.0):
         """Overall reaction-activity ranking integrated over the whole run."""
@@ -3515,17 +3713,7 @@ class AutoclaveExperiment:
         return pd.DataFrame(rows)
 
     def get_surface_data(self):
-        """Corrosion-product mass accumulation and corrosion rate vs time.
-
-        ``Fe2O3_mg``/``FeCO3_mg``/``FeNO32_mg``/``FeSO4_mg``/``Fe_lost_mg`` and
-        ``corrosion_rate_mm_yr`` (its time-gradient) are all mass-balanced against the wall
-        reactions' extents (Fe consumed = solid product formed). Under the general reference
-        profile ``Fe2O3_mg`` collects BOTH active Fe2O3 paths (O2 via ``wall_k_intrinsic``, and
-        NO2 via ``wall_no2_k_intrinsic``), and ``FeNO32_mg``/``FeSO4_mg`` come from the HNO3 and
-        H2SO4 paths. Only ``FeCO3_mg`` is 0 -- the carbonic-acid path is disabled
-        (``wall_feco3_k_intrinsic=0.0``) and remains available via
-        ``configure_wall_corrosion(feco3_k_intrinsic=...)`` when required.
-        """
+        """Corrosion-product mass accumulation and corrosion rate vs time."""
         model = self.exp.model
         rate = self._compute_reaction_rate_series()
         t_h = self.t_h
@@ -3533,15 +3721,13 @@ class AutoclaveExperiment:
         dt = np.diff(t_s, prepend=0.0)
         V_m3 = self.volume_ml * 1e-6
 
-        n_o2_lost = np.cumsum(rate['Wall O2 / Fe2O3'] * V_m3 * dt)     # kmol
-        n_fe2o3 = n_o2_lost * (2.0 / 3.0)                               # 4 Fe + 3 O2 -> 2 Fe2O3
-        n_no2_lost = np.cumsum(rate['Wall NO2 / Fe2O3'] * V_m3 * dt)   # kmol NO2 consumed
-        n_fe2o3 += n_no2_lost * (1.0 / 3.0)                             # 2 Fe + 3 NO2 -> Fe2O3 + 3 NO
-        n_feco3 = np.cumsum(rate['FeCO3 deposit'] * V_m3 * dt)         # Fe + CO2(aq) + H2O -> FeCO3
-        # FeSO4/Fe(NO3)2 are tracked as real ODE states (see rhs()/simulate()) -- use the true
-        # solved trajectory directly rather than re-integrating the reconstructed rate series.
-        n_fe_no3_2 = self.wall_solid['FeNO32'] * V_m3      # 8 HNO3+3Fe -> 3 Fe(NO3)2+2NO+4H2O
-        n_fe_so4 = self.wall_solid['FeSO4'] * V_m3          # Fe + H2SO4 -> FeSO4
+        n_o2_lost = np.cumsum(rate['Wall O2 / Fe2O3'] * V_m3 * dt)
+        n_fe2o3 = n_o2_lost * (2.0 / 3.0)
+        n_no2_lost = np.cumsum(rate['Wall NO2 / Fe2O3'] * V_m3 * dt)
+        n_fe2o3 += n_no2_lost * (1.0 / 3.0)
+        n_feco3 = np.cumsum(rate['FeCO3 deposit'] * V_m3 * dt)
+        n_fe_no3_2 = self.wall_solid['FeNO32'] * V_m3
+        n_fe_so4 = self.wall_solid['FeSO4'] * V_m3
         n_fe_total = n_o2_lost * (4.0 / 3.0) + n_no2_lost * (2.0 / 3.0) + n_feco3 + n_fe_no3_2 + n_fe_so4
 
         fe2o3_mg = n_fe2o3 * self.M_FE2O3 * 1e6
@@ -3556,8 +3742,6 @@ class AutoclaveExperiment:
         depth_rate_m_s = d_fe_dt_kg_s / (area * self.RHO_FE_KG_M3) if area > 0 else np.zeros_like(t_h)
         corrosion_rate_mm_yr = np.clip(depth_rate_m_s * 3600.0 * 24.0 * 365.25 * 1000.0, 0.0, None)
 
-        # Acid-history enhancement actually driving _wall_o2_rate: instantaneous NO2+H2SO4+HNO3
-        # gas-phase loading (see _acid_enhancement), not a cumulative or solid-product tracker.
         total_acid_ppm = self.ppm['NO2'] + self.ppm['H2SO4'] + self.ppm['HNO3']
         enhancement = model.wall_acid_background + model.wall_acid_gain * total_acid_ppm ** model.wall_acid_exponent
 
@@ -3575,28 +3759,6 @@ class AutoclaveExperiment:
     def get_mass_balance_table(self):
         """Per-phase N/S/H/O atom-balance closure check: fed in = outflow + gas-phase
         accumulation + wall-solid deposit, for every element.
-
-        For each A-I phase and each element E in {N, S, H, O}, computes (all in mmol):
-          - ``fed``: atoms entering with the feed stream over the phase duration.
-          - ``outflow``: atoms leaving with the CSTR outflow (trapezoidal integral of
-            outlet ppm(t) x molar throughput over the phase).
-          - ``accumulation``: change in the vessel's own gas-phase inventory of that element
-            (end of phase minus start of phase).
-          - ``wall_deposit``: change in that element's content of the four solid corrosion
-            products (Fe2O3, FeCO3, Fe(NO3)2, FeSO4) over the phase -- this is what lets the
-            balance close even though the reaction network moves atoms from the tracked gas
-            species into an untracked solid phase.
-          - ``residual`` = fed - outflow - accumulation - wall_deposit, and ``residual_pct``
-            relative to ``fed`` (or ``NaN`` when nothing of that element was fed) -- should be
-            close to zero; a large residual points at a stoichiometry bug in ``rhs()``.
-
-        Uses each phase's molar throughput (`mass_flow_g_h` / ``MW_CO2``) for every species
-        since CO2 is the overwhelming bulk carrier gas and the impurities are trace-level. Known
-        approximation: the very first phase of any experiment includes an initial vessel-fill
-        sub-period with no outflow yet (see ``run_experiment``'s ``inflow_only`` stage); this
-        method still assumes full steady outflow throughout, so the first phase's residual is
-        typically larger (the fill sub-period's assumed-but-nonexistent outflow) than later
-        phases, which close to within ~1%.
         """
         if self.results is None:
             raise RuntimeError('Call run() before get_mass_balance_table().')
@@ -3604,32 +3766,23 @@ class AutoclaveExperiment:
         model = self.exp.model
         t_h, t_s = self.t_h, self.t_h * 3600.0
         V_m3 = self.volume_ml * 1e-6
-        molar_flow_kmol_s = np.zeros_like(t_h)
-        for phase, (t0, t1) in zip(self.exp.phases, self.phase_bounds):
-            phase_flow_kmol_s = (phase['mass_flow_g_h'] / 1000.0) / MW_CO2 / 3600.0
-            molar_flow_kmol_s[(t_h >= t0) & (t_h <= t1)] = phase_flow_kmol_s
         elements = ('N', 'S', 'H', 'O')
 
-        # Gas-phase inventory and outflow flux of each element vs time.
         inventory_kmol = {e: np.zeros_like(t_h) for e in elements}
-        outflow_kmol_s = {e: np.zeros_like(t_h) for e in elements}
         for species in model.SPECIES:
             counts = SPECIES_ATOM_COUNTS.get(species, {})
             if not counts:
                 continue
             mole_fraction = self.ppm[species] * 1e-6
             C_kmol_m3 = mole_fraction * model.molar_density
-            mole_flow_kmol_s = mole_fraction * molar_flow_kmol_s
             for e, n_atoms in counts.items():
                 inventory_kmol[e] += n_atoms * C_kmol_m3 * V_m3
-                outflow_kmol_s[e] += n_atoms * mole_flow_kmol_s
 
-        # Element content of the four solid wall-corrosion products vs time.
         surf = self.get_surface_data()
-        n_fe_no3_2 = surf['FeNO32_mg'] / (self.M_FE_NO3_2 * 1e6)   # kmol Fe(NO3)2
-        n_fe_so4 = surf['FeSO4_mg'] / (self.M_FE_SO4 * 1e6)        # kmol FeSO4
-        n_feco3 = surf['FeCO3_mg'] / (self.M_FECO3 * 1e6)          # kmol FeCO3
-        n_fe2o3 = surf['Fe2O3_mg'] / (self.M_FE2O3 * 1e6)          # kmol Fe2O3
+        n_fe_no3_2 = surf['FeNO32_mg'] / (self.M_FE_NO3_2 * 1e6)
+        n_fe_so4 = surf['FeSO4_mg'] / (self.M_FE_SO4 * 1e6)
+        n_feco3 = surf['FeCO3_mg'] / (self.M_FECO3 * 1e6)
+        n_fe2o3 = surf['Fe2O3_mg'] / (self.M_FE2O3 * 1e6)
         wall_kmol = {
             'N': 2.0 * n_fe_no3_2.to_numpy(),
             'S': 1.0 * n_fe_so4.to_numpy(),
@@ -3649,9 +3802,10 @@ class AutoclaveExperiment:
                 fed_mmol = sum(
                     feed_ppm.get(sp, 0.0) * 1e-6 * phase_molar_flow_kmol_s * duration_s * counts[e]
                     for sp, counts in SPECIES_ATOM_COUNTS.items() if e in counts
-                ) * 1e6  # kmol -> mmol
+                ) * 1e6
 
-                outflow_mmol = _trapz(outflow_kmol_s[e][i0:i1 + 1], t_s[i0:i1 + 1]) * 1e6
+                outflow_mmol = _trapz(inventory_kmol[e][i0:i1 + 1], t_s[i0:i1 + 1]) \
+                    * phase_molar_flow_kmol_s / (model.molar_density * V_m3) * 1e6
                 accumulation_mmol = (inventory_kmol[e][i1] - inventory_kmol[e][i0]) * 1e6
                 wall_mmol = (wall_kmol[e][i1] - wall_kmol[e][i0]) * 1e6
 
@@ -3668,36 +3822,8 @@ class AutoclaveExperiment:
         return pd.DataFrame(rows)
 
     def get_wash_water_pH_table(self, water_mass_g, wash_temp_C=25.0, co2_partial_pressure_atm=1.0):
-        """Estimate the pH of a fixed mass of wash water continuously scrubbing the reactor's
-        CO2 off-gas, vs time (illustrative, screening-level).
-
-        Physical model:
-          - The off-gas is almost pure CO2 (ppm-level impurities), so it is treated as an OPEN
-            system: bubbling it through the wash water holds dissolved CO2 at its Henry's-law
-            equilibrium (``[CO2(aq)] = KH(T) * co2_partial_pressure_atm``) for the entire run,
-            then buffered through the standard two-step carbonic-acid equilibrium
-            (CO2(aq)+H2O <-> H+ + HCO3- <-> 2H+ + CO3^2-). This does NOT accumulate with time,
-            since the gas supply is effectively infinite relative to a small water sample.
-          - NH3, H2SO4 and HNO3 are assumed to be retained quantitatively -- negligible vapor
-            pressure back to the gas phase -- so their absorbed amount ACCUMULATES in the fixed
-            water mass over time. Each species' cumulative moles absorbed is the time-integral
-            of (outlet ppm x CO2 molar throughput), divided by the (assumed constant, non-
-            evaporating) water volume.
-          - pH is then the root of the H+ / OH- / HCO3- / CO3^2- / NH4+ / HSO4- / SO4^2- / NO3-
-            charge balance at every time point (see ``_solve_wash_water_pH``).
-          - Deliberate simplification (flagged, not silent): H2S, SO2, NO2, O2, NO, N2O, S8 and
-            H2 are excluded from the charge balance -- only CO2 plus the 3 named species are
-            modeled.
-
-        Parameters
-        ----------
-        water_mass_g : float
-            Mass of (initially pure) wash water the whole run's off-gas is bubbled through.
-        wash_temp_C : float, default 25.0
-            Wash-water temperature, independent of the reactor's own operating temperature
-            (washing is treated as a separate bench-scale step at ambient conditions).
-        co2_partial_pressure_atm : float, default 1.0
-            CO2 partial pressure seen by the wash water (vented to ~ambient pressure).
+        """Estimate the pH of a fixed mass of wash water continuously scrubbing the
+        reactor's CO2 off-gas, vs time (illustrative, screening-level).
         """
         if self.results is None:
             raise RuntimeError('Call run() before get_wash_water_pH_table().')
@@ -3712,12 +3838,12 @@ class AutoclaveExperiment:
             phase_flow_kmol_s = (phase['mass_flow_g_h'] / 1000.0) / MW_CO2 / 3600.0
             molar_flow_kmol_s[(t_h >= t0) & (t_h <= t1)] = phase_flow_kmol_s
 
-        water_l = water_mass_g / 1000.0  # rho_water ~= 1.0 g/mL
+        water_l = water_mass_g / 1000.0
         cum_mol_l = {}
         for species in ('NH3', 'H2SO4', 'HNO3'):
             mole_flow_kmol_s = ppm[species] * 1e-6 * molar_flow_kmol_s
             cum_kmol = _cumulative_trapz(mole_flow_kmol_s, t_s)
-            cum_mol_l[species] = np.clip(cum_kmol * 1000.0 / water_l, 0.0, None)  # kmol -> mol, / L
+            cum_mol_l[species] = np.clip(cum_kmol * 1000.0 / water_l, 0.0, None)
 
         temp_kelvin = wash_temp_C + 273.15
         co2_aq_mol_l = _van_t_hoff(KH_CO2_298_MOL_L_ATM, DH_KH_CO2, temp_kelvin) * co2_partial_pressure_atm
@@ -3738,26 +3864,10 @@ class AutoclaveExperiment:
         })
 
     def get_autoclave_wash_table(self, wash_mass_g):
-        """Estimate ion-chromatography-style SO4^2-/NO3-/NH4+ results for a fixed mass of water
-        used to rinse the autoclave's OWN internals after the run, vs time (illustrative,
-        screening-level; companion to ``get_wash_water_pH_table``, which instead models washing
-        the CO2 OFF-GAS through an external bottle).
-
-        Physical model: treats ALL H2SO4, HNO3 and NH3 ever chemically formed by the reaction
-        network as having stayed inside the vessel (zero net transport out with the CO2 outflow, and no further consumption by any other pathway --
-        e.g. wall corrosion consuming H2SO4/HNO3, or R10 consuming NH3) -- i.e. reads directly
-        from the model's own cumulative "total ever produced" ODE states (``CumH2SO4``/
-        ``CumHNO3``/``CumNH3``, see ``EXTRA_STATE_KEYS``), each a never-decreasing kmol/m^3-
-        equivalent concentration. Multiplying by the reactor's own volume gives total moles ever
-        formed at each time point; dividing by the wash water's volume gives the IC-style
-        concentration a lab would measure after rinsing the vessel with ``wash_mass_g`` grams of
-        water. Reported as the measured ionic species (SO4^2-, NO3-, NH4+), matching real
-        ion-chromatography output, not the neutral parent acid/base (H2SO4/HNO3/NH3).
-
-        Parameters
-        ----------
-        wash_mass_g : float
-            Mass of (initially pure) water used to rinse the autoclave internals.
+        """Estimate ion-chromatography-style SO4^2-/NO3-/NH4+ results for a fixed mass of
+        water used to rinse the autoclave's OWN internals after the run, vs time
+        (illustrative, screening-level; companion to ``get_wash_water_pH_table``,
+        which instead models washing the CO2 OFF-GAS through an external bottle).
         """
         if self.results is None:
             raise RuntimeError('Call run() before get_autoclave_wash_table().')
@@ -3766,18 +3876,16 @@ class AutoclaveExperiment:
 
         t_h = self.t_h
         V_m3 = self.volume_ml * 1e-6
-        wash_l = wash_mass_g / 1000.0  # rho_water ~= 1.0 g/mL
+        wash_l = wash_mass_g / 1000.0
 
         cum_h2so4_kmol = self.wall_solid['CumH2SO4'] * V_m3
         cum_hno3_kmol = self.wall_solid['CumHNO3'] * V_m3
         cum_nh3_kmol = self.wall_solid.get('CumNH3', np.zeros_like(t_h)) * V_m3
 
-        # kmol -> mol (x1e3) -> umol (x1e6): combined factor x1e9.
         so4_umol = cum_h2so4_kmol * 1e9
         no3_umol = cum_hno3_kmol * 1e9
         nh4_umol = cum_nh3_kmol * 1e9
 
-        # umol * g/mol = ug; x1e-3 -> mg; / L -> mg/L.
         so4_mg_l = so4_umol * M_SO4_2MINUS * 1e-3 / wash_l
         no3_mg_l = no3_umol * M_NO3_MINUS * 1e-3 / wash_l
         nh4_mg_l = nh4_umol * M_NH4_PLUS * 1e-3 / wash_l
@@ -3805,7 +3913,6 @@ class AutoclaveExperiment:
             ],
         )
 
-    # ---------------------------------------------------------------------- plots
     def _condition_string(self):
         return (f'{self.volume_ml:g} mL, {self.mass_flow_g_h:g} g/hr CO2, '
                 f'{self.temp_C:+g} \u00b0C / {self.pressure_bar:g} bar, '
@@ -3976,6 +4083,123 @@ class AutoclaveExperiment:
         plt.show()
         return fig, ax
 
+    def _plot_interactive_reactions(self, reaction=None, show=True, show_feed=False, height=720):
+        """Plot component concentrations and one key reaction per feed step."""
+        from html import escape
+        from textwrap import wrap
+        try:
+            import plotly.graph_objects as go
+        except ImportError as error:
+            raise ImportError("Interactive reactions require Plotly: python -m pip install plotly") from error
+
+        if any(phase.get(key) is not None for phase in self.exp.phases for key in ('temp_C', 'pressure_bar')):
+            raise ValueError('Interactive reaction rates currently require constant temperature and pressure.')
+        if not np.isfinite(height) or height < 500:
+            raise ValueError('Interactive plot height must be finite and at least 500 pixels.')
+        names = {name.lower(): name for name in self.REACTION_NAMES}
+        selected = None if reaction is None else names.get(str(reaction).strip().lower())
+        if reaction is not None and selected is None:
+            raise ValueError(f'Unknown reaction {reaction!r}. Choose from {list(self.REACTION_NAMES)}')
+
+        model = self.exp.model
+        rate_series = self._compute_reaction_rate_series()
+        coefficients = {name: dict(values) for name, values in self.REACTION_SPECIES.items()}
+        if model.wall_consume_h2o:
+            coefficients['Wall O2 / Fe2O3']['H2O'] = -1
+        species = list(model.SPECIES)
+        colors = {name: style[0] for name, style in self.PRODUCT_STYLE.items()}
+        colors.update(self.REACTANT_STYLE)
+        overview_species = {'H2O', 'H2S', 'SO2', 'NO2', 'O2', 'NO', 'H2SO4', 'HNO3', 'S8'}
+        figure = go.Figure()
+        for name in species:
+            figure.add_trace(go.Scatter(
+                x=self.t_h, y=self.ppm[name], name=name, legendgroup=name,
+                line=dict(color=colors.get(name, '#59636b'), width=2.3),
+                visible=True if name in overview_species else 'legendonly',
+                hovertemplate=f'{name}: %{{y:.4g}} ppm-mol<br>%{{x:.2f}} h<extra></extra>',
+            ))
+            if show_feed and any(feed.get(name, 0.0) for _, feed in self.phases):
+                feed_time, feed_ppm = self._feed_profile(name)
+                figure.add_trace(go.Scatter(
+                    x=feed_time, y=feed_ppm, name=f'{name} feed', legendgroup=name, showlegend=False,
+                    line=dict(color=colors.get(name, '#59636b'), width=1.1, dash='dot'),
+                    opacity=0.5, visible=True if name in overview_species else 'legendonly',
+                    hovertemplate=f'{name} feed: %{{y:.4g}} ppm-mol<br>%{{x:.2f}} h<extra></extra>',
+                ))
+
+        full_range = [float(self.t_h[0]), float(self.t_h[-1])]
+        buttons = [dict(label='Full run', method='relayout',
+                        args=[{'xaxis.range': full_range, 'annotations': []}])]
+        step_reactions = []
+        for step, ((start, end), (phase_name, _), mask) in enumerate(
+                zip(self.phase_bounds, self.phases, self._phase_masks()), start=1):
+            indices = np.flatnonzero(mask)
+            indices = indices[(indices >= np.searchsorted(self.t_h, start, side='right') - 1)
+                              & (indices <= np.searchsorted(self.t_h, end, side='left'))]
+            mask = np.zeros_like(self.t_h, dtype=bool)
+            mask[indices] = True
+            scores = {
+                name: self._integrated_extent_mmol(np.asarray(values), mask)
+                * sum(abs(value) for value in coefficients[name].values())
+                for name, values in rate_series.items()
+            }
+            pathway = selected or max(scores, key=scores.get)
+            if scores[pathway] <= 0.0:
+                pathway = None
+            text = f'<b>Step {step}: no active reaction</b>'
+            direction = None
+            if pathway is not None:
+                rates = np.asarray(rate_series[pathway])[indices]
+                equation = self.REACTION_NAMES[pathway]
+                direction = 'mixed' if np.any(rates > 0.0) and np.any(rates < 0.0) else (
+                    'reverse' if np.any(rates < 0.0) else 'forward')
+                if direction != 'forward':
+                    equation = equation.replace(' -> ', ' <-> ' if direction == 'mixed' else ' <- ')
+                formatted = '<br>'.join(escape(line) for line in wrap(equation, width=30))
+                formatted = formatted.replace('&lt;-&gt;', '&#8596;').replace('-&gt;', '&#8594;')
+                formatted = formatted.replace('&lt;-', '&#8592;')
+                text = f'<b>Step {step}: {escape(pathway)}</b><br>{formatted}'
+                peak_index = indices[int(np.argmax(np.abs(rates)))]
+                formed = {name: coefficient * rate_series[pathway][peak_index]
+                          for name, coefficient in coefficients[pathway].items()}
+                component = max(formed, key=formed.get)
+                hour = 0.5 * (start + end)
+                figure.add_trace(go.Scatter(
+                    x=[hour], y=[float(np.interp(hour, self.t_h, self.ppm[component]))],
+                    mode='markers', name=f'Step {step}', showlegend=False,
+                    marker=dict(symbol='diamond', size=8, color=colors.get(component, '#59636b'),
+                                line=dict(color='white', width=1)),
+                    meta=dict(step=step, pathway=pathway, component=component),
+                    hovertemplate=f'{text}<br>{escape(phase_name)}<br>{start:g}-{end:g} h<extra></extra>',
+                ))
+            annotation = dict(x=0.5, y=-0.14, xref='paper', yref='paper', xanchor='center',
+                              yanchor='top', align='center', text=text, showarrow=False, font=dict(size=12))
+            buttons.append(dict(label=f'Step {step}', method='relayout',
+                                args=[{'xaxis.range': [float(start), float(end)],
+                                       'annotations': [annotation]}]))
+            step_reactions.append(dict(step=step, phase=phase_name, start=float(start), end=float(end),
+                                       reaction=pathway, direction=direction))
+            figure.add_vline(x=start, line_width=0.6, line_dash='dot', line_color='#bdc4c9')
+        figure.update_layout(
+            title=dict(text='Component concentrations', x=0.02, y=0.99, font=dict(size=18)),
+            height=int(height), autosize=True, template='plotly_white',
+            font=dict(family='Aptos, Calibri, sans-serif', size=12, color='#26323a'),
+            margin=dict(l=65, r=40, t=95, b=225), hovermode='closest',
+            modebar=dict(orientation='v'),
+            legend=dict(orientation='h', y=-0.35, yanchor='top', x=0.5, xanchor='center',
+                        entrywidth=36, tracegroupgap=0, groupclick='togglegroup', font=dict(size=11)),
+            updatemenus=[dict(buttons=buttons, active=0, direction='down', x=0, y=1.13,
+                             xanchor='left', yanchor='top')],
+            meta=dict(step_reactions=step_reactions, concentration_units='ppm-mol',
+                      reaction_ranking='integrated absolute component conversion',
+                      conditions=self._condition_string()),
+        )
+        figure.update_xaxes(range=full_range, title_text='Time (h)', showgrid=True, gridcolor='#e8ecee')
+        figure.update_yaxes(title_text='Concentration (ppm-mol)', rangemode='tozero')
+        if show:
+            figure.show(config=self.INTERACTIVE_PLOT_CONFIG)
+        return figure
+
     _PLOT_KINDS = {
         'reactant_species': _plot_reactant_species,
         'reactants': _plot_reactant_species,
@@ -3987,11 +4211,13 @@ class AutoclaveExperiment:
         'corrosion': _plot_corrosion_rate,
         'wash_water_ph': _plot_wash_water_pH,
         'ph': _plot_wash_water_pH,
+        'interactive_reactions': _plot_interactive_reactions,
     }
 
     def build_plot(self, kind, **kwargs):
         """Render one of: 'reactant species', 'reaction products',
-        'surface reaction products', 'corrosion rate'."""
+        'surface reaction products', 'corrosion rate', 'wash water pH',
+        or 'interactive reactions' (optional Plotly dependency)."""
         if self.results is None:
             raise RuntimeError('Call run() before build_plot().')
         key = kind.strip().lower().replace(' ', '_')
