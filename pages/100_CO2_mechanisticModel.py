@@ -1,25 +1,29 @@
 """
 CO2 Impurity Mechanistic Model — Streamlit Page
 ================================================
-Interactive front-end for the CSTR-style CO2-impurity kinetics / wall-corrosion
-engine implemented in :mod:`co2_mechanistic_model` (``AutoclaveExperiment``).
-
-The user defines the reactor/coupon geometry once, then builds a feed schedule
-table (one row per phase: start time, pressure, temperature, mass flow, feed
-concentrations and a label). Rows can be added/removed with the built-in
-data-editor "+"/"-" controls. Running the simulation calls into NeqSim
-(via the SRK EoS, when available) for the thermodynamics and displays the
-resulting species/reaction/corrosion/wash-water results as tables and charts,
-mirroring the analysis performed in ``pages/CDC171.ipynb``.
+.
 """
 
+import importlib.util
 import re
+import sys
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
 from theme import apply_theme
-from co2_mechanistic_model import AutoclaveExperiment
+
+_MODEL_MODULE_NAME = 'neqsim_co2_kinetics'
+if _MODEL_MODULE_NAME in sys.modules:
+    _co2_kinetics = sys.modules[_MODEL_MODULE_NAME]
+else:
+    _spec = importlib.util.spec_from_file_location(
+        _MODEL_MODULE_NAME, Path(__file__).with_name('neqsim_co2_kinetics.py'))
+    _co2_kinetics = importlib.util.module_from_spec(_spec)
+    sys.modules[_MODEL_MODULE_NAME] = _co2_kinetics
+    _spec.loader.exec_module(_co2_kinetics)
+AutoclaveExperiment = _co2_kinetics.AutoclaveExperiment
 
 st.set_page_config(
     page_title="CO2 Mechanistic Model",
@@ -64,9 +68,6 @@ The kinetic parameters are illustrative/uncalibrated and are provided for
 
 st.divider()
 
-# =============================================================================
-# Reactor / coupon geometry
-# =============================================================================
 st.subheader("1️⃣ Reactor & coupon geometry")
 
 st.caption("Flow rate, pressure and temperature are set per phase in the feed schedule table below, "
@@ -81,9 +82,6 @@ with geom_col3:
     coupon_diameter_cm = st.number_input("Coupon diameter [cm]", min_value=0.0, value=3.0, step=0.5)
     coupon_thickness_mm = st.number_input("Coupon thickness [mm]", min_value=0.0, value=5.0, step=0.5)
 
-# =============================================================================
-# Feed schedule editor
-# =============================================================================
 st.subheader("2️⃣ Feed schedule")
 st.caption("One row per phase. Feed concentrations are ppm-mol; leave at 0 for pure CO2.")
 
@@ -118,8 +116,6 @@ with st.expander("📋 Paste from Excel (replaces the whole table)"):
                 cells = line.split(',')
             else:
                 cells = re.split(r'\s{2,}|\s+', line)
-            # A real data row must have numeric Start/Pressure/Temperature/Mass flow; anything
-            # else (e.g. a copied Excel header row) is skipped instead of turning into a 0-row.
             numeric_ok = True
             numeric_values = {}
             for i, col in enumerate(FEED_COLUMNS[:4]):
@@ -153,8 +149,6 @@ with st.expander("📋 Paste from Excel (replaces the whole table)"):
         else:
             st.warning("No numeric data rows detected in the pasted text.")
 
-# Static defaults (not tied to the sidebar reactor settings) so that changing the sidebar
-# never reshapes the column config and never resets/clears the table's own data.
 column_config = {
     'Start (h)': st.column_config.NumberColumn('Start (h)', min_value=0.0, format="%.2f", default=0.0),
     'Pressure (bar)': st.column_config.NumberColumn('Pressure (bar)', min_value=0.0, format="%.2f",
@@ -176,7 +170,6 @@ feed_df = st.data_editor(
     key='co2mm_feed_editor',
 )
 
-# Safety net for any cell still left blank (e.g. a pasted range shorter than the table).
 _row_defaults = {col: ('' if col == 'Label' else 0.0) for col in FEED_COLUMNS}
 feed_df = feed_df.fillna(_row_defaults)
 
@@ -188,12 +181,8 @@ if st.button("➕ Add row", key='co2mm_add_row'):
 
 run_clicked = st.button("▶️ Run simulation", type="primary")
 
-# =============================================================================
-# Run
-# =============================================================================
+
 def _build_phases(df: pd.DataFrame):
-    # A row only counts as a real phase once it has a positive pressure; this lets the
-    # pre-filled blank template rows (all zeros) sit unused until the user fills them in.
     rows = df.dropna(subset=['Start (h)'])
     rows = rows[rows['Pressure (bar)'] > 0].sort_values('Start (h)')
     phases = []
@@ -215,7 +204,6 @@ if run_clicked:
         st.warning("Add at least one feed-schedule row before running.")
     else:
         first = phases_feed[0][1]
-        # No explicit termination-hour input: run 50 h past the last phase's start time.
         termination_hour = phases_feed[-1][0] + 50.0
         try:
             with st.spinner("Running mechanistic simulation..."):
