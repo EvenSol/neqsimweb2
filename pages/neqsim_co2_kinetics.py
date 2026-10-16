@@ -3291,6 +3291,8 @@ class AutoclaveExperiment:
         self.temp_C = float(temp_C)
         self.pressure_bar = float(pressure_bar)
         self.material = material
+        if self.material in ('stainless_steel', 'inert'):
+            coupon_diameter_cm = 0.0
 
         self.exp = CO2ImpurityReactorExperiment(
             target_pressure_bar=self.pressure_bar,
