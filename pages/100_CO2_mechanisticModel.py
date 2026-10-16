@@ -77,7 +77,7 @@ with geom_col1:
     volume_ml = st.number_input("Volume [mL]", min_value=1.0, value=330.0, step=10.0)
 with geom_col2:
     diameter_cm = st.number_input("Inner diameter [cm]", min_value=0.1, value=6.5, step=0.1)
-    material = st.selectbox("Material", MATERIALS, index=MATERIALS.index('carbon_steel'))
+    material = st.selectbox("Material", MATERIALS, index=MATERIALS.index('inert'))
 with geom_col3:
     coupon_diameter_cm = st.number_input("Coupon diameter [cm]", min_value=0.0, value=3.0, step=0.5)
     coupon_thickness_mm = st.number_input("Coupon thickness [mm]", min_value=0.0, value=5.0, step=0.5)
