@@ -44,7 +44,7 @@ class AppNavigationPolicyTest(unittest.TestCase):
                 "LNGageing",
                 "Property Generator",
                 "Helium",
-                "CO₂ Mechanistic Model",
+                "CO₂ Autoclave Exposure Simulator (AES)",
             ),
         )
 

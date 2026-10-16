@@ -40,7 +40,7 @@ TITLE_OVERRIDES = {
     "pages/35_Process_Flowsheet_Studio.py": "Process Flowsheet Studio",
     "pages/80_Emission_Calculator.py": "Emission Calculator",
     "pages/81_TEG_Dehydration_Emissions.py": "TEG Dehydration Emissions",
-    "pages/100_CO2_mechanisticModel.py": "CO₂ Mechanistic Model",
+    "pages/100_CO2_mechanisticModel.py": "CO₂ Autoclave Exposure Simulator (AES)",
 }
 
 @dataclass(frozen=True)

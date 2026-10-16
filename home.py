@@ -93,7 +93,7 @@ simulations through this easy-to-use Streamlit interface.
 ### Getting Started
 Use the left-hand menu to select a calculation. Normal mode contains TP Flash,
 Phase Envelope, Gas Hydrate, Hydrogen, EOS-CG, Compressor Performance, GERG-2008,
-Water Dew Point, LNGageing, Property Generator, Helium, and CO₂ Mechanistic Model.
+Water Dew Point, LNGageing, Property Generator, Helium, and CO₂ Autoclave Exposure Simulator (AES).
 Enable **Experimental mode** below the menu to add the wider set of developing
 tools. Opening a direct link to an experimental page automatically enables
 Experimental mode for that session; stable-tool links keep normal mode active.
