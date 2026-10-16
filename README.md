@@ -54,7 +54,7 @@ The app starts in **normal mode**, with these stable tools in the sidebar:
 - LNGageing
 - Property Generator
 - Helium
-- CO₂ Mechanistic Model
+- CO₂ Autoclave Exposure Simulator (AES)
 
 Direct links to these tools open in normal mode without enabling Experimental
 mode. The NeqSim Studio card is hidden from the front page in normal mode.

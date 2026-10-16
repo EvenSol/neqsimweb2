@@ -1,5 +1,5 @@
 """
-CO2 Impurity Mechanistic Model — Streamlit Page
+CO₂ Autoclave Exposure Simulator (AES) — Streamlit Page
 ================================================
 .
 """
@@ -26,7 +26,7 @@ else:
 AutoclaveExperiment = _co2_kinetics.AutoclaveExperiment
 
 st.set_page_config(
-    page_title="CO2 Mechanistic Model",
+    page_title="CO₂ Autoclave Exposure Simulator (AES)",
     page_icon='images/neqsimlogocircleflat.png',
     layout="wide",
 )
@@ -44,7 +44,7 @@ def _numeric_column_config(df: pd.DataFrame, fmt: str = "%.4g") -> dict:
         for col, dtype in df.dtypes.items() if pd.api.types.is_float_dtype(dtype)
     }
 
-st.title("🧪 CO2 Impurity Mechanistic Model")
+st.title("🧪 CO₂ Autoclave Exposure Simulator (AES)")
 st.markdown("""
 Mechanistic CSTR simulator for trace-impurity reaction chemistry and wall corrosion
 in CO2 streams, built on NeqSim thermodynamics (SRK EoS). Define the reactor/coupon
